@@ -1,0 +1,5248 @@
+{
+  "version": "residency-metrics-v1",
+  "reviewed_on": "2026-10-28",
+  "purpose": "Inventário rastreável e contrato de cálculo; presença neste catálogo não afirma disponibilidade em qualquer execução.",
+  "status_semantics": {
+    "source_observed": "Definição conferida na fonte executável indicada; execução/publicação ainda deve ser verificada por run.",
+    "conditional_definition": "Contrato condicionado a dados e telemetria; não é promessa de captura implementada."
+  },
+  "study_status_semantics": {
+    "studied": "Indicador nomeado ou explicitamente descrito no material observado.",
+    "operationalization": "Fórmula/unidade operacional escolhida para tornar mensurável um conceito presente no estudo.",
+    "extension": "Extensão do benchmark; não afirmar estudo específico nas Semanas 01–07."
+  },
+  "notation": {
+    "y": "alvo binário; 1 é a classe positiva",
+    "p": "probabilidade predita da classe positiva",
+    "TP_FP_TN_FN": "contagens em limiar p>=0.5",
+    "a[k,j]": "acurácia do probe do episódio j após conclusão do aprendizado/liberação do episódio k; índices matemáticos começam em 1",
+    "joint": "mesmo learner de uma passagem no prefixo completo permitido",
+    "task_only": "mesmo learner de uma passagem apenas no range do episódio"
+  },
+  "availability_contract": {
+    "missing_numeric_value": null,
+    "required_metadata": [
+      "reason",
+      "status_or_available"
+    ],
+    "no_fabrication": [
+      "Sem ground truth real, métricas dependentes de changepoints são N/A.",
+      "Sem Oracle ou baseline apropriada, não preencher SCPE, IM, FWT ou Lr com zero.",
+      "Sem custos reais, não publicar cenários como R$ observado.",
+      "Sem amostras intervalares de memória, não inventar RAM-tempo.",
+      "Grade pós-hoc da mesma trajetória não é campanha UPF nem sua AUC."
+    ],
+    "legacy_compatibility": "Metrics.values preserva zeros convencionais para várias frações vazias; metadados/contagens devem distinguir ausência de evidência. None em métricas novas significa indisponibilidade, não pior resultado.",
+    "representation": "Tracking nativo usa status=available/unavailable; matriz CL usa available booleano. Séries podem existir em series+availability+series_metadata sem resumo escalar."
+  },
+  "lineage_contract": {
+    "every_result": [
+      "dataset_version",
+      "ordered_event_range_or_split",
+      "model_version",
+      "code_revision_or_source_sha",
+      "config",
+      "seed",
+      "environment",
+      "protocol",
+      "scope"
+    ],
+    "reference_models": [
+      "name",
+      "dataset_version",
+      "seq_range_half_open",
+      "model_family",
+      "training_presentations",
+      "budget_per_model",
+      "state_or_model_version",
+      "train_seconds",
+      "available",
+      "reason"
+    ],
+    "budgets": "Orçamento da política principal não é alterado pela avaliação; referências possuem cap próprio por modelo e custo contabilizado separadamente.",
+    "checkpoint": "Retomar matrizes, contadores e referências pelo estado da execução; não misturar resultados de contrato de fonte/configuração diferente."
+  },
+  "sources": {
+    "week01": {
+      "kind": "study_page",
+      "title": "Relatório Semana 01",
+      "url": "https://chatgpt.com/space/page_0a66d6fa6aa48191a06c7aa67465bc07",
+      "locator": "Discussão de velocidade, latência, requisições/s e custo; sem fórmula operacional"
+    },
+    "week02_ci": {
+      "kind": "study_page",
+      "title": "Anotações CI/CD: revisão sistemática",
+      "url": "https://chatgpt.com/space/page_4a9cd39a6bf881918e2dbcc26ca76e0e",
+      "locator": "Tempo de entrega, compilação/testes, cobertura e violações; blocos 14, 81, 98, 102"
+    },
+    "week03": {
+      "kind": "study_page",
+      "title": "Challenges in Deploying Machine Learning",
+      "url": "https://chatgpt.com/space/page_50f90e6a0aa481918086a99b090b2e44",
+      "locator": "Implantação, recursos, monitoramento e custos; blocos 5, 18, 54"
+    },
+    "technical_debt": {
+      "kind": "study_page",
+      "title": "Hidden Technical Debt in Machine Learning Systems",
+      "url": "https://chatgpt.com/space/page_a1d9502a2d9c8191b4c217f67aed6bea",
+      "locator": "Custo e manutenção do sistema além da qualidade preditiva"
+    },
+    "cl_notes": {
+      "kind": "study_page",
+      "title": "A Comprehensive Survey of Continual Learning: anotações Semana 04",
+      "url": "https://chatgpt.com/space/page_6abe3d0632588191a28c719a34dfbddb",
+      "locator": "Seção C, blocos 40–43: AA, AIA, FM, BWT, IM e FWT"
+    },
+    "cl_primary": {
+      "kind": "primary_paper",
+      "title": "Wang et al., A Comprehensive Survey of Continual Learning, arXiv v3",
+      "url": "https://arxiv.org/pdf/2302.00487v3",
+      "locator": "Seção 2.3, equações 1–7, p. 3"
+    },
+    "week05": {
+      "kind": "study_page",
+      "title": "Resumo completo dos estudos da Semana 05",
+      "url": "https://chatgpt.com/space/page_36f6a28c3e2081918bfde273ef4cea4d",
+      "locator": "Estimar a perda e avaliar a adaptação; qualidade, falsos alarmes, atraso, recuperação e recursos"
+    },
+    "gama_primary": {
+      "kind": "primary_paper",
+      "title": "Gama et al., A Survey on Concept Drift Adaptation",
+      "url": "https://doi.org/10.1145/2523813"
+    },
+    "week06": {
+      "kind": "study_page",
+      "title": "Resumo completo dos estudos da Semana 06",
+      "url": "https://chatgpt.com/space/page_9ffeb147edb08191865236f6f36b72cb",
+      "locator": "Avaliar qualidade, custos e retenção do conhecimento"
+    },
+    "hinder_notes": {
+      "kind": "study_page",
+      "title": "Resumo de Hinder, Vaquet e Hammer: detecção de drift",
+      "url": "https://chatgpt.com/space/page_4216cd117bdc8191b015023c5f8c9415",
+      "locator": "Blocos 17, 24, 35, 43: FP/FN, escores e ROC-AUC de detecção"
+    },
+    "hinder_primary": {
+      "kind": "primary_paper",
+      "title": "One or two things we know about concept drift, Part A",
+      "url": "https://doi.org/10.3389/frai.2024.1330257"
+    },
+    "roi_notes": {
+      "kind": "study_page",
+      "title": "Towards cost-sensitive adaptation: anotações",
+      "url": "https://chatgpt.com/space/page_e910e26aed6481918627e8c2e014760c",
+      "locator": "Blocos 19–24; ganho realizado, componentes de custo, ROI e RAM-tempo"
+    },
+    "roi_primary": {
+      "kind": "primary_paper",
+      "title": "Žliobaitė, Budka e Stahl, Towards cost-sensitive adaptation",
+      "url": "https://doi.org/10.1016/j.neucom.2014.05.084",
+      "locator": "Equações 1 e 5–9; pp. 4–6"
+    },
+    "cara_notes": {
+      "kind": "study_page",
+      "title": "Cost-aware retraining: anotações",
+      "url": "https://chatgpt.com/space/page_7093b08d28008191a176b16b6bf9c28e",
+      "locator": "Blocos 14–18 e 39: custo relativo, Oracle, SCPE"
+    },
+    "cara_primary": {
+      "kind": "primary_paper",
+      "title": "Mahadevan e Mathioudakis, Cost-aware retraining for machine learning",
+      "url": "https://doi.org/10.1016/j.knosys.2024.111610"
+    },
+    "upf_notes": {
+      "kind": "study_translation",
+      "title": "Quando retreinar um modelo de aprendizado de máquina",
+      "url": "https://chatgpt.com/space/page_eeec4651e54c8191ab556c46fd2ffbff",
+      "locator": "Equações 1, 3, 24; blocos 99–104 e 317: custo, grade alpha, AUC, erro e viés do previsor"
+    },
+    "speed_notes": {
+      "kind": "study_page",
+      "title": "Same accuracy twice as fast: anotações",
+      "url": "https://chatgpt.com/space/page_0e6c9b1c85c8819181ac107a1281f117",
+      "locator": "Bloco 13: primeiro alcance do alvo e L99/L100; blocos 47 e 52: limites e recursos"
+    },
+    "speed_primary": {
+      "kind": "primary_paper",
+      "title": "Verwimp, Hacohen e Tuytelaars, Same accuracy, twice as fast",
+      "url": "https://arxiv.org/abs/2502.21147v1",
+      "locator": "Seção 2, equações 1–2"
+    },
+    "mlops_notes": {
+      "kind": "study_page",
+      "title": "MLOps: A Taxonomy and a Methodology",
+      "url": "https://chatgpt.com/space/page_3209b6b9044881919b6bf68809d3e41a",
+      "locator": "Blocos 12, 29–30, 56: precisão, recall, F1, MSE e KPIs"
+    },
+    "mlops_primary": {
+      "kind": "primary_paper",
+      "title": "Testi et al., MLOps: A Taxonomy and a Methodology",
+      "url": "https://doi.org/10.1109/ACCESS.2022.3181730"
+    },
+    "platform_notes": {
+      "kind": "study_page",
+      "title": "Practical Benchmark of Open-Source MLOps Platforms",
+      "url": "https://chatgpt.com/space/page_f4f90f99da2c819195f41a22c8af8a4c",
+      "locator": "Tempo, disco, linhas adicionais e paridade preditiva; estes números publicados não são medidas deste laboratório"
+    },
+    "crisp_notes": {
+      "kind": "study_page",
+      "title": "Towards CRISP-ML(Q)",
+      "url": "https://chatgpt.com/space/page_9948a1d301c88191ab5b8521f2c05edb",
+      "locator": "Blocos 25–26, 50, 76: critérios técnicos, econômicos e recursos"
+    },
+    "crisp_primary": {
+      "kind": "primary_paper",
+      "title": "Studer et al., Towards CRISP-ML(Q)",
+      "url": "https://doi.org/10.3390/make3020020"
+    },
+    "classification_source": {
+      "kind": "executable_source",
+      "path": "src/continual_bench/domain/metrics.py",
+      "locator": "Metrics; limiar 0.5, AUROC/AP exatos, calibração positiva em 10 bins"
+    },
+    "continual_source": {
+      "kind": "executable_source",
+      "path": "src/continual_bench/domain/continual.py",
+      "locator": "ContinualEvaluation; episódios, probes e referências de uma passagem"
+    },
+    "sklearn_metrics": {
+      "kind": "official_documentation",
+      "title": "scikit-learn: model evaluation",
+      "url": "https://scikit-learn.org/stable/modules/model_evaluation.html",
+      "locator": "Referência complementar das extensões; não prova estudo nas Semanas 01–07"
+    },
+    "sklearn_calibration": {
+      "kind": "official_documentation",
+      "title": "scikit-learn: probability calibration",
+      "url": "https://scikit-learn.org/stable/modules/calibration.html",
+      "locator": "Referência complementar; o binning específico é definido neste projeto"
+    },
+    "upf_primary": {
+      "kind": "primary_paper",
+      "title": "Regol et al., When to retrain a machine learning model, ICML 2025",
+      "url": "https://proceedings.mlr.press/v267/regol25a.html",
+      "locator": "Equações de custo e protocolo de avaliação em grade alpha"
+    },
+    "tracking_source": {
+      "kind": "executable_source",
+      "path": "src/continual_bench/application/tracking.py",
+      "locator": "build_tracking, detector_metrics, recovery_metrics, save_tracking_files"
+    }
+  },
+  "families": {
+    "classification": {
+      "label": "Qualidade preditiva binária",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "common_prerequisites": [
+        "previsões anteriores ao aprendizado com o respectivo rótulo",
+        "rótulos já disponíveis no protocolo",
+        "probabilidade positiva finita em [0,1]"
+      ],
+      "limits": [
+        "n=0 não significa sucesso mesmo quando o formato legado emite 0",
+        "métricas por classe usam limiar 0.5",
+        "AUROC/AP guardam escores O(n), ordenação O(n log n)",
+        "a prevalência afeta interpretação e comparação"
+      ]
+    },
+    "continual": {
+      "label": "Aprendizagem contínua por episódio",
+      "scopes": [
+        "episode",
+        "run"
+      ],
+      "common_prerequisites": [
+        "episódios ordenados e offsets exclusivos",
+        "probes rotulados independentes do treino, indexados por episódio",
+        "matriz a[k,j] avaliada ao terminar a liberação dos rótulos do episódio k"
+      ],
+      "limits": [
+        "recorrências do mesmo conceito são episódios distintos",
+        "FM usa máximo amostrado, não máximo contínuo entre checkpoints",
+        "referências task_only e joint_prefix_one_pass usam o mesmo learner de uma passagem; não são oráculos otimizados",
+        "budget de referências é próprio por modelo e custos separados do orçamento da política principal",
+        "Matriz diagnóstica completa: probes heldout de episódios futuros apenas para diagnóstico, sem alterar adaptação. A fonte define a matriz triangular e depois um máximo de todas as linhas anteriores; a escolha max_all_prior_rows torna essa ambiguidade explícita."
+      ]
+    },
+    "drift": {
+      "label": "Detecção e recuperação",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "common_prerequisites": [
+        "contrato do sinal e do instante do alarme",
+        "regra de associação entre alarmes e mudanças quando aplicável"
+      ],
+      "limits": [
+        "sem ground truth não calcular taxas de detecção como se o fluxo fosse estável",
+        "alarm count é observável sem provar drift real",
+        "tempo ordinal de replay não é tempo de calendário"
+      ]
+    },
+    "adaptation": {
+      "label": "Benefício e custo da adaptação",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "common_prerequisites": [
+        "perda e horizonte explicitados",
+        "comparação temporal sem rótulos futuros",
+        "custo e unidade declarados"
+      ],
+      "limits": [
+        "cenários econômicos parametrizados não são despesas medidas",
+        "custos das referências e da avaliação devem ser reportados separadamente",
+        "média dos ROIs não equivale a razão de somas"
+      ]
+    },
+    "resources": {
+      "label": "Recursos e eficiência",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "common_prerequisites": [
+        "fronteiras de medição e relógio definidos",
+        "hardware, ambiente e concorrência registrados"
+      ],
+      "limits": [
+        "tempo sob oito tasks concorrentes é sensível à disputa de recursos",
+        "peak RSS é diferente de memória atribuível apenas ao modelo",
+        "tempo de replay não substitui latência medida",
+        "iterações não são automaticamente segundos"
+      ]
+    },
+    "regression": {
+      "label": "Regressão e previsão de desempenho",
+      "scopes": [
+        "window",
+        "run"
+      ],
+      "common_prerequisites": [
+        "alvos numéricos e previsões comparáveis",
+        "rótulos disponíveis"
+      ],
+      "limits": [
+        "erro do previsor de desempenho exige previsor próprio e resultados futuros observados; não é erro do classificador"
+      ]
+    },
+    "mlops": {
+      "label": "Pipeline e overhead de plataforma",
+      "scopes": [
+        "pipeline",
+        "deployment",
+        "campaign"
+      ],
+      "common_prerequisites": [
+        "instrumentação das operações reais e identificador de correlação",
+        "baseline equivalente quando a métrica compara plataformas"
+      ],
+      "limits": [
+        "duração de treino não é duração completa do pipeline",
+        "MLOps e CI/CD não são inferidos das métricas do classificador"
+      ]
+    },
+    "business": {
+      "label": "Indicadores econômicos de negócio",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "common_prerequisites": [
+        "dados reais de receitas, despesas ou transações",
+        "moeda, período e regra de atribuição definidos"
+      ],
+      "limits": [
+        "sem fonte financeira permanecer N/A",
+        "custos simulados não são gastos reais nem ROS"
+      ]
+    },
+    "cicd": {
+      "label": "Qualidade e entrega de software",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "common_prerequisites": [
+        "telemetria de build, testes, análise de código ou releases"
+      ],
+      "limits": [
+        "ausência de telemetria não equivale a zero falhas ou cobertura perfeita",
+        "não há evidência de estudo das quatro métricas DORA como conjunto nas fontes examinadas"
+      ]
+    }
+  },
+  "definitions": {
+    "n": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "count(y)",
+      "direction": "descriptive",
+      "unit": "examples",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "accuracy": {
+      "family": "classification",
+      "study_status": "studied",
+      "formula": "(TP+TN)/n",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "mlops_notes",
+        "classification_source"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "f1": {
+      "family": "classification",
+      "study_status": "studied",
+      "formula": "2*TP/(2*TP+FP+FN)",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "mlops_notes",
+        "classification_source"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "frações de confusão sem denominador usam zero por compatibilidade; inspecionar contagens e n, sem interpretar como evidência de qualidade"
+      ]
+    },
+    "brier": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "mean((y-p)^2)",
+      "direction": "minimize",
+      "unit": "squared_probability",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "log_loss": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "-mean(y*ln(q)+(1-y)*ln(1-q)); q=clip(p,1e-15,1-1e-15)",
+      "direction": "minimize",
+      "unit": "nats/example",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "tp": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "count(y=1 and p>=0.5)",
+      "direction": "descriptive",
+      "unit": "examples",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "fp": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "count(y=0 and p>=0.5)",
+      "direction": "minimize",
+      "unit": "examples",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "tn": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "count(y=0 and p<0.5)",
+      "direction": "descriptive",
+      "unit": "examples",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "fn": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "count(y=1 and p<0.5)",
+      "direction": "minimize",
+      "unit": "examples",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "errors": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "FP+FN",
+      "direction": "minimize",
+      "unit": "examples",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "error_rate": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "(FP+FN)/n",
+      "direction": "minimize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "precision": {
+      "family": "classification",
+      "study_status": "studied",
+      "formula": "TP/(TP+FP)",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "mlops_notes",
+        "classification_source"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "frações de confusão sem denominador usam zero por compatibilidade; inspecionar contagens e n, sem interpretar como evidência de qualidade"
+      ]
+    },
+    "recall": {
+      "family": "classification",
+      "study_status": "studied",
+      "formula": "TP/(TP+FN)",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "mlops_notes",
+        "classification_source"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "frações de confusão sem denominador usam zero por compatibilidade; inspecionar contagens e n, sem interpretar como evidência de qualidade"
+      ]
+    },
+    "specificity": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "TN/(TN+FP)",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "frações de confusão sem denominador usam zero por compatibilidade; inspecionar contagens e n, sem interpretar como evidência de qualidade"
+      ]
+    },
+    "false_positive_rate": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "FP/(FP+TN)",
+      "direction": "minimize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "frações de confusão sem denominador usam zero por compatibilidade; inspecionar contagens e n, sem interpretar como evidência de qualidade"
+      ]
+    },
+    "false_negative_rate": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "FN/(FN+TP)",
+      "direction": "minimize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "frações de confusão sem denominador usam zero por compatibilidade; inspecionar contagens e n, sem interpretar como evidência de qualidade"
+      ]
+    },
+    "negative_predictive_value": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "TN/(TN+FN)",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "frações de confusão sem denominador usam zero por compatibilidade; inspecionar contagens e n, sem interpretar como evidência de qualidade"
+      ]
+    },
+    "balanced_accuracy": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "(recall+specificity)/2",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0",
+        "as duas classes verdadeiras presentes"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions",
+        "single_class"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "f1_macro": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "(F1_positive+F1_negative)/2; F1_negative=2*TN/(2*TN+FP+FN)",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "frações de confusão sem denominador usam zero por compatibilidade; inspecionar contagens e n, sem interpretar como evidência de qualidade"
+      ]
+    },
+    "f1_weighted": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "((TP+FN)*F1_positive+(TN+FP)*F1_negative)/n",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "frações de confusão sem denominador usam zero por compatibilidade; inspecionar contagens e n, sem interpretar como evidência de qualidade"
+      ]
+    },
+    "mcc": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "(TP*TN-FP*FN)/sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))",
+      "direction": "maximize",
+      "unit": "correlation",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0",
+        "denominador não nulo"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions",
+        "degenerate_denominator"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "cohen_kappa": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "(n*(TP+TN)-E)/(n^2-E); E=(TP+FP)*(TP+FN)+(TN+FN)*(TN+FP)",
+      "direction": "maximize",
+      "unit": "agreement_coefficient",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0",
+        "denominador não nulo"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions",
+        "degenerate_denominator"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "positive_rate": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "(TP+FN)/n",
+      "direction": "descriptive",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "predicted_positive_rate": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "(TP+FP)/n",
+      "direction": "descriptive",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "roc_auc": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "P(p_positive>p_negative)+0.5*P(p_positive=p_negative)",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0",
+        "as duas classes verdadeiras presentes"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions",
+        "single_class"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": []
+    },
+    "average_precision": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "sum_over_distinct_descending_thresholds(delta_recall*precision)",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0",
+        "ao menos um positivo"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions",
+        "no_positive_labels"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_metrics"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "AP não interpolada; não é AUC trapezoidal de precision-recall"
+      ]
+    },
+    "ece": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "sum_nonempty_bins((n_b/n)*abs(mean_b(p)-mean_b(y)))",
+      "direction": "minimize",
+      "unit": "probability_gap",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_calibration"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "10 bins iguais [i/10,(i+1)/10), incluindo 1 no último; calibração de probabilidade positiva, não calibração de confiança da classe prevista",
+        "sensível ao tamanho da amostra e aos bins"
+      ]
+    },
+    "mce": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "max_nonempty_bins(abs(mean_b(p)-mean_b(y)))",
+      "direction": "minimize",
+      "unit": "probability_gap",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "n>0"
+      ],
+      "na_reasons": [
+        "no_labeled_predictions"
+      ],
+      "sources": [
+        "classification_source",
+        "sklearn_calibration"
+      ],
+      "status": "source_observed",
+      "interpretation_limits": [
+        "10 bins iguais [i/10,(i+1)/10), incluindo 1 no último; calibração de probabilidade positiva, não calibração de confiança da classe prevista",
+        "sensível ao tamanho da amostra e aos bins"
+      ]
+    },
+    "cl_average_accuracy": {
+      "family": "continual",
+      "study_status": "studied",
+      "formula": "AA[k]=sum(j=1..k,a[k,j])/k",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "episode",
+        "run"
+      ],
+      "prerequisites": [
+        "a[k,j] disponível para todo episódio j<=k"
+      ],
+      "na_reasons": [
+        "missing_probe",
+        "no_completed_tasks"
+      ],
+      "sources": [
+        "cl_notes",
+        "cl_primary",
+        "continual_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "índices da fórmula começam em 1; implementação pode indexar episódios em 0",
+        "cap por referência não aumenta nem reduz o budget da política principal",
+        "referência de uma passagem é baseline operacional, não treinamento conjunto convergido do artigo"
+      ]
+    },
+    "cl_average_incremental_accuracy": {
+      "family": "continual",
+      "study_status": "studied",
+      "formula": "AIA[k]=sum(i=1..k,AA[i])/k",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "episode",
+        "run"
+      ],
+      "prerequisites": [
+        "AA de cada episódio completo"
+      ],
+      "na_reasons": [
+        "missing_probe",
+        "no_completed_tasks"
+      ],
+      "sources": [
+        "cl_notes",
+        "cl_primary",
+        "continual_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "índices da fórmula começam em 1; implementação pode indexar episódios em 0",
+        "cap por referência não aumenta nem reduz o budget da política principal",
+        "referência de uma passagem é baseline operacional, não treinamento conjunto convergido do artigo"
+      ]
+    },
+    "cl_forgetting": {
+      "family": "continual",
+      "study_status": "studied",
+      "formula": "FM[k]=mean(j<k,max(i=1..k-1,a[i,j])-a[k,j]); sem clip em zero",
+      "direction": "minimize",
+      "unit": "accuracy_difference",
+      "scopes": [
+        "episode",
+        "run"
+      ],
+      "prerequisites": [
+        "k>=2",
+        "histórico de probes por episódio"
+      ],
+      "na_reasons": [
+        "insufficient_tasks",
+        "missing_probe",
+        "no_completed_tasks"
+      ],
+      "sources": [
+        "cl_notes",
+        "cl_primary",
+        "continual_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "índices da fórmula começam em 1; implementação pode indexar episódios em 0",
+        "cap por referência não aumenta nem reduz o budget da política principal",
+        "referência de uma passagem é baseline operacional, não treinamento conjunto convergido do artigo",
+        "max_all_prior_rows: inclui avaliações diagnósticas anteriores ao aprendizado do episódio; nenhuma avaliação futura alimenta a política."
+      ]
+    },
+    "cl_backward_transfer": {
+      "family": "continual",
+      "study_status": "studied",
+      "formula": "BWT[k]=mean(j<k,a[k,j]-a[j,j])",
+      "direction": "maximize",
+      "unit": "accuracy_difference",
+      "scopes": [
+        "episode",
+        "run"
+      ],
+      "prerequisites": [
+        "k>=2",
+        "diagonal e linha atual da matriz"
+      ],
+      "na_reasons": [
+        "insufficient_tasks",
+        "missing_probe",
+        "no_completed_tasks"
+      ],
+      "sources": [
+        "cl_notes",
+        "cl_primary",
+        "continual_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "índices da fórmula começam em 1; implementação pode indexar episódios em 0",
+        "cap por referência não aumenta nem reduz o budget da política principal",
+        "referência de uma passagem é baseline operacional, não treinamento conjunto convergido do artigo"
+      ]
+    },
+    "cl_intransigence": {
+      "family": "continual",
+      "study_status": "studied",
+      "formula": "IM[k]=a_joint[k]-a[k,k]",
+      "direction": "minimize",
+      "unit": "accuracy_difference",
+      "scopes": [
+        "episode",
+        "run"
+      ],
+      "prerequisites": [
+        "referência joint_prefix_one_pass treinada nos rótulos liberados [0,end[k])",
+        "probe atual independente do treino"
+      ],
+      "na_reasons": [
+        "references_disabled",
+        "reference_budget_exceeded",
+        "missing_probe",
+        "no_completed_tasks"
+      ],
+      "sources": [
+        "cl_notes",
+        "cl_primary",
+        "continual_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "índices da fórmula começam em 1; implementação pode indexar episódios em 0",
+        "cap por referência não aumenta nem reduz o budget da política principal",
+        "referência de uma passagem é baseline operacional, não treinamento conjunto convergido do artigo"
+      ]
+    },
+    "cl_forward_transfer": {
+      "family": "continual",
+      "study_status": "studied",
+      "formula": "FWT[k]=mean(j=2..k,a[j,j]-a_task_only[j])",
+      "direction": "maximize",
+      "unit": "accuracy_difference",
+      "scopes": [
+        "episode",
+        "run"
+      ],
+      "prerequisites": [
+        "k>=2",
+        "referências task_only treinadas no range de cada episódio"
+      ],
+      "na_reasons": [
+        "insufficient_tasks",
+        "references_disabled",
+        "reference_budget_exceeded",
+        "missing_probe",
+        "no_completed_tasks"
+      ],
+      "sources": [
+        "cl_notes",
+        "cl_primary",
+        "continual_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "índices da fórmula começam em 1; implementação pode indexar episódios em 0",
+        "cap por referência não aumenta nem reduz o budget da política principal",
+        "referência de uma passagem é baseline operacional, não treinamento conjunto convergido do artigo"
+      ]
+    },
+    "drift_alarm_count": {
+      "family": "drift",
+      "study_status": "operationalization",
+      "formula": "count(alarmes emitidos)",
+      "direction": "descriptive",
+      "unit": "alarms",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "log do detector"
+      ],
+      "na_reasons": [
+        "missing_alarm_log"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ]
+    },
+    "drift_true_positives": {
+      "family": "drift",
+      "study_status": "operationalization",
+      "formula": "count(mudanças associadas a um alarme admissível)",
+      "direction": "maximize",
+      "unit": "changes",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "ground truth",
+        "associação uma mudança/alarme e tolerância declaradas",
+        "followup completo até min(change+tolerance,next_change); excluir mudanças censuradas e alarmes de suas janelas"
+      ],
+      "na_reasons": [
+        "no_ground_truth"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ]
+    },
+    "drift_false_positives": {
+      "family": "drift",
+      "study_status": "studied",
+      "formula": "count(alarmes não associados)",
+      "direction": "minimize",
+      "unit": "alarms",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "ground truth",
+        "regra para alarmes duplicados",
+        "followup completo até min(change+tolerance,next_change); excluir mudanças censuradas e alarmes de suas janelas"
+      ],
+      "na_reasons": [
+        "no_ground_truth"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ]
+    },
+    "drift_false_negatives": {
+      "family": "drift",
+      "study_status": "studied",
+      "formula": "count(mudanças não detectadas no horizonte admissível)",
+      "direction": "minimize",
+      "unit": "changes",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "ground truth",
+        "horizonte observado após cada mudança",
+        "followup completo até min(change+tolerance,next_change); excluir mudanças censuradas e alarmes de suas janelas"
+      ],
+      "na_reasons": [
+        "no_ground_truth",
+        "insufficient_followup"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ]
+    },
+    "drift_precision": {
+      "family": "drift",
+      "study_status": "operationalization",
+      "formula": "TP_drift/(TP_drift+FP_drift)",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "contagens de detecção",
+        "denominador>0",
+        "followup completo até min(change+tolerance,next_change); excluir mudanças censuradas e alarmes de suas janelas"
+      ],
+      "na_reasons": [
+        "no_ground_truth",
+        "no_alarms"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ]
+    },
+    "drift_recall": {
+      "family": "drift",
+      "study_status": "operationalization",
+      "formula": "TP_drift/(TP_drift+FN_drift)",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "contagens de detecção",
+        "mudanças>0",
+        "followup completo até min(change+tolerance,next_change); excluir mudanças censuradas e alarmes de suas janelas"
+      ],
+      "na_reasons": [
+        "no_ground_truth",
+        "no_changes"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ]
+    },
+    "drift_false_alarm_rate": {
+      "family": "drift",
+      "study_status": "operationalization",
+      "formula": "alarmes na exposição estável / exemplos avaliados fora de todas as janelas [change,min(change+tolerance,next_change))",
+      "direction": "minimize",
+      "unit": "alarms/example",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "ground truth",
+        "exposição estável medida em exemplos ou segundos"
+      ],
+      "na_reasons": [
+        "no_ground_truth",
+        "zero_stable_exposure"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Não é FP_drift/n: duplicatas nas janelas completas contam como FP_drift, mas não como alarme na exposição estável. Sem exposição estável: N/A."
+      ]
+    },
+    "drift_detection_delay": {
+      "family": "drift",
+      "study_status": "studied",
+      "formula": "instante do primeiro alarme associado - referência temporal da mudança",
+      "direction": "minimize",
+      "unit": "examples_or_seconds",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "ground truth",
+        "definir início/fim da transição",
+        "definir relógio fonte versus disponibilidade do rótulo",
+        "followup completo até min(change+tolerance,next_change); excluir mudanças censuradas e alarmes de suas janelas"
+      ],
+      "na_reasons": [
+        "no_ground_truth",
+        "change_not_detected"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ]
+    },
+    "drift_score_roc_auc": {
+      "family": "drift",
+      "study_status": "studied",
+      "formula": "AUROC(escores,cenário_drift); classes=sem/com mudança",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "escores contínuos de detector",
+        "rótulo independente de drift para cada caso",
+        "ambas classes"
+      ],
+      "na_reasons": [
+        "missing_drift_scores",
+        "no_ground_truth",
+        "single_class"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ]
+    },
+    "recovery_time": {
+      "family": "drift",
+      "study_status": "studied",
+      "formula": "primeiro instante com qualidade recuperada segundo janela/tolerância/persistência - instante de referência da mudança",
+      "direction": "minimize",
+      "unit": "examples_or_seconds",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "mudança e qualidade-alvo definidas",
+        "janelas após mudança",
+        "definir persistência e censura"
+      ],
+      "na_reasons": [
+        "no_ground_truth",
+        "missing_recovery_target",
+        "insufficient_followup",
+        "target_not_reached"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais",
+        "Sem janela prévia completa: unavailable, separado de censura quando existe alvo definido e a recuperação não foi observada."
+      ]
+    },
+    "degradation": {
+      "family": "drift",
+      "study_status": "operationalization",
+      "formula": "qualidade_referência - qualidade_atual em comparação declarada",
+      "direction": "minimize",
+      "unit": "metric_difference",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "referência e métrica comparáveis"
+      ],
+      "na_reasons": [
+        "missing_quality_reference"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ]
+    },
+    "adaptation_count": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "count(atualizações efetivamente executadas)",
+      "direction": "descriptive",
+      "unit": "updates",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "log de ações de treino"
+      ],
+      "na_reasons": [
+        "missing_training_log"
+      ],
+      "sources": [
+        "week06"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "separar warmup, atualizações online, reconstruções e ações bloqueadas pelo budget"
+      ]
+    },
+    "realized_adaptation_gain": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "sum_eventos_no_mesmo_horizonte(loss_shadow_old-loss_current)",
+      "direction": "maximize",
+      "unit": "loss_sum",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "shadow do modelo anterior congelado",
+        "mesmos eventos futuros e rótulos liberados",
+        "encerrar horizonte na próxima adaptação ou fim definido"
+      ],
+      "na_reasons": [
+        "shadow_disabled",
+        "missing_shadow_predictions",
+        "no_labeled_overlap"
+      ],
+      "sources": [
+        "roi_notes",
+        "roi_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "não substituir por diferença entre janelas distintas; overhead do shadow separado"
+      ]
+    },
+    "adaptation_roi": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "realized_adaptation_gain/incremental_adaptation_cost",
+      "direction": "maximize",
+      "unit": "loss_reduction/cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "ganho realizado pareado",
+        "custo adicional observado ou cenário explicitamente nomeado",
+        "custo>0"
+      ],
+      "na_reasons": [
+        "missing_realized_gain",
+        "missing_incremental_cost",
+        "zero_cost"
+      ],
+      "sources": [
+        "roi_notes",
+        "roi_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "excluir custo da própria avaliação do denominador conforme o artigo e reportá-lo separado",
+        "não é lucro monetário sem conversão compatível"
+      ]
+    },
+    "adaptation_roi_weighted": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "sum_j(n_j*ROI_j)/sum_j(n_j)",
+      "direction": "maximize",
+      "unit": "loss_reduction/cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "ROI e tamanho de cada intervalo",
+        "pesos positivos"
+      ],
+      "na_reasons": [
+        "missing_interval_roi",
+        "zero_weight"
+      ],
+      "sources": [
+        "roi_notes",
+        "roi_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "não equivale em geral a sum(gain)/sum(cost)"
+      ]
+    },
+    "adaptation_roi_global": {
+      "family": "adaptation",
+      "study_status": "operationalization",
+      "formula": "sum(ganhos de TODAS as atualizações pós-warmup)/sum(custos adicionais de TODAS as atualizações pós-warmup)",
+      "direction": "maximize",
+      "unit": "loss_reduction/cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "ganhos e custos para o mesmo escopo",
+        "custo total>0",
+        "todas as atualizações com shadow futuro avaliado e custo precificado",
+        "identidades e contagens dos intervalos shadow coincidem com updates",
+        "custo total positivo"
+      ],
+      "na_reasons": [
+        "missing_realized_gain",
+        "missing_incremental_cost",
+        "zero_cost",
+        "requires_all_updates_priced_with_evaluated_future_shadow_horizons"
+      ],
+      "sources": [
+        "roi_notes",
+        "roi_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "declarar se referência é cada modelo anterior ou modelo fixo inicial",
+        "Agregado de intervalos elegíveis tem nome separado e expõe contagem e custo omitidos; não substitui o global."
+      ]
+    },
+    "scenario_total_cost": {
+      "family": "adaptation",
+      "study_status": "operationalization",
+      "formula": "error_unit_cost*errors + sum_training_costs + other_declared_costs",
+      "direction": "minimize",
+      "unit": "scenario_cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "parâmetros de custo e unidades fornecidos",
+        "eventos contados sem duplicação"
+      ],
+      "na_reasons": [
+        "missing_cost_scenario"
+      ],
+      "sources": [
+        "week06",
+        "roi_notes",
+        "upf_notes",
+        "upf_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "cenário parametrizado; não R$ medido automaticamente; contabilizar monitoramento/buffers quando presentes"
+      ]
+    },
+    "scpe": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "100*(strategy_cost-oracle_cost)/oracle_cost",
+      "direction": "minimize",
+      "unit": "percent",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "Oracle retrospectivo fornecido",
+        "mesmo horizonte e função de custo",
+        "oracle_cost>0"
+      ],
+      "na_reasons": [
+        "missing_oracle",
+        "incompatible_oracle",
+        "zero_oracle_cost"
+      ],
+      "sources": [
+        "cara_notes",
+        "cara_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "oráculo de custo não garante maior acurácia; não estimar Oracle pela melhor configuração observada"
+      ]
+    },
+    "upf_total_cost": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "C_hat(alpha)=alpha*retraining_count+sum_t(error_rate_t); e*N=1",
+      "direction": "minimize",
+      "unit": "normalized_cost",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "lotes e alpha definidos",
+        "retreinamentos definidos como na política",
+        "perda zero-um por lote",
+        "política não online e todas as atualizações efetivas reset_retrain, excluindo learn_one"
+      ],
+      "na_reasons": [
+        "missing_alpha",
+        "incompatible_lot_contract",
+        "incremental_updates_do_not_follow_the_UPF_retraining_contract"
+      ],
+      "sources": [
+        "upf_notes",
+        "upf_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "pesos por lote devem ser declarados quando N varia; objetivo não é dinheiro sem conversão",
+        "Custo de trajetória fixa nas janelas registradas; não reproduz o previsor, o Oracle ou a campanha alpha do artigo."
+      ]
+    },
+    "upf_paper_cost_auc": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "integral_0^alpha_max C_hat(alpha;policy_run_at_alpha) d(alpha)",
+      "direction": "minimize",
+      "unit": "normalized_cost*alpha",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política executada por alpha",
+        "grade comum documentada",
+        "protocolo Oracle que define alpha_max",
+        "dados e horizonte equivalentes"
+      ],
+      "na_reasons": [
+        "missing_alpha_campaign",
+        "missing_oracle_alpha_max",
+        "incompatible_alpha_grid"
+      ],
+      "sources": [
+        "upf_notes",
+        "upf_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "artigo avalia 10 pontos; integração numérica e faixa precisam constar do artefato"
+      ]
+    },
+    "posthoc_cost_sensitivity": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "série na grade: value(alpha)=alpha*count(all update events)+sum(window error rates)",
+      "direction": "descriptive",
+      "unit": "normalized_scenario_cost",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "grade e trajetória fixa observada",
+        "parâmetros do cenário"
+      ],
+      "na_reasons": [
+        "missing_sensitivity_grid"
+      ],
+      "sources": [
+        "upf_notes",
+        "upf_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "não reexecuta nem otimiza a política; não chamar de AUC do paper UPF",
+        "inclui learn_one por escolha explícita do cenário",
+        "alpha_grid e cost_basis constam de series_metadata; AUC escalar é extensão separada"
+      ],
+      "representation": "series",
+      "step": "zero-based alpha grid index"
+    },
+    "cara_relative_staleness": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "erro ponderado por similaridade às consultas atuais menos referência do lote de treino",
+      "direction": "minimize",
+      "unit": "staleness_cost",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "consultas e dados rotulados identificados",
+        "kernel/similaridade e normalização definidos",
+        "modelo/lote de treino de referência"
+      ],
+      "na_reasons": [
+        "missing_query_stream",
+        "missing_staleness_reference",
+        "missing_similarity_contract"
+      ],
+      "sources": [
+        "cara_notes",
+        "cara_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "é indicador substituto de obsolescência; não ganho real de retreino nem custo financeiro observado"
+      ]
+    },
+    "train_seconds": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "sum(tempo medido dos treinos)",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "telemetria de treino"
+      ],
+      "na_reasons": [
+        "missing_training_timing"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "monitor_seconds": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "sum(tempo medido do detector/monitor)",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "telemetria do detector/monitor"
+      ],
+      "na_reasons": [
+        "missing_monitor_timing"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "prediction_latency": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "tempo final - tempo inicial da operação de inferência medida",
+      "direction": "minimize",
+      "unit": "seconds/prediction",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "amostras medidas e fronteiras da inferência"
+      ],
+      "na_reasons": [
+        "missing_prediction_timing"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "prediction_throughput": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "n_previsões / tempo medido da fase de inferência",
+      "direction": "maximize",
+      "unit": "predictions/second",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "n e duração da mesma fase",
+        "tempo>0"
+      ],
+      "na_reasons": [
+        "missing_prediction_timing",
+        "zero_elapsed_time"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "train_samples": {
+      "family": "resources",
+      "study_status": "operationalization",
+      "formula": "sum(exemplos efetivamente apresentados ao learner)",
+      "direction": "descriptive",
+      "unit": "training_presentations",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "log ou contador de treino"
+      ],
+      "na_reasons": [
+        "missing_training_counter"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "peak_rss_bytes": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "max(RSS observado no processo durante escopo declarado)",
+      "direction": "minimize",
+      "unit": "bytes",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "RSS medido no processo",
+        "plataforma e escopo"
+      ],
+      "na_reasons": [
+        "missing_memory_measurement"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "ram_time_bytes_seconds": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "integral(RSS(t) dt) estimada com amostras intervalares e regra declarada",
+      "direction": "minimize",
+      "unit": "byte*seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "série temporal RSS com timestamps",
+        "cobertura do intervalo"
+      ],
+      "na_reasons": [
+        "missing_memory_time_series",
+        "insufficient_memory_samples"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "peak RSS * duração não é integral medida; sem série temporal o indicador é N/A"
+      ]
+    },
+    "reference_train_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "sum(tempo de treino das referências de avaliação)",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "telemetria das referências"
+      ],
+      "na_reasons": [
+        "references_disabled",
+        "missing_reference_timing"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "reference_train_samples": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "sum(exemplos de treino das referências)",
+      "direction": "descriptive",
+      "unit": "training_presentations",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "referências treinadas e ranges registrados"
+      ],
+      "na_reasons": [
+        "references_disabled"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "evaluation_overhead_seconds": {
+      "family": "resources",
+      "study_status": "operationalization",
+      "formula": "tempo dos probes/copias/shadows/referências segundo escopo explicitado",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "telemetria da avaliação separada da política"
+      ],
+      "na_reasons": [
+        "missing_evaluation_timing"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "iterations_to_target": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "s(f,a)=min{iteration:quality(f,iteration)>=a}",
+      "direction": "minimize",
+      "unit": "iterations",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "curva de qualidade",
+        "alvo",
+        "eixo de iterações e orçamento definidos",
+        "curve_scope=training_iteration_fixed_test",
+        "method_curve e baseline_curve em iterações no mesmo teste fixo versionado por test_dataset_sha256",
+        "curvas ordenadas, passos inteiros, acurácias finitas, target e proveniência fornecidos"
+      ],
+      "na_reasons": [
+        "missing_target",
+        "missing_learning_curve",
+        "target_not_reached",
+        "requires_training_iteration_curve_on_fixed_test"
+      ],
+      "sources": [
+        "speed_notes",
+        "speed_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Offsets prequential produzem somente samples_to_target_accuracy e prequential_samples_ratio_l99/l100; não são iterações de treino em teste fixo."
+      ]
+    },
+    "l99": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "s(baseline,a_baseline)/s(method,0.99*a_baseline)",
+      "direction": "maximize",
+      "unit": "ratio",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "baseline fornecida",
+        "qualidade final da baseline e curvas comparáveis",
+        "mesma definição de iteração",
+        "curve_scope=training_iteration_fixed_test",
+        "method_curve e baseline_curve em iterações no mesmo teste fixo versionado por test_dataset_sha256",
+        "curvas ordenadas, passos inteiros, acurácias finitas, target e proveniência fornecidos"
+      ],
+      "na_reasons": [
+        "missing_efficiency_baseline",
+        "incompatible_baseline",
+        "target_not_reached",
+        "zero_target_iterations",
+        "requires_training_iteration_curve_on_fixed_test"
+      ],
+      "sources": [
+        "speed_notes",
+        "speed_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "alvo não atingido é censura/N/A com motivo, nunca aceleração zero",
+        "L99 usa 99% da acurácia da baseline; não 99% absoluto",
+        "razão de iterações não implica igual razão de segundos",
+        "Offsets prequential produzem somente samples_to_target_accuracy e prequential_samples_ratio_l99/l100; não são iterações de treino em teste fixo."
+      ]
+    },
+    "l100": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "s(baseline,a_baseline)/s(method,a_baseline)",
+      "direction": "maximize",
+      "unit": "ratio",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "baseline fornecida",
+        "qualidade final da baseline e curvas comparáveis",
+        "mesma definição de iteração",
+        "curve_scope=training_iteration_fixed_test",
+        "method_curve e baseline_curve em iterações no mesmo teste fixo versionado por test_dataset_sha256",
+        "curvas ordenadas, passos inteiros, acurácias finitas, target e proveniência fornecidos"
+      ],
+      "na_reasons": [
+        "missing_efficiency_baseline",
+        "incompatible_baseline",
+        "target_not_reached",
+        "zero_target_iterations",
+        "requires_training_iteration_curve_on_fixed_test"
+      ],
+      "sources": [
+        "speed_notes",
+        "speed_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "alvo não atingido é censura/N/A com motivo, nunca aceleração zero",
+        "L99 usa 99% da acurácia da baseline; não 99% absoluto",
+        "razão de iterações não implica igual razão de segundos",
+        "Offsets prequential produzem somente samples_to_target_accuracy e prequential_samples_ratio_l99/l100; não são iterações de treino em teste fixo."
+      ]
+    },
+    "mae": {
+      "family": "regression",
+      "study_status": "studied",
+      "formula": "mean(abs(y-y_hat))",
+      "direction": "minimize",
+      "unit": "target_unit",
+      "scopes": [
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "tarefa de regressão ou previsão explícita"
+      ],
+      "na_reasons": [
+        "not_regression_task"
+      ],
+      "sources": [
+        "roi_notes",
+        "sklearn_metrics"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "mse": {
+      "family": "regression",
+      "study_status": "studied",
+      "formula": "mean((y-y_hat)^2)",
+      "direction": "minimize",
+      "unit": "squared_target_unit",
+      "scopes": [
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "tarefa de regressão ou previsão explícita"
+      ],
+      "na_reasons": [
+        "not_regression_task"
+      ],
+      "sources": [
+        "mlops_notes",
+        "sklearn_metrics"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "performance_forecast_mae": {
+      "family": "regression",
+      "study_status": "studied",
+      "formula": "mean(abs(predicted_performance-observed_performance))",
+      "direction": "minimize",
+      "unit": "performance_unit",
+      "scopes": [
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "previsor de desempenho treinado",
+        "previsões registradas antes dos alvos",
+        "resultado futuro observado"
+      ],
+      "na_reasons": [
+        "missing_performance_forecaster",
+        "missing_forecast_targets"
+      ],
+      "sources": [
+        "upf_notes",
+        "upf_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "performance_forecast_bias": {
+      "family": "regression",
+      "study_status": "studied",
+      "formula": "mean(predicted_performance-observed_performance)",
+      "direction": "target_zero",
+      "unit": "performance_unit",
+      "scopes": [
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "previsões do previsor e respectivos alvos observados"
+      ],
+      "na_reasons": [
+        "missing_performance_forecaster",
+        "missing_forecast_targets"
+      ],
+      "sources": [
+        "upf_notes",
+        "upf_primary"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "pipeline_elapsed_seconds": {
+      "family": "mlops",
+      "study_status": "operationalization",
+      "formula": "fim da execução - início da execução",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "pipeline",
+        "deployment",
+        "campaign"
+      ],
+      "prerequisites": [
+        "timestamps reais do pipeline e definição das fases"
+      ],
+      "na_reasons": [
+        "missing_pipeline_timing"
+      ],
+      "sources": [
+        "week02_ci",
+        "week03",
+        "mlops_notes",
+        "platform_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "time_to_deployment_seconds": {
+      "family": "mlops",
+      "study_status": "studied",
+      "formula": "instante de disponibilização - origem de lead time declarada",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "pipeline",
+        "deployment",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evento inicial e release disponível correlacionados"
+      ],
+      "na_reasons": [
+        "missing_release_events"
+      ],
+      "sources": [
+        "week02_ci",
+        "week03",
+        "mlops_notes",
+        "platform_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "platform_runtime_overhead": {
+      "family": "mlops",
+      "study_status": "studied",
+      "formula": "100*(runtime_platform-runtime_baseline)/runtime_baseline",
+      "direction": "minimize",
+      "unit": "percent",
+      "scopes": [
+        "pipeline",
+        "deployment",
+        "campaign"
+      ],
+      "prerequisites": [
+        "baseline sem integração equivalente",
+        "runtime_baseline>0"
+      ],
+      "na_reasons": [
+        "missing_platform_baseline",
+        "zero_baseline_runtime"
+      ],
+      "sources": [
+        "week02_ci",
+        "week03",
+        "mlops_notes",
+        "platform_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "platform_disk_overhead": {
+      "family": "mlops",
+      "study_status": "studied",
+      "formula": "disk_platform/disk_baseline",
+      "direction": "minimize",
+      "unit": "ratio",
+      "scopes": [
+        "pipeline",
+        "deployment",
+        "campaign"
+      ],
+      "prerequisites": [
+        "disco da mesma carga medido",
+        "baseline>0"
+      ],
+      "na_reasons": [
+        "missing_platform_baseline",
+        "zero_baseline_disk"
+      ],
+      "sources": [
+        "week02_ci",
+        "week03",
+        "mlops_notes",
+        "platform_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "platform_added_lines": {
+      "family": "mlops",
+      "study_status": "studied",
+      "formula": "linhas integração - linhas código de referência",
+      "direction": "minimize",
+      "unit": "lines",
+      "scopes": [
+        "pipeline",
+        "deployment",
+        "campaign"
+      ],
+      "prerequisites": [
+        "mesma convenção LOC e baseline de referência"
+      ],
+      "na_reasons": [
+        "missing_loc_baseline"
+      ],
+      "sources": [
+        "week02_ci",
+        "week03",
+        "mlops_notes",
+        "platform_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "platform_prediction_parity": {
+      "family": "mlops",
+      "study_status": "studied",
+      "formula": "métrica ou previsões plataforma - baseline na mesma avaliação",
+      "direction": "target_zero",
+      "unit": "metric_difference",
+      "scopes": [
+        "pipeline",
+        "deployment",
+        "campaign"
+      ],
+      "prerequisites": [
+        "mesmos dados/configuração/seed e avaliação"
+      ],
+      "na_reasons": [
+        "missing_platform_baseline"
+      ],
+      "sources": [
+        "week02_ci",
+        "week03",
+        "mlops_notes",
+        "platform_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "build_seconds": {
+      "family": "cicd",
+      "study_status": "studied",
+      "formula": "fim_build-inicio_build",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "prerequisites": [
+        "eventos de build"
+      ],
+      "na_reasons": [
+        "missing_build_events"
+      ],
+      "sources": [
+        "week02_ci"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "test_seconds": {
+      "family": "cicd",
+      "study_status": "studied",
+      "formula": "fim_testes-inicio_testes",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "prerequisites": [
+        "eventos de execução de testes"
+      ],
+      "na_reasons": [
+        "missing_test_events"
+      ],
+      "sources": [
+        "week02_ci"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "test_coverage": {
+      "family": "cicd",
+      "study_status": "studied",
+      "formula": "elementos de código cobertos / elementos mensuráveis",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "prerequisites": [
+        "relatório de cobertura",
+        "definição linha/branch e denominador>0"
+      ],
+      "na_reasons": [
+        "missing_coverage_report",
+        "zero_coverage_denominator"
+      ],
+      "sources": [
+        "week02_ci"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "code_standard_violations": {
+      "family": "cicd",
+      "study_status": "studied",
+      "formula": "count(violações reportadas pelo analisador)",
+      "direction": "minimize",
+      "unit": "violations",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "prerequisites": [
+        "relatório de análise e regras versionadas"
+      ],
+      "na_reasons": [
+        "missing_static_analysis_report"
+      ],
+      "sources": [
+        "week02_ci"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "release_frequency": {
+      "family": "cicd",
+      "study_status": "operationalization",
+      "formula": "n_releases / período observado",
+      "direction": "descriptive",
+      "unit": "releases/period",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "prerequisites": [
+        "eventos reais de release e período"
+      ],
+      "na_reasons": [
+        "missing_release_events"
+      ],
+      "sources": [
+        "week02_ci"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "infrastructure_cost_brl": {
+      "family": "business",
+      "study_status": "operationalization",
+      "formula": "sum(despesas de infraestrutura atribuídas ao período)",
+      "direction": "minimize",
+      "unit": "BRL",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "prerequisites": [
+        "despesas reais com regra de atribuição e período"
+      ],
+      "na_reasons": [
+        "missing_financial_source"
+      ],
+      "sources": [
+        "mlops_notes",
+        "mlops_primary",
+        "crisp_notes",
+        "crisp_primary",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "labeling_cost_brl": {
+      "family": "business",
+      "study_status": "operationalization",
+      "formula": "sum(despesas de obtenção de rótulos atribuídas)",
+      "direction": "minimize",
+      "unit": "BRL",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "prerequisites": [
+        "fonte real de custos de rotulagem"
+      ],
+      "na_reasons": [
+        "missing_labeling_cost_source"
+      ],
+      "sources": [
+        "mlops_notes",
+        "mlops_primary",
+        "crisp_notes",
+        "crisp_primary",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "communication_cost_brl": {
+      "family": "business",
+      "study_status": "operationalization",
+      "formula": "sum(despesas adicionais de transferência para adaptação)",
+      "direction": "minimize",
+      "unit": "BRL",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "prerequisites": [
+        "medição de transferência e preço aplicável"
+      ],
+      "na_reasons": [
+        "missing_communication_cost_source"
+      ],
+      "sources": [
+        "mlops_notes",
+        "mlops_primary",
+        "crisp_notes",
+        "crisp_primary",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "opportunity_cost_brl": {
+      "family": "business",
+      "study_status": "operationalization",
+      "formula": "valor das oportunidades perdidas atribuíveis à atualização",
+      "direction": "minimize",
+      "unit": "BRL",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "prerequisites": [
+        "fonte de negócios e contrafactual justificável"
+      ],
+      "na_reasons": [
+        "missing_business_counterfactual"
+      ],
+      "sources": [
+        "mlops_notes",
+        "mlops_primary",
+        "crisp_notes",
+        "crisp_primary",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "return_on_sales": {
+      "family": "business",
+      "study_status": "operationalization",
+      "formula": "lucro_operacional / receita_líquida",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "prerequisites": [
+        "lucro e receita reais do mesmo período",
+        "receita>0",
+        "definição contábil declarada"
+      ],
+      "na_reasons": [
+        "missing_financial_source",
+        "zero_revenue"
+      ],
+      "sources": [
+        "mlops_notes",
+        "mlops_primary",
+        "crisp_notes",
+        "crisp_primary",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "ROS foi estudado como KPI; escolher lucro operacional e receita líquida é a convenção deste catálogo e requer fonte contábil compatível."
+      ]
+    },
+    "inspection_savings_per_item": {
+      "family": "business",
+      "study_status": "studied",
+      "formula": "custo_manual_comparável - custo_automatizado por peça",
+      "direction": "maximize",
+      "unit": "BRL/item",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "prerequisites": [
+        "custos reais comparáveis e quantidade inspecionada"
+      ],
+      "na_reasons": [
+        "missing_inspection_business_data"
+      ],
+      "sources": [
+        "mlops_notes",
+        "mlops_primary",
+        "crisp_notes",
+        "crisp_primary",
+        "roi_notes"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "alarm_count": {
+      "family": "drift",
+      "study_status": "operationalization",
+      "formula": "count(alarmes emitidos)",
+      "direction": "descriptive",
+      "unit": "alarms",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "log do detector"
+      ],
+      "na_reasons": [
+        "missing_alarm_log"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ],
+      "canonical_name": "drift_alarm_count"
+    },
+    "drift_tp": {
+      "family": "drift",
+      "study_status": "operationalization",
+      "formula": "count(mudanças associadas a um alarme admissível)",
+      "direction": "maximize",
+      "unit": "changes",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "ground truth",
+        "associação uma mudança/alarme e tolerância declaradas",
+        "followup completo até min(change+tolerance,next_change); excluir mudanças censuradas e alarmes de suas janelas"
+      ],
+      "na_reasons": [
+        "no_ground_truth"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ],
+      "canonical_name": "drift_true_positives"
+    },
+    "drift_fp": {
+      "family": "drift",
+      "study_status": "studied",
+      "formula": "count(alarmes não associados)",
+      "direction": "minimize",
+      "unit": "alarms",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "ground truth",
+        "regra para alarmes duplicados",
+        "followup completo até min(change+tolerance,next_change); excluir mudanças censuradas e alarmes de suas janelas"
+      ],
+      "na_reasons": [
+        "no_ground_truth"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ],
+      "canonical_name": "drift_false_positives"
+    },
+    "drift_fn": {
+      "family": "drift",
+      "study_status": "studied",
+      "formula": "count(mudanças não detectadas no horizonte admissível)",
+      "direction": "minimize",
+      "unit": "changes",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "ground truth",
+        "horizonte observado após cada mudança",
+        "followup completo até min(change+tolerance,next_change); excluir mudanças censuradas e alarmes de suas janelas"
+      ],
+      "na_reasons": [
+        "no_ground_truth",
+        "insufficient_followup"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ],
+      "canonical_name": "drift_false_negatives"
+    },
+    "drift_delay_mean_samples": {
+      "family": "drift",
+      "study_status": "studied",
+      "formula": "instante do primeiro alarme associado - referência temporal da mudança",
+      "direction": "minimize",
+      "unit": "examples_or_seconds",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "ground truth",
+        "definir início/fim da transição",
+        "definir relógio fonte versus disponibilidade do rótulo",
+        "followup completo até min(change+tolerance,next_change); excluir mudanças censuradas e alarmes de suas janelas"
+      ],
+      "na_reasons": [
+        "no_ground_truth",
+        "change_not_detected"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ],
+      "canonical_name": "drift_detection_delay"
+    },
+    "drift_roc_auc": {
+      "family": "drift",
+      "study_status": "studied",
+      "formula": "AUROC(escores,cenário_drift); classes=sem/com mudança",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "escores contínuos de detector",
+        "rótulo independente de drift para cada caso",
+        "ambas classes"
+      ],
+      "na_reasons": [
+        "missing_drift_scores",
+        "no_ground_truth",
+        "single_class"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais"
+      ],
+      "canonical_name": "drift_score_roc_auc"
+    },
+    "recovery_delay_mean_samples": {
+      "family": "drift",
+      "study_status": "studied",
+      "formula": "primeiro instante com qualidade recuperada segundo janela/tolerância/persistência - instante de referência da mudança",
+      "direction": "minimize",
+      "unit": "examples_or_seconds",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "mudança e qualidade-alvo definidas",
+        "janelas após mudança",
+        "definir persistência e censura"
+      ],
+      "na_reasons": [
+        "no_ground_truth",
+        "missing_recovery_target",
+        "insufficient_followup",
+        "target_not_reached"
+      ],
+      "sources": [
+        "week05",
+        "week06",
+        "hinder_notes",
+        "hinder_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "as fórmulas operacionais de associação, exposição e recuperação são escolhas do projeto; as notas não fixam denominadores universais",
+        "Sem janela prévia completa: unavailable, separado de censura quando existe alvo definido e a recuperação não foi observada."
+      ],
+      "canonical_name": "recovery_time"
+    },
+    "update_count": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "count(atualizações efetivamente executadas)",
+      "direction": "descriptive",
+      "unit": "updates",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "log de ações de treino"
+      ],
+      "na_reasons": [
+        "missing_training_log"
+      ],
+      "sources": [
+        "week06",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "separar warmup, atualizações online, reconstruções e ações bloqueadas pelo budget"
+      ],
+      "canonical_name": "adaptation_count"
+    },
+    "adaptation_realized_gain": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "sum_eventos_no_mesmo_horizonte(loss_shadow_old-loss_current)",
+      "direction": "maximize",
+      "unit": "loss_sum",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "shadow do modelo anterior congelado",
+        "mesmos eventos futuros e rótulos liberados",
+        "encerrar horizonte na próxima adaptação ou fim definido"
+      ],
+      "na_reasons": [
+        "shadow_disabled",
+        "missing_shadow_predictions",
+        "no_labeled_overlap"
+      ],
+      "sources": [
+        "roi_notes",
+        "roi_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "não substituir por diferença entre janelas distintas; overhead do shadow separado"
+      ],
+      "canonical_name": "realized_adaptation_gain"
+    },
+    "adaptation_roi_mean": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "realized_adaptation_gain/incremental_adaptation_cost",
+      "direction": "maximize",
+      "unit": "loss_reduction/cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "ganho realizado pareado",
+        "custo adicional observado ou cenário explicitamente nomeado",
+        "custo>0"
+      ],
+      "na_reasons": [
+        "missing_realized_gain",
+        "missing_incremental_cost",
+        "zero_cost"
+      ],
+      "sources": [
+        "roi_notes",
+        "roi_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "excluir custo da própria avaliação do denominador conforme o artigo e reportá-lo separado",
+        "não é lucro monetário sem conversão compatível"
+      ],
+      "canonical_name": "adaptation_roi"
+    },
+    "adaptation_roi_prediction_weighted": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "sum_j(n_j*ROI_j)/sum_j(n_j)",
+      "direction": "maximize",
+      "unit": "loss_reduction/cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "ROI e tamanho de cada intervalo",
+        "pesos positivos"
+      ],
+      "na_reasons": [
+        "missing_interval_roi",
+        "zero_weight"
+      ],
+      "sources": [
+        "roi_notes",
+        "roi_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "não equivale em geral a sum(gain)/sum(cost)"
+      ],
+      "canonical_name": "adaptation_roi_weighted"
+    },
+    "cost_total": {
+      "family": "adaptation",
+      "study_status": "operationalization",
+      "formula": "error_unit_cost*errors + sum_training_costs + other_declared_costs",
+      "direction": "minimize",
+      "unit": "scenario_cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "parâmetros de custo e unidades fornecidos",
+        "eventos contados sem duplicação"
+      ],
+      "na_reasons": [
+        "missing_cost_scenario"
+      ],
+      "sources": [
+        "week06",
+        "roi_notes",
+        "upf_notes",
+        "upf_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "cenário parametrizado; não R$ medido automaticamente; contabilizar monitoramento/buffers quando presentes"
+      ],
+      "canonical_name": "scenario_total_cost"
+    },
+    "cost_scpe": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "100*(strategy_cost-oracle_cost)/oracle_cost",
+      "direction": "minimize",
+      "unit": "percent",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "Oracle retrospectivo fornecido",
+        "mesmo horizonte e função de custo",
+        "oracle_cost>0"
+      ],
+      "na_reasons": [
+        "missing_oracle",
+        "incompatible_oracle",
+        "zero_oracle_cost"
+      ],
+      "sources": [
+        "cara_notes",
+        "cara_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "oráculo de custo não garante maior acurácia; não estimar Oracle pela melhor configuração observada"
+      ],
+      "canonical_name": "scpe"
+    },
+    "upf_paper_auc": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "integral_0^alpha_max C_hat(alpha;policy_run_at_alpha) d(alpha)",
+      "direction": "minimize",
+      "unit": "normalized_cost*alpha",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política executada por alpha",
+        "grade comum documentada",
+        "protocolo Oracle que define alpha_max",
+        "dados e horizonte equivalentes"
+      ],
+      "na_reasons": [
+        "missing_alpha_campaign",
+        "missing_oracle_alpha_max",
+        "incompatible_alpha_grid"
+      ],
+      "sources": [
+        "upf_notes",
+        "upf_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "artigo avalia 10 pontos; integração numérica e faixa precisam constar do artefato"
+      ],
+      "canonical_name": "upf_paper_cost_auc"
+    },
+    "prediction_latency_mean_seconds": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "tempo final - tempo inicial da operação de inferência medida",
+      "direction": "minimize",
+      "unit": "seconds/prediction",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "amostras medidas e fronteiras da inferência"
+      ],
+      "na_reasons": [
+        "missing_prediction_timing"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "prediction_latency"
+    },
+    "prediction_throughput_per_second": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "n_previsões / tempo medido da fase de inferência",
+      "direction": "maximize",
+      "unit": "predictions/second",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "n e duração da mesma fase",
+        "tempo>0"
+      ],
+      "na_reasons": [
+        "missing_prediction_timing",
+        "zero_elapsed_time"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "prediction_throughput"
+    },
+    "training_presentations": {
+      "family": "resources",
+      "study_status": "operationalization",
+      "formula": "sum(exemplos efetivamente apresentados ao learner)",
+      "direction": "descriptive",
+      "unit": "training_presentations",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "log ou contador de treino"
+      ],
+      "na_reasons": [
+        "missing_training_counter"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "train_samples"
+    },
+    "process_peak_rss_bytes": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "max(RSS observado no processo durante escopo declarado)",
+      "direction": "minimize",
+      "unit": "bytes",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "RSS medido no processo",
+        "plataforma e escopo"
+      ],
+      "na_reasons": [
+        "missing_memory_measurement"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "peak_rss_bytes"
+    },
+    "sampled_rss_byte_seconds": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "integral(RSS(t) dt) estimada com amostras intervalares e regra declarada",
+      "direction": "minimize",
+      "unit": "byte*seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "série temporal RSS com timestamps",
+        "cobertura do intervalo"
+      ],
+      "na_reasons": [
+        "missing_memory_time_series",
+        "insufficient_memory_samples"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "peak RSS * duração não é integral medida; sem série temporal o indicador é N/A"
+      ],
+      "canonical_name": "ram_time_bytes_seconds"
+    },
+    "cl_reference_train_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "sum(tempo de treino das referências de avaliação)",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "telemetria das referências"
+      ],
+      "na_reasons": [
+        "references_disabled",
+        "missing_reference_timing"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "reference_train_seconds"
+    },
+    "cl_reference_train_samples": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "sum(exemplos de treino das referências)",
+      "direction": "descriptive",
+      "unit": "training_presentations",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "referências treinadas e ranges registrados"
+      ],
+      "na_reasons": [
+        "references_disabled"
+      ],
+      "sources": [
+        "week01",
+        "week06",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "reference_train_samples"
+    },
+    "instrumentation_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "tempo medido em callbacks de diagnóstico, incluindo CL quando chamado no callback",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "learning_speed_l99": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "s(baseline,a_baseline)/s(method,0.99*a_baseline)",
+      "direction": "maximize",
+      "unit": "ratio",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "baseline fornecida",
+        "qualidade final da baseline e curvas comparáveis",
+        "mesma definição de iteração",
+        "curve_scope=training_iteration_fixed_test",
+        "method_curve e baseline_curve em iterações no mesmo teste fixo versionado por test_dataset_sha256",
+        "curvas ordenadas, passos inteiros, acurácias finitas, target e proveniência fornecidos"
+      ],
+      "na_reasons": [
+        "missing_efficiency_baseline",
+        "incompatible_baseline",
+        "target_not_reached",
+        "zero_target_iterations",
+        "requires_training_iteration_curve_on_fixed_test"
+      ],
+      "sources": [
+        "speed_notes",
+        "speed_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "alvo não atingido é censura/N/A com motivo, nunca aceleração zero",
+        "L99 usa 99% da acurácia da baseline; não 99% absoluto",
+        "razão de iterações não implica igual razão de segundos",
+        "Offsets prequential produzem somente samples_to_target_accuracy e prequential_samples_ratio_l99/l100; não são iterações de treino em teste fixo."
+      ],
+      "canonical_name": "l99"
+    },
+    "learning_speed_l100": {
+      "family": "resources",
+      "study_status": "studied",
+      "formula": "s(baseline,a_baseline)/s(method,a_baseline)",
+      "direction": "maximize",
+      "unit": "ratio",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "baseline fornecida",
+        "qualidade final da baseline e curvas comparáveis",
+        "mesma definição de iteração",
+        "curve_scope=training_iteration_fixed_test",
+        "method_curve e baseline_curve em iterações no mesmo teste fixo versionado por test_dataset_sha256",
+        "curvas ordenadas, passos inteiros, acurácias finitas, target e proveniência fornecidos"
+      ],
+      "na_reasons": [
+        "missing_efficiency_baseline",
+        "incompatible_baseline",
+        "target_not_reached",
+        "zero_target_iterations",
+        "requires_training_iteration_curve_on_fixed_test"
+      ],
+      "sources": [
+        "speed_notes",
+        "speed_primary",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "alvo não atingido é censura/N/A com motivo, nunca aceleração zero",
+        "L99 usa 99% da acurácia da baseline; não 99% absoluto",
+        "razão de iterações não implica igual razão de segundos",
+        "Offsets prequential produzem somente samples_to_target_accuracy e prequential_samples_ratio_l99/l100; não são iterações de treino em teste fixo."
+      ],
+      "canonical_name": "l100"
+    },
+    "platform_time_overhead_ratio": {
+      "family": "mlops",
+      "study_status": "studied",
+      "formula": "100*(runtime_platform-runtime_baseline)/runtime_baseline",
+      "direction": "minimize",
+      "unit": "percent",
+      "scopes": [
+        "pipeline",
+        "deployment",
+        "campaign"
+      ],
+      "prerequisites": [
+        "baseline sem integração equivalente",
+        "runtime_baseline>0"
+      ],
+      "na_reasons": [
+        "missing_platform_baseline",
+        "zero_baseline_runtime"
+      ],
+      "sources": [
+        "week02_ci",
+        "week03",
+        "mlops_notes",
+        "platform_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "platform_runtime_overhead"
+    },
+    "platform_disk_overhead_ratio": {
+      "family": "mlops",
+      "study_status": "studied",
+      "formula": "disk_platform/disk_baseline",
+      "direction": "minimize",
+      "unit": "ratio",
+      "scopes": [
+        "pipeline",
+        "deployment",
+        "campaign"
+      ],
+      "prerequisites": [
+        "disco da mesma carga medido",
+        "baseline>0"
+      ],
+      "na_reasons": [
+        "missing_platform_baseline",
+        "zero_baseline_disk"
+      ],
+      "sources": [
+        "week02_ci",
+        "week03",
+        "mlops_notes",
+        "platform_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "platform_disk_overhead"
+    },
+    "ci_build_seconds": {
+      "family": "cicd",
+      "study_status": "studied",
+      "formula": "fim_build-inicio_build",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "prerequisites": [
+        "eventos de build"
+      ],
+      "na_reasons": [
+        "missing_build_events"
+      ],
+      "sources": [
+        "week02_ci",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "build_seconds"
+    },
+    "ci_test_seconds": {
+      "family": "cicd",
+      "study_status": "studied",
+      "formula": "fim_testes-inicio_testes",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "prerequisites": [
+        "eventos de execução de testes"
+      ],
+      "na_reasons": [
+        "missing_test_events"
+      ],
+      "sources": [
+        "week02_ci",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "test_seconds"
+    },
+    "ci_test_coverage": {
+      "family": "cicd",
+      "study_status": "studied",
+      "formula": "elementos de código cobertos / elementos mensuráveis",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "prerequisites": [
+        "relatório de cobertura",
+        "definição linha/branch e denominador>0"
+      ],
+      "na_reasons": [
+        "missing_coverage_report",
+        "zero_coverage_denominator"
+      ],
+      "sources": [
+        "week02_ci",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "test_coverage"
+    },
+    "ci_standard_violations": {
+      "family": "cicd",
+      "study_status": "studied",
+      "formula": "count(violações reportadas pelo analisador)",
+      "direction": "minimize",
+      "unit": "violations",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "prerequisites": [
+        "relatório de análise e regras versionadas"
+      ],
+      "na_reasons": [
+        "missing_static_analysis_report"
+      ],
+      "sources": [
+        "week02_ci",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "code_standard_violations"
+    },
+    "financial_ros": {
+      "family": "business",
+      "study_status": "operationalization",
+      "formula": "lucro_operacional / receita_líquida",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "prerequisites": [
+        "lucro e receita reais do mesmo período",
+        "receita>0",
+        "definição contábil declarada"
+      ],
+      "na_reasons": [
+        "missing_financial_source",
+        "zero_revenue"
+      ],
+      "sources": [
+        "mlops_notes",
+        "mlops_primary",
+        "crisp_notes",
+        "crisp_primary",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "ROS foi estudado como KPI; escolher lucro operacional e receita líquida é a convenção deste catálogo e requer fonte contábil compatível."
+      ],
+      "canonical_name": "return_on_sales"
+    },
+    "financial_infrastructure_cost": {
+      "family": "business",
+      "study_status": "operationalization",
+      "formula": "sum(despesas de infraestrutura atribuídas ao período)",
+      "direction": "minimize",
+      "unit": "BRL",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "prerequisites": [
+        "despesas reais com regra de atribuição e período"
+      ],
+      "na_reasons": [
+        "missing_financial_source"
+      ],
+      "sources": [
+        "mlops_notes",
+        "mlops_primary",
+        "crisp_notes",
+        "crisp_primary",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "infrastructure_cost_brl"
+    },
+    "label_acquisition_cost": {
+      "family": "business",
+      "study_status": "operationalization",
+      "formula": "sum(despesas de obtenção de rótulos atribuídas)",
+      "direction": "minimize",
+      "unit": "BRL",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "prerequisites": [
+        "fonte real de custos de rotulagem"
+      ],
+      "na_reasons": [
+        "missing_labeling_cost_source"
+      ],
+      "sources": [
+        "mlops_notes",
+        "mlops_primary",
+        "crisp_notes",
+        "crisp_primary",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "labeling_cost_brl"
+    },
+    "communication_cost": {
+      "family": "business",
+      "study_status": "operationalization",
+      "formula": "sum(despesas adicionais de transferência para adaptação)",
+      "direction": "minimize",
+      "unit": "BRL",
+      "scopes": [
+        "business_period",
+        "deployment"
+      ],
+      "prerequisites": [
+        "medição de transferência e preço aplicável"
+      ],
+      "na_reasons": [
+        "missing_communication_cost_source"
+      ],
+      "sources": [
+        "mlops_notes",
+        "mlops_primary",
+        "crisp_notes",
+        "crisp_primary",
+        "roi_notes",
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [],
+      "canonical_name": "communication_cost_brl"
+    },
+    "drift_f1": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "2*TP/(2*TP+FP+FN), somente followup completo",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_ground_truth_changepoints",
+        "detector_disabled"
+      ],
+      "sources": [
+        "tracking_source",
+        "hinder_notes",
+        "week05"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "drift_censored_changes": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "count(mudanças com followup incompleto ou anteriores à avaliação)",
+      "direction": "descriptive",
+      "unit": "changes",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_ground_truth_changepoints",
+        "detector_disabled"
+      ],
+      "sources": [
+        "tracking_source",
+        "hinder_notes",
+        "week05"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "drift_complete_followup_changes": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "count(mudanças com janela inteira observada dentro do range avaliado)",
+      "direction": "descriptive",
+      "unit": "changes",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_ground_truth_changepoints",
+        "detector_disabled"
+      ],
+      "sources": [
+        "tracking_source",
+        "hinder_notes",
+        "week05"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "drift_observed_detections": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "count(mudanças com alarme observado, incluindo censuradas)",
+      "direction": "descriptive",
+      "unit": "changes",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_ground_truth_changepoints",
+        "detector_disabled"
+      ],
+      "sources": [
+        "tracking_source",
+        "hinder_notes",
+        "week05"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "drift_stable_exposure_samples": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "n avaliado menos exemplos na união das janelas de detecção",
+      "direction": "descriptive",
+      "unit": "examples",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_ground_truth_changepoints",
+        "detector_disabled"
+      ],
+      "sources": [
+        "tracking_source",
+        "hinder_notes",
+        "week05"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "drift_stable_false_alarms": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "count(alarmes fora de todas as janelas de detecção)",
+      "direction": "minimize",
+      "unit": "alarms",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_ground_truth_changepoints",
+        "detector_disabled"
+      ],
+      "sources": [
+        "tracking_source",
+        "hinder_notes",
+        "week05"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "drift_unmatched_alarms_per_1000_evaluated": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "1000*alarmes não associados fora de janelas censuradas / n avaliado",
+      "direction": "minimize",
+      "unit": "alarms/1000_evaluated_examples",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_ground_truth_changepoints",
+        "detector_disabled"
+      ],
+      "sources": [
+        "tracking_source",
+        "hinder_notes",
+        "week05"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "drift_false_alarm_rate_per_1000": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "alias legado de drift_unmatched_alarms_per_1000_evaluated, não taxa em exposição estável",
+      "direction": "minimize",
+      "unit": "alarms/1000_evaluated_examples",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_ground_truth_changepoints",
+        "detector_disabled"
+      ],
+      "sources": [
+        "tracking_source",
+        "hinder_notes",
+        "week05"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "drift_delay_release_mean": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "mean(alarm.released_at-epoch-change_seq) em followup completo",
+      "direction": "minimize",
+      "unit": "ordinal_replay_seconds",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_ground_truth_changepoints",
+        "detector_disabled"
+      ],
+      "sources": [
+        "tracking_source",
+        "hinder_notes",
+        "week05"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "drift_false_positive_rate": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "FP_trials/(FP_trials+TN_trials); sem trials negativos definidos: N/A",
+      "direction": "minimize",
+      "unit": "fraction",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "recovery_recovered_changes": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "count(mudanças com baseline definido e recuperação observada)",
+      "direction": "descriptive",
+      "unit": "changes",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "recovery_censored_changes": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "count(mudanças com alvo definido e recuperação não observada no horizonte)",
+      "direction": "descriptive",
+      "unit": "changes",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "recovery_unavailable_changes": {
+      "family": "drift",
+      "study_status": "extension",
+      "formula": "count(mudanças sem janela prévia completa para definir alvo)",
+      "direction": "descriptive",
+      "unit": "changes",
+      "scopes": [
+        "change_event",
+        "window",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "mae_probability": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "mean(abs(y-p)) em probabilidades binárias registradas",
+      "direction": "minimize",
+      "unit": "probability_error",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Erro da probabilidade binária; não alias para regressão nem para erro do previsor UPF."
+      ]
+    },
+    "mse_probability": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "mean((y-p)^2), igual ao Brier binário",
+      "direction": "minimize",
+      "unit": "squared_probability",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Erro da probabilidade binária; não alias para regressão nem para erro do previsor UPF."
+      ]
+    },
+    "mean_window_accuracy": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "mean(acurácias das janelas registradas), sem ponderar por n",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "fading_accuracy": {
+      "family": "classification",
+      "study_status": "extension",
+      "formula": "s_t=factor*s_(t-1)+correct_t; w_t=factor*w_(t-1)+1; accuracy=s_t/w_t",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "run",
+        "window",
+        "episode_probe"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "prediction_latency_p50_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "quantil empírico linear 0.5 das durações de inferência avaliadas",
+      "direction": "minimize",
+      "unit": "seconds/prediction",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "prediction_latency_p95_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "quantil empírico linear 0.95 das durações de inferência avaliadas",
+      "direction": "minimize",
+      "unit": "seconds/prediction",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "prediction_latency_p99_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "quantil empírico linear 0.99 das durações de inferência avaliadas",
+      "direction": "minimize",
+      "unit": "seconds/prediction",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "prediction_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "sum(tempo model.predict nos exemplos avaliados)",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "initial_train_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "sum(tempos learn no prefixo inicial liberado)",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "update_train_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "sum(update.seconds)",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "postwarmup_train_samples_per_second": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "apresentações pós-warmup / duração das atualizações pós-warmup",
+      "direction": "maximize",
+      "unit": "training_presentations/second",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "training_unique_examples": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "cardinalidade da união dos ranges efetivamente treinados",
+      "direction": "descriptive",
+      "unit": "examples",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "training_repeated_presentations": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "training_presentations-training_unique_examples",
+      "direction": "descriptive",
+      "unit": "training_presentations",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "training_used_post_warmup": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "sum(update.train_samples)",
+      "direction": "descriptive",
+      "unit": "training_presentations",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "training_budget_blocked_decisions": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "count(decisões bloqueadas pelo budget mínimo)",
+      "direction": "descriptive",
+      "unit": "decisions",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "training_budget_utilization": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "training_used_post_warmup/configured_positive_budget",
+      "direction": "descriptive",
+      "unit": "fraction",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "updates_per_1000_evaluated": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "1000*count(updates)/n avaliado",
+      "direction": "descriptive",
+      "unit": "updates/1000_examples",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "retrain_count": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "count(update.action=reset_retrain), exclui learn_one",
+      "direction": "descriptive",
+      "unit": "retrainings",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "adaptation_roi_aggregate": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "sum(ganho shadow elegível)/sum(custo shadow elegível), subconjunto com horizonte e preço",
+      "direction": "maximize",
+      "unit": "loss_reduction/cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "adaptation_roi_eligible_updates": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "count(intervalos shadow com avaliação futura e custo precificado)",
+      "direction": "descriptive",
+      "unit": "updates",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "adaptation_roi_omitted_updates": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "count(atualizações ausentes do agregado elegível)",
+      "direction": "descriptive",
+      "unit": "updates",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "adaptation_roi_eligible_cost": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "sum(custos adicionais dos intervalos elegíveis)",
+      "direction": "descriptive",
+      "unit": "scenario_cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "adaptation_roi_omitted_priced_cost": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "sum(custos de todas atualizações omitidas), somente com todos preços conhecidos",
+      "direction": "descriptive",
+      "unit": "scenario_cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "posthoc_update_event_cost": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "alpha*count(all updates including learn_one)+sum(window error rates)",
+      "direction": "minimize",
+      "unit": "normalized_scenario_cost",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "cost_sensitivity_auc": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "integral trapezoidal da grade pós-hoc da trajetória fixa; não AUC UPF",
+      "direction": "descriptive",
+      "unit": "normalized_scenario_cost*alpha",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "cost_prediction_errors": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "FP*false_positive_price+FN*false_negative_price",
+      "direction": "minimize",
+      "unit": "scenario_cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "cost_training_presentations": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "initial_and_update_train_presentations*train_sample_price",
+      "direction": "minimize",
+      "unit": "scenario_cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "cost_update_events": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "count(all updates)*update_price",
+      "direction": "minimize",
+      "unit": "scenario_cost_unit",
+      "scopes": [
+        "adaptation",
+        "window",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "prequential_samples_ratio_l99": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "offset_baseline_at_target/offset_method_at_0.99_target em janelas prequential",
+      "direction": "descriptive",
+      "unit": "source_offset_ratio",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Distribuição/modelo podem variar ao longo do fluxo; diagnóstico operacional, não iterações com teste fixo do paper."
+      ]
+    },
+    "prequential_samples_ratio_l100": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "offset_baseline_at_target/offset_method_at_target em janelas prequential",
+      "direction": "descriptive",
+      "unit": "source_offset_ratio",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Distribuição/modelo podem variar ao longo do fluxo; diagnóstico operacional, não iterações com teste fixo do paper."
+      ]
+    },
+    "samples_to_target_accuracy": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "primeiro window.end_seq+1 com accuracy>=target, incluindo warmup",
+      "direction": "descriptive",
+      "unit": "source_offset",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Distribuição/modelo podem variar ao longo do fluxo; diagnóstico operacional, não iterações com teste fixo do paper."
+      ]
+    },
+    "evaluation_compute_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "compute_seconds do relatório; escopo específico do protocolo",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "evaluation_attempt_wall_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "wall_seconds_this_attempt; não soma de todas tentativas",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "cl_probe_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "tempo de cópia e inferência dos probes da matriz CL",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "cl_overhead_seconds": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "cl_probe_seconds+cl_reference_train_seconds",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "retention_final_mean_accuracy": {
+      "family": "continual",
+      "study_status": "extension",
+      "formula": "mean(última acurácia de cada probe por conceito visto), não AA por episódio",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "episode",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "retention_final_mean_drop": {
+      "family": "continual",
+      "study_status": "extension",
+      "formula": "mean(melhor probe amostrado incluindo atual menos acurácia atual)",
+      "direction": "minimize",
+      "unit": "accuracy_difference",
+      "scopes": [
+        "episode",
+        "run"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "energy_kwh": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "integral de potência elétrica medida no escopo, convertida para kWh",
+      "direction": "minimize",
+      "unit": "kWh",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_energy_meter_or_carbon_intensity"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "carbon_emissions": {
+      "family": "resources",
+      "study_status": "extension",
+      "formula": "sum(energia medida por período*intensidade de carbono correspondente)",
+      "direction": "minimize",
+      "unit": "kg_CO2e",
+      "scopes": [
+        "operation",
+        "adaptation",
+        "run",
+        "campaign"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "no_energy_meter_or_carbon_intensity"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "ci_delivery_seconds": {
+      "family": "cicd",
+      "study_status": "extension",
+      "formula": "instante release disponível - origem de entrega correlacionada",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "build",
+        "test_job",
+        "release",
+        "reporting_period"
+      ],
+      "prerequisites": [
+        "evidência de execução no escopo declarado"
+      ],
+      "na_reasons": [
+        "missing_execution_evidence"
+      ],
+      "sources": [
+        "tracking_source"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    }
+  },
+  "evidence_limits": [
+    "Este inventário não é avaliação científica da campanha nem comprovação de publicação no MLflow.",
+    "Semanas 01–03 contêm vários conceitos qualitativos; fórmulas operacionais são identificadas como tais.",
+    "Não há evidência de estudo específico de Brier, log-loss, ECE/MCE, AP, balanced accuracy, MCC ou kappa; são extensões identificadas.",
+    "Página de Importance Weighted Cross Validation page_27f258a9e1dc819188d4ddf6c3a63664 estava vazia; não usada como evidência.",
+    "AP/IoU/FID e recompensa aparecem como possibilidades no survey original, mas não foram confirmadas como métricas estudadas/aplicáveis ao classificador tabular desta campanha."
+  ],
+  "dynamic_definitions": {
+    "retention_accuracy/concept_{concept}": {
+      "family": "continual",
+      "formula": "acurácia do probe legado por conceito visto",
+      "unit": "fraction",
+      "scope": "sampled_concept_probe",
+      "sources": [
+        "tracking_source"
+      ]
+    },
+    "retention_drop/concept_{concept}": {
+      "family": "continual",
+      "formula": "máximo amostrado incluindo atual menos acurácia atual",
+      "unit": "accuracy_difference",
+      "scope": "sampled_concept_probe",
+      "sources": [
+        "tracking_source"
+      ]
+    }
+  }
+}

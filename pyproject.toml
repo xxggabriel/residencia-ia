@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling==1.29.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "continual-bench"
+version = "0.1.0"
+description = "Bounded, replayable continual-learning benchmark laboratory"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "river==0.26.1",
+  "pydantic==2.12.5",
+  "PyYAML==6.0.3",
+]
+
+[project.optional-dependencies]
+services = [
+  "zenml==0.98.0",
+  "mlflow-skinny==3.17.2",
+  "boto3==1.43.117",
+  "confluent-kafka==2.16.0",
+  "s3fs==2026.9.0",
+  "pandas==2.3.3",
+]
+dev = ["pytest==9.1.1", "ruff==0.15.7"]
+
+[project.scripts]
+continual-bench = "continual_bench.cli:main"
+
+[tool.hatch.build.targets.wheel.force-include]
+"configs/metric-definitions.json" = "continual_bench/metric-definitions.json"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["services: requires actual Kafka, MinIO, MLflow and ZenML", "benchmark: full experiment, excluded from quick tests"]
+addopts = "-m 'not services and not benchmark'"
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

@@ -1,0 +1,255 @@
+name: continual-bench
+
+x-common: &common
+  restart: unless-stopped
+  networks: [bench]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+  pids_limit: 256
+  security_opt: [no-new-privileges:true]
+
+x-airflow-env: &airflow-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${POSTGRES_PASSWORD:?required}@postgres/airflow
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?required}
+  AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?required}
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api:8080/execution/
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+  AIRFLOW__CORE__PARALLELISM: "8"
+  AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+
+x-airflow: &airflow
+  <<: *common
+  build: {context: ., dockerfile: docker/airflow/Dockerfile}
+  image: continual-bench-airflow:3.3.2
+  environment: *airflow-env
+  volumes: [airflow-logs:/opt/airflow/logs]
+  mem_limit: 2g
+  cpus: 2
+  depends_on:
+    airflow-init: {condition: service_completed_successfully}
+
+x-worker-env: &worker-env
+  PYTHONHASHSEED: "0"
+  BENCH_STATE: /state/runs
+  BENCH_DATASETS: /state/datasets
+  BENCH_CONCURRENCY: "8"
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  S3_ENDPOINT_URL: http://minio:9000
+  AWS_ACCESS_KEY_ID: ${MINIO_USER:?required}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_PASSWORD:?required}
+  AWS_DEFAULT_REGION: us-east-1
+  BENCH_BUCKET: benchmarks
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  MLFLOW_TRACKING_USERNAME: ${WEB_USER:?required}
+  MLFLOW_TRACKING_PASSWORD: ${MLFLOW_PASSWORD:?required}
+  ZENML_STORE_URL: http://zenml:8080
+  ZENML_STORE_USERNAME: ${WEB_USER:?required}
+  ZENML_STORE_PASSWORD: ${WEB_PASSWORD:?required}
+  ZENML_CONFIG_PATH: /state/zen-config
+  ZENML_ANALYTICS_OPT_IN: "false"
+  # OSS dashboard only renders default. It is dedicated to this benchmark deployment.
+  BENCH_ZENML_PROJECT: default
+  BENCH_ZENML_ARTIFACT_STORE: benchmark-minio-v2
+  BENCH_ZENML_STACK: benchmark-minio-v2
+
+services:
+  postgres:
+    <<: *common
+    image: postgres:17.10-bookworm
+    environment: {POSTGRES_USER: airflow, POSTGRES_DB: airflow, POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?required}"}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U airflow -d airflow]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    mem_limit: 512m
+    cpus: 1
+
+  minio:
+    <<: *common
+    build: {context: ., dockerfile: docker/minio/Dockerfile}
+    image: continual-bench-minio:2025-10-15-9e49d5e7
+    command: [server, /data, --console-address, ":9001"]
+    environment: {MINIO_ROOT_USER: "${MINIO_USER:?required}", MINIO_ROOT_PASSWORD: "${MINIO_PASSWORD:?required}"}
+    volumes: [minio-data:/data]
+    ports: ["${WEB_BIND_IP:?required}:19001:9001"]
+    healthcheck:
+      test: [CMD, curl, -fsS, http://localhost:9000/minio/health/live]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    mem_limit: 1g
+    cpus: 2
+
+  kafka:
+    <<: *common
+    image: apache/kafka:4.3.1
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_LOG_RETENTION_HOURS: "24"
+      KAFKA_LOG_RETENTION_BYTES: "268435456"
+      KAFKA_HEAP_OPTS: -Xmx512m -Xms256m
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes: [kafka-data:/var/lib/kafka/data]
+    healthcheck:
+      test: [CMD-SHELL, /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+    mem_limit: 1536m
+    cpus: 2
+
+  zenml:
+    <<: *common
+    image: zenmldocker/zenml-server:0.98.0
+    environment:
+      ZENML_STORE_URL: sqlite:////zenml/zenml.db
+      ZENML_SERVER_AUTO_ACTIVATE: "1"
+      ZENML_DEFAULT_USER_NAME: ${WEB_USER:?required}
+      ZENML_DEFAULT_USER_PASSWORD: ${WEB_PASSWORD:?required}
+      ZENML_ANALYTICS_OPT_IN: "false"
+    volumes: [zenml-data:/zenml, zen-artifacts:/state/zen-artifacts:ro]
+    ports: ["${WEB_BIND_IP:?required}:18082:8080"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+    mem_limit: 1536m
+    cpus: 2
+
+  mlflow:
+    <<: *common
+    build: {context: ., dockerfile: docker/mlflow.Dockerfile}
+    image: continual-bench-mlflow:3.17.2
+    command: [mlflow, server, --host, 0.0.0.0, --port, "5000", --workers, "1",
+      --backend-store-uri, sqlite:////mlflow/tracking.db, --artifacts-destination, s3://mlflow,
+      --app-name, basic-auth, --allowed-hosts, "mlflow:5000,localhost:15000,127.0.0.1:15000,${WEB_BIND_IP:?required}:15000",
+      --cors-allowed-origins, "http://${WEB_BIND_IP:?required}:15000"]
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_USER:?required}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_PASSWORD:?required}
+      AWS_DEFAULT_REGION: us-east-1
+      MLFLOW_AUTH_ADMIN_USERNAME: ${WEB_USER:?required}
+      MLFLOW_AUTH_ADMIN_PASSWORD: ${MLFLOW_PASSWORD:?required}
+      MLFLOW_FLASK_SERVER_SECRET_KEY: ${MLFLOW_FLASK_SECRET:?required}
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+    volumes: [mlflow-data:/mlflow]
+    ports: ["${WEB_BIND_IP:?required}:15000:5000"]
+    depends_on:
+      minio: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://mlflow:5000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+    mem_limit: 3g
+    cpus: 4
+
+  storage-init:
+    <<: *common
+    restart: "no"
+    build: .
+    image: continual-bench-worker:0.1.0
+    environment: *worker-env
+    command: [python, -c, "from continual_bench.adapters.services import S3Objects; s=S3Objects(); existing={b['Name'] for b in s.client.list_buckets()['Buckets']}; [s.client.create_bucket(Bucket=b) for b in ('benchmarks','mlflow') if b not in existing]"]
+    depends_on:
+      minio: {condition: service_healthy}
+    mem_limit: 256m
+    cpus: 1
+
+  worker:
+    <<: *common
+    build: .
+    image: continual-bench-worker:0.1.0
+    environment: *worker-env
+    volumes: [worker-data:/state, zen-artifacts:/state/zen-artifacts]
+    depends_on:
+      storage-init: {condition: service_completed_successfully}
+      kafka: {condition: service_healthy}
+      zenml: {condition: service_healthy}
+      mlflow: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8088/ready', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+    mem_limit: 8g
+    cpus: 8
+    pids_limit: 768
+
+  airflow-init:
+    <<: *airflow
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${WEB_USER:?required}
+      _AIRFLOW_WWW_USER_PASSWORD: ${WEB_PASSWORD:?required}
+    command: version
+
+  airflow-api:
+    <<: *airflow
+    command: api-server
+    ports: ["${WEB_BIND_IP:?required}:18081:8080"]
+    healthcheck:
+      test: [CMD, curl, -fsS, http://localhost:8080/api/v2/monitor/health]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+
+  airflow-scheduler:
+    <<: *airflow
+    command: scheduler
+    mem_limit: 4g
+    cpus: 4
+    pids_limit: 512
+    healthcheck:
+      test: [CMD, curl, -fsS, http://localhost:8974/health]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+
+  airflow-dag-processor:
+    <<: *airflow
+    command: dag-processor
+    healthcheck:
+      test: [CMD-SHELL, "airflow jobs check --job-type DagProcessorJob --hostname \"$${HOSTNAME}\""]
+      interval: 20s
+      timeout: 15s
+      retries: 12
+
+networks:
+  bench: {}
+volumes:
+  postgres-data:
+  minio-data:
+  kafka-data:
+  zenml-data:
+  mlflow-data:
+  worker-data:
+  airflow-logs:
+  zen-artifacts:
