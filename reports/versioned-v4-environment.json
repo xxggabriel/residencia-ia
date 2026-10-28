@@ -1,0 +1,56 @@
+{
+  "limits": [
+    {
+      "service": "worker",
+      "image_id": "sha256:34ba494f0bb91be28dec3ff0fbbec20b5f5d924017f3fd3fefc6ec6b59a67902",
+      "cpu_limit": 8.0,
+      "memory_limit_bytes": 8589934592,
+      "pids_limit": 768
+    },
+    {
+      "service": "airflow-scheduler",
+      "image_id": "sha256:d3a880234c0c001de5d20d84d916b1e2e4fbe79895d9224ee4c7cbcdb5f45c45",
+      "cpu_limit": 4.0,
+      "memory_limit_bytes": 4294967296,
+      "pids_limit": 512
+    },
+    {
+      "service": "mlflow",
+      "image_id": "sha256:fdea23b9c66500b5d0434a4c325e2329e277ba8b3e68caa5b1f7a2762d35017e",
+      "cpu_limit": 4.0,
+      "memory_limit_bytes": 3221225472,
+      "pids_limit": 256
+    }
+  ],
+  "execution": "CPU; OMP_NUM_THREADS=1 and OPENBLAS_NUM_THREADS=1 in benchmark processes",
+  "source_sha256": "ead28c768252514ba84b0ff7dd827bb85bf8da9514cce85a40c5b123c4376499",
+  "note": "Integration tests ran concurrently with campaign; wall time is not a controlled comparison with v3",
+  "thread_limits": {
+    "worker": {
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": null,
+      "NUMEXPR_NUM_THREADS": null
+    },
+    "mlflow": {
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1"
+    }
+  },
+  "cpu_model": "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz",
+  "logical_cpus": 28,
+  "memory": "MemTotal:       31703992 kB",
+  "final_deployment": {
+    "source_sha256": "8c9e598dd768943bd9725810ebd192fc28e160f106e67084c3eee284d1c0f629",
+    "image_reference": "continual-bench-worker:0.1.0",
+    "image_id": "sha256:220ee74a2c41648c3774c976bd9fa1108bb63e56b82ae084a1401793e58b7753",
+    "changes": "Atomic staging readiness marker and model lineage checksum verification; deployed after campaign"
+  },
+  "validation_tool_sha256": {
+    "scripts/verify_versioned_campaign.py": "fcbc2922434ecfce0af77f131249c5d444fd9f4c65b540eacd17fdea92b3ac54",
+    "scripts/registry_inference_probe.py": "c94b7ee9573ed7410e266e5f8f3a435bc64691afa0bce3ecba3ae50d50fd761d",
+    "scripts/summarize_versioned_campaign.py": "66f9efaa02b2ef2518cdcbd931d862b0b78b02df6299b2363237c2572cf3227b"
+  }
+}

@@ -1,0 +1,639 @@
+{
+  "campaign": "metrics-v6-validation-20261028",
+  "dag_id": "benchmark_metrics_smoke",
+  "run_id": "tracking_v1_validation_20261028",
+  "params": {
+    "campaign": "metrics-v6-validation-20261028",
+    "samples": 300,
+    "seeds": [
+      42
+    ],
+    "label_delay": 3
+  },
+  "expected_runs": 8,
+  "parallel_tasks": 8,
+  "source_sha256": "334cdb67ea6c37566635042676648f9ff3692b3acdf64254c7ee8249301cc185",
+  "definitions_sha256": "3f6e7eea08b007cd8384ec5f41db0280cc1927eeff8ea41283c0f6028ec23db4",
+  "configurations": [
+    {
+      "run_key": "1ba4e0c04fb9d8a177ece50d",
+      "config": {
+        "protocol_version": 1,
+        "name": "metrics-v6-validation-20261028",
+        "mode": "streaming",
+        "dataset": {
+          "name": "sea",
+          "samples": 300,
+          "seed": 42,
+          "label_delay": 3,
+          "epoch": 1735689600,
+          "params": {}
+        },
+        "model": {
+          "name": "logistic",
+          "params": {
+            "learning_rate": 0.05
+          }
+        },
+        "detector": {
+          "name": "ddm",
+          "params": {}
+        },
+        "policy": {
+          "name": "drift",
+          "every": 200,
+          "cooldown": 100,
+          "min_samples": 100,
+          "min_window": 50,
+          "action": "reset_retrain"
+        },
+        "warmup": 100,
+        "replay_window": 256,
+        "metric_window": 100,
+        "batch_size": 32,
+        "checkpoint_every": 100,
+        "offline_train_fraction": 0.6,
+        "reset_detector_on_retrain": true,
+        "max_seconds": 1800,
+        "training_budget": 200,
+        "plugins": [],
+        "plugin_packages": [],
+        "tracking": {
+          "version": "residency-metrics-v1",
+          "fading_factor": 0.99,
+          "detection_window": 50,
+          "recovery_tolerance": 0.05,
+          "recovery_windows": 2,
+          "target_accuracy": 0.9,
+          "probe_samples": 64,
+          "continual_references": true,
+          "reference_budget": null,
+          "adaptation_shadows": true,
+          "costs": {
+            "unit": "scenario_error_units",
+            "false_positive": 1.0,
+            "false_negative": 1.0,
+            "train_sample": 0.001,
+            "update": 0.05,
+            "train_second": 0.0,
+            "predict_second": 0.0
+          },
+          "upf_alpha": 1.0,
+          "upf_alphas": [
+            0.0,
+            0.1,
+            1.0,
+            10.0
+          ],
+          "reference": null
+        }
+      }
+    },
+    {
+      "run_key": "58a5b3dfaec2fd50deb35d30",
+      "config": {
+        "protocol_version": 1,
+        "name": "metrics-v6-validation-20261028",
+        "mode": "streaming",
+        "dataset": {
+          "name": "agrawal",
+          "samples": 300,
+          "seed": 42,
+          "label_delay": 3,
+          "epoch": 1735689600,
+          "params": {}
+        },
+        "model": {
+          "name": "hoeffding_tree",
+          "params": {
+            "grace_period": 50,
+            "max_depth": 8,
+            "max_size": 8,
+            "memory_estimate_period": 100,
+            "leaf_prediction": "nba",
+            "nominal_attributes": [
+              "elevel",
+              "car",
+              "zipcode"
+            ]
+          }
+        },
+        "detector": {
+          "name": "none",
+          "params": {}
+        },
+        "policy": {
+          "name": "online",
+          "every": 200,
+          "cooldown": 0,
+          "min_samples": 100,
+          "min_window": 50,
+          "action": "learn_one"
+        },
+        "warmup": 100,
+        "replay_window": 256,
+        "metric_window": 100,
+        "batch_size": 32,
+        "checkpoint_every": 100,
+        "offline_train_fraction": 0.6,
+        "reset_detector_on_retrain": true,
+        "max_seconds": 1800,
+        "training_budget": 200,
+        "plugins": [],
+        "plugin_packages": [],
+        "tracking": {
+          "version": "residency-metrics-v1",
+          "fading_factor": 0.99,
+          "detection_window": 50,
+          "recovery_tolerance": 0.05,
+          "recovery_windows": 2,
+          "target_accuracy": 0.9,
+          "probe_samples": 64,
+          "continual_references": true,
+          "reference_budget": null,
+          "adaptation_shadows": true,
+          "costs": {
+            "unit": "scenario_error_units",
+            "false_positive": 1.0,
+            "false_negative": 1.0,
+            "train_sample": 0.001,
+            "update": 0.05,
+            "train_second": 0.0,
+            "predict_second": 0.0
+          },
+          "upf_alpha": 1.0,
+          "upf_alphas": [
+            0.0,
+            0.1,
+            1.0,
+            10.0
+          ],
+          "reference": null
+        }
+      }
+    },
+    {
+      "run_key": "bbbc16ba6d09c2694e93028c",
+      "config": {
+        "protocol_version": 1,
+        "name": "metrics-v6-validation-20261028",
+        "mode": "offline",
+        "dataset": {
+          "name": "agrawal",
+          "samples": 300,
+          "seed": 42,
+          "label_delay": 3,
+          "epoch": 1735689600,
+          "params": {}
+        },
+        "model": {
+          "name": "hoeffding_tree",
+          "params": {
+            "grace_period": 50,
+            "max_depth": 8,
+            "max_size": 8,
+            "memory_estimate_period": 100,
+            "leaf_prediction": "nba",
+            "nominal_attributes": [
+              "elevel",
+              "car",
+              "zipcode"
+            ]
+          }
+        },
+        "detector": {
+          "name": "none",
+          "params": {}
+        },
+        "policy": {
+          "name": "none",
+          "every": 200,
+          "cooldown": 100,
+          "min_samples": 100,
+          "min_window": 50,
+          "action": "reset_retrain"
+        },
+        "warmup": 100,
+        "replay_window": 256,
+        "metric_window": 100,
+        "batch_size": 32,
+        "checkpoint_every": 100,
+        "offline_train_fraction": 0.6,
+        "reset_detector_on_retrain": true,
+        "max_seconds": 1800,
+        "training_budget": null,
+        "plugins": [],
+        "plugin_packages": [],
+        "tracking": {
+          "version": "residency-metrics-v1",
+          "fading_factor": 0.99,
+          "detection_window": 50,
+          "recovery_tolerance": 0.05,
+          "recovery_windows": 2,
+          "target_accuracy": 0.9,
+          "probe_samples": 64,
+          "continual_references": true,
+          "reference_budget": null,
+          "adaptation_shadows": true,
+          "costs": {
+            "unit": "scenario_error_units",
+            "false_positive": 1.0,
+            "false_negative": 1.0,
+            "train_sample": 0.001,
+            "update": 0.05,
+            "train_second": 0.0,
+            "predict_second": 0.0
+          },
+          "upf_alpha": 1.0,
+          "upf_alphas": [
+            0.0,
+            0.1,
+            1.0,
+            10.0
+          ],
+          "reference": null
+        }
+      }
+    },
+    {
+      "run_key": "8a0177526d602032f33b80ff",
+      "config": {
+        "protocol_version": 1,
+        "name": "metrics-v6-validation-20261028",
+        "mode": "incremental",
+        "dataset": {
+          "name": "stagger",
+          "samples": 300,
+          "seed": 42,
+          "label_delay": 3,
+          "epoch": 1735689600,
+          "params": {}
+        },
+        "model": {
+          "name": "knn",
+          "params": {
+            "n_neighbors": 11,
+            "window_size": 256,
+            "weighted": true
+          }
+        },
+        "detector": {
+          "name": "none",
+          "params": {}
+        },
+        "policy": {
+          "name": "online",
+          "every": 200,
+          "cooldown": 0,
+          "min_samples": 100,
+          "min_window": 50,
+          "action": "learn_one"
+        },
+        "warmup": 100,
+        "replay_window": 256,
+        "metric_window": 100,
+        "batch_size": 32,
+        "checkpoint_every": 100,
+        "offline_train_fraction": 0.6,
+        "reset_detector_on_retrain": true,
+        "max_seconds": 1800,
+        "training_budget": 200,
+        "plugins": [],
+        "plugin_packages": [],
+        "tracking": {
+          "version": "residency-metrics-v1",
+          "fading_factor": 0.99,
+          "detection_window": 50,
+          "recovery_tolerance": 0.05,
+          "recovery_windows": 2,
+          "target_accuracy": 0.9,
+          "probe_samples": 64,
+          "continual_references": true,
+          "reference_budget": null,
+          "adaptation_shadows": true,
+          "costs": {
+            "unit": "scenario_error_units",
+            "false_positive": 1.0,
+            "false_negative": 1.0,
+            "train_sample": 0.001,
+            "update": 0.05,
+            "train_second": 0.0,
+            "predict_second": 0.0
+          },
+          "upf_alpha": 1.0,
+          "upf_alphas": [
+            0.0,
+            0.1,
+            1.0,
+            10.0
+          ],
+          "reference": null
+        }
+      }
+    },
+    {
+      "run_key": "0af5430245fe29340ccce208",
+      "config": {
+        "protocol_version": 1,
+        "name": "metrics-v6-validation-20261028",
+        "mode": "offline",
+        "dataset": {
+          "name": "stagger",
+          "samples": 300,
+          "seed": 42,
+          "label_delay": 3,
+          "epoch": 1735689600,
+          "params": {}
+        },
+        "model": {
+          "name": "knn",
+          "params": {
+            "n_neighbors": 11,
+            "window_size": 256,
+            "weighted": true
+          }
+        },
+        "detector": {
+          "name": "none",
+          "params": {}
+        },
+        "policy": {
+          "name": "none",
+          "every": 200,
+          "cooldown": 100,
+          "min_samples": 100,
+          "min_window": 50,
+          "action": "reset_retrain"
+        },
+        "warmup": 100,
+        "replay_window": 256,
+        "metric_window": 100,
+        "batch_size": 32,
+        "checkpoint_every": 100,
+        "offline_train_fraction": 0.6,
+        "reset_detector_on_retrain": true,
+        "max_seconds": 1800,
+        "training_budget": null,
+        "plugins": [],
+        "plugin_packages": [],
+        "tracking": {
+          "version": "residency-metrics-v1",
+          "fading_factor": 0.99,
+          "detection_window": 50,
+          "recovery_tolerance": 0.05,
+          "recovery_windows": 2,
+          "target_accuracy": 0.9,
+          "probe_samples": 64,
+          "continual_references": true,
+          "reference_budget": null,
+          "adaptation_shadows": true,
+          "costs": {
+            "unit": "scenario_error_units",
+            "false_positive": 1.0,
+            "false_negative": 1.0,
+            "train_sample": 0.001,
+            "update": 0.05,
+            "train_second": 0.0,
+            "predict_second": 0.0
+          },
+          "upf_alpha": 1.0,
+          "upf_alphas": [
+            0.0,
+            0.1,
+            1.0,
+            10.0
+          ],
+          "reference": null
+        }
+      }
+    },
+    {
+      "run_key": "b097d54c18bd3ec319e18eb0",
+      "config": {
+        "protocol_version": 1,
+        "name": "metrics-v6-validation-20261028",
+        "mode": "incremental",
+        "dataset": {
+          "name": "electricity",
+          "samples": 300,
+          "seed": 42,
+          "label_delay": 3,
+          "epoch": 1735689600,
+          "params": {}
+        },
+        "model": {
+          "name": "hoeffding_tree",
+          "params": {
+            "grace_period": 50,
+            "max_depth": 8,
+            "max_size": 8,
+            "memory_estimate_period": 100,
+            "leaf_prediction": "nba"
+          }
+        },
+        "detector": {
+          "name": "none",
+          "params": {}
+        },
+        "policy": {
+          "name": "online",
+          "every": 200,
+          "cooldown": 0,
+          "min_samples": 100,
+          "min_window": 50,
+          "action": "learn_one"
+        },
+        "warmup": 100,
+        "replay_window": 256,
+        "metric_window": 100,
+        "batch_size": 32,
+        "checkpoint_every": 100,
+        "offline_train_fraction": 0.6,
+        "reset_detector_on_retrain": true,
+        "max_seconds": 1800,
+        "training_budget": 200,
+        "plugins": [],
+        "plugin_packages": [],
+        "tracking": {
+          "version": "residency-metrics-v1",
+          "fading_factor": 0.99,
+          "detection_window": 50,
+          "recovery_tolerance": 0.05,
+          "recovery_windows": 2,
+          "target_accuracy": 0.9,
+          "probe_samples": 64,
+          "continual_references": true,
+          "reference_budget": null,
+          "adaptation_shadows": true,
+          "costs": {
+            "unit": "scenario_error_units",
+            "false_positive": 1.0,
+            "false_negative": 1.0,
+            "train_sample": 0.001,
+            "update": 0.05,
+            "train_second": 0.0,
+            "predict_second": 0.0
+          },
+          "upf_alpha": 1.0,
+          "upf_alphas": [
+            0.0,
+            0.1,
+            1.0,
+            10.0
+          ],
+          "reference": null
+        }
+      }
+    },
+    {
+      "run_key": "3c220bb041840b94cb65acdc",
+      "config": {
+        "protocol_version": 1,
+        "name": "metrics-v6-validation-20261028",
+        "mode": "streaming",
+        "dataset": {
+          "name": "airlines",
+          "samples": 300,
+          "seed": 42,
+          "label_delay": 3,
+          "epoch": 1735689600,
+          "params": {}
+        },
+        "model": {
+          "name": "knn",
+          "params": {
+            "n_neighbors": 11,
+            "window_size": 256,
+            "weighted": true
+          }
+        },
+        "detector": {
+          "name": "none",
+          "params": {}
+        },
+        "policy": {
+          "name": "periodic",
+          "every": 200,
+          "cooldown": 100,
+          "min_samples": 100,
+          "min_window": 50,
+          "action": "reset_retrain"
+        },
+        "warmup": 100,
+        "replay_window": 256,
+        "metric_window": 100,
+        "batch_size": 32,
+        "checkpoint_every": 100,
+        "offline_train_fraction": 0.6,
+        "reset_detector_on_retrain": true,
+        "max_seconds": 1800,
+        "training_budget": 200,
+        "plugins": [],
+        "plugin_packages": [],
+        "tracking": {
+          "version": "residency-metrics-v1",
+          "fading_factor": 0.99,
+          "detection_window": 50,
+          "recovery_tolerance": 0.05,
+          "recovery_windows": 2,
+          "target_accuracy": 0.9,
+          "probe_samples": 64,
+          "continual_references": true,
+          "reference_budget": null,
+          "adaptation_shadows": true,
+          "costs": {
+            "unit": "scenario_error_units",
+            "false_positive": 1.0,
+            "false_negative": 1.0,
+            "train_sample": 0.001,
+            "update": 0.05,
+            "train_second": 0.0,
+            "predict_second": 0.0
+          },
+          "upf_alpha": 1.0,
+          "upf_alphas": [
+            0.0,
+            0.1,
+            1.0,
+            10.0
+          ],
+          "reference": null
+        }
+      }
+    },
+    {
+      "run_key": "4a45fef04b1875df0616cfa5",
+      "config": {
+        "protocol_version": 1,
+        "name": "metrics-v6-validation-20261028",
+        "mode": "offline",
+        "dataset": {
+          "name": "airlines",
+          "samples": 300,
+          "seed": 42,
+          "label_delay": 3,
+          "epoch": 1735689600,
+          "params": {}
+        },
+        "model": {
+          "name": "logistic",
+          "params": {
+            "learning_rate": 0.05
+          }
+        },
+        "detector": {
+          "name": "none",
+          "params": {}
+        },
+        "policy": {
+          "name": "none",
+          "every": 200,
+          "cooldown": 100,
+          "min_samples": 100,
+          "min_window": 50,
+          "action": "reset_retrain"
+        },
+        "warmup": 100,
+        "replay_window": 256,
+        "metric_window": 100,
+        "batch_size": 32,
+        "checkpoint_every": 100,
+        "offline_train_fraction": 0.6,
+        "reset_detector_on_retrain": true,
+        "max_seconds": 1800,
+        "training_budget": null,
+        "plugins": [],
+        "plugin_packages": [],
+        "tracking": {
+          "version": "residency-metrics-v1",
+          "fading_factor": 0.99,
+          "detection_window": 50,
+          "recovery_tolerance": 0.05,
+          "recovery_windows": 2,
+          "target_accuracy": 0.9,
+          "probe_samples": 64,
+          "continual_references": true,
+          "reference_budget": null,
+          "adaptation_shadows": true,
+          "costs": {
+            "unit": "scenario_error_units",
+            "false_positive": 1.0,
+            "false_negative": 1.0,
+            "train_sample": 0.001,
+            "update": 0.05,
+            "train_second": 0.0,
+            "predict_second": 0.0
+          },
+          "upf_alpha": 1.0,
+          "upf_alphas": [
+            0.0,
+            0.1,
+            1.0,
+            10.0
+          ],
+          "reference": null
+        }
+      }
+    }
+  ]
+}

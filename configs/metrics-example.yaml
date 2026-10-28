@@ -1,0 +1,29 @@
+name: metrics-v6-example
+mode: streaming
+dataset:
+  name: agrawal
+  samples: 3000
+  seed: 42
+  label_delay: 3
+model:
+  name: hoeffding_tree
+  params:
+    nominal_attributes: [elevel, car, zipcode]
+detector:
+  name: none
+policy:
+  name: online
+  action: learn_one
+training_budget: 2900
+tracking:
+  version: residency-metrics-v1
+  adaptation_shadows: true
+  continual_references: true
+  costs:
+    unit: scenario_error_units
+    false_positive: 1.0
+    false_negative: 1.0
+    train_sample: 0.001
+    update: 0.05
+    train_second: 0.0
+    predict_second: 0.0
