@@ -1,0 +1,19 @@
+name: sea-drift
+mode: streaming
+dataset:
+  name: sea
+  samples: 1200
+  seed: 42
+  label_delay: 3
+model: {name: logistic, params: {learning_rate: 0.05}}
+detector: {name: adwin, params: {delta: 0.002}}
+policy:
+  name: drift
+  action: reset_retrain
+  cooldown: 100
+  min_samples: 100
+  min_window: 50
+warmup: 100
+replay_window: 256
+metric_window: 100
+checkpoint_every: 100
