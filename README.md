@@ -1,4 +1,12 @@
-# Laboratório de aprendizado contínuo — Semana 08
+# Laboratório de aprendizado contínuo — Semanas 08 e 09
+
+A Semana 09 acrescentou políticas por desempenho e custo de cenário, detectores River,
+promoção independente do treino, fontes com drift explícito, admissão de datasets locais,
+avaliação tipada de regressão/multiclasse e métricas futuras com modelos congelados.
+Consulte a [matriz de cobertura](docs/semana09-coverage.md) e o
+[relatório de implementação e validação no homelab](docs/semana09-report.md).
+Os smokes foram verificações funcionais; campanhas comparativas e a reconciliação
+com os 47 registros da planilha permaneceram pendentes.
 
 Fluxo de processamento desacoplado para experimentos com mudança de conceito (drift) e atualização de modelos. Apache Airflow coordena **tarefas com execução finita**; ZenML (projeto independente, não Apache) organiza quatro etapas e seus artefatos; Kafka transporta eventos; MinIO guarda dados e pontos de recuperação; MLflow rastreia experimentos. Somente o núcleo Python controla o ciclo por amostra/lote. O agendador do ZenML não controla o fluxo contínuo de dados.
 
