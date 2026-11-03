@@ -29,6 +29,7 @@ class Engine:
         min_retrain_window: int = 1,
         versions=None,
         observer=None,
+        promotion: dict | None = None,
     ):
         self.model_factory = model_factory
         self.detector_factory = detector_factory
@@ -43,6 +44,19 @@ class Engine:
         self.min_retrain_window = min_retrain_window
         self.versions = versions
         self.observer = observer
+        self.promotion = promotion
+        if promotion is not None:
+            if (set(promotion) - {"validation_samples", "min_improvement"}
+                    or not isinstance(promotion.get("validation_samples"), int)
+                    or promotion["validation_samples"] < 1
+                    or not 0 <= promotion.get("min_improvement", 0) <= 1
+                    or promotion["validation_samples"] + min_retrain_window > window):
+                raise ValueError("invalid promotion holdout configuration")
+        default_monitor = max(metric_window, getattr(policy, "min_window", 1))
+        monitor_window = getattr(policy, "params", {}).get("monitor_window", default_monitor)
+        self.recent_errors = deque(maxlen=int(monitor_window))
+        self.recent_error_sum = 0
+        self.candidates = []
         self.training_used = 0
         self.budget_blocked = 0
         self.next_seq = 0
@@ -60,6 +74,17 @@ class Engine:
         self.best_probe = {}
         self.audit = hashlib.sha256(b"continual-bench-v1").hexdigest()
         self.compute_seconds = 0.0
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if "promotion" not in state:
+            self.promotion = None
+        if "recent_errors" not in state:
+            self.recent_errors = deque(maxlen=self.metric_window)
+        if "recent_error_sum" not in state:
+            self.recent_error_sum = sum(self.recent_errors)
+        if "candidates" not in state:
+            self.candidates = [{**update, "promoted": True} for update in self.updates]
 
     def observe_batch(self, batch: list[Event]) -> None:
         start = time.perf_counter()
@@ -120,8 +145,16 @@ class Engine:
             if event.concept is not None:
                 self.seen_concepts.add(event.concept)
             monitor_started = time.perf_counter()
-            alarm = self.detector.update(int((p >= 0.5) != event.y))
-            decision = self.policy.decide(DecisionContext(self.labeled, len(self.replay), alarm))
+            error = int((p >= 0.5) != event.y)
+            if len(self.recent_errors) == self.recent_errors.maxlen:
+                self.recent_error_sum -= self.recent_errors[0]
+            self.recent_errors.append(error)
+            self.recent_error_sum += error
+            alarm = self.detector.update(error)
+            decision = self.policy.decide(DecisionContext(
+                self.labeled, len(self.replay), alarm,
+                self.recent_error_sum / len(self.recent_errors), len(self.recent_errors),
+            ))
             if self.observer is not None:
                 self.observer.monitor_seconds += time.perf_counter() - monitor_started
             if alarm:
@@ -135,7 +168,17 @@ class Engine:
                     }
                 )
             if decision.action != "none":
-                train_samples = len(self.replay) if decision.action == "reset_retrain" else 1
+                validation_count = self.promotion["validation_samples"] if self.promotion else 0
+                if validation_count and decision.action != "reset_retrain":
+                    raise ValueError("promotion gate requires reset_retrain")
+                available = len(self.replay) - validation_count
+                train_samples = available if decision.action == "reset_retrain" else 1
+                if validation_count and train_samples < self.min_retrain_window:
+                    if self.current.n == self.metric_window:
+                        self.close_window(event.seq)
+                    if self.observer is not None:
+                        self.observer.after_label(event, p, trace, now, self.model, True)
+                    continue
                 if self.training_budget is not None:
                     train_samples = min(train_samples, self.training_budget - self.training_used)
                     minimum = self.min_retrain_window if decision.action == "reset_retrain" else 1
@@ -148,40 +191,75 @@ class Engine:
                         continue
                 previous = self.observer.before_update(self.model) if self.observer is not None else None
                 started = time.perf_counter()
+                promoted = True
+                validation = {}
                 if decision.action == "reset_retrain":
-                    self.model = self.model_factory()
-                    for x, y in list(self.replay)[-train_samples:]:
-                        self.model.learn(dict(x), y)
-                    if self.reset_detector:
-                        self.detector = self.detector_factory()
+                    candidate = self.model_factory()
+                    replay = list(self.replay)
+                    training = (replay[:-validation_count] if validation_count else replay)[-train_samples:]
+                    for x, y in training:
+                        candidate.learn(dict(x), y)
+                    training_seconds = time.perf_counter() - started
+                    if validation_count:
+                        holdout = replay[-validation_count:]
+                        incumbent = copy.deepcopy(self.model)
+                        candidate_accuracy = self.holdout_accuracy(candidate, holdout)
+                        incumbent_accuracy = self.holdout_accuracy(incumbent, holdout)
+                        gain = candidate_accuracy - incumbent_accuracy
+                        promoted = gain > self.promotion.get("min_improvement", 0)
+                        validation = {"validation_samples": validation_count,
+                                      "validation_seq_range": [event.seq - validation_count + 1,
+                                                               event.seq + 1],
+                                      "candidate_accuracy": candidate_accuracy,
+                                      "incumbent_accuracy": incumbent_accuracy,
+                                      "accuracy_gain": gain,
+                                      "validation_seconds": time.perf_counter() - started - training_seconds}
+                    if promoted:
+                        self.model = candidate
+                        if self.reset_detector:
+                            self.detector = self.detector_factory()
                 elif decision.action == "learn_one":
                     self.model.learn(dict(event.x), event.y)
+                    training_seconds = time.perf_counter() - started
                 else:
                     raise ValueError(f"unknown update action: {decision.action}")
+                # Every completed candidate consumes budget and starts cooldown, including rejection.
                 self.policy.updated(self.labeled)
                 self.training_used += train_samples
-                self.updates.append(
-                    {
-                        "seq": event.seq,
-                        "labeled": self.labeled,
-                        "action": decision.action,
-                        "reason": decision.reason,
-                        "train_samples": train_samples,
-                        "seconds": time.perf_counter() - started,
-                    }
-                )
-                if self.observer is not None:
-                    self.observer.after_update(previous, self.updates[-1])
-                if self.versions is not None:
-                    start = event.seq - train_samples + 1 if decision.action == "reset_retrain" else event.seq
-                    self.versions.record(self.model, {"action": decision.action,
-                                                      "seq_range": [start, event.seq + 1],
-                                                      "label_available_at": event.available_at,
-                                                      "released_at": now})
+                record = {
+                    "seq": event.seq, "labeled": self.labeled, "action": decision.action,
+                    "reason": decision.reason, "train_samples": train_samples, "seconds": training_seconds,
+                }
+                training_end = event.seq + 1 - validation_count
+                training_start = (training_end - train_samples
+                                  if decision.action == "reset_retrain" else event.seq)
+                self.candidates.append({**record, "promoted": promoted,
+                                        "train_seq_range": [training_start, training_end], **validation})
+                if promoted:
+                    self.updates.append(record)
+                    if self.observer is not None:
+                        self.observer.after_update(previous, record)
+                    if self.versions is not None:
+                        end = event.seq + 1 - validation_count
+                        start = end - train_samples if decision.action == "reset_retrain" else event.seq
+                        self.versions.record(self.model, {"action": decision.action,
+                                                          "seq_range": [start, end],
+                                                          "label_available_at": event.available_at,
+                                                          "released_at": now})
             if self.current.n == self.metric_window:
                 self.close_window(event.seq)
             if self.observer is not None:
                 self.observer.after_label(event, p, trace, now, self.model, True)
+
+    @staticmethod
+    def holdout_accuracy(model, holdout):
+        correct = 0
+        for x, y in holdout:
+            probability = model.predict(dict(x))
+            if not 0 <= probability <= 1:
+                raise ValueError("invalid prediction during promotion validation")
+            correct += (probability >= 0.5) == y
+        return correct / len(holdout)
 
     def close_window(self, end_seq: int) -> None:
         if self.current.n:
@@ -221,6 +299,12 @@ class Engine:
             "windows": self.windows,
             "alarms": self.alarms,
             "updates": self.updates,
+            "candidates": self.candidates,
+            "promotion": {"gate": self.promotion, "trained": len(self.candidates),
+                          "promoted": sum(c["promoted"] for c in self.candidates),
+                          "rejected": sum(not c["promoted"] for c in self.candidates),
+                          "training_seconds": sum(c["seconds"] for c in self.candidates)},
+            "detector_signal": "released_label_binary_prediction_error",
             "training": {"budget": self.training_budget, "used": self.training_used,
                          "blocked_decisions": self.budget_blocked, "excludes_warmup": True},
             "retention_probes": self.retention,
