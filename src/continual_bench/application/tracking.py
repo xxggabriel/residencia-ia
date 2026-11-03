@@ -306,11 +306,13 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
         series["fading_accuracy"] = observation["fading_series"]
     config = report["config"]
     updates = report["updates"]
-    used = sum(u["train_samples"] for u in updates)
+    candidates = report.get("candidates", updates)
+    used = sum(u["train_samples"] for u in candidates)
     initial = report["split"]["train"][1] if "split" in report else config["warmup"]
     trained = set(range(initial))
-    for u in updates:
-        trained.update(range(u["seq"] - u["train_samples"] + 1, u["seq"] + 1))
+    for u in candidates:
+        start, end = u.get("train_seq_range", [u["seq"] - u["train_samples"] + 1, u["seq"] + 1])
+        trained.update(range(start, end))
     available("training_presentations", initial + used, scope="includes_initial_fit_and_replays")
     available("training_used_post_warmup", used)
     available("training_unique_examples", len(trained))
@@ -326,7 +328,7 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
     )
     budget = config.get("training_budget")
     available("training_budget_utilization", used / budget if budget else None, "no_positive_budget")
-    train_seconds = sum(u["seconds"] for u in updates)
+    train_seconds = sum(u["seconds"] for u in candidates)
     available("update_train_seconds", train_seconds)
     initial_seconds = observation.get("warmup_train_seconds")
     available("initial_train_seconds", initial_seconds, "initial_fit_timer_not_captured")
@@ -403,7 +405,8 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
     retrains = sum(u["action"] == "reset_retrain" for u in updates)
     reset_only = (config.get("policy", {}).get("name") != "online"
                   and config.get("policy", {}).get("action", "reset_retrain") == "reset_retrain"
-                  and all(u["action"] == "reset_retrain" for u in updates))
+                  and all(u["action"] == "reset_retrain" for u in updates)
+                  and len(candidates) == len(updates))
     available(
         "upf_total_cost",
         settings.get("upf_alpha", 1) * retrains + error_sum if reset_only else None,
@@ -435,7 +438,7 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
         available(
             "cost_training_presentations", (initial + used) * costs["train_sample"], scope=costs["unit"]
         )
-        available("cost_update_events", len(updates) * costs["update"], scope=costs["unit"])
+        available("cost_update_events", len(candidates) * costs["update"], scope=costs["unit"])
         timed_train = metrics["train_seconds"]
         timed_predict = metrics["prediction_seconds"]
         if (not costs["train_second"] or timed_train is not None) and (
@@ -444,7 +447,7 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
             cost_total = (
                 error_cost
                 + (initial + used) * costs["train_sample"]
-                + len(updates) * costs["update"]
+                + len(candidates) * costs["update"]
                 + (timed_train or 0) * costs["train_second"]
                 + (timed_predict or 0) * costs["predict_second"]
             )

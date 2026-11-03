@@ -1,0 +1,29 @@
+# Transient test client only: `run --rm --no-deps validation ...`; never `up`.
+name: ${WEEK09_PROJECT:-semana09-validation}
+services:
+  validation:
+    extends:
+      file: compose.yaml
+      service: worker
+    restart: "no"
+    depends_on: !reset {}
+    volumes: !override
+      - ${WEEK09_CODE:?required}:/work:ro
+      - ${WEEK09_STATE:?required}:/state
+    working_dir: /work
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 192
+    healthcheck:
+      disable: true
+    environment:
+      PYTHONPATH: /work/src
+      PYTHONDONTWRITEBYTECODE: "1"
+      BENCH_ZENML_PROJECT: ${WEEK09_PROJECT:-semana09-validation}
+      BENCH_ZENML_STACK: ${WEEK09_PROJECT:-semana09-validation}
+      ZENML_CONFIG_PATH: /state/zen-config
+      SERVICE_TEST_STATE: /state/service-tests
+networks:
+  bench:
+    external: true
+    name: ${WEEK09_NETWORK:-continual-bench_bench}

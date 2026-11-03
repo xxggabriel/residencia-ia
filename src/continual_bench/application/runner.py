@@ -143,7 +143,7 @@ def evaluate(config: Config, manifest: dict, root: str, transport=None, *, stop_
             split = int(config.dataset.samples * config.offline_train_fraction)
             test_start = next(itertools.islice(read_events(events_path), split, split + 1)).timestamp
             metrics, current, windows = Metrics(), Metrics(), []
-            observer = OnlineObservability(settings, memory_sampler=current_rss_bytes)
+            observer = OnlineObservability(settings, memory_sampler=current_rss_bytes, warmup=split)
             observer.sample_memory()
             trained = 0
             for event in read_events(events_path):
@@ -212,8 +212,10 @@ def evaluate(config: Config, manifest: dict, root: str, transport=None, *, stop_
                     min_retrain_window=config.policy.min_window,
                     versions=versions,
                     observer=OnlineObservability(
-                        settings, continual_evaluation(source, model_factory, settings), current_rss_bytes
+                        settings, continual_evaluation(source, model_factory, settings), current_rss_bytes,
+                        warmup=config.warmup,
                     ),
+                    promotion=config.promotion.model_dump() if config.promotion else None,
                 )
             )
             if config.mode == "streaming" and transport:
@@ -269,6 +271,10 @@ def evaluate(config: Config, manifest: dict, root: str, transport=None, *, stop_
             }
         )
         save_tracking_files(directory, report, settings, observer)
+        if settings.get("week09") is not None:
+            from continual_bench.application.week09_reporting import supplemental_report
+
+            report["week09"] = supplemental_report(report, directory, near_future=observer.near_future)
         # Report first, then complete checkpoint: either crash point is safe to recompute/reuse.
         atomic_write(report_path, json.dumps(report, indent=2).encode())
         checkpoints.save(identity, {"contract": contract, "state": state, "complete": True})

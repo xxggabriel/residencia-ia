@@ -231,7 +231,7 @@ class MLflowTracker:
         registry = register_final_model(client, run, config, report, Path(files[0]).parent, catalog)
         summaries = [("summary_" + key, 0, value)
                      for key, value in report["metrics"].items() if value is not None]
-        used = sum(update["train_samples"] for update in report["updates"])
+        used = sum(update["train_samples"] for update in report.get("candidates", report["updates"]))
         summaries.append(("training_used", 0, used))
         log_metric_points(client, run_id, summaries)
         client.log_batch(run_id, tags=[RunTag("update_count", str(len(report["updates"]))),
