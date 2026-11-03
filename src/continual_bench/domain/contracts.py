@@ -29,6 +29,8 @@ class DecisionContext:
     labeled: int
     window_size: int
     drift: bool
+    recent_error: float | None = None
+    monitored: int = 0
 
 
 @dataclass(frozen=True)

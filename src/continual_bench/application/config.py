@@ -39,6 +39,23 @@ class PolicyConfig(Strict):
     min_samples: int = Field(default=100, ge=1)
     min_window: int = Field(default=50, ge=1)
     action: Literal["reset_retrain", "learn_one"] = "reset_retrain"
+    params: dict = Field(default_factory=dict, exclude_if=lambda value: not value)
+
+    @model_validator(mode="after")
+    def validate_builtin_policy(self):
+        builtin = {"none", "online", "periodic", "drift", "performance", "cost_heuristic"}
+        if self.name in builtin and self.params:
+            from continual_bench.domain.policies import PolicyStrategy
+
+            PolicyStrategy(kind=self.name, **self.model_dump(exclude={"name"}))
+        return self
+
+
+class PromotionConfig(Strict):
+    """Past-label temporal holdout; candidates never learn its validation suffix."""
+
+    validation_samples: int = Field(default=32, ge=1, le=1000)
+    min_improvement: float = Field(default=0, ge=0, le=1, allow_inf_nan=False)
 
 
 class CostConfig(Strict):
@@ -49,6 +66,12 @@ class CostConfig(Strict):
     update: float = Field(default=0, ge=0, allow_inf_nan=False)
     train_second: float = Field(default=0, ge=0, allow_inf_nan=False)
     predict_second: float = Field(default=0, ge=0, allow_inf_nan=False)
+
+
+class Week09EvaluationConfig(Strict):
+    horizon: int = Field(default=32, ge=1, le=1024)
+    gap: int = Field(default=1, ge=0)
+    max_windows: int = Field(default=4, ge=1, le=64)
 
 
 class TrackingConfig(Strict):
@@ -66,6 +89,7 @@ class TrackingConfig(Strict):
     upf_alpha: float = Field(default=1, ge=0, allow_inf_nan=False)
     upf_alphas: tuple[float, ...] = (0, 0.1, 1, 10)
     reference: dict | None = None
+    week09: Week09EvaluationConfig | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def valid_alphas(self):
@@ -99,9 +123,16 @@ class Config(Strict):
     plugin_packages: tuple[str, ...] = ()
     # Keep identities/config dumps of historical configurations byte-compatible.
     tracking: TrackingConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    promotion: PromotionConfig | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_protocol(self):
+        if self.promotion is not None:
+            if (self.mode == "offline" or self.policy.action != "reset_retrain"
+                    or self.policy.name in {"none", "online"}):
+                raise ValueError("promotion gate requires a prequential reset_retrain policy")
+            if self.promotion.validation_samples + self.policy.min_window > self.replay_window:
+                raise ValueError("promotion must leave min_window training samples in replay")
         if self.warmup >= self.dataset.samples:
             raise ValueError("warmup must leave evaluation samples")
         if self.policy.min_window > self.replay_window:
