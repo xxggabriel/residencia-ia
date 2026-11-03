@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "scope": "Candidates explicitly named in the request and Semana 09 report; not the unavailable 47-record workbook",
+  "catalog_complete": false,
+  "river_version": "0.26.1",
+  "download_policy": "No automatic downloads. Admit reviewed local manifests before real-data runs.",
+  "synthetic_presets": [
+    {"name": "sea", "task": "binary", "adapter": "SyntheticSource", "status": "existing_piecewise_concepts"},
+    {"name": "agrawal", "task": "binary", "adapter": "SyntheticSource", "status": "existing_recurrent_concepts"},
+    {"name": "stagger", "task": "binary", "adapter": "SyntheticSource", "status": "existing_piecewise_concepts"},
+    {"name": "hyperplane", "task": "binary", "adapter": "MovingSyntheticSource", "params": {"n_features": 10, "n_drift_features": 2, "mag_change": 0.001, "noise_percentage": 0.05, "sigma": 0.1}},
+    {"name": "rbf_drift", "task": "binary", "adapter": "MovingSyntheticSource", "params": {"n_features": 10, "n_centroids": 20, "n_drift_centroids": 10, "change_speed": 0.001}},
+    {"name": "friedman_drift", "task": "regression", "adapter": "FriedmanDriftSource", "params": {"drift_type": "gra", "position": [100, 200], "transition_window": 0}, "binary_runner": "rejected"}
+  ],
+  "local_candidates": [
+    {"name": "insects", "adapter": "LocalManifestSource", "formats": ["arff", "csv"], "variant": null, "source": "https://sites.google.com/view/uspdsrepository", "status": "exact_variant_license_hashes_and_annotations_required"},
+    {"name": "electricity", "adapter": "RealSource", "source": "https://www.openml.org/d/151", "status": "existing_pinned_OpenML_v1_no_ground_truth_changepoints"},
+    {"name": "gas", "adapter": "LocalManifestSource", "formats": ["libsvm"], "source": "https://archive.ics.uci.edu/dataset/224/gas+sensor+array+drift+dataset", "status": "six_class_batch_manifests_required_binary_runner_rejected"},
+    {"name": "split_mnist", "adapter": "LocalManifestSource + split_class_tasks", "source": "https://yann.lecun.com/exdb/mnist/", "status": "prepared_pixels_official_train_test_and_license_required"},
+    {"name": "permuted_mnist", "adapter": "LocalManifestSource + permuted_tasks", "source": "https://yann.lecun.com/exdb/mnist/", "status": "prepared_pixels_official_train_test_and_license_required"},
+    {"name": "split_cifar10", "adapter": "LocalManifestSource + split_class_tasks", "source": "https://www.cs.toronto.edu/~kriz/cifar.html", "status": "prepared_pixels_official_train_test_and_license_required"},
+    {"name": "split_cifar100", "adapter": "LocalManifestSource + split_class_tasks", "source": "https://www.cs.toronto.edu/~kriz/cifar.html", "status": "prepared_pixels_official_train_test_and_license_required"},
+    {"name": "core50", "adapter": "LocalManifestSource + temporal_tasks", "source": "https://vlomonaco.github.io/core50/", "status": "official_scenario_run_session_and_split_manifests_required"},
+    {"name": "stream51", "adapter": "LocalManifestSource + temporal_tasks", "source": "https://github.com/tyler-hayes/Stream-51", "status": "official_instance_order_split_novelty_and_frame_preparation_required"},
+    {"name": "clear10", "adapter": "LocalManifestSource + temporal_tasks", "source": "https://clear-benchmark.github.io/", "status": "release_protocol_temporal_bucket_and_image_rights_required"},
+    {"name": "clear100", "adapter": "LocalManifestSource + temporal_tasks", "source": "https://clear-benchmark.github.io/", "status": "release_protocol_temporal_bucket_and_image_rights_required"}
+  ]
+}

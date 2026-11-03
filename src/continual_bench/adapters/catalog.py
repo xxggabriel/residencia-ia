@@ -45,20 +45,26 @@ def put_immutable(objects, key, path):
     return f"s3://{objects.bucket}/{key}"
 
 
+def catalog_source(dataset):
+    """Machine-local cache locations must not change content-addressed metadata."""
+    source = {
+        k: v
+        for k, v in dataset.items()
+        if k not in ("path", "raw_path", "cache", "run_key", "protocol", "config", "requested_seed")
+    }
+    # A real source explicitly ignores seed; do not turn run-only metadata into a dataset version.
+    if source.get("seed_ignored"):
+        source.pop("seed", None)
+    return source
+
+
 def publish_catalog(objects, report, directory):
     directory = Path(directory)
     dataset = report["dataset"]
     version = dataset["sha256"]
     first = json.loads((directory / "events.jsonl").open().readline())
     schema = {key: type(value).__name__ for key, value in first["x"].items()}
-    source = {
-        k: v
-        for k, v in dataset.items()
-        if k not in ("path", "raw_path", "run_key", "protocol", "config", "requested_seed")
-    }
-    # A real source explicitly ignores seed; do not turn run-only metadata into a dataset version.
-    if source.get("seed_ignored"):
-        source.pop("seed", None)
+    source = catalog_source(dataset)
     raw_uri = None
     if dataset.get("raw_sha256"):
         raw = Path(dataset["raw_path"])

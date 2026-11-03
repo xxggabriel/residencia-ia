@@ -2,7 +2,14 @@ import hashlib
 
 import pytest
 
-from continual_bench.adapters.catalog import put_immutable
+from continual_bench.adapters.catalog import catalog_source, put_immutable
+
+
+def test_local_cache_location_never_changes_shared_dataset_catalog():
+    dataset = {"sha256": "fixture", "source": "https://example.org/dataset", "cache": "/host-a/cache"}
+    other = {**dataset, "cache": "/host-b/cache"}
+    assert catalog_source(dataset) == catalog_source(other)
+    assert "cache" not in catalog_source(dataset)
 
 
 def test_catalog_refuses_overwriting_a_version_with_different_bytes(tmp_path):
