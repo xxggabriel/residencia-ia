@@ -16,7 +16,7 @@ def quantile(values, fraction):
 
 
 class OnlineObservability:
-    def __init__(self, settings, continual=None, memory_sampler=None):
+    def __init__(self, settings, continual=None, memory_sampler=None, *, warmup=None):
         self.settings = settings
         self.continual = continual
         self.memory_sampler = memory_sampler
@@ -33,13 +33,22 @@ class OnlineObservability:
         self.monitor_seconds = 0.0
         self.memory_breaks = set()
         self.start_memory_segment = True
+        self.near_future = None
+        if settings.get("week09") is not None:
+            from .week09_metrics import NearFutureEvaluation
+
+            self.near_future = NearFutureEvaluation(warmup=warmup, **settings["week09"])
 
     def __setstate__(self, state):
         self.__dict__.update(state)
         self.start_memory_segment = True
+        if "near_future" not in state:
+            self.near_future = None
 
     def before_prediction(self, event, model, labeled, prediction_seconds):
         started = time.perf_counter()
+        if self.near_future is not None:
+            self.near_future.before_prediction(event, model, labeled, prediction_seconds)
         old_probability = self.shadow.predict(dict(event.x)) if self.shadow is not None else None
         trace = {
             "prediction_seconds": prediction_seconds,
@@ -74,6 +83,8 @@ class OnlineObservability:
 
     def after_label(self, event, probability, trace, released_at, model, evaluated):
         started = time.perf_counter()
+        if self.near_future is not None:
+            self.near_future.after_label(event, probability, trace, released_at, model, evaluated)
         if evaluated:
             row = {
                 "event_id": event.event_id,

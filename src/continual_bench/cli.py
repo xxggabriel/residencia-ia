@@ -21,7 +21,32 @@ def main():
     matrix.add_argument("--baselines", action="store_true")
     matrix.add_argument("--samples", default=600, type=int)
     sub.add_parser("serve")
+    campaign = sub.add_parser("campaign")
+    campaign.add_argument("config")
+    campaign.add_argument("--state", default="state/week09")
+    campaign.add_argument("--services", action="store_true")
+    campaign.add_argument("--zenml", action="store_true")
+    typed = sub.add_parser("typed")
+    typed.add_argument("config")
+    typed.add_argument("--state", default="state/week09-typed")
     args = parser.parse_args()
+    if args.command == "typed":
+        from .application.registry import default_registry, make_source
+        from .application.typed_benchmark import run_typed
+        from .application.typed_config import TypedConfig
+
+        specification = TypedConfig.model_validate_json(Path(args.config).read_text())
+        source = make_source(default_registry(), specification.dataset)
+        result = run_typed(source, args.state, **specification.model_dump(exclude={"dataset"}))
+        print(json.dumps({k: result[k] for k in ("run_key", "metrics", "complete")}, indent=2))
+        return
+    if args.command == "campaign":
+        from .application.campaign import Campaign, execute_campaign
+
+        specification = Campaign.model_validate_json(Path(args.config).read_text())
+        result = execute_campaign(specification, args.state, services=args.services, zenml=args.zenml)
+        print(json.dumps(result, indent=2))
+        return
     if args.command == "serve":
         from .application.server import serve
 

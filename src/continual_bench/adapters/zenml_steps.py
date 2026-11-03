@@ -48,10 +48,11 @@ def audit_drift_and_retraining(report: dict, config_data: dict) -> dict:
     if config.policy.name == "drift" and any(update["seq"] not in alarms for update in updates):
         raise ValueError("Drift policy retrained without a detector alarm")
     if config.policy.name != "online" and any(
-        b["labeled"] - a["labeled"] < config.policy.cooldown for a, b in zip(updates, updates[1:])
+        b["labeled"] - a["labeled"] < config.policy.cooldown
+        for a, b in zip(report.get("candidates", updates), report.get("candidates", updates)[1:])
     ):
         raise ValueError("Retraining violated the configured cooldown")
-    used = sum(update["train_samples"] for update in updates)
+    used = sum(update["train_samples"] for update in report.get("candidates", updates))
     if config.training_budget is not None and used > config.training_budget:
         raise ValueError("Training exceeded the configured budget")
     if config.policy.name == "online" and len(updates) != config.dataset.samples - config.warmup:

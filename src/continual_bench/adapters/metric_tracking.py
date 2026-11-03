@@ -137,7 +137,7 @@ def publish_tracking(client, run_id, report, directory, objects=None, derived=Fa
     )
     extra_paths = []
     for name in ("predictions.jsonl", "metric-definitions.json", "continual-probes.json",
-                 "tracking/execution-v1.json"):
+                 "week09-metrics.json", "tracking/execution-v1.json"):
         path = directory / name
         if path.is_file():
             extra_paths.append(path)
