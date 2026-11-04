@@ -8,6 +8,14 @@ Consulte a [matriz de cobertura](docs/semana09-coverage.md) e o
 Os smokes foram verificações funcionais; campanhas comparativas e a reconciliação
 com os 47 registros da planilha permaneceram pendentes.
 
+Para os loaders nativos de imagens e Parquet, instalar também o extra `datasets`:
+`uv sync --frozen --extra dev --extra services --extra datasets`. No homelab,
+`scripts/validate_dataset_epochs.py` verificou 100 registros únicos e duas épocas
+de treino por fonte, com teste separado. A DAG `benchmark_week09_full` exige
+aprovação de todas as fontes no mesmo contrato de código, dependências e locks.
+Consultar [aquisição e execução dos datasets](docs/semana09-dataset-execution.md)
+antes de iniciar o worker dedicado ou a DAG.
+
 Fluxo de processamento desacoplado para experimentos com mudança de conceito (drift) e atualização de modelos. Apache Airflow coordena **tarefas com execução finita**; ZenML (projeto independente, não Apache) organiza quatro etapas e seus artefatos; Kafka transporta eventos; MinIO guarda dados e pontos de recuperação; MLflow rastreia experimentos. Somente o núcleo Python controla o ciclo por amostra/lote. O agendador do ZenML não controla o fluxo contínuo de dados.
 
 O projeto original foi confirmado pelo chat Codex `01a1789a-e60c-77d0-895d-caa196f9d2c5`: `/Users/gabrieloliveira/residencia-ia`, ramificação `Semana-08`, base `ca10670518ec9739f08a305aa344b6f4fe044e3e`. Código enviado ao servidor do laboratório doméstico: `/home/gabriel/residencia-ia-benchmark`.
@@ -17,7 +25,7 @@ O projeto original foi confirmado pelo chat Codex `01a1789a-e60c-77d0-895d-caa19
 Requer Python 3.12. Dependências do serviço executor (worker) fixadas em `uv.lock` e exportadas com hashes em `requirements.lock`. Airflow usa um ambiente Python separado.
 
 ```bash
-uv sync --frozen --extra dev --extra services
+uv sync --frozen --extra dev --extra services --extra datasets
 PYTHONPATH=. uv run pytest -q
 uv run continual-bench run configs/streaming.yaml
 uv run continual-bench run configs/incremental.yaml

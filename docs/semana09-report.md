@@ -2,6 +2,8 @@
 
 Em 3 de novembro de 2026, foi ampliado o laboratório da Semana 08 na branch local `Semana-09`, criada de `origin/main` (`bd8ac1c`) do remoto confirmado `https://github.com/xxggabriel/residencia-ia.git`. O checkout inicial estava limpo. Foram implementados componentes e executadas validações funcionais no homelab; não foi concluída uma campanha comparativa, um ranking ou uma reprodução CARA/UPF.
 
+A continuidade de 4 de novembro implementou os loaders brutos e os testes de **100 exemplos/2 épocas**. Os resultados atuais e a preparação da DAG completa ficaram no [relatório de datasets e execução](semana09-dataset-execution.md). As seções abaixo preservaram o registro da primeira etapa; seus itens então pendentes não substituíram o estado atualizado desse complemento.
+
 ## Implementação realizada
 
 - Foram preservados os controles SEA, AGRAWAL, STAGGER, as fontes reais já fixadas e os contratos da Semana 08. Foram integrados Hyperplane e Random RBF Drift com movimento obrigatório, além de FriedmanDrift com alvos contínuos preservados.
