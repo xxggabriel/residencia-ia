@@ -29,7 +29,51 @@ def main():
     typed = sub.add_parser("typed")
     typed.add_argument("config")
     typed.add_argument("--state", default="state/week09-typed")
+    datasets = sub.add_parser("datasets")
+    datasets.add_argument("--dataset", default="all")
+    datasets.add_argument("--cache", default="state/datasets")
+    datasets.add_argument("--state", default="state/dataset-epochs")
+    datasets.add_argument("--real-directory")
+    datasets.add_argument("--download", action="store_true")
+    epoch_job = sub.add_parser("epoch-job")
+    epoch_job.add_argument("config")
+    epoch_job.add_argument("--cache", required=True)
+    epoch_job.add_argument("--state", required=True)
+    epoch_job.add_argument("--real-directory", required=True)
+    epoch_job.add_argument("--download", action="store_true")
+    epoch_job.add_argument("--services", action="store_true")
+    sub.add_parser("serve-datasets")
     args = parser.parse_args()
+    if args.command == "serve-datasets":
+        from .application.epoch_server import serve
+
+        serve()
+        return
+    if args.command == "epoch-job":
+        from .application.epoch_benchmark import EpochConfig, run_epochs
+
+        config = EpochConfig.model_validate_json(Path(args.config).read_text())
+        if args.services:
+            from .adapters.epoch_pipeline import execute_epoch_pipeline
+
+            result = execute_epoch_pipeline(config, args.state, args.cache,
+                                            real_directory=args.real_directory, download=args.download)
+        else:
+            result = run_epochs(config, args.state, args.cache, real_directory=args.real_directory,
+                                download=args.download)
+        print(json.dumps(result, indent=2))
+        return
+    if args.command == "datasets":
+        from .application.epoch_benchmark import EpochConfig, run_epochs, smoke_all
+
+        if args.dataset == "all":
+            result = smoke_all(args.state, args.cache, download=args.download,
+                               real_directory=args.real_directory)
+        else:
+            result = run_epochs(EpochConfig(dataset=args.dataset), args.state, args.cache,
+                                download=args.download, real_directory=args.real_directory)
+        print(json.dumps(result, indent=2))
+        return
     if args.command == "typed":
         from .application.registry import default_registry, make_source
         from .application.typed_benchmark import run_typed

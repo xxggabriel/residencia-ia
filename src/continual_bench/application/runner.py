@@ -82,7 +82,7 @@ def prepare(config: Config, root: str) -> dict:
 def environment():
     versions = {}
     for package in ("continual-bench", "river", "pydantic", "zenml", "mlflow-skinny", "confluent-kafka",
-                    "pandas", "numpy", "scipy"):
+                    "pandas", "numpy", "scipy", "pillow", "pyarrow"):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
