@@ -1,0 +1,40 @@
+# Dedicated worker only. Existing containers and their files remain in service.
+name: semana09-dataset-benchmark
+services:
+  dataset-worker:
+    extends:
+      file: compose.yaml
+      service: worker
+    image: continual-bench-datasets:semana09-v2
+    build: !reset null
+    depends_on: !reset {}
+    command: [python, -m, continual_bench.cli, serve-datasets]
+    working_dir: /work
+    restart: unless-stopped
+    volumes: !override
+      - ${WEEK09_CODE:?required}:/work:ro
+      - ${WEEK09_STATE:?required}:/state
+      - legacy-datasets:/legacy:ro
+    cpus: 2
+    mem_limit: 6g
+    pids_limit: 256
+    environment:
+      PYTHONPATH: /work/src
+      BENCH_STATE: /state/binary-runs
+      BENCH_EPOCH_ROOT: /state/epoch-jobs
+      BENCH_DATASET_SMOKES: /state/dataset-smokes
+      BENCH_DATASET_CACHE: /state/datasets
+      BENCH_DATASET_DOWNLOAD: "true"
+      BENCH_DATASETS: /legacy/datasets
+      BENCH_CONCURRENCY: "1"
+      BENCH_ZENML_PROJECT: semana09-datasets-20261103-2341
+      BENCH_ZENML_STACK: semana09-dataset-benchmark
+      ZENML_CONFIG_PATH: /state/zen-config
+networks:
+  bench:
+    external: true
+    name: continual-bench_bench
+volumes:
+  legacy-datasets:
+    external: true
+    name: continual-bench_worker-data
