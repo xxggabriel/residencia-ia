@@ -35,7 +35,7 @@ def encoded(value):
 def dataset_fingerprint(env=None):
     env = environment() if env is None else env
     locks = {}
-    for name in ("image-datasets.lock.json", "real-streams-week09.lock.json", "temporal-vision.lock.json"):
+    for name in ("image-datasets.lock.json", "real-streams.lock.json", "temporal-vision.lock.json"):
         candidates = (Path(__file__).parents[3] / "configs" / name, Path(__file__).parents[1] / name)
         path = next((p for p in candidates if p.is_file()), None)
         if path is None:

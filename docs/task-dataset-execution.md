@@ -26,7 +26,7 @@ Esse protocolo verificou carga, schema, alvos, treinamento, avaliação, artefat
 | Stream51 | ZIP/JSON/bounding boxes oficiais; suporte a arquivo local e HTTP Range | BLOCKED nos dados reais; contratos com fixture aprovados |
 | CLEAR10, CLEAR100 | Release julho/2022, espelho indicado pelos autores, revisão imutável | PASS nas duas variantes |
 
-Detalhes de origem, licença, schema, ordem, checksums e limitações: [MNIST/CIFAR nativos](image-datasets.md), [INSECTS/Gas](real-streams-week09.md), [CORe50/Stream51/CLEAR](temporal-vision.md). O loader CIFAR usado pelo factory foi `adapters/cifar_parquet.py`: a aquisição dos arquivos completos de Toronto excedeu o timeout no homelab, e foi escolhida explicitamente a variante Parquet versionada; não houve troca automática de origem após uma negação. Os hashes LFS integrais foram registrados como referência, sem alegar sua verificação por leitura parcial. Foram verificados os bytes selecionados e os respectivos manifestos. A representação de CORe50/CLEAR/Stream51 foi RGB 16×16 normalizado; não houve pré-treino de um extrator visual.
+Detalhes de origem, licença, schema, ordem, checksums e limitações: [MNIST/CIFAR nativos](image-datasets.md), [INSECTS/Gas](real-streams.md), [CORe50/Stream51/CLEAR](temporal-vision.md). O loader CIFAR usado pelo factory foi `adapters/cifar_parquet.py`: a aquisição dos arquivos completos de Toronto excedeu o timeout no homelab, e foi escolhida explicitamente a variante Parquet versionada; não houve troca automática de origem após uma negação. Os hashes LFS integrais foram registrados como referência, sem alegar sua verificação por leitura parcial. Foram verificados os bytes selecionados e os respectivos manifestos. A representação de CORe50/CLEAR/Stream51 foi RGB 16×16 normalizado; não houve pré-treino de um extrator visual.
 
 ## Arquitetura entregue
 
@@ -35,7 +35,7 @@ Detalhes de origem, licença, schema, ordem, checksums e limitações: [MNIST/CI
 - `adapters/epoch_pipeline.py` separou avaliação e publicação em dois passos ZenML. `epoch_tracking.py` publicou relatórios e amostras no MinIO e métricas por época em um experimento MLflow separado; repetição da publicação preservou a identidade da run e das métricas.
 - `application/epoch_server.py` acrescentou um worker isolado com fila compartilhada de concorrência um, limites de requisições, timeout e endpoints de admissão. O gate exigiu recibos válidos de **todas as 18 fontes**, com 100 exemplos/2 épocas e fingerprint atual.
 - `scripts/validate_dataset_epochs.py` consolidou sucessos e falhas, continuando as fontes independentes sem transformar ausência em skip aprovado. `scripts/export_dataset_epoch_evidence.py` exportou evidências sem alterar permissões dos arquivos produzidos pelo container.
-- `benchmark_week09_full` ampliou a matriz existente para 549 casos: 531 combinações do motor binário e 18 avaliações tipadas por épocas. Manteve um seed pareado, no máximo duas tarefas Airflow ativas e um job efetivo por worker. O padrão dos casos binários foi 3.000 eventos; o recorte tipado permaneceu em 100 exemplos/2 épocas. Não foi denominada campanha exaustiva do catálogo nem comparação de arquiteturas de visão.
+- `benchmark_task_suite` ampliou a matriz existente para 549 casos: 531 combinações do motor binário e 18 avaliações tipadas por épocas. Manteve um seed pareado, no máximo duas tarefas Airflow ativas e um job efetivo por worker. O padrão dos casos binários foi 3.000 eventos; o recorte tipado permaneceu em 100 exemplos/2 épocas. Não foi denominada campanha exaustiva do catálogo nem comparação de arquiteturas de visão.
 
 ## Ambiente e evidências
 
@@ -66,32 +66,32 @@ O endereço oficial `http://klab.cis.rit.edu/files/Stream-51.zip`, ainda indicad
 
 Para retomar, fornecer o caminho de uma cópia oficial de `Stream-51.zip` no homelab, ou uma URL de origem autorizada. Montar o arquivo somente para leitura no cliente isolado e definir `BENCH_STREAM51_ARCHIVE` com o caminho interno. Preparar os 100 exemplos, repetir a admissão completa e conferir `complete=true` com as 18 fontes/fingerprint atual. Não iniciar a campanha com recibo parcial.
 
-Com a admissão aprovada, iniciar somente o worker de `compose.dataset-benchmark.yaml`, usando o arquivo de ambiente já existente, sem ler seu conteúdo. Copiar somente os dois novos arquivos (`benchmark_week09_full.py` e `week09_jobs.py`) para os componentes Airflow necessários, sem substituir os arquivos antigos. Confirmar importação, saúde do worker e `/datasets-ready`; despausar e disparar `benchmark_week09_full` com run ID único. Conferir que o estado do dag_run passou a `running`; esse foi o critério solicitado para encerrar a tarefa, sem esperar a conclusão da campanha.
+Com a admissão aprovada, iniciar somente o worker de `compose.dataset-benchmark.yaml`, usando o arquivo de ambiente já existente, sem ler seu conteúdo. Copiar somente os dois novos arquivos (`benchmark_task_suite.py` e `task_jobs.py`) para os componentes Airflow necessários, sem substituir os arquivos antigos. Confirmar importação, saúde do worker e `/datasets-ready`; despausar e disparar `benchmark_task_suite` com run ID único. Conferir que o estado do dag_run passou a `running`; esse foi o critério solicitado para encerrar a tarefa, sem esperar a conclusão da campanha.
 
 Comandos de validação, executados **no homelab** com o snapshot final e o estado isolado:
 
 ```bash
-export WEEK09_CODE=/home/gabriel/semana09-datasets-20261103-2341/review-final/code
-export WEEK09_STATE=/home/gabriel/semana09-datasets-20261103-2341/state
-export WEEK09_SERVICE_ENV=/home/gabriel/.config/continual-bench/benchmark.env
+export TASK_BENCH_CODE=/home/gabriel/semana09-datasets-20261103-2341/review-final/code
+export TASK_BENCH_STATE=/home/gabriel/semana09-datasets-20261103-2341/state
+export TASK_BENCH_SERVICE_ENV=/home/gabriel/.config/continual-bench/benchmark.env
 
 timeout 900 docker run --rm --network none --cpus 2 --memory 4g \
   --pids-limit 192 --read-only --tmpfs /tmp:rw,size=256m \
-  -v "$WEEK09_CODE:/work:ro" -v "$WEEK09_STATE:/state" \
+  -v "$TASK_BENCH_CODE:/work:ro" -v "$TASK_BENCH_STATE:/state" \
   -v continual-bench_worker-data:/legacy:ro -w /work \
   -e PYTHONPATH=/work/src -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONHASHSEED=0 \
   --entrypoint python continual-bench-datasets:semana09-v2 \
   scripts/validate_dataset_epochs.py --state /state/dataset-smokes \
   --cache /state/datasets --real-directory /legacy/datasets
 
-docker compose --env-file "$WEEK09_SERVICE_ENV" \
-  -f "$WEEK09_CODE/compose.dataset-benchmark.yaml" config --quiet
-timeout 420 docker compose --env-file "$WEEK09_SERVICE_ENV" \
-  -f "$WEEK09_CODE/compose.dataset-benchmark.yaml" run --rm --no-deps \
+docker compose --env-file "$TASK_BENCH_SERVICE_ENV" \
+  -f "$TASK_BENCH_CODE/compose.dataset-benchmark.yaml" config --quiet
+timeout 420 docker compose --env-file "$TASK_BENCH_SERVICE_ENV" \
+  -f "$TASK_BENCH_CODE/compose.dataset-benchmark.yaml" run --rm --no-deps \
   -e SERVICE_TEST_STATE=/state/reviewed-services -e PYTHONDONTWRITEBYTECODE=1 \
   -e PYTHONHASHSEED=0 --entrypoint python dataset-worker \
   -m pytest -q -p no:cacheprovider -m services \
-  tests/test_epoch_services.py tests/test_week09_services.py
+  tests/test_epoch_services.py tests/test_task_services.py
 ```
 
 O primeiro comando terminou com exit code 1 enquanto faltou Stream51; isso foi o resultado esperado do gate fechado, não uma aprovação de todas as fontes. A repetição offline usou o cache verificado e não repetiu a tentativa DNS conhecida. Para uma nova aquisição explicitamente autorizada, acrescentar `--download` e o mount do arquivo local quando necessário.

@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from continual_bench.domain.week09_metrics import _integer, task_matrix_metrics
+from continual_bench.domain.evaluation_metrics import _integer, task_matrix_metrics
 
 
 def validated_detection(report, tolerance):
@@ -75,6 +75,6 @@ def supplemental_report(report, directory=None, *, near_future=None):
     if directory is not None:
         from continual_bench.adapters.local import atomic_write
 
-        atomic_write(Path(directory) / "week09-metrics.json",
+        atomic_write(Path(directory) / "task_evaluation-metrics.json",
                      json.dumps(supplement, sort_keys=True, indent=2, allow_nan=False).encode())
     return supplement

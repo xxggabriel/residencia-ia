@@ -68,7 +68,7 @@ class CostConfig(Strict):
     predict_second: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 
-class Week09EvaluationConfig(Strict):
+class FutureEvaluationConfig(Strict):
     horizon: int = Field(default=32, ge=1, le=1024)
     gap: int = Field(default=1, ge=0)
     max_windows: int = Field(default=4, ge=1, le=64)
@@ -89,7 +89,9 @@ class TrackingConfig(Strict):
     upf_alpha: float = Field(default=1, ge=0, allow_inf_nan=False)
     upf_alphas: tuple[float, ...] = (0, 0.1, 1, 10)
     reference: dict | None = None
-    week09: Week09EvaluationConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    task_evaluation: FutureEvaluationConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def valid_alphas(self):

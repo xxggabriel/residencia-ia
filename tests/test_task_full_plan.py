@@ -12,12 +12,12 @@ from continual_bench.application.epoch_benchmark import EpochConfig
 
 def jobs():
     directory = Path(__file__).parents[1] / 'dags'
-    for name in ('bench_jobs', 'week09_jobs'):
+    for name in ('bench_jobs', 'task_jobs'):
         spec = importlib.util.spec_from_file_location(name, directory / f'{name}.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         sys.modules[name] = module
-    return sys.modules['week09_jobs']
+    return sys.modules['task_jobs']
 
 
 def test_complete_plan_covers_catalog_models_modes_and_policy_extensions():

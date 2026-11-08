@@ -17,7 +17,7 @@ from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 
 from continual_bench.adapters.local import atomic_write
-from continual_bench.adapters.week09_sources import TaskSample
+from continual_bench.adapters.task_sources import TaskSample
 
 CLEAR_REVISION = "b518a845a98f1c913497ab98a19727cb65b74e65"
 CLEAR_ROOT = ("https://huggingface.co/datasets/elvishelvis6/CLEAR-Continual_Learning_Benchmark/resolve/"

@@ -5,9 +5,9 @@ from dataclasses import replace
 
 import pytest
 
-from continual_bench.application.week09_reporting import supplemental_report, validated_detection
+from continual_bench.application.evaluation_reporting import supplemental_report, validated_detection
 from continual_bench.domain.contracts import Event
-from continual_bench.domain.week09_metrics import (
+from continual_bench.domain.evaluation_metrics import (
     NearFutureEvaluation,
     task_matrix_metrics,
     validate_temporal_holdout,
@@ -191,7 +191,7 @@ def test_supplement_is_versioned_atomic_and_does_not_fabricate_future_accuracy(t
     assert result["version"] == "semana09-metrics-v1"
     assert result["near_future"]["near_future_accuracy"] is None
     assert result["resources"]["metrics"]["train_seconds"] == 1.5
-    assert json.loads((tmp_path / "week09-metrics.json").read_text()) == result
+    assert json.loads((tmp_path / "task_evaluation-metrics.json").read_text()) == result
     assert report == before
 
 

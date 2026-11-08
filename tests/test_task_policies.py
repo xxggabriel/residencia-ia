@@ -180,7 +180,7 @@ def test_new_options_do_not_change_historical_config_serialization():
     config = Config()
     assert "promotion" not in config.model_dump()
     assert "params" not in config.policy.model_dump()
-    assert "week09" not in TrackingConfig().model_dump()
+    assert "task_evaluation" not in TrackingConfig().model_dump()
     with pytest.raises(ValueError, match="promotion gate"):
         Config.model_validate({"policy": {"name": "online", "action": "learn_one"},
                                "promotion": {"validation_samples": 8}})

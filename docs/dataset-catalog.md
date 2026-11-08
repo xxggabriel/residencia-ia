@@ -1,6 +1,6 @@
 # Datasets e protocolos da Semana 09
 
-Foram implementados geradores com drift explícito, admissão de dados locais por manifesto e transformações de protocolo sobre amostras preparadas. O arquivo `configs/week09-datasets.json` registrou apenas os candidatos nomeados no pedido e no relatório. Ele não substituiu o catálogo de 47 registros da planilha indisponível e não representou uma campanha executada.
+Foram implementados geradores com drift explícito, admissão de dados locais por manifesto e transformações de protocolo sobre amostras preparadas. O arquivo `configs/dataset-catalog.json` registrou apenas os candidatos nomeados no pedido e no relatório. Ele não substituiu o catálogo de 47 registros da planilha indisponível e não representou uma campanha executada.
 
 ## Contratos e fronteiras
 

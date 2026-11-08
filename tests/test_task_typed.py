@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from continual_bench.adapters.week09_sources import FriedmanDriftSource, TaskSample
+from continual_bench.adapters.task_sources import FriedmanDriftSource, TaskSample
 from continual_bench.application.typed_benchmark import run_typed
 
 

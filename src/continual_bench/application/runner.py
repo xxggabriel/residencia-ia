@@ -271,10 +271,12 @@ def evaluate(config: Config, manifest: dict, root: str, transport=None, *, stop_
             }
         )
         save_tracking_files(directory, report, settings, observer)
-        if settings.get("week09") is not None:
-            from continual_bench.application.week09_reporting import supplemental_report
+        if settings.get("task_evaluation") is not None:
+            from continual_bench.application.evaluation_reporting import supplemental_report
 
-            report["week09"] = supplemental_report(report, directory, near_future=observer.near_future)
+            report["task_evaluation"] = supplemental_report(
+                report, directory, near_future=observer.near_future
+            )
         # Report first, then complete checkpoint: either crash point is safe to recompute/reuse.
         atomic_write(report_path, json.dumps(report, indent=2).encode())
         checkpoints.save(identity, {"contract": contract, "state": state, "complete": True})

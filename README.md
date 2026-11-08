@@ -3,17 +3,17 @@
 A Semana 09 acrescentou políticas por desempenho e custo de cenário, detectores River,
 promoção independente do treino, fontes com drift explícito, admissão de datasets locais,
 avaliação tipada de regressão/multiclasse e métricas futuras com modelos congelados.
-Consulte a [matriz de cobertura](docs/semana09-coverage.md) e o
-[relatório de implementação e validação no homelab](docs/semana09-report.md).
+Consulte a [matriz de cobertura](docs/task-coverage.md) e o
+[relatório de implementação e validação no homelab](docs/task-report.md).
 Os smokes foram verificações funcionais; campanhas comparativas e a reconciliação
 com os 47 registros da planilha permaneceram pendentes.
 
 Para os loaders nativos de imagens e Parquet, instalar também o extra `datasets`:
 `uv sync --frozen --extra dev --extra services --extra datasets`. No homelab,
 `scripts/validate_dataset_epochs.py` verificou 100 registros únicos e duas épocas
-de treino por fonte, com teste separado. A DAG `benchmark_week09_full` exige
+de treino por fonte, com teste separado. A DAG `benchmark_task_suite` exige
 aprovação de todas as fontes no mesmo contrato de código, dependências e locks.
-Consultar [aquisição e execução dos datasets](docs/semana09-dataset-execution.md)
+Consultar [aquisição e execução dos datasets](docs/task-dataset-execution.md)
 antes de iniciar o worker dedicado ou a DAG.
 
 Fluxo de processamento desacoplado para experimentos com mudança de conceito (drift) e atualização de modelos. Apache Airflow coordena **tarefas com execução finita**; ZenML (projeto independente, não Apache) organiza quatro etapas e seus artefatos; Kafka transporta eventos; MinIO guarda dados e pontos de recuperação; MLflow rastreia experimentos. Somente o núcleo Python controla o ciclo por amostra/lote. O agendador do ZenML não controla o fluxo contínuo de dados.

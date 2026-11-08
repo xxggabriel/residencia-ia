@@ -28,7 +28,7 @@ def default_registry(plugins=()):
     from continual_bench.adapters.nonlinear import HoeffdingTreeModel, KNNModel
     from continual_bench.adapters.real_sources import RealSource
     from continual_bench.adapters.river import NullDetector, RiverDetector, RiverModel, SyntheticSource
-    from continual_bench.adapters.week09_sources import (
+    from continual_bench.adapters.task_sources import (
         FriedmanDriftSource,
         LocalManifestSource,
         MovingSyntheticSource,

@@ -19,7 +19,8 @@ def collect(root):
             "detector": report["config"]["detector"]["name"], "metrics": report["metrics"],
             "code_sha256": report["environment"]["code_sha256"],
             "dataset_sha256": report["dataset"]["sha256"], "environment": report["environment"],
-            "near_future": {k: v for k, v in report["week09"]["near_future"].items() if k != "windows"},
+            "near_future": {k: v for k, v in report["task_evaluation"]["near_future"].items()
+                            if k != "windows"},
             "promotion": report["promotion"], "training": report["training"],
             "compute_seconds": report["compute_seconds"],
             "peak_rss_bytes_process": report["peak_rss_bytes_process"],
@@ -32,7 +33,7 @@ def collect(root):
         evidence["code_sha256"] = report["environment"]["code_sha256"]
         evidence["dataset_sha256"] = report["dataset"]["sha256"]
         evidence["supplement_sha256"] = hashlib.sha256(
-            (path.parent / "week09-metrics.json").read_bytes()
+            (path.parent / "task_evaluation-metrics.json").read_bytes()
         ).hexdigest()
         result["services"].append(evidence)
     return result

@@ -16,7 +16,7 @@ from collections import Counter
 from pathlib import Path
 
 from .real_sources import file_sha256
-from .week09_sources import TaskSample
+from .task_sources import TaskSample
 
 SPECS = {
     "insects": {

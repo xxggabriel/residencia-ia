@@ -7,7 +7,7 @@ O escopo verificável partiu do pedido e das Pages da Semana 09, lidas em 3 de n
 | Componente | Fonte e versão | Implementação | Testes e estado |
 | --- | --- | --- | --- |
 | SEA, AGRAWAL, STAGGER | River 0.26.1, contratos Semana 08 | Reutilizados, conceitos segmentados e recorrência explícita | Suíte anterior, integração e smokes; validação inicial |
-| Hyperplane e Random RBF Drift | River 0.26.1, links no [detalhamento](week09-datasets.md) | Novos wrappers nativos com movimento obrigatório e seeds | Replay, contrato, campanha smoke e Hyperplane com serviços; campanha comparativa pendente |
+| Hyperplane e Random RBF Drift | River 0.26.1, links no [detalhamento](dataset-catalog.md) | Novos wrappers nativos com movimento obrigatório e seeds | Replay, contrato, campanha smoke e Hyperplane com serviços; campanha comparativa pendente |
 | FriedmanDrift gra, lea, gsg | River 0.26.1, Ikonomovska et al. 2011 | Adaptador preservou regressão; avaliador LinearRegression/StandardScaler | Três variantes em fixtures; smoke real do gerador com MAE/RMSE |
 | Electricity Elec2 e Airlines | Fontes e SHA-256 fixados em `real-sources.lock.json` | Adaptadores existentes e factory tipado | Caches originais verificados, 100 exemplos/2 épocas aprovados nas duas fontes |
 | INSECTS | Origem dos autores, `abrupt_balanced` | Loader ARFF original, 33 atributos/6 classes, cache com checksum observado | Contratos e 100 exemplos/2 épocas reais aprovados; demais variantes/campanhas pendentes |
@@ -31,7 +31,7 @@ O escopo verificável partiu do pedido e das Pages da Semana 09, lidas em 3 de n
 | Near-future accuracy | Hammoud et al., arXiv 2305.09275v1 | Adaptação binária operacional com snapshot, gap, horizonte e atraso | Retomada e replay testados; executada nos smokes; sem alegação de reprodução visual ou UPF |
 | Regressão e multiclasse | River 0.26.1 | Avaliador tipado com none/online/periodic e splits intercalados | Friedman e três classes em fixtures; sem colapsar classes/alvos para bool |
 | Campanhas declarativas | `semana09-v1` | Casos explícitos, journal, lock, prazo e retomada verificada | Seis casos de smoke; campanha com múltiplas seeds e escalabilidade pendente |
-| DAG ampliada | `benchmark_week09_full`, Airflow 3.3.2 | 549 casos: matriz binária e 18 fontes tipadas; gate 100 exemplos/2 épocas/fingerprint | Importação e plano aprovados; DAG não iniciada enquanto Stream51 permaneceu bloqueado |
+| DAG ampliada | `benchmark_task_suite`, Airflow 3.3.2 | 549 casos: matriz binária e 18 fontes tipadas; gate 100 exemplos/2 épocas/fingerprint | Importação e plano aprovados; DAG não iniciada enquanto Stream51 permaneceu bloqueado |
 | Kafka, ZenML, MLflow, MinIO | Versões da stack Semana 08 | Integração preservada, suplemento publicado com os artefatos | Verificação real de eventos, quatro passos, hashes, registro e replay; ver relatório |
 
-Fontes, decisões e testes por área: [datasets](week09-datasets.md), [políticas](week09-policies.md), [métricas](week09-metrics.md). Resultados e limitações observados: [relatório](semana09-report.md).
+Fontes, decisões e testes por área: [datasets](dataset-catalog.md), [políticas](task_evaluation-policies.md), [métricas](task_evaluation-metrics.md). Resultados e limitações observados: [relatório](semana09-report.md).
