@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from airflow.exceptions import AirflowFailException
 from airflow.sdk import Param, dag, task
-from bench_jobs import configurations, consolidate, execute_job, tracking_profile
+from bench_jobs import POLICY_DATASETS, configurations, consolidate, execute_job, tracking_profile
 from bench_readiness import require_dependencies
 
 
@@ -17,7 +17,7 @@ def build_dag(suite):
         params={
             "samples": Param(300 if suite == "metrics_smoke" else 3000,
                              type="integer", minimum=300, maximum=100000),
-            **({"dataset": Param("electricity", type="string", enum=["electricity", "airlines"]),
+            **({"dataset": Param("electricity", type="string", enum=list(POLICY_DATASETS)),
                 "models": Param(["logistic", "hoeffding_tree", "knn"], type="array", minItems=1,
                                 uniqueItems=True,
                                 items={"type": "string", "enum": ["logistic", "hoeffding_tree", "knn"]}),
