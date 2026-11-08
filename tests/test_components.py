@@ -50,7 +50,8 @@ def test_compatibility_is_explicit_and_catalog_declares_every_task():
     with pytest.raises(IncompatibleComponent, match="does not support binary"):
         MODELS.get("linear_regression").build(BINARY)
     assert default_model(MULTICLASS) == "hoeffding_tree" and default_model(REGRESSION) == "linear_regression"
-    assert len(DATASETS) == 18 and "friedman_drift" in datasets_for(REGRESSION)
+    assert len(DATASETS) == 17 and "stream51" not in CATALOG
+    assert "friedman_drift" in datasets_for(REGRESSION)
     assert all(CATALOG.get(name).task in (BINARY, MULTICLASS, REGRESSION) for name in DATASETS)
 
 

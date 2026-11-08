@@ -1,5 +1,7 @@
 # Datasets e preparação da DAG — 4 de novembro de 2026
 
+> **Atualização em 08/11/2026:** Stream51 foi removido do projeto (catálogo, adaptador, lock e DAG), porque a origem oficial `klab.cis.rit.edu` continuou sem resolver DNS e não há cópia oficial disponível. O catálogo e o gate de admissão passaram a exigir 17 fontes; os registros abaixo preservam o estado de 04/11/2026.
+
 Foram implementados loaders executáveis para as 18 fontes/variantes explicitadas no projeto, na branch local `Semana-09`. Foram realizados testes iniciais exclusivamente no homelab, acessado por `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes gabriel@192.168.100.27`. **A DAG completa não foi iniciada: a aquisição do Stream51 permaneceu bloqueada pela resolução DNS da origem oficial.** O seu adaptador passou pelos testes de contrato com fixtures; isso não homologou seus dados reais.
 
 A planilha `Semana_09_Datasets_Benchmarks.xlsx` continuou indisponível neste executor: a referência Library retornou `page_reference_unsupported_format`. As 18 entradas abaixo não substituíram os 47 registros do catálogo bibliográfico, nem representaram 18 datasets independentes. Outros candidatos do catálogo não foram presumidos selecionados.

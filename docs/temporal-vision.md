@@ -1,5 +1,7 @@
 # Loaders de imagens temporais da Semana 09
 
+> **Atualização em 08/11/2026:** Stream51 foi removido do projeto (catálogo, adaptador, lock e DAG), porque a origem oficial `klab.cis.rit.edu` continuou sem resolver DNS e não há cópia oficial disponível. O catálogo e o gate de admissão passaram a exigir 17 fontes; os registros abaixo preservam o estado de 04/11/2026.
+
 Foi implementado `prepare_temporal_dataset(name, cache, limit=100, seed=42, download=False)`, retornando uma fonte com `samples_iter()` e `manifest()`. Foram cobertos os nomes `core50`, `stream51`, `clear10` e `clear100`, com imagens e rótulos originais. Não foram usados exemplos sintéticos para simular essas bases.
 
 ## Contrato de aquisição

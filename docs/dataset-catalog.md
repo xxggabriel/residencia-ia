@@ -1,5 +1,7 @@
 # Datasets e protocolos da Semana 09
 
+> **Atualização em 08/11/2026:** Stream51 foi removido do projeto (catálogo, adaptador, lock e DAG), porque a origem oficial `klab.cis.rit.edu` continuou sem resolver DNS e não há cópia oficial disponível. O catálogo e o gate de admissão passaram a exigir 17 fontes; os registros abaixo preservam o estado de 04/11/2026.
+
 Foram implementados geradores com drift explícito, admissão de dados locais por manifesto e transformações de protocolo sobre amostras preparadas. O arquivo `configs/dataset-catalog.json` registrou apenas os candidatos nomeados no pedido e no relatório. Ele não substituiu o catálogo de 47 registros da planilha indisponível e não representou uma campanha executada.
 
 ## Contratos e fronteiras

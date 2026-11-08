@@ -26,7 +26,7 @@ def test_complete_plan_covers_catalog_models_modes_and_policy_extensions():
                                    'epochs': 2, 'seeds': [42], 'label_delay': 3}, 'a' * 64)
     epochs = [EpochConfig.model_validate(c['config']) for c in cases if c['kind'] == 'epochs']
     binary = [Config.model_validate(c['config']) for c in cases if c['kind'] == 'binary']
-    assert {c.dataset for c in epochs} == set(DATASETS) and len(epochs) == 18
+    assert {c.dataset for c in epochs} == set(DATASETS) and len(epochs) == 17
     assert {c.model.name for c in binary} == {'logistic', 'hoeffding_tree', 'knn'}
     assert {c.mode for c in binary} == {'streaming', 'incremental', 'offline'}
     assert {'performance', 'cost_heuristic', 'drift', 'online', 'none', 'periodic'} <= {

@@ -6,7 +6,6 @@ evaluators) and `prepare` (a bounded, cached TaskSample source for epochs).
 Factories are import strings, so configuration validation never imports River.
 """
 
-import os
 from dataclasses import asdict, dataclass, field
 from typing import Callable
 
@@ -49,19 +48,6 @@ class DatasetSpec:
         return resolve(self.prepare)(self.name, cache, limit=examples, seed=seed, download=download)
 
 
-def _stream51_archives():
-    archive = os.environ.get("BENCH_STREAM51_ARCHIVE")
-    return {"train": archive} if archive else None
-
-
-def prepare_temporal(name, cache, *, limit, seed, download):
-    from .temporal_vision import prepare_temporal_dataset
-
-    local = _stream51_archives() if name == "stream51" else None
-    return prepare_temporal_dataset(name, cache, limit=limit, seed=seed, download=download,
-                                    local_archives=local)
-
-
 CATALOG: Registry[DatasetSpec] = Registry("source")
 _SYNTHETIC = "continual_bench.datasets.synthetic"
 _LOCAL = "continual_bench.datasets.local_manifest:LocalManifestSource"
@@ -85,9 +71,9 @@ for _name in ("split_mnist", "permuted_mnist"):
 for _name in ("split_cifar10", "split_cifar100"):
     CATALOG.add(DatasetSpec(_name, MULTICLASS, "image", _LOCAL, {"name": _name},
                             "continual_bench.datasets.cifar_parquet:prepare_cifar_parquet", "cache"))
-for _name in ("core50", "stream51", "clear10", "clear100"):
+for _name in ("core50", "clear10", "clear100"):
     CATALOG.add(DatasetSpec(_name, MULTICLASS, "temporal_vision", _LOCAL, {"name": _name},
-                            "continual_bench.datasets.catalog:prepare_temporal", "cache"))
+                            "continual_bench.datasets.temporal_vision:prepare_temporal_dataset", "cache"))
 # Local-manifest aliases without a bounded epoch loader; their manifest declares the task.
 for _name in ("split_cifar", "clear"):
     CATALOG.add(DatasetSpec(_name, None, "local_manifest", _LOCAL, {"name": _name}, prepare_kind="none"))
