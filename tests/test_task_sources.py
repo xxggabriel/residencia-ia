@@ -4,16 +4,10 @@ from dataclasses import replace
 
 import pytest
 
-from continual_bench.adapters.task_sources import (
-    FriedmanDriftSource,
-    LocalDatasetManifest,
-    LocalManifestSource,
-    MovingSyntheticSource,
-    TaskSample,
-    permuted_tasks,
-    split_class_tasks,
-    temporal_tasks,
-)
+from continual_bench.core.contracts import TaskSample
+from continual_bench.datasets.local_manifest import LocalDatasetManifest, LocalManifestSource
+from continual_bench.datasets.protocols import permuted_tasks, split_class_tasks, temporal_tasks
+from continual_bench.datasets.synthetic import FriedmanDriftSource, MovingSyntheticSource
 
 
 @pytest.mark.parametrize("name", ["hyperplane", "rbf_drift"])

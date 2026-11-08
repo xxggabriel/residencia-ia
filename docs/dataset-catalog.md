@@ -56,7 +56,7 @@ Covertype não recebeu cronologia natural. CGLM/CLOC/BudgetCL e CLAD permanecera
 
 ## Avaliador tipado executável
 
-`application/typed_benchmark.py` implementou `run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, window=128, max_samples=1000, max_seconds=60, training_budget=None)`. O tipo veio de `source.manifest()["task"]` e foi conferido contra o tipo solicitado. Foram aceitas regressão e classificação multiclasse, com amostras de `samples_iter()`.
+`evaluation/typed.py` implementou `run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, window=128, max_samples=1000, max_seconds=60, training_budget=None)`. O tipo veio de `source.manifest()["task"]` e foi conferido contra o tipo solicitado. Foram aceitas regressão e classificação multiclasse, com amostras de `samples_iter()`.
 
 O baseline de regressão utilizou `StandardScaler` e `LinearRegression` nativos do River 0.26.1; o scaler foi atualizado somente na aprendizagem. A classificação utilizou `HoeffdingTreeClassifier` com profundidade e memória limitadas. As métricas foram MAE/RMSE e acurácia/MacroF1, respectivamente. A primeira predição multiclasse, antes de qualquer aprendizagem, foi registrada como `__untrained__` e contada como erro nas partições avaliadas.
 

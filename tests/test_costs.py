@@ -1,6 +1,6 @@
 import pytest
 
-from continual_bench.application.costs import account, error_units, profile
+from continual_bench.evaluation.costs import account, error_units, profile
 
 
 def test_normalized_regression_and_classification():
@@ -26,8 +26,8 @@ def test_invalid_profiles_are_rejected(values):
 
 @pytest.mark.parametrize("policy", ["none", "online", "periodic", "drift", "performance", "cost_heuristic"])
 def test_main_flow_records_default_costs_for_every_policy(tmp_path, policy):
-    from continual_bench.application.config import Config
     from continual_bench.application.runner import run
+    from continual_bench.config import Config
 
     action = "learn_one" if policy == "online" else "reset_retrain"
     config = Config.model_validate({"dataset": {"samples": 100}, "warmup": 10,

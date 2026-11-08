@@ -4,7 +4,7 @@ import csv
 import hashlib
 from pathlib import Path
 
-from continual_bench.domain.contracts import Event
+from continual_bench.core.contracts import Event
 
 
 class TemporalCSV:

@@ -8,9 +8,9 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from continual_bench.adapters.epoch_pipeline import execute_epoch_pipeline
-from continual_bench.adapters.services import S3Objects
-from continual_bench.application.epoch_benchmark import EpochConfig
+from continual_bench.evaluation.epochs import EpochConfig
+from continual_bench.infrastructure.services import S3Objects
+from continual_bench.orchestration.epoch_pipeline import execute_epoch_pipeline
 
 
 @pytest.mark.services

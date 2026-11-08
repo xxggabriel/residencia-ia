@@ -12,9 +12,9 @@ if not config_path.exists():
     shutil.copytree("/state/zen-config", config_path)
 os.environ["ZENML_CONFIG_PATH"] = str(config_path)
 
-from continual_bench.adapters.zenml_pipeline import execute_pipeline  # noqa: E402
-from continual_bench.application.config import Config  # noqa: E402
-from continual_bench.application.runner import environment  # noqa: E402
+from continual_bench.config import Config  # noqa: E402
+from continual_bench.evaluation.environment import environment  # noqa: E402
+from continual_bench.orchestration.zenml_pipeline import execute_pipeline  # noqa: E402
 
 cfg = Config.model_validate(
     {

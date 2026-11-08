@@ -1,0 +1,25 @@
+# Binary drift/retraining comparison: 5 datasets × 3 models × 4 strategies × 2 modes × 3 seeds.
+# Incompatible pairs are listed under "skipped" by `continual-bench matrix --dry-run`.
+name: residency-binary-comparison
+evaluator: binary
+datasets:
+  - {name: sea, samples: 3000, label_delay: 3}
+  - {name: agrawal, samples: 3000, label_delay: 3}
+  - {name: stagger, samples: 3000, label_delay: 3}
+  - {name: hyperplane, samples: 3000, label_delay: 3}
+  - {name: rbf_drift, samples: 3000, label_delay: 3}
+models:
+  - {name: logistic, params: {learning_rate: 0.05}}
+  - {name: hoeffding_tree, params: {grace_period: 50, max_depth: 8}}
+  - {name: knn, params: {n_neighbors: 11, window_size: 256}}
+strategies:
+  - {detector: {name: none}, policy: {name: none}}
+  - {detector: {name: none}, policy: {name: online, action: learn_one}}
+  - {detector: {name: adwin}, policy: {name: drift}}
+  - {detector: {name: none}, policy: {name: performance, params: {error_threshold: 0.3}}}
+modes: [streaming, incremental]
+seeds: [42, 43, 44]
+base:
+  warmup: 100
+  metric_window: 100
+  tracking: {probe_samples: 32, continual_references: false}

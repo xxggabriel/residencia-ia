@@ -4,23 +4,23 @@ import json
 
 import pytest
 
-from continual_bench.adapters.metric_tracking import metric_points
-from continual_bench.application.config import TrackingConfig
-from continual_bench.application.tracking import (
-    build_tracking,
-    confusion_metrics,
-    detector_metrics,
-    recovery_metrics,
-)
-from continual_bench.domain.contracts import Event
-from continual_bench.domain.metrics import Metrics
-from continual_bench.domain.observability import (
+from continual_bench.config import TrackingConfig
+from continual_bench.core.contracts import Event
+from continual_bench.core.metrics import Metrics
+from continual_bench.core.observability import (
     OnlineObservability,
     first_target,
     learning_speed_ratio,
     quantile,
     relative_cost_error,
 )
+from continual_bench.evaluation.tracking import (
+    build_tracking,
+    confusion_metrics,
+    detector_metrics,
+    recovery_metrics,
+)
+from continual_bench.infrastructure.metric_tracking import metric_points
 
 
 def settings(**changes):
@@ -336,7 +336,7 @@ def test_sampled_rss_integral_preserves_zero_and_trapezoidal_units(monkeypatch, 
     readings = iter(samples)
     times = iter([1, 3])
     observer = OnlineObservability(settings(), memory_sampler=lambda: next(readings))
-    monkeypatch.setattr("continual_bench.domain.observability.time.perf_counter", lambda: next(times))
+    monkeypatch.setattr("continual_bench.core.observability.time.perf_counter", lambda: next(times))
     observer.sample_memory()
     observer.sample_memory()
     assert observer.report()["sampled_rss_byte_seconds"] == expected
@@ -474,8 +474,8 @@ def test_reference_learning_curves_reject_invalid_order_or_scores(curve):
 def test_episode_probe_dataset_is_saved_with_independent_version_and_source_lineage(tmp_path):
     import hashlib
 
-    from continual_bench.application.config import Config
     from continual_bench.application.runner import run
+    from continual_bench.config import Config
 
     config = Config.model_validate({
         'name': 'probe-evidence', 'mode': 'streaming',
@@ -531,7 +531,7 @@ def test_fixed_test_speed_cannot_be_activated_without_method_curve():
 
 
 def test_every_static_tracking_output_has_catalog_definition_and_no_semantic_alias():
-    from continual_bench.application.tracking import metric_catalog
+    from continual_bench.evaluation.tracking import metric_catalog
 
     catalog, _ = metric_catalog()
     tracking = build_tracking(evidence(), settings())
@@ -550,12 +550,12 @@ def test_historical_summary_without_probability_losses_does_not_invent_zero():
 
 
 def test_metric_catalog_prefers_installed_package_asset_over_repository_fallback(tmp_path, monkeypatch):
-    import continual_bench.application.tracking as module
+    import continual_bench.evaluation.tracking as module
 
     package = tmp_path / 'project' / 'src' / 'continual_bench'
     package.mkdir(parents=True)
     (package / 'metric-definitions.json').write_text('{"version":"package-asset"}')
-    monkeypatch.setattr(module, '__file__', str(package / 'application' / 'tracking.py'))
+    monkeypatch.setattr(module, '__file__', str(package / 'evaluation' / 'tracking.py'))
     catalog, raw = module.metric_catalog()
     assert catalog == {'version': 'package-asset'}
     assert json.loads(raw) == catalog
@@ -603,8 +603,8 @@ def test_retention_curves_keep_latest_equal_step_but_preserve_every_raw_probe():
 def test_incremental_stagger_knn_final_drain_repeated_probe_step_can_publish(tmp_path):
     from collections import Counter
 
-    from continual_bench.application.config import Config
     from continual_bench.application.runner import run
+    from continual_bench.config import Config
 
     config = Config.model_validate({
         'name': 'retention-final-drain', 'mode': 'incremental',

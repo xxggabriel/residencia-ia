@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.adapters.dataset_loading import load_dataset
 from continual_bench.application.readiness import ensure_tracking_ready
-from continual_bench.application.typed_benchmark import run_typed
+from continual_bench.datasets.catalog import load_dataset
+from continual_bench.evaluation.typed import run_typed
 
 
 @pytest.mark.services

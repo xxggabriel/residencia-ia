@@ -4,9 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
-from continual_bench.adapters.dataset_loading import DATASETS
-from continual_bench.adapters.local import atomic_write
-from continual_bench.application.epoch_benchmark import EpochConfig, dataset_fingerprint, run_epochs
+from continual_bench.datasets.catalog import DATASETS
+from continual_bench.evaluation.epochs import EpochConfig, dataset_fingerprint, run_epochs
+from continual_bench.infrastructure.storage import atomic_write
 
 
 def main():

@@ -5,7 +5,7 @@ from itertools import permutations
 
 import pytest
 
-from continual_bench.domain.metrics import Metrics
+from continual_bench.core.metrics import Metrics
 
 
 def accumulate(examples):

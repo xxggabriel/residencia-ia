@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.adapters.services import S3Objects
-from continual_bench.adapters.zenml_pipeline import execute_pipeline
-from continual_bench.application.config import Config
-from continual_bench.application.runner import environment
+from continual_bench.config import Config
+from continual_bench.evaluation.environment import environment
+from continual_bench.infrastructure.services import S3Objects
+from continual_bench.orchestration.zenml_pipeline import execute_pipeline
 
 
 @pytest.mark.services

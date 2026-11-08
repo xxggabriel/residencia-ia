@@ -11,10 +11,10 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from continual_bench.adapters.local import atomic_write, run_lock
-from continual_bench.application.config import TrackingConfig
-from continual_bench.application.tracking import build_tracking, confusion_metrics, metric_catalog
-from continual_bench.domain.metrics import Metrics
+from continual_bench.config import TrackingConfig
+from continual_bench.core.metrics import Metrics
+from continual_bench.evaluation.tracking import build_tracking, confusion_metrics, metric_catalog
+from continual_bench.infrastructure.storage import atomic_write, run_lock
 
 LEGACY_METRICS = ("n", "accuracy", "f1", "brier", "log_loss")
 RECOVERY_ORIGIN = "recovered_frozen_offline_registry_inference"
@@ -224,8 +224,8 @@ def main():
     if args.publish:
         from mlflow.tracking import MlflowClient
 
-        from continual_bench.adapters.services import S3Objects
         from continual_bench.application.readiness import ensure_tracking_ready
+        from continual_bench.infrastructure.services import S3Objects
 
         ensure_tracking_ready()
         client, objects = MlflowClient(), S3Objects()
@@ -281,7 +281,7 @@ def main():
                 ),
             }
             if args.publish:
-                from continual_bench.adapters.metric_tracking import publish_tracking
+                from continual_bench.infrastructure.metric_tracking import publish_tracking
 
                 tracked = client.get_run(result["mlflow_run_id"])
                 assert tracked.data.tags["run_key"] == key and tracked.info.status == "FINISHED"

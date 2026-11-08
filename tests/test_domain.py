@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.domain.contracts import DecisionContext, Event
-from continual_bench.domain.engine import Engine
-from continual_bench.domain.metrics import Metrics
-from continual_bench.domain.policies import PolicyStrategy
+from continual_bench.core.contracts import DecisionContext, Event
+from continual_bench.core.engine import Engine
+from continual_bench.core.metrics import Metrics
+from continual_bench.core.policies import PolicyStrategy
 
 
 class SpyModel:

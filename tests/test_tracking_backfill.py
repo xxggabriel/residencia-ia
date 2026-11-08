@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from continual_bench.application.config import TrackingConfig
-from continual_bench.domain.metrics import Metrics
+from continual_bench.config import TrackingConfig
+from continual_bench.core.metrics import Metrics
 
 
 def script(name):

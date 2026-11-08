@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.adapters.real_sources import REAL_SOURCES, RealSource, iter_arff, validate_source
+from continual_bench.datasets.openml import REAL_SOURCES, RealSource, iter_arff, validate_source
 
 ELECTRICITY_HEADER = """@relation fixture
 @attribute date numeric

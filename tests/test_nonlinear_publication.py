@@ -7,15 +7,16 @@ from functools import partial
 
 import pytest
 
-from continual_bench.adapters.catalog import model_family_name
-from continual_bench.adapters.nonlinear import HoeffdingTreeModel, KNNModel
-from continual_bench.adapters.river import NullDetector
-from continual_bench.adapters.versioning import ModelVersions, _canonical_state
-from continual_bench.application.config import Config
 from continual_bench.application.runner import run
-from continual_bench.domain.contracts import Event
-from continual_bench.domain.engine import Engine
-from continual_bench.domain.policies import PolicyStrategy
+from continual_bench.config import Config
+from continual_bench.core.contracts import Event
+from continual_bench.core.engine import Engine
+from continual_bench.core.policies import PolicyStrategy
+from continual_bench.detectors.river import NullDetector
+from continual_bench.infrastructure.catalog import model_family_name
+from continual_bench.infrastructure.versioning import ModelVersions, _canonical_state
+from continual_bench.models.neighbors import KNNModel
+from continual_bench.models.tree import HoeffdingTreeModel
 
 
 @pytest.mark.parametrize("model_class", [HoeffdingTreeModel, KNNModel])
@@ -99,7 +100,7 @@ def test_nonlinear_model_packages_load_in_fresh_process(tmp_path, name):
     import subprocess
     import sys
 
-    from continual_bench.adapters.catalog import prepare_mlflow_model
+    from continual_bench.infrastructure.catalog import prepare_mlflow_model
 
     cfg = Config.model_validate(
         {
@@ -130,7 +131,7 @@ def test_nonlinear_model_packages_load_in_fresh_process(tmp_path, name):
     )
     result = json.loads(checked.stdout)
     assert result["fresh_process"] and result["model"] == name
-    assert "/code/continual_bench/adapters/nonlinear.py" in result["bundled_model_code"]
+    assert "/code/continual_bench/models/" in result["bundled_model_code"]
 
 
 @pytest.mark.parametrize("name", ["logistic", "hoeffding_tree", "knn"])
@@ -138,8 +139,8 @@ def test_numeric_signature_accepts_fractional_values_after_first_integer_row(tmp
     pytest.importorskip("mlflow.pyfunc", exc_type=ImportError)
     import mlflow.pyfunc
 
-    from continual_bench.adapters.catalog import prepare_mlflow_model
-    from continual_bench.adapters.model_loader import RiverPredictor, inference_frame
+    from continual_bench.infrastructure.catalog import prepare_mlflow_model
+    from continual_bench.models.serving import RiverPredictor, inference_frame
 
     cfg = Config.model_validate(
         {

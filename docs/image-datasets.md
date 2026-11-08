@@ -76,7 +76,7 @@ aquisição e treinamento ficaram no [relatório de execução](semana09-dataset
 ## Fonte CIFAR Parquet explicitamente selecionada
 
 Foi acrescentada `prepare_cifar_parquet(name, cache, limit=100, seed=42,
-download=False)` em `adapters/cifar_parquet.py`. Essa função foi uma fonte
+download=False)` em `datasets/cifar_parquet.py`. Essa função foi uma fonte
 alternativa explícita após timeout de transferência no servidor Toronto; ela não
 foi fallback automático após negação de acesso. Os repositórios públicos
 [uoft-cs/cifar10](https://huggingface.co/datasets/uoft-cs/cifar10) e

@@ -6,14 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.adapters.local import LocalCheckpoints
-from continual_bench.adapters.river import NullDetector, RiverModel, SyntheticSource
-from continual_bench.adapters.versioning import load_version
-from continual_bench.application.config import Config
 from continual_bench.application.runner import evaluate, prepare, run
-from continual_bench.domain.engine import Engine
-from continual_bench.domain.observability import OnlineObservability
-from continual_bench.domain.policies import PolicyStrategy
+from continual_bench.config import Config
+from continual_bench.core.engine import Engine
+from continual_bench.core.observability import OnlineObservability
+from continual_bench.core.policies import PolicyStrategy
+from continual_bench.datasets.synthetic import SyntheticSource
+from continual_bench.detectors.river import NullDetector
+from continual_bench.infrastructure.storage import LocalCheckpoints
+from continual_bench.infrastructure.versioning import load_version
+from continual_bench.models.linear import RiverModel
 
 
 def small_config(mode="streaming", tracking=None, policy="online"):
@@ -171,7 +173,7 @@ def test_reference_and_shadow_toggles_do_not_change_main_predictions_or_budget(m
 
 @pytest.mark.parametrize("size", [1, 8])
 def test_engine_observer_itself_does_not_change_policy_or_learning(size):
-    from continual_bench.application.config import TrackingConfig
+    from continual_bench.config import TrackingConfig
 
     settings = TrackingConfig(adaptation_shadows=True, continual_references=False).model_dump(mode="json")
     source = SyntheticSource("sea", 120, 42, 3, 1000)

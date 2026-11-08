@@ -2,8 +2,8 @@
 
 import pytest
 
-from continual_bench.application.config import Config
 from continual_bench.application.runner import evaluate, prepare
+from continual_bench.config import Config
 
 
 class UnitTransport:
@@ -81,7 +81,7 @@ def test_zenml_definitions_are_importable_sdk_objects():
     from zenml.pipelines.pipeline_definition import Pipeline
     from zenml.steps.base_step import BaseStep
 
-    from continual_bench.adapters import zenml_steps
+    from continual_bench.orchestration import zenml_steps
 
     assert isinstance(zenml_steps.finite_benchmark, Pipeline)
     for name in ("materialize", "benchmark", "persist"):

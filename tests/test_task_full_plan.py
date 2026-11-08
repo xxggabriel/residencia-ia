@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.adapters.dataset_loading import DATASETS
-from continual_bench.application.config import Config
-from continual_bench.application.epoch_benchmark import EpochConfig
+from continual_bench.config import Config
+from continual_bench.datasets.catalog import DATASETS
+from continual_bench.evaluation.epochs import EpochConfig
 
 
 def jobs():

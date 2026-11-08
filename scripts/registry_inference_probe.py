@@ -11,7 +11,7 @@ import pandas as pd
 request = json.load(sys.stdin)
 assert not any(key.startswith("continual_bench") for key in sys.modules)
 model = mlflow.pyfunc.load_model(request["uri"])
-loader = importlib.import_module("continual_bench.adapters.model_loader")
+loader = importlib.import_module(model.metadata.flavors["python_function"]["loader_module"])
 implementation = importlib.import_module(type(model._model_impl.model).__module__)
 if request.get("model"):
     expected = {"logistic": "RiverModel", "hoeffding_tree": "HoeffdingTreeModel", "knn": "KNNModel"}

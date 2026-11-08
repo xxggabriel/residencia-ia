@@ -2,7 +2,7 @@ import hashlib
 
 import pytest
 
-from continual_bench.adapters.catalog import catalog_source, put_immutable
+from continual_bench.infrastructure.catalog import catalog_source, put_immutable
 
 
 def test_local_cache_location_never_changes_shared_dataset_catalog():

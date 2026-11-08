@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from continual_bench.adapters.temporal_vision import (
+from continual_bench.datasets.temporal_vision import (
     DatasetAccessError,
     RangeReader,
     prepare_temporal_dataset,

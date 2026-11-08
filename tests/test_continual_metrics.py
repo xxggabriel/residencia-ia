@@ -4,7 +4,7 @@ import pickle
 
 import pytest
 
-from continual_bench.domain.continual import METRICS, ContinualEvaluation
+from continual_bench.core.continual import METRICS, ContinualEvaluation
 
 
 class ReferenceModel:

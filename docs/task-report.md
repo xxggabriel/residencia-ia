@@ -54,7 +54,7 @@ O hash SHA-256 do código Python validado foi `b82fa3f7699d58b73d514d5c83a73d9cb
 ## Falhas encontradas e corrigidas
 
 1. A primeira transferência por tar incluiu arquivos AppleDouble `._*`, que causaram falhas de leitura/lint. Foram removidos somente da área de staging desta tarefa e as transferências seguintes desabilitaram metadados do Mac.
-2. O teste arquitetural detectou dependência de I/O/aplicação no novo módulo de domínio. A montagem de relatórios foi movida para `application/evaluation_reporting.py`; a validação não foi enfraquecida.
+2. O teste arquitetural detectou dependência de I/O/aplicação no novo módulo de domínio. A montagem de relatórios foi movida para `evaluation/reporting.py`; a validação não foi enfraquecida.
 3. O teste de replay tipado detectou tuplas do descritor nativo versus listas lidas do JSON. A configuração foi canonicalizada antes de retornar/persistir.
 4. A primeira integração Hyperplane executou o benchmark e falhou no persist por ausência de `version` no manifesto. O contrato foi corrigido; seu formato foi avançado para `river-moving-v2`, preservando os objetos imutáveis anteriores.
 5. Uma repetição com código alterado tentou reutilizar run keys já publicadas, e o MLflow rejeitou os parâmetros imutáveis. Os testes passaram a derivar o namespace do hash do código. Outra tentativa encontrou o catálogo Hyperplane antigo com metadados diferentes; a versão nova da fonte produziu identidade própria. Nenhum objeto imutável foi apagado ou sobrescrito para ocultar o conflito.

@@ -64,15 +64,17 @@ Na avaliação prequential, `warmup` é o trecho inicial usado no aquecimento: c
 
 ## Experimentos e extensão
 
-`domain/` contém classes de dados, contratos, métricas, decisões e motor; não importa River, Kafka, ZenML, MinIO, MLflow ou Pydantic. `application/` valida configurações, monta componentes por injeção e coordena tarefas. `adapters/` implementa ferramentas concretas. As estratégias são substituíveis no registro de componentes sem modificar o motor (DIP/OCP); contratos têm responsabilidades separadas, sem classe de serviço onipotente.
+O pacote é organizado em camadas (detalhes em [arquitetura modular](docs/architecture.md)): `core/` contém contratos, tipos de tarefa, políticas, motor e métricas e não importa River, Kafka, ZenML, MinIO, MLflow ou Pydantic; `config/` valida configurações; `datasets/`, `models/` e `detectors/` declaram cada componente em um catálogo; `evaluation/` implementa os protocolos (holdout temporal, prequential, typed e épocas); `application/` monta componentes por injeção e coordena casos de uso; `infrastructure/` e `orchestration/` isolam E/S externa e pontos de entrada. As estratégias são substituíveis nos catálogos sem modificar o motor (DIP/OCP).
+
+Cada família de modelo declara os tipos de alvo que suporta (`binary`, `multiclass`, `regression`), e cada dataset declara o seu; qualquer dataset pode ser usado com qualquer modelo compatível. `continual-bench components` lista o catálogo e `continual-bench matrix configs/matrix-example.yaml --dry-run` expande uma matriz datasets × modelos × estratégias × modos × sementes, listando as combinações incompatíveis descartadas.
 
 | Componente | Implementações iniciais | Interface |
 |---|---|---|
-| Modelo | regressão logística River + padronização numérica com StandardScaler + codificação categórica indicadora (one-hot) | `predict(x) -> probabilidade`, `learn(x,y)` |
-| Detector | ADWIN, DDM, nenhum | `update(erro_rotulado) -> alarme` |
-| Política | nenhuma, periódica, por mudança de conceito, online | `decide(contexto) -> ação/motivo`, `updated(contagem)` |
-| Fonte | SEA, Agrawal, STAGGER, Electricity, Airlines | eventos ordenados + manifesto + conjuntos de diagnóstico opcionais |
-| Persistência | ponto de recuperação local com gravação atômica, S3 MinIO, MLflow remoto | interfaces em `domain/contracts.py` |
+| Modelo | logística, regressão linear, Hoeffding Tree e kNN (River), com padronização incremental e one-hot | binário: `predict(x) -> probabilidade`, `learn(x,y)`; multiclasse/regressão: `predict_one`, `learn_one` |
+| Detector | ADWIN, DDM, EDDM, HDDM-A/W, Page-Hinkley, KSWIN, nenhum | `update(erro_rotulado) -> alarme` |
+| Política | nenhuma, online, periódica, por drift, por desempenho, heurística de custo | `decide(contexto) -> ação/motivo`, `updated(contagem)` |
+| Fonte | 18 datasets do catálogo (`datasets/catalog.py`) | eventos ordenados + manifesto + conjuntos de diagnóstico opcionais |
+| Persistência | ponto de recuperação local com gravação atômica, S3 MinIO, MLflow remoto | interfaces em `core/contracts.py` |
 
 Detector **não** decide retreinamento. As políticas de retreinamento impõem `cooldown`, `min_samples`, `min_window` e frequência. A política `online` atualiza a cada rótulo disponível após o aquecimento, sem esses guardas de retreinamento. `reset_retrain` cria modelo/preprocessador novos e treina do zero na janela limitada de rótulos já disponíveis; **não** reprocessa todo o histórico. `learn_one` atualiza o modelo existente só com o exemplo liberado. `reset_detector_on_retrain` torna explícito o reinício do detector. O modelo de referência `none` congela modelo/preprocessador após o aquecimento.
 

@@ -15,8 +15,18 @@ from urllib.parse import urlparse
 import yaml
 from mlflow.tracking import MlflowClient
 
-from continual_bench.adapters.services import S3Objects
-from continual_bench.adapters.versioning import digest_json
+from continual_bench.infrastructure.catalog import INFERENCE_CODE, INFERENCE_LOADER
+from continual_bench.infrastructure.services import S3Objects
+from continual_bench.infrastructure.versioning import digest_json
+
+LEGACY_INFERENCE_CODE = (
+    "__init__.py",
+    "adapters/__init__.py",
+    "adapters/river.py",
+    "adapters/model_loader.py",
+    "domain/__init__.py",
+    "domain/contracts.py",
+)
 
 
 def sha(data):
@@ -238,16 +248,12 @@ def main():
             for name in ("river", "numpy", "scipy", "mlflow-skinny", "pandas")
         }
         assert set(requirements) == expected_requirements
-        required_code = (
-            "__init__.py",
-            "adapters/__init__.py",
-            "adapters/river.py",
-            "adapters/model_loader.py",
-            "domain/__init__.py",
-            "domain/contracts.py",
-        )
-        if "adapters/nonlinear.py" in archived_sources:
-            required_code += ("adapters/nonlinear.py",)
+        if flavor["loader_module"] == INFERENCE_LOADER:
+            required_code = INFERENCE_CODE
+        else:  # Campaigns published before the modular package layout.
+            required_code = LEGACY_INFERENCE_CODE
+            if "adapters/nonlinear.py" in archived_sources:
+                required_code += ("adapters/nonlinear.py",)
         for filename in required_code:
             bundled = objects.client.get_object(
                 Bucket="mlflow", Key=f"{prefix}/{flavor['code']}/continual_bench/{filename}"

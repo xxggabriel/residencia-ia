@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.application.config import Config
-from continual_bench.domain.observability import OnlineObservability
+from continual_bench.config import Config
+from continual_bench.core.observability import OnlineObservability
 
 
 def current_memory():
@@ -14,7 +14,7 @@ def current_memory():
 
 def test_ram_time_excludes_pause_between_checkpoint_attempts(monkeypatch):
     times = iter([100, 101, 500, 502])
-    monkeypatch.setattr("continual_bench.domain.observability.time.perf_counter", lambda: next(times))
+    monkeypatch.setattr("continual_bench.core.observability.time.perf_counter", lambda: next(times))
     observer = OnlineObservability({}, memory_sampler=current_memory)
     observer.sample_memory()
     observer.sample_memory()

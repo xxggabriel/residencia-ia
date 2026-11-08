@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.adapters.real_sources import file_sha256
-from continual_bench.adapters.real_stream_datasets import (
+from continual_bench.datasets.openml import file_sha256
+from continual_bench.datasets.real_streams import (
     SPECS,
     _download,
     _gas_rows,
@@ -58,7 +58,7 @@ def test_gas_parser_preserves_numeric_batch_order_and_128_features(tmp_path):
 
 @pytest.mark.parametrize("name", ["insects", "gas"])
 def test_acquisition_admission_prefix_cache_replay_and_corruption(tmp_path, monkeypatch, name):
-    import continual_bench.adapters.real_stream_datasets as module
+    import continual_bench.datasets.real_streams as module
 
     fixture = (insects_fixture(tmp_path / "original.csv") if name == "insects" else
                gas_fixture(tmp_path / "original.zip"))
@@ -102,7 +102,7 @@ def test_missing_cache_never_acquires_without_explicit_permission(tmp_path):
 
 
 def test_failed_admission_removes_partial_cache_and_explicit_retry_is_clean(tmp_path, monkeypatch):
-    import continual_bench.adapters.real_stream_datasets as module
+    import continual_bench.datasets.real_streams as module
 
     original = insects_fixture(tmp_path / "fixture.csv")
     monkeypatch.setitem(SPECS, "insects", {**SPECS["insects"], "expected_rows": 6,

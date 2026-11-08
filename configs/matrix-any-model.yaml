@@ -1,0 +1,15 @@
+# Typed prequential: binary streams are adapted to two classes, so every dataset
+# pairs with every model family supporting its target type (regression included).
+name: residency-any-model
+evaluator: typed
+datasets:
+  - {name: sea, samples: 1000, label_delay: 3}
+  - {name: hyperplane, samples: 1000, label_delay: 3}
+  - {name: friedman_drift, samples: 1000, label_delay: 3}
+models:
+  - {name: logistic}
+  - {name: linear_regression}
+  - {name: hoeffding_tree}
+  - {name: knn}
+typed_policies: [none, online, periodic]
+base: {warmup: 50, every: 100, max_samples: 1000}

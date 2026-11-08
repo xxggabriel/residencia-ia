@@ -235,7 +235,7 @@ Cada modelo final é também uma versão nativa do Model Registry, na família
 `continual-bench-{dataset}-{mode}-{policy}-{detector}`. A versão referencia o run_id e os hashes do
 modelo/dataset/código. `mlflow.pyfunc.load_model("models:/nome/versão")` recarrega o pacote com
 assinatura, pré-processamento e dependências. Para estados intermediários, baixar o diário e índice
-a partir dos URIs do recibo e usar `continual_bench.adapters.versioning.load_version` com o version_id.
+a partir dos URIs do recibo e usar `continual_bench.infrastructure.versioning.load_version` com o version_id.
 Baixar também `model-metadata.json` permite conferir o checksum integral do índice.
 Apenas artefatos próprios e autenticados devem ser desserializados.
 
