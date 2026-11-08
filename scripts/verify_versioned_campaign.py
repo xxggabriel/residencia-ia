@@ -35,7 +35,7 @@ def sha(data):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", default="/app/configs/campaign-versioned-v4.json")
+    parser.add_argument("--manifest", default="/app/configs/history/campaign-versioned-v4.json")
     parser.add_argument(
         "--limit", type=int, help="Audit only an initial subset; never marks the campaign complete"
     )

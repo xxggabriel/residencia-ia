@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 from typing import Literal
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from continual_bench.core.policies import POLICIES, PolicyStrategy
@@ -192,5 +191,7 @@ def _dataset_family(name: str) -> str | None:
 
 
 def load_config(path: str | Path) -> Config:
-    with Path(path).open() as f:
-        return Config.model_validate(yaml.safe_load(f))
+    """Load a run configuration, resolving `extends` bases (see config.loader)."""
+    from .loader import load_model
+
+    return load_model(Config, path)

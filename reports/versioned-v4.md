@@ -23,7 +23,7 @@ simultaneamente em 415 de 713 observações.
 Os três protocolos foram executados: streaming com Kafka, incremental e offline com corte temporal.
 A matriz mantém os orçamentos pós-warmup de 2900/5800 apresentações; online aprende cada rótulo
 liberado, inclusive na drenagem final. A matriz e o SHA executados estão em
-[campaign-versioned-v4.json](../configs/campaign-versioned-v4.json).
+[campaign-versioned-v4.json](../configs/history/campaign-versioned-v4.json).
 
 ## MLflow e versionamento
 

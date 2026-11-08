@@ -328,7 +328,7 @@ Os tamanhos abaixo são payloads medidos pelo auditor, quando presentes; não in
 
 ## Proveniência e reprodução
 
-SHA principal do manifesto congelado: `159e32431ef622c64b2020ab8d9ec73947eaff2f944a58f318910a246756b69c`; as revisões autorizadas por run estão detalhadas acima. Configurações: [manifesto](../configs/campaign-nonlinear-v5.json). [Ambiente e imagens](nonlinear-v5-environment.json).
+SHA principal do manifesto congelado: `159e32431ef622c64b2020ab8d9ec73947eaff2f944a58f318910a246756b69c`; as revisões autorizadas por run estão detalhadas acima. Configurações: [manifesto](../configs/history/campaign-nonlinear-v5.json). [Ambiente e imagens](nonlinear-v5-environment.json).
 
 Imagens registradas: `/continual-bench-worker-1` → `sha256:36b2481bc82b2de0c114c06e3430204c136b8327e948a498e58011df3a436a46`; `/continual-bench-airflow-scheduler-1` → `sha256:f2de552c9d7685166120a7ae27d01bca8079c410f4110651ab8596ab856f4b90`; `/continual-bench-mlflow-1` → `sha256:fdea23b9c66500b5d0434a4c325e2329e277ba8b3e68caa5b1f7a2762d35017e`; `/continual-bench-zenml-1` → `sha256:6a03880ace49597e5eb4a427facfd43871fe7518c5123f122a61e746aa9aec84`; `/continual-bench-kafka-1` → `sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837`.
 

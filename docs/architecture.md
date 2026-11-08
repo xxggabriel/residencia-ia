@@ -73,15 +73,15 @@ que suporta:
 ## Matriz de experimentos
 
 ```bash
-continual-bench matrix configs/matrix-example.yaml --dry-run   # plano + combinações descartadas
-continual-bench matrix configs/matrix-example.yaml --state state/matrices
+continual-bench matrix configs/matrices/binary-comparison.yaml --dry-run   # plano + combinações descartadas
+continual-bench matrix configs/matrices/binary-comparison.yaml --state state/matrices
 ```
 
 O resultado fica em `state/matrices/<identidade>/`: `matrix.json` (diário retomável, com status
 de cada caso) e `summary.json` (uma linha por caso com dataset, semente, modelo, modo, detector,
 política e métricas finais). Uma nova execução reaproveita os casos concluídos; cada caso
 continua idempotente pela identidade da sua configuração. Veja também
-`configs/matrix-any-model.yaml` para o avaliador typed com regressão.
+`configs/matrices/any-model.yaml` para o avaliador typed com regressão.
 
 ## Como estender
 
@@ -110,3 +110,12 @@ continua idempotente pela identidade da sua configuração. Veja também
 - Equivalência verificada no homelab: 100 casos (91 binários em 5 datasets × 3 modelos × 6
   combinações de protocolo/política, 3 typed e 6 de épocas) produziram digests de predição e
   métricas idênticos antes e depois da refatoração.
+
+## Configurações
+
+Os arquivos de `configs/` seguem a estrutura base → sobrescrita descrita em
+[configs/README.md](../configs/README.md): `base/` concentra os padrões compartilhados; `runs/`,
+`typed/`, `campaigns/` e `matrices/` herdam deles com `extends`; `contracts/` guarda locks e
+definições de métricas versionados; `history/` guarda os manifestos congelados das campanhas
+executadas. `continual_bench.config.load_model(schema, caminho)` resolve a herança e valida o
+resultado.

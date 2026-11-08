@@ -218,7 +218,7 @@ def main():
     args = parser.parse_args()
     raw = Path(args.input).read_bytes()
     payload = json.loads(raw)
-    result = analyze(payload, json.loads(Path("configs/campaign-versioned-v4.json").read_text()))
+    result = analyze(payload, json.loads(Path("configs/history/campaign-versioned-v4.json").read_text()))
     result["input_sha256"] = hashlib.sha256(raw).hexdigest()
     reference_path = Path("reports/versioned-v4-reference-baselines.json")
     reference_raw = reference_path.read_bytes()

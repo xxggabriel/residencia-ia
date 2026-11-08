@@ -1,5 +1,6 @@
 # Binary drift/retraining comparison: 5 datasets × 3 models × 4 strategies × 2 modes × 3 seeds.
 # Incompatible pairs are listed under "skipped" by `continual-bench matrix --dry-run`.
+extends: base.yaml
 name: residency-binary-comparison
 evaluator: binary
 datasets:
@@ -18,7 +19,6 @@ strategies:
   - {detector: {name: adwin}, policy: {name: drift}}
   - {detector: {name: none}, policy: {name: performance, params: {error_threshold: 0.3}}}
 modes: [streaming, incremental]
-seeds: [42, 43, 44]
 base:
   warmup: 100
   metric_window: 100

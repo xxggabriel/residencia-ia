@@ -3,7 +3,7 @@ from pathlib import Path
 
 from continual_bench.application.campaign import Campaign, execute_campaign
 from continual_bench.application.runner import evaluate, prepare, run
-from continual_bench.config import Config
+from continual_bench.config import Config, load_model
 
 
 def configuration():
@@ -42,8 +42,8 @@ def test_runner_resume_preserves_frozen_horizons_and_prices_rejected_candidates(
 
 
 def test_declarative_smoke_campaign_runs_all_cases_and_reuses_reports(tmp_path):
-    path = Path(__file__).parents[1] / "configs/campaign-task-smoke.json"
-    specification = Campaign.model_validate_json(path.read_text())
+    path = Path(__file__).parents[1] / "configs/campaigns/task-smoke.yaml"
+    specification = load_model(Campaign, path)
     first = execute_campaign(specification, tmp_path)
     second = execute_campaign(specification, tmp_path)
     assert first == second and second["complete"]

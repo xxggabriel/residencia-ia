@@ -105,8 +105,9 @@ def _campaign_options(parser):
 @command("campaign", _campaign_options)
 def campaign_command(args):
     from .application.campaign import Campaign, execute_campaign
+    from .config import load_model
 
-    specification = Campaign.model_validate_json(Path(args.config).read_text())
+    specification = load_model(Campaign, args.config)
     executor = None
     if args.zenml:
         from .orchestration.zenml_pipeline import execute_pipeline as executor
@@ -118,10 +119,10 @@ def campaign_command(args):
                              p.add_argument("--state", default="state/task_evaluation-typed")))
 def typed_command(args):
     from .application.components import default_registry, make_source
-    from .config import TypedConfig
+    from .config import TypedConfig, load_model
     from .evaluation.typed import run_typed
 
-    specification = TypedConfig.model_validate_json(Path(args.config).read_text())
+    specification = load_model(TypedConfig, args.config)
     source = make_source(default_registry(), specification.dataset)
     result = run_typed(source, args.state, **specification.model_dump(exclude={"dataset"}))
     emit({k: result[k] for k in ("run_key", "metrics", "complete")})
@@ -159,9 +160,9 @@ def _epoch_job_options(parser):
 
 @command("epoch-job", _epoch_job_options)
 def epoch_job_command(args):
-    from .config import EpochConfig
+    from .config import EpochConfig, load_model
 
-    config = EpochConfig.model_validate_json(Path(args.config).read_text())
+    config = load_model(EpochConfig, args.config)
     if args.services:
         from .orchestration.epoch_pipeline import execute_epoch_pipeline
 
@@ -199,11 +200,10 @@ def _matrix_options(parser):
 
 @command("matrix", _matrix_options)
 def matrix_command(args):
-    import yaml
-
     from .application.matrix import ExperimentMatrix, case_key, describe, execute_matrix
+    from .config import load_model
 
-    matrix = ExperimentMatrix.model_validate(yaml.safe_load(Path(args.config).read_text()))
+    matrix = load_model(ExperimentMatrix, args.config)
     if args.dry_run:
         plan = matrix.plan()
         emit({"matrix": plan["matrix"], "evaluator": plan["evaluator"], "cases": len(plan["cases"]),

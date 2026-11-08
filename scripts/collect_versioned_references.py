@@ -8,7 +8,7 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", default="/app/configs/campaign-versioned-v4.json")
+    parser.add_argument("--manifest", default="/app/configs/history/campaign-versioned-v4.json")
     parser.add_argument("--state", default="/state/runs")
     args = parser.parse_args()
     manifest = json.loads(Path(args.manifest).read_text())

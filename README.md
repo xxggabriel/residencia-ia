@@ -27,9 +27,9 @@ Requer Python 3.12. Dependências do serviço executor (worker) fixadas em `uv.l
 ```bash
 uv sync --frozen --extra dev --extra services --extra datasets
 PYTHONPATH=. uv run pytest -q
-uv run continual-bench run configs/streaming.yaml
-uv run continual-bench run configs/incremental.yaml
-uv run continual-bench run configs/offline.yaml
+uv run continual-bench run configs/runs/streaming.yaml
+uv run continual-bench run configs/runs/incremental.yaml
+uv run continual-bench run configs/runs/offline.yaml
 uv run continual-bench smoke --state state/smoke --samples 600 --baselines
 ```
 
@@ -52,7 +52,7 @@ Os três geradores sintéticos River têm código BSD-3-Clause. Foram integradas
 | Electricity | OpenML 151, versão 1 | 45312 | `class=UP` |
 | Airlines | OpenML 1169, versão 1 | 539383 | `Delay=1` |
 
-O catálogo OpenML declara licença `Public` para ambas; preservamos esse rótulo, sem convertê-lo em uma licença SPDX. Os ARFF completos são validados antes do pipeline e armazenados com hash. O adaptador usa um prefixo na ordem publicada, sem embaralhar, com timestamps e atraso de rótulo simulados; a cronologia original e o atraso real não foram estabelecidos. Electricity foi normalizado/imputado pelo publicador, cujo escopo de ajuste não está documentado. Não há pontos de mudança conhecidos nem probes sintéticos para essas fontes. Consulte [fontes fixadas](configs/real-sources.lock.json) e [operação](docs/benchmark-operations.md#datasets-reais-e-campanha-versionada-v4).
+O catálogo OpenML declara licença `Public` para ambas; preservamos esse rótulo, sem convertê-lo em uma licença SPDX. Os ARFF completos são validados antes do pipeline e armazenados com hash. O adaptador usa um prefixo na ordem publicada, sem embaralhar, com timestamps e atraso de rótulo simulados; a cronologia original e o atraso real não foram estabelecidos. Electricity foi normalizado/imputado pelo publicador, cujo escopo de ajuste não está documentado. Não há pontos de mudança conhecidos nem probes sintéticos para essas fontes. Consulte [fontes fixadas](configs/contracts/real-sources.lock.json) e [operação](docs/benchmark-operations.md#datasets-reais-e-campanha-versionada-v4).
 
 Cada manifesto registra fonte e versão, semente aleatória, SHA-256 do JSONL, limites dos conceitos e tipo de timestamp. Os timestamps são **simulados**, `epoch + sequência` em segundos; não representam medições do mundo real. IDs estáveis derivam de versão da fonte e sequência. A ordem original nunca é embaralhada. Cada segmento usa um gerador com semente aleatória explícita. Os conjuntos de diagnóstico fixos (probes) usam outra semente, nunca são usados no treino e não são fornecidos ao detector nem à política.
 
@@ -66,7 +66,7 @@ Na avaliação prequential, `warmup` é o trecho inicial usado no aquecimento: c
 
 O pacote é organizado em camadas (detalhes em [arquitetura modular](docs/architecture.md)): `core/` contém contratos, tipos de tarefa, políticas, motor e métricas e não importa River, Kafka, ZenML, MinIO, MLflow ou Pydantic; `config/` valida configurações; `datasets/`, `models/` e `detectors/` declaram cada componente em um catálogo; `evaluation/` implementa os protocolos (holdout temporal, prequential, typed e épocas); `application/` monta componentes por injeção e coordena casos de uso; `infrastructure/` e `orchestration/` isolam E/S externa e pontos de entrada. As estratégias são substituíveis nos catálogos sem modificar o motor (DIP/OCP).
 
-Cada família de modelo declara os tipos de alvo que suporta (`binary`, `multiclass`, `regression`), e cada dataset declara o seu; qualquer dataset pode ser usado com qualquer modelo compatível. `continual-bench components` lista o catálogo e `continual-bench matrix configs/matrix-example.yaml --dry-run` expande uma matriz datasets × modelos × estratégias × modos × sementes, listando as combinações incompatíveis descartadas.
+Cada família de modelo declara os tipos de alvo que suporta (`binary`, `multiclass`, `regression`), e cada dataset declara o seu; qualquer dataset pode ser usado com qualquer modelo compatível. `continual-bench components` lista o catálogo e `continual-bench matrix configs/matrices/binary-comparison.yaml --dry-run` expande uma matriz datasets × modelos × estratégias × modos × sementes, listando as combinações incompatíveis descartadas.
 
 | Componente | Implementações iniciais | Interface |
 |---|---|---|
@@ -154,7 +154,7 @@ O teto de treino é medido em chamadas de aprendizado, incluindo replays; não e
 de CPU nem força os detectores a gastar todo o orçamento. Detalhes em
 [Operação do benchmark](docs/benchmark-operations.md#campanha-controlada-v3).
 
-Manifesto: [campaign-controlled-v3.json](configs/campaign-controlled-v3.json).
+Manifesto: [campaign-controlled-v3.json](configs/history/campaign-controlled-v3.json).
 A comparação reproduzível usa `scripts/compare_controlled_campaign.py` e preserva os protocolos
 separados, a semente 42 histórica e a dispersão entre as cinco sementes.
 
@@ -163,7 +163,7 @@ separados, a semente 42 histórica e a dispersão entre as cinco sementes.
 
 `benchmark_versioned` executa `versioned-v4`: 255 configurações sintéticas (cinco sementes)
 e 34 configurações reais (um prefixo fixo de Electricity e outro de Airlines), com oito tarefas
-`evaluate_and_publish` paralelas. O manifesto [campaign-versioned-v4.json](configs/campaign-versioned-v4.json)
+`evaluate_and_publish` paralelas. O manifesto [campaign-versioned-v4.json](configs/history/campaign-versioned-v4.json)
 fixa 3000 exemplos, atraso 3 e os orçamentos da v3. Sementes não criam repetições independentes
 dos datasets reais; o adaptador registra explicitamente `seed_ignored`.
 
@@ -194,13 +194,13 @@ por família da v4: cinco datasets, cinco sementes sintéticas, prefixos reais f
 seleção dos dados; o MLflow registra família/parâmetros e mantém os experimentos por política/detector.
 
 Consulte o [contrato e parâmetros](docs/nonlinear-v5-protocol.md), o
-[manifesto por run](configs/campaign-nonlinear-v5.json) e a
+[manifesto por run](configs/history/campaign-nonlinear-v5.json) e a
 [comparação com a campanha v4](reports/nonlinear-v5.md). A análise distingue qualidade preditiva,
 probabilidades, apresentações de treino e tamanho dos artefatos; os tetos não igualam o custo de CPU.
 
 ## Tracking ampliado das métricas da residência
 
-O [catálogo versionado](configs/metric-definitions.json) e o
+O [catálogo versionado](configs/contracts/metric-definitions.json) e o
 [contrato de métricas](docs/tracking-metrics.md) distinguem medidas calculadas, definições
 condicionais e evidências ausentes. As novas runs registram classificação, ranking/calibração,
 retenção e transferência por episódio, drift/recuperação, custo configurável e recursos.
@@ -213,12 +213,12 @@ A DAG `benchmark_metrics_smoke` verifica oito combinações dos cinco datasets e
 Ambas mantêm o limite de oito tarefas `evaluate_and_publish`. O parâmetro `campaign` permite
 nomear a campanha e `tracking` configura os coeficientes e a instrumentação. Referências e
 comparações com cópias do modelo anterior acrescentam custo de avaliação, medido separadamente.
-O perfil [tracking-metrics-profile.json](configs/tracking-metrics-profile.json) usa unidades
+O perfil [tracking-metrics-profile.json](configs/base/tracking.yaml) usa unidades
 sintéticas de cenário, sem representar preços observados. O exemplo
-[metrics-example.yaml](configs/metrics-example.yaml) executa localmente com:
+[metrics-example.yaml](configs/runs/metrics.yaml) executa localmente com:
 
 ```bash
-uv run continual-bench run configs/metrics-example.yaml --state state/metrics
+uv run continual-bench run configs/runs/metrics.yaml --state state/metrics
 ```
 
 Para enriquecer campanhas históricas, `scripts/backfill_tracking_metrics.py` gera um sidecar

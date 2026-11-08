@@ -302,7 +302,7 @@ def main():
     parser.add_argument("--current", default="reports/generated/nonlinear-v5-inputs.json")
     parser.add_argument("--previous", default="reports/generated/versioned-v4-inputs.json")
     parser.add_argument("--output", default="reports/nonlinear-v5-comparison.json")
-    parser.add_argument("--manifest", default="configs/campaign-nonlinear-v5.json")
+    parser.add_argument("--manifest", default="configs/history/campaign-nonlinear-v5.json")
     args = parser.parse_args()
     raw_current, raw_previous = Path(args.current).read_bytes(), Path(args.previous).read_bytes()
     raw_manifest = Path(args.manifest).read_bytes()

@@ -8,7 +8,7 @@ from mlflow.tracking import MlflowClient
 
 from continual_bench.infrastructure.services import S3Objects
 
-manifest = json.loads(Path("/app/configs/campaign-controlled-v3.json").read_text())
+manifest = json.loads(Path("/app/configs/history/campaign-controlled-v3.json").read_text())
 expected = {r["run_key"] for r in manifest["configurations"]}
 client = MlflowClient()
 experiment = client.get_experiment_by_name("continual-bench-v1")

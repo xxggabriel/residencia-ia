@@ -16,7 +16,7 @@ A continuidade de 4 de novembro implementou os loaders brutos e os testes de **1
 - Foi acrescentado o suplemento `semana09-metrics-v1`: validação de anotações de drift, resumo GEM, forgetting após aprendizado, retenção, recursos e near-future accuracy operacional com snapshots congelados. Ausência de anotações manteve F1 do detector indisponível. FWT de GEM sem baseline inicial permaneceu indisponível. As definições históricas da Semana 08 foram preservadas e distinguidas.
 - Foram acrescentados campanha declarativa limitada, journal, locks, falhas visíveis e retomada verificada, além de configuração de um cliente transitório de testes com serviços. Os parâmetros vazios novos foram omitidos das identidades históricas. Não foram atualizadas dependências ou lockfiles.
 
-A matriz com componentes, versões, fontes, testes e restrições ficou em [cobertura](semana09-coverage.md). O catálogo parcial executável ficou em `configs/dataset-catalog.json`.
+A matriz com componentes, versões, fontes, testes e restrições ficou em [cobertura](semana09-coverage.md). O catálogo parcial executável ficou em `configs/contracts/dataset-catalog.json`.
 
 ## Ambiente e isolamento
 
@@ -92,8 +92,8 @@ docker compose --env-file "$TASK_BENCH_SERVICE_ENV" \
 No cliente limitado do homelab, os comandos CLI executados foram:
 
 ```bash
-python -m continual_bench.cli campaign configs/campaign-task-smoke.json --state /state/smoke
-python -m continual_bench.cli typed configs/friedman-smoke.json --state /state/typed
+python -m continual_bench.cli campaign configs/campaigns/task-smoke.yaml --state /state/smoke
+python -m continual_bench.cli typed configs/typed/friedman-smoke.yaml --state /state/typed
 python scripts/export_task_evidence.py --state /state
 ```
 

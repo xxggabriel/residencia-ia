@@ -43,7 +43,7 @@ def dataset_fingerprint(env=None):
     env = environment() if env is None else env
     locks = {}
     for name in DATASET_LOCKS:
-        candidates = (PACKAGE_ROOT.parents[1] / "configs" / name, PACKAGE_ROOT / name)
+        candidates = (PACKAGE_ROOT.parents[1] / "configs" / "contracts" / name, PACKAGE_ROOT / name)
         path = next((p for p in candidates if p.is_file()), None)
         if path is None:
             raise FileNotFoundError(f"dataset contract must accompany the runtime: {name}")

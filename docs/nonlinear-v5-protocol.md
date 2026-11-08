@@ -8,7 +8,7 @@ das configurações a partir dos resultados de teste. O ranking posterior de pol
 ## Matriz
 
 `benchmark_nonlinear` executa 867 configurações: 289 por modelo, intercaladas por caso.
-O manifesto `configs/campaign-nonlinear-v5.json` fixa cada configuração e o SHA da implementação.
+O manifesto `configs/history/campaign-nonlinear-v5.json` fixa cada configuração e o SHA da implementação.
 
 - Cinco datasets; SEA/Agrawal/STAGGER com sementes 42–46; Electricity/Airlines com um prefixo cada.
 - 3000 exemplos, aquecimento100, atraso simulado3, lote incremental32, janela de replay256.
@@ -80,7 +80,7 @@ Online continua aprendendo; periódico/drift reiniciam na janela256. Representa�
 retido também diferem entre modelos. Os reais continuam com um único prefixo e relógio/atraso simulados;
 Electricity conserva a incerteza sobre normalização/imputação anterior à aquisição.
 
-Ferramentas: `scripts/verify_versioned_campaign.py --manifest /app/configs/campaign-nonlinear-v5.json`
+Ferramentas: `scripts/verify_versioned_campaign.py --manifest /app/configs/history/campaign-nonlinear-v5.json`
 e `scripts/compare_nonlinear_campaign.py`. Asserções e testes precedem a execução completa.
 
 ## Recuperação registrada durante a execução

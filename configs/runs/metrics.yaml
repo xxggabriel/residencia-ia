@@ -1,0 +1,14 @@
+# Residency metrics profile on an online Hoeffding tree with a post-warmup budget.
+extends: ../base/run.yaml
+name: metrics-v6-example
+mode: streaming
+dataset: {name: agrawal, samples: 3000}
+model:
+  name: hoeffding_tree
+  params:
+    nominal_attributes: [elevel, car, zipcode]
+detector: {name: none}
+policy: {name: online, action: learn_one}
+training_budget: 2900
+tracking:
+  extends: ../base/tracking.yaml

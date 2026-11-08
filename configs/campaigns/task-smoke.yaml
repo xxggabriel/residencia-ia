@@ -1,0 +1,33 @@
+# Semana 09 initial validation (`continual-bench campaign`): one case per policy family.
+version: semana09-v1
+name: semana09-initial-validation
+max_seconds: 600
+cases:
+  - extends: ../base/smoke.yaml
+    dataset: {name: sea}
+    policy: {name: none}
+    detector: {name: none}
+  - extends: ../base/smoke.yaml
+    dataset: {name: agrawal}
+    policy: {name: periodic}
+    detector: {name: adwin}
+  - extends: ../base/smoke.yaml
+    dataset: {name: stagger}
+    policy: {name: drift}
+    detector: {name: ddm}
+  - extends: ../base/smoke.yaml
+    dataset: {name: hyperplane}
+    policy:
+      name: performance
+      params: {monitor_window: 20, error_threshold: 0.25}
+    detector: {name: page_hinkley}
+  - extends: ../base/smoke.yaml
+    dataset: {name: rbf_drift}
+    policy:
+      name: cost_heuristic
+      params: {monitor_window: 20, target_error: 0.1, horizon: 50, fixed_train_cost: 1, sample_train_cost: 0.01}
+    detector: {name: eddm}
+  - extends: ../base/smoke.yaml
+    dataset: {name: sea}
+    policy: {name: online, action: learn_one}
+    detector: {name: none}
