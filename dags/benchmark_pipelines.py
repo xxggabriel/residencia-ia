@@ -17,6 +17,15 @@ def build_dag(suite):
         params={
             "samples": Param(300 if suite == "metrics_smoke" else 3000,
                              type="integer", minimum=300, maximum=100000),
+            **({"dataset": Param("electricity", type="string", enum=["electricity", "airlines"]),
+                "models": Param(["logistic", "hoeffding_tree", "knn"], type="array", minItems=1,
+                                uniqueItems=True,
+                                items={"type": "string", "enum": ["logistic", "hoeffding_tree", "knn"]}),
+                "campaign": Param("", type="string", pattern="^[A-Za-z0-9_-]{0,64}$",
+                                  description="Empty: policies-<dataset>-v1"),
+                "experiment": Param("", type="string", pattern="^[A-Za-z0-9_./-]{0,200}$",
+                                    description="Empty: continual-bench/<campaign>")}
+               if suite == "policies" else {}),
             "seeds": Param(
                 [42, 43, 44, 45, 46]
                 if suite in ("controlled", "versioned", "nonlinear", "metrics") else [42],
@@ -44,7 +53,8 @@ def build_dag(suite):
         def plan(params=None):
             return configurations(params, suite)
 
-        @task(execution_timeout=timedelta(minutes=40 if suite in ("metrics", "metrics_smoke") else 22))
+        @task(execution_timeout=timedelta(
+            minutes=40 if suite in ("metrics", "metrics_smoke", "policies") else 22))
         def evaluate_and_publish(config):
             return execute_job(config)
 
@@ -65,6 +75,6 @@ def build_dag(suite):
 
 for _suite in (
     "streaming", "incremental", "offline", "strategies", "full", "controlled", "versioned", "nonlinear",
-    "metrics", "metrics_smoke",
+    "metrics", "metrics_smoke", "policies",
 ):
     globals()[f"benchmark_{_suite}"] = build_dag(_suite)

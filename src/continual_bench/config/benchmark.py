@@ -133,6 +133,9 @@ class Config(Strict):
     # Keep identities/config dumps of historical configurations byte-compatible.
     tracking: TrackingConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     promotion: PromotionConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Groups a campaign in one MLflow experiment; None keeps the per-policy/detector experiments.
+    mlflow_experiment: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_./-]{1,200}$",
+                                          exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_protocol(self):

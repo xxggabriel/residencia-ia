@@ -15,6 +15,8 @@ def tracking_profile():
 
 
 def configurations(params, suite):
+    if suite == "policies":
+        return policy_configurations(params)
     if suite in ("metrics", "metrics_smoke"):
         cases = nonlinear_configurations(params)
         if suite == "metrics_smoke":
@@ -65,6 +67,56 @@ def configurations(params, suite):
                         "policy": {"name": policy,
                                    "action": "learn_one" if policy == "online" else "reset_retrain"},
                     })
+    return result
+
+
+POLICY_MODELS = {
+    "logistic": {"learning_rate": 0.05},
+    "hoeffding_tree": {"grace_period": 50, "max_depth": 8, "max_size": 8, "memory_estimate_period": 100,
+                       "leaf_prediction": "nba"},
+    "knn": {"n_neighbors": 11, "window_size": 256, "weighted": True},
+}
+DRIFT_DETECTORS = ("adwin", "ddm", "eddm", "hddm_a", "hddm_w", "page_hinkley", "kswin")
+
+
+def policy_strategies():
+    """Every retraining policy; drift-triggered retraining once per River detector."""
+    guards = {"every": 500, "cooldown": 100, "min_samples": 100, "min_window": 50, "action": "reset_retrain"}
+    strategies = [("none", {"name": "none"}),
+                  ("none", {"name": "online", "action": "learn_one"}),
+                  ("none", {"name": "periodic", **guards})]
+    strategies += [(detector, {"name": "drift", **guards}) for detector in DRIFT_DETECTORS]
+    strategies.append(("none", {"name": "performance", **guards,
+                                "params": {"monitor_window": 200, "error_threshold": 0.3}}))
+    strategies.append(("none", {"name": "cost_heuristic", **guards,
+                                "params": {"monitor_window": 200, "target_error": 0.15, "horizon": 500,
+                                           "fixed_train_cost": 5.0, "sample_train_cost": 0.01}}))
+    return strategies
+
+
+def policy_configurations(params):
+    """One real dataset x models x all retraining policies; offline frozen holdout as reference.
+
+    Real prefixes are deterministic, so a single seed is used. Every case omits `tracking`,
+    so the worker collects the full default metric profile, system metrics and plots.
+    """
+    dataset = params["dataset"]
+    campaign = params.get("campaign") or f"policies-{dataset}-v1"
+    experiment = params.get("experiment") or f"continual-bench/{campaign}"
+    models = params.get("models") or list(POLICY_MODELS)
+    data = {"name": dataset, "samples": params["samples"], "seed": params["seeds"][0],
+            "label_delay": params["label_delay"]}
+    common = {"name": campaign, "mlflow_experiment": experiment, "warmup": 100, "metric_window": 100,
+              "replay_window": 256, "max_seconds": 1800}
+    result = []
+    for model in models:
+        component = {"name": model, "params": deepcopy(POLICY_MODELS[model])}
+        for mode in ("streaming", "incremental"):
+            for detector, policy in policy_strategies():
+                result.append({**common, "mode": mode, "dataset": dict(data), "model": deepcopy(component),
+                               "detector": {"name": detector}, "policy": deepcopy(policy)})
+        result.append({**common, "mode": "offline", "dataset": dict(data), "model": deepcopy(component),
+                       "detector": {"name": "none"}, "policy": {"name": "none"}})
     return result
 
 

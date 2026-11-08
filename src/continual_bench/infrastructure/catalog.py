@@ -32,6 +32,11 @@ def strategy_name(config):
     return f"continual-bench/policy-{policy}/detector-{config['detector']['name']}"
 
 
+def experiment_name(config):
+    """Campaign experiment when declared, otherwise the historical strategy experiment."""
+    return config.get("mlflow_experiment") or strategy_name(config)
+
+
 def model_family_name(config):
     parts = [config["dataset"]["name"]]
     # Preserve the historical logistic families; nonlinear models have distinct registries.
