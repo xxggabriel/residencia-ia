@@ -121,7 +121,7 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
         report["costs"] = account(costs, errors=totals["errors"],
                                   presentations=len(train) * config.epochs, updates=config.epochs,
                                   train_seconds=totals["train_seconds"],
-                                  predict_seconds=totals["predict_seconds"])
+                                  predict_seconds=totals["predict_seconds"], model_storage_bytes=0)
         report["system_metrics"] = sampler.report()
         report["artifacts"] = write_artifacts(
             directory, epoch_figures(report) + system_figures(report["system_metrics"]),
@@ -167,7 +167,7 @@ def _train_epochs(config, model, task, train, test, costs, started):
                        "prediction_seconds": prediction_seconds,
                        "costs": account(costs, errors=errors, presentations=len(train), updates=1,
                                         train_seconds=training_seconds,
-                                        predict_seconds=prediction_seconds),
+                                        predict_seconds=prediction_seconds, include_aws=False),
                        "metrics": {name: metric.get() for name, metric in scores.items()},
                        "prediction_digest": hashlib.sha256(encoded(predictions)).hexdigest()})
     return epochs, totals

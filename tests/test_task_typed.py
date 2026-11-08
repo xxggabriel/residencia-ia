@@ -29,6 +29,8 @@ def test_friedman_runs_native_regression_and_complete_replay_is_idempotent(tmp_p
     first = run_typed(source, tmp_path, warmup=10)
     second = run_typed(source, tmp_path, warmup=10)
     assert first == second
+    assert first["costs"]["aws"]["consumption"]["model_storage_bytes"] == 0
+    assert first["costs"]["aws"]["metrics"]["cost_total_usd"] > 0
     assert first["observed"] == 90
     assert first["metrics"]["train"]["n"] == 80
     assert first["metrics"]["train"]["mae"] >= 0

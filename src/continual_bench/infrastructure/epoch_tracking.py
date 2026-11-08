@@ -52,6 +52,8 @@ def publish_epochs(report, root):
                       for epoch in report["epochs"] for name, value in epoch["costs"]["metrics"].items())
         points.extend(("costs/total/" + name, 0, value)
                       for name, value in report["costs"]["metrics"].items())
+        points.extend(("costs/aws/" + name, 0, value)
+                      for name, value in report["costs"].get("aws", {}).get("metrics", {}).items())
         points.extend(("compute/" + name, epoch["epoch"], epoch[name])
                       for epoch in report["epochs"] for name in ("training_seconds", "prediction_seconds"))
         log_metric_points(client, run_id, points)

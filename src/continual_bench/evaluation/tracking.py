@@ -438,10 +438,14 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
         costs, errors=metrics["fp"] * costs["false_positive"] + metrics["fn"] * costs["false_negative"],
         presentations=initial + used, updates=len(candidates),
         train_seconds=metrics["train_seconds"], predict_seconds=metrics["prediction_seconds"],
+        model_storage_bytes=report.get("model_versions", {}).get("storage_bytes"),
     )
     cost_total = cost_report["metrics"]["cost_total"]
     for key, value in cost_report["metrics"].items():
         available(key, value, "required_timer_missing", costs["unit"])
+    for key, value in cost_report.get("aws", {}).get("metrics", {}).items():
+        available("aws_" + key, value, "required_resource_consumption_missing", "USD")
+
     def adaptation_cost(update):
         if costs is None or costs["predict_second"]:
             return None

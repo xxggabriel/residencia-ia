@@ -233,4 +233,4 @@ calibração e referências não gravadas permanecem indisponíveis nessas runs.
 
 ## Custos de execução
 
-Os fluxos principal, tipado e por épocas registram um cenário de custo configurável independente da política. Consulte [contabilização de custos](docs/cost-accounting.md) para coeficientes, escopos, publicação e migração dos nomes de avaliação.
+Os fluxos principal, tipado e por épocas registram um cenário de custo configurável independente da política e uma estimativa AWS em USD, com CPU/RAM por tempo de processamento e modelos salvos por GB e retenção. Consulte [contabilização de custos](docs/cost-accounting.md) para coeficientes, escopos, publicação e migração dos nomes de avaliação.

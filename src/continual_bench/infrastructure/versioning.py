@@ -137,6 +137,7 @@ class ModelVersions:
             "dataset_version": self.dataset_version,
             "code_sha256": self.code_sha256,
             "count": len(self.entries),
+            "storage_bytes": self.offset + len(blob),
             "final_version_id": last["version_id"],
             "state_sha256": last["state_sha256"],
             "index_sha256": hashlib.sha256(encoded).hexdigest(),

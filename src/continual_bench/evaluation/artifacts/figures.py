@@ -114,6 +114,13 @@ SUMMARY_FAMILIES = {
 }
 
 
+def _aws_figures(costs):
+    aws = costs.get("aws") or {}
+    if not aws:
+        return []
+    return [_bar("costs", "aws_usd", "Estimativa de infraestrutura AWS", aws["metrics"], x_label="USD")]
+
+
 def _events(report):
     """Detector alarms, synthetic changepoints and promoted/rejected adaptations as x markers."""
     markers = [
@@ -280,6 +287,7 @@ def binary_figures(report) -> list[Figure]:
                 x_label=(tracking.get("costs") or {}).get("settings", {}).get("unit", ""),
             )
         )
+    figures.extend(_aws_figures(tracking.get("costs") or {}))
     if tracking.get("cost_sensitivity"):
         figures.append(
             _line(
@@ -426,6 +434,7 @@ def typed_figures(report, timeline) -> list[Figure]:
         )
     )
     figures.append(_bar("costs", "components", "Componentes do custo de cenário", report["costs"]["metrics"]))
+    figures.extend(_aws_figures(report["costs"]))
     return figures
 
 
@@ -460,6 +469,7 @@ def epoch_figures(report) -> list[Figure]:
         )
     )
     figures.append(_bar("costs", "total", "Custo de cenário total", report["costs"]["metrics"]))
+    figures.extend(_aws_figures(report["costs"]))
     figures.append(
         _line(
             "compute",

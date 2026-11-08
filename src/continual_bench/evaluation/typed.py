@@ -237,7 +237,8 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
                                               "from scratch")}}
             report["costs"] = account(costs, errors=prediction_errors,
                                       presentations=warmup + training_used, updates=len(updates),
-                                      train_seconds=training_seconds, predict_seconds=prediction_seconds)
+                                      train_seconds=training_seconds, predict_seconds=prediction_seconds,
+                                      model_storage_bytes=0)
         report["system_metrics"] = sampler.report()
         timeline = [(r.seq, r.split, r.y, p["prediction"]) for r, p in zip(records, predictions)]
         report["artifacts"] = write_artifacts(

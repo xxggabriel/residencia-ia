@@ -75,7 +75,7 @@ PINNED_RUNS = {
     "runs/streaming.yaml": "897e16de43642d1d0a9e0e28",
     "runs/incremental.yaml": "044e156dd54baed038c20bd6",
     "runs/offline.yaml": "f60534406896a010d318bdf1",
-    "runs/metrics.yaml": "8c22e92a4c74be619c373ed6",
+    "runs/metrics.yaml": "5541472dde9d9a55390db437",
 }
 
 
@@ -86,7 +86,7 @@ def test_versioned_runs_keep_their_identities(name, identity):
 
 def test_versioned_campaign_typed_and_matrix_configs_validate():
     campaign = load_model(Campaign, CONFIGS / "campaigns/task-smoke.yaml")
-    assert campaign.identity() == "9962180b952ee3fbe349c4bc"
+    assert campaign.identity() == "056808872404983207e64a7b"
     assert load_model(TypedConfig, CONFIGS / "typed/friedman-smoke.yaml").dataset.name == "friedman_drift"
     assert load_model(ExperimentMatrix, CONFIGS / "matrices/binary-comparison.yaml").identity() == (
         "380356c50d6234d3b4e3c41f")
