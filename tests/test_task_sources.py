@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from continual_bench.adapters.week09_sources import (
+from continual_bench.adapters.task_sources import (
     FriedmanDriftSource,
     LocalDatasetManifest,
     LocalManifestSource,

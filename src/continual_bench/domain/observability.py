@@ -34,10 +34,10 @@ class OnlineObservability:
         self.memory_breaks = set()
         self.start_memory_segment = True
         self.near_future = None
-        if settings.get("week09") is not None:
-            from .week09_metrics import NearFutureEvaluation
+        if settings.get("task_evaluation") is not None:
+            from .evaluation_metrics import NearFutureEvaluation
 
-            self.near_future = NearFutureEvaluation(warmup=warmup, **settings["week09"])
+            self.near_future = NearFutureEvaluation(warmup=warmup, **settings["task_evaluation"])
 
     def __setstate__(self, state):
         self.__dict__.update(state)

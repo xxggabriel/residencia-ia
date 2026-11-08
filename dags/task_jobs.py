@@ -39,7 +39,7 @@ def configurations(params, code):
     campaign = "semana09-full-" + code[:12]
     legacy = [{"kind": "binary", "config": {**c, "name": campaign,
                "tracking": {"probe_samples": 16, "continual_references": False,
-                            "week09": {"horizon": 16, "gap": 1, "max_windows": 4}}}} for c in base]
+                            "task_evaluation": {"horizon": 16, "gap": 1, "max_windows": 4}}}} for c in base]
     models = {json.dumps(c["model"], sort_keys=True) for c in base
               if "nominal_attributes" not in c["model"]["params"]}
     extra = []

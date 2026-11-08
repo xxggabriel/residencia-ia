@@ -21,7 +21,7 @@ from pathlib import Path
 
 from .local import atomic_write, run_lock
 from .real_sources import file_sha256
-from .week09_sources import TaskSample
+from .task_sources import TaskSample
 
 NAMES = {"split_mnist", "permuted_mnist", "split_cifar10", "split_cifar100"}
 

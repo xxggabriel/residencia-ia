@@ -13,8 +13,8 @@ from pathlib import Path
 
 from .image_datasets import PreparedImageSource
 from .local import atomic_write, run_lock
+from .task_sources import TaskSample
 from .temporal_vision import RangeReader
-from .week09_sources import TaskSample
 
 SOURCES = {
     "split_cifar10": {

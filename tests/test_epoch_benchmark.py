@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from continual_bench.adapters.week09_sources import TaskSample
+from continual_bench.adapters.task_sources import TaskSample
 from continual_bench.application.epoch_benchmark import EpochConfig, run_epochs, split_records
 
 

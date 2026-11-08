@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY pyproject.toml ./
 COPY src ./src
 COPY configs/metric-definitions.json configs/image-datasets.lock.json \
-    configs/real-streams-week09.lock.json configs/temporal-vision.lock.json ./configs/
+    configs/real-streams.lock.json configs/temporal-vision.lock.json ./configs/
 RUN pip install --no-cache-dir --no-deps .
 COPY configs ./configs
 COPY tests ./tests

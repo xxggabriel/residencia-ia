@@ -100,7 +100,7 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
         raise ValueError("typed warmup must leave at least one training-stream evaluation sample")
     payload = b"".join(_json(asdict(sample)) + b"\n" for sample in records)
     env = environment()
-    config = {"schema_version": "week09-typed-v1", "task": task, "policy": policy, "warmup": warmup,
+    config = {"schema_version": "task_evaluation-typed-v1", "task": task, "policy": policy, "warmup": warmup,
               "every": every, "window": window, "max_samples": max_samples, "max_seconds": max_seconds,
               "training_budget": training_budget, "source": manifest,
               "samples_sha256": hashlib.sha256(payload).hexdigest(), "environment": env,
@@ -188,7 +188,7 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
             release(sample.timestamp)
         if pending:
             release(pending[-1][0].available_at)
-        report = {"schema_version": "week09-typed-v1", "identity": identity,
+        report = {"schema_version": "task_evaluation-typed-v1", "identity": identity,
                   "run_key": identity, "complete": True, "config": config,
                   "observed": len(records), "metrics": {
                       split: {"n": counts[split], **{k: m.get() if counts[split] else None

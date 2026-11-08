@@ -19,7 +19,7 @@ from continual_bench.application.runner import environment
     ("hyperplane", "incremental", "performance"),
     ("stagger", "offline", "none"),
 ])
-def test_week09_real_service_evidence(source, mode, policy):
+def test_task_evaluation_real_service_evidence(source, mode, policy):
     from mlflow.tracking import MlflowClient
     from zenml.client import Client
 
@@ -32,13 +32,13 @@ def test_week09_real_service_evidence(source, mode, policy):
         "policy": {"name": policy, "min_samples": 20, "min_window": 8, "cooldown": 10,
                    **({"params": {"monitor_window": 10}} if mode != "offline" else {})},
         "tracking": {"probe_samples": 4, "continual_references": False,
-                     "week09": {"horizon": 8, "gap": 1, "max_windows": 2}},
+                     "task_evaluation": {"horizon": 8, "gap": 1, "max_windows": 2}},
         **({"promotion": {"validation_samples": 8}} if mode == "incremental" else {}),
     })
     report = execute_pipeline(cfg, str(root), services=True)
     assert report["complete"] and report["observed"] == 120
     assert report["transport"] == ("kafka" if mode == "streaming" else "local_jsonl")
-    assert report["week09"]["near_future"]["completed_windows"] == 2
+    assert report["task_evaluation"]["near_future"]["completed_windows"] == 2
     directory = root / cfg.identity()
     receipt = json.loads((directory / "receipt.json").read_text())
     objects = S3Objects()

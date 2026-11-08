@@ -5,7 +5,7 @@ from dataclasses import asdict
 
 from .real_sources import RealSource
 from .river import SyntheticSource
-from .week09_sources import FriedmanDriftSource, MovingSyntheticSource, TaskSample
+from .task_sources import FriedmanDriftSource, MovingSyntheticSource, TaskSample
 
 DATASETS = (
     "sea", "agrawal", "stagger", "hyperplane", "rbf_drift", "friedman_drift",

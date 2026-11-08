@@ -1,10 +1,10 @@
 # Métricas e contratos da Semana 09
 
 Foi acrescentado o suplemento `semana09-metrics-v1`, preservando as definições e
-identidades da Semana 08. O módulo `domain/week09_metrics.py` acrescentou avaliação de horizontes futuros
+identidades da Semana 08. O módulo `domain/evaluation_metrics.py` acrescentou avaliação de horizontes futuros
 com snapshots, validação temporal e um resumo de matrizes de tarefas. A montagem
 do relatório e a validação do matcher existente ficaram em
-`application/week09_reporting.py`, preservando o domínio sem dependências de I/O
+`application/evaluation_reporting.py`, preservando o domínio sem dependências de I/O
 ou da camada de aplicação.
 
 ## Cobertura e fontes
@@ -12,7 +12,7 @@ ou da camada de aplicação.
 | Componente | Fonte e versão | Implementação | Validação |
 | --- | --- | --- | --- |
 | Qualidade binária, calibração e probabilidades | `domain/metrics.py`, contrato `residency-metrics-v1` | Existente; precisão, recall, F1, AUROC/AP, Brier, log loss e calibração | Suíte existente |
-| Detecção com anotações | `application/tracking.py::detector_metrics`, contrato v1 | Reutilizada; suplemento validou offsets, unicidade, ordem e tolerância | `test_week09_metrics.py` cobriu matches, alarmes repetidos, censura e ausência de ground truth |
+| Detecção com anotações | `application/tracking.py::detector_metrics`, contrato v1 | Reutilizada; suplemento validou offsets, unicidade, ordem e tolerância | `test_evaluation_metrics.py` cobriu matches, alarmes repetidos, censura e ausência de ground truth |
 | Recuperação e recursos | `application/tracking.py` e `domain/observability.py`, contrato v1 | Existente; suplemento referenciou o ledger sem recalcular custos | Suíte existente e teste do suplemento |
 | BWT e FWT de GEM | [Lopez-Paz e Ranzato, arXiv 1706.08840v6, equações 3 e 4](https://arxiv.org/html/1706.08840v6) | Novo resumo de matriz; FWT exigiu baseline anterior ao aprendizado | Testes com matrizes calculáveis, células ausentes e transferência positiva |
 | Near-future accuracy | [Hammoud et al., arXiv 2305.09275v1, seção 3.5](https://arxiv.org/html/2305.09275v1) | Adaptação operacional binária com gap e horizonte declarados; sem reprodução do benchmark visual | Testes de snapshot, atraso, replay, falha, retomada e limites |
@@ -91,9 +91,9 @@ model, evaluated)` ao liberar os rótulos. A quantidade de rótulos treinados n�
 pôde ultrapassar o offset da previsão. A garantia de que o modelo fornecido foi
 treinado apenas nesse prefixo permaneceu responsabilidade do engine.
 
-`application.week09_reporting.supplemental_report(report, directory,
+`application.evaluation_reporting.supplemental_report(report, directory,
 near_future=collector)` gerou
-`week09-metrics.json` com escrita atômica. Sem o coletor, a acurácia futura
+`task_evaluation-metrics.json` com escrita atômica. Sem o coletor, a acurácia futura
 permaneceu indisponível: um ledger prequential comum não reconstruiu modelos
 congelados retroativamente. O resumo reutilizou tempo, memória, frequência e
 custo do tracking existente. O ledger de candidatos contou tentativas treinadas,
