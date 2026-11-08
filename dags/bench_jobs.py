@@ -76,6 +76,10 @@ POLICY_MODELS = {
                        "leaf_prediction": "nba"},
     "knn": {"n_neighbors": 11, "window_size": 256, "weighted": True},
 }
+# Binary streams accepted by the drift/retraining engine (multiclass/regression use other evaluators).
+POLICY_DATASETS = ("electricity", "airlines", "sea", "agrawal", "stagger", "hyperplane", "rbf_drift")
+# River generators encode these categorical features as integers; the tree must treat them as nominal.
+NOMINAL_FEATURES = {"agrawal": ["elevel", "car", "zipcode"], "stagger": ["size", "color", "shape"]}
 DRIFT_DETECTORS = ("adwin", "ddm", "eddm", "hddm_a", "hddm_w", "page_hinkley", "kswin")
 
 
@@ -101,6 +105,8 @@ def policy_configurations(params):
     so the worker collects the full default metric profile, system metrics and plots.
     """
     dataset = params["dataset"]
+    if dataset not in POLICY_DATASETS:
+        raise ValueError(f"policies suite needs a binary dataset; got {dataset}")
     campaign = params.get("campaign") or f"policies-{dataset}-v1"
     experiment = params.get("experiment") or f"continual-bench/{campaign}"
     models = params.get("models") or list(POLICY_MODELS)
@@ -111,6 +117,8 @@ def policy_configurations(params):
     result = []
     for model in models:
         component = {"name": model, "params": deepcopy(POLICY_MODELS[model])}
+        if model == "hoeffding_tree" and dataset in NOMINAL_FEATURES:
+            component["params"]["nominal_attributes"] = NOMINAL_FEATURES[dataset]
         for mode in ("streaming", "incremental"):
             for detector, policy in policy_strategies():
                 result.append({**common, "mode": mode, "dataset": dict(data), "model": deepcopy(component),

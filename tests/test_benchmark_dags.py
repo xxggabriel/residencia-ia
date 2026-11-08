@@ -159,3 +159,14 @@ def test_real_dataset_policy_suite_covers_every_policy_and_detector_in_one_exper
     data = {k: v for k, v in configs[0].model_dump().items() if k != "mlflow_experiment"}
     plain = Config.model_validate(data)
     assert "mlflow_experiment" not in plain.model_dump()  # Historical identities stay unchanged.
+
+
+@pytest.mark.parametrize("dataset", ["airlines", "sea", "agrawal", "stagger", "hyperplane", "rbf_drift"])
+def test_policy_suite_runs_on_every_binary_dataset_in_its_own_experiment(dataset):
+    params = {"samples": 3000, "seeds": [42], "label_delay": 3, "dataset": dataset,
+              "models": ["logistic", "hoeffding_tree", "knn"], "campaign": "", "experiment": ""}
+    configs = [Config.model_validate(c) for c in jobs_module().configurations(params, "policies")]
+    assert len({c.identity() for c in configs}) == 75
+    assert {c.mlflow_experiment for c in configs} == {f"continual-bench/policies-{dataset}-v1"}
+    trees = [c for c in configs if c.model.name == "hoeffding_tree"]
+    assert all(("nominal_attributes" in c.model.params) == (dataset in {"agrawal", "stagger"}) for c in trees)
