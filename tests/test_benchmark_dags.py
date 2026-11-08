@@ -141,3 +141,21 @@ def test_nonlinear_campaign_fails_early_above_airflow_mapping_limit():
     assert len(configs) == len({c.identity() for c in configs}) == 1020
     with pytest.raises(ValueError, match="1173 configurations; Airflow max_map_length=1024"):
         jobs.configurations({**params, "seeds": [*params["seeds"], 48]}, "nonlinear")
+
+
+def test_real_dataset_policy_suite_covers_every_policy_and_detector_in_one_experiment():
+    params = {"samples": 10000, "seeds": [42], "label_delay": 3, "dataset": "electricity",
+              "models": ["logistic", "hoeffding_tree", "knn"], "campaign": "", "experiment": ""}
+    configs = [Config.model_validate(c) for c in jobs_module().configurations(params, "policies")]
+    assert len(configs) == len({c.identity() for c in configs}) == 75
+    assert {c.dataset.name for c in configs} == {"electricity"}
+    assert {c.policy.name for c in configs} == {"none", "online", "periodic", "drift", "performance",
+                                                 "cost_heuristic"}
+    assert {c.detector.name for c in configs if c.policy.name == "drift"} == {
+        "adwin", "ddm", "eddm", "hddm_a", "hddm_w", "page_hinkley", "kswin"}
+    assert {c.mlflow_experiment for c in configs} == {"continual-bench/policies-electricity-v1"}
+    assert all(c.tracking is None for c in configs)  # Full default metric profile on the worker.
+    assert Counter(c.mode for c in configs) == {"streaming": 36, "incremental": 36, "offline": 3}
+    data = {k: v for k, v in configs[0].model_dump().items() if k != "mlflow_experiment"}
+    plain = Config.model_validate(data)
+    assert "mlflow_experiment" not in plain.model_dump()  # Historical identities stay unchanged.

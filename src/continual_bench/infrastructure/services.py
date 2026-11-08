@@ -7,7 +7,7 @@ from pathlib import Path
 
 from continual_bench.core.contracts import Event
 
-from .catalog import publish_catalog, register_final_model, strategy_name
+from .catalog import experiment_name, publish_catalog, register_final_model, strategy_name
 from .metric_tracking import log_metric_points, publish_tracking
 from .run_artifacts import publish_run_artifacts
 
@@ -145,7 +145,7 @@ class MLflowTracker:
 
         mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
         client = MlflowClient()
-        name = strategy_name(config)
+        name = experiment_name(config)
         experiment = client.get_experiment_by_name(name)
         if experiment is None:
             from mlflow.exceptions import MlflowException
@@ -174,7 +174,7 @@ class MLflowTracker:
                     "run_key": identity,
                     "protocol": report["protocol"],
                     "dataset": config["dataset"]["name"],
-                    "strategy": name,
+                    "strategy": strategy_name(config),
                 },
             )
         )
