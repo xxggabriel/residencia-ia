@@ -38,3 +38,19 @@ cases=100 differing=0 digest_equal=100
 - Testes `-m services` (Kafka, MinIO, MLflow e ZenML reais) não foram executados: escrevem na
   stack em operação. Os módulos correspondentes foram verificados por import na imagem do worker.
 - As imagens Docker não foram reconstruídas; os testes montam o código-fonte por volume.
+
+## Verificação real dos datasets e remoção do Stream51
+
+Primeira verificação com dados reais: as 18 fontes, com 100 exemplos únicos e 1 época, offline,
+usando uma cópia do cache verificado da Semana 09
+(`/home/gabriel/semana09-datasets-20261103-2341/state/datasets`). A cópia ficou em
+`~/refactor-modular-20261108/state/datasets`, e o volume `continual-bench_worker-data` foi montado
+somente leitura para Electricity/Airlines. Resultado: 17 PASS; Stream51 falhou com
+`DatasetAccessError`, porque o cache está vazio e `klab.cis.rit.edu` continua sem resolver DNS.
+
+Por isso o Stream51 foi removido do catálogo, do adaptador `temporal_vision`, do
+`temporal-vision.lock.json`, do `dataset-catalog.json` e da DAG `task_jobs.py`. Com a árvore
+final (`code_sha256` `7a567cf449109f7289a5f6d340f193dedfb48e3e1d13d15ac33d46143fe3a392`), as
+17 fontes passaram: [dataset-epoch-check.json](dataset-epoch-check.json), gerado por
+[dataset_epoch_check.py](dataset_epoch_check.py). Suíte: 526 passed. Com 80 exemplos de treino
+e uma passada, as métricas só comprovam que o fluxo executa; elas não comparam desempenho.

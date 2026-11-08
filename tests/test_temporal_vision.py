@@ -89,24 +89,6 @@ def test_core50_local_zip_preserves_official_session_splits_and_original_classes
     assert source.manifest() == repeated.manifest()
 
 
-def test_stream51_loader_reads_original_metadata_and_bounds_crops(tmp_path):
-    archive = tmp_path / "stream51.zip"
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for split, total in (("train", 100), ("test", 25)):
-            rows = []
-            for i in range(total):
-                path = f"{split}/frame_{i}.png"
-                z.writestr(f"Stream-51/{path}", png())
-                row = ([i % 3, i // 10, i // 5, i, [2, 2], [2, 0, 2, 0], path]
-                       if split == "train" else [i % 3, [2, 2], [2, 0, 2, 0], path])
-                rows.append(row)
-            z.writestr(f"Stream-51/Stream-51_meta_{split}.json", json.dumps(rows))
-    source = prepare_temporal_dataset("stream51", tmp_path / "cache", local_archives={"train": archive})
-    assert len(list(source.samples_iter())) == 100
-    assert {s.y for s in source.samples_iter()} == {"0", "1", "2"}
-    assert source.manifest()["protocol"].endswith("no novelty evaluation")
-
-
 @pytest.mark.parametrize("name", ["clear10", "clear100"])
 def test_clear_reads_official_bucket_class_metadata_without_training_test_images(tmp_path, name):
     archives = {}
@@ -139,7 +121,7 @@ def test_clear_reads_official_bucket_class_metadata_without_training_test_images
 
 def test_temporal_cache_only_mode_and_replay_integrity_fail_closed(tmp_path):
     with pytest.raises(DatasetAccessError, match="cache is absent"):
-        prepare_temporal_dataset("stream51", tmp_path)
+        prepare_temporal_dataset("clear10", tmp_path)
     folder = tmp_path / "core50"
     folder.mkdir()
     bad = {"samples": [], "manifest": {"samples_sha256": "bad"}}
@@ -148,3 +130,5 @@ def test_temporal_cache_only_mode_and_replay_integrity_fail_closed(tmp_path):
         prepare_temporal_dataset("core50", tmp_path)
     with pytest.raises(ValueError, match="unsupported"):
         prepare_temporal_dataset("unrelated", tmp_path)
+    with pytest.raises(ValueError, match="unsupported"):
+        prepare_temporal_dataset("stream51", tmp_path)  # Removed: no reachable official source.

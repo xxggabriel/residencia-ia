@@ -19,7 +19,7 @@ def test_worker_refuses_missing_partial_or_stale_dataset_admission(tmp_path, mon
     with pytest.raises(ValueError, match='incomplete'):
         epoch_server.dataset_readiness()
     path.write_text(json.dumps({'complete': True, 'datasets': rows}))
-    assert epoch_server.dataset_readiness()['datasets'] == 18
+    assert epoch_server.dataset_readiness()['datasets'] == 17
     rows[0]['code_sha256'] = 'old'
     path.write_text(json.dumps({'complete': True, 'datasets': rows}))
     with pytest.raises(ValueError, match='stale'):

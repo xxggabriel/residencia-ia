@@ -1,4 +1,4 @@
-"""Bounded real-image admission for CORe50, Stream-51 and CLEAR 2022.
+"""Bounded real-image admission for CORe50 and CLEAR 2022.
 
 Only selected ZIP members are fetched. HTTP servers must honor byte ranges;
 there is deliberately no fallback that downloads a multi-gigabyte archive.
@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import asdict
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from continual_bench.core.contracts import TaskSample
 from continual_bench.infrastructure.storage import atomic_write
@@ -28,13 +28,6 @@ SOURCES = {
         "train_url": "http://bias.csr.unibo.it/maltoni/download/core50/core50_128x128.zip",
         "license": "CC-BY-4.0", "license_reference": "https://vlomonaco.github.io/core50/",
         "archive_md5_reference": "745f3373fed08d69343f1058ee559e13",
-    },
-    "stream51": {
-        "source": "https://github.com/tyler-hayes/Stream-51", "release": "CVPRW-2020-original",
-        "train_url": "http://klab.cis.rit.edu/files/Stream-51.zip",
-        "license": "MIT (publisher repository; dataset-specific rights remain with publisher)",
-        "license_reference": "https://github.com/tyler-hayes/Stream-51/blob/master/LICENSE",
-        "archive_md5_reference": "5f34d542b71af7e5ecb2226d1bc7297c",
     },
     **{name: {
         "source": "https://clear-benchmark.github.io/", "release": "July-2022-" + CLEAR_REVISION,
@@ -215,19 +208,13 @@ class _Archive:
         }), "members": self.members}
 
 
-def _pixels(payload, bbox=None):
+def _pixels(payload):
     from PIL import Image
 
     with Image.open(io.BytesIO(payload)) as original:
         if original.width * original.height > 20_000_000:
             raise ValueError("selected image exceeds decoded pixel budget")
-        image = original.convert("RGB")
-        if bbox is not None:
-            right, left, bottom, top = map(float, bbox)
-            if not 0 <= left < right <= image.width or not 0 <= top < bottom <= image.height:
-                raise ValueError("invalid Stream-51 object bounding box")
-            image = image.crop((left, top, right, bottom))
-        image = image.resize((16, 16), Image.Resampling.BILINEAR)
+        image = original.convert("RGB").resize((16, 16), Image.Resampling.BILINEAR)
         return {f"pixel_{index}": value / 255.0 for index, value in enumerate(image.tobytes())}
 
 
@@ -250,27 +237,6 @@ def _core_rows(archive):
                      "split": "test" if session in {3, 7, 10} else "train",
                      "order": (session, obj, frame)})
     return sorted(rows, key=lambda row: row["order"])
-
-
-def _stream_rows(archive, split):
-    metadata = archive.metadata(f"Stream-51_meta_{split}.json")
-    if not isinstance(metadata, list) or not metadata:
-        raise ValueError("Stream-51 metadata must contain a nonempty list")
-    first_suffix = str(PurePosixPath(metadata[0][-1]))
-    first_path = archive.find(first_suffix)
-    prefix = first_path[:-len(first_suffix)]
-    rows = []
-    for offset, record in enumerate(metadata):
-        if not isinstance(record, list) or len(record) != (7 if split == "train" else 4):
-            raise ValueError("Stream-51 metadata record schema changed")
-        suffix = str(PurePosixPath(record[-1]))
-        path = prefix + suffix
-        if path not in archive.name_set:
-            raise ValueError("Stream-51 frame missing or ambiguous")
-        rows.append({"path": path, "label": str(record[0]), "task": int(record[0]),
-                     "group": f"class-{record[0]}:clip-{record[1]}:video-{record[2]}" if split == "train"
-                     else "official-test", "split": split, "order": offset, "bbox": record[-2]})
-    return rows
 
 
 def _clear_rows(archive, split, count):
@@ -350,8 +316,6 @@ def prepare_temporal_dataset(name, cache, limit=100, seed=42, *, download=False,
             all_rows = _core_rows(train)
             streams = {split: (train, [r for r in all_rows if r["split"] == split])
                        for split in ("train", "test")}
-        elif name == "stream51":
-            streams = {split: (train, _stream_rows(train, split)) for split in ("train", "test")}
         else:
             test = _Archive(spec["test_url"], cache / "ranges", local_path=local_archives.get("test"))
             streams = {"train": (train, _clear_rows(train, "train", train_count)),
@@ -364,7 +328,7 @@ def prepare_temporal_dataset(name, cache, limit=100, seed=42, *, download=False,
                 payload = archive.member(row["path"], max_bytes=8 * 1024**2)
                 identity = _sha(_json([name, spec["release"], row["path"], _sha(payload)]))
                 seq = len(samples)
-                samples.append(TaskSample(identity, seq, seq, seq, _pixels(payload, row.get("bbox")),
+                samples.append(TaskSample(identity, seq, seq, seq, _pixels(payload),
                                           row["label"], row["task"], split, row["group"]))
                 selected.append({**row, "source_split_index": index, "image_sha256": _sha(payload)})
         if len({sample.sample_id for sample in samples}) != limit:
@@ -379,7 +343,6 @@ def prepare_temporal_dataset(name, cache, limit=100, seed=42, *, download=False,
             "natural_order": "session/object/frame" if name == "core50" else "official metadata order",
             "protocol": (
                 "CORe50 session-ordered NI diagnostic subset" if name == "core50" else
-                "Stream51 published source ordering; no novelty evaluation" if name == "stream51" else
                 "CLEAR July2022 official train/test buckets; not paper streaming test-on-next-bucket"
             ),
             "raw_archives": [a.provenance() for a in (train, test) if a is not None],

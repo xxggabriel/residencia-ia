@@ -1,5 +1,7 @@
 # Matriz de cobertura da Semana 09
 
+> **Atualização em 08/11/2026:** Stream51 foi removido do projeto (catálogo, adaptador, lock e DAG), porque a origem oficial `klab.cis.rit.edu` continuou sem resolver DNS e não há cópia oficial disponível. O catálogo e o gate de admissão passaram a exigir 17 fontes; os registros abaixo preservam o estado de 04/11/2026.
+
 O escopo verificável partiu do pedido e das Pages da Semana 09, lidas em 3 de novembro de 2026. A planilha `Semana_09_Datasets_Benchmarks.xlsx` não foi materializada: o leitor autorizado retornou `page_reference_unsupported_format` para a referência fornecida. A matriz abaixo não substituiu os 47 registros, 39 associações e 64 referências da pesquisa. Não foram inventados registros nem seleções ausentes.
 
 **Implementado** descreveu código executável; **validado inicialmente** descreveu testes pequenos no homelab; **campanha pendente** descreveu comparação experimental ainda não realizada. Fixtures não homologaram dados originais. A ampliação de 4 de novembro, incluindo os testes de 100 exemplos/2 épocas e o bloqueio de Stream51, foi registrada no [relatório de datasets](semana09-dataset-execution.md).

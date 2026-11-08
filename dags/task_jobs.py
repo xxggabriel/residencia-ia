@@ -9,7 +9,7 @@ WORKER = "http://dataset-worker:8088"
 DATASETS = (
     "sea", "agrawal", "stagger", "hyperplane", "rbf_drift", "friedman_drift",
     "electricity", "airlines", "insects", "gas", "split_mnist", "permuted_mnist",
-    "split_cifar10", "split_cifar100", "core50", "stream51", "clear10", "clear100",
+    "split_cifar10", "split_cifar100", "core50", "clear10", "clear100",
 )
 
 

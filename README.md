@@ -73,7 +73,7 @@ Cada família de modelo declara os tipos de alvo que suporta (`binary`, `multicl
 | Modelo | logística, regressão linear, Hoeffding Tree e kNN (River), com padronização incremental e one-hot | binário: `predict(x) -> probabilidade`, `learn(x,y)`; multiclasse/regressão: `predict_one`, `learn_one` |
 | Detector | ADWIN, DDM, EDDM, HDDM-A/W, Page-Hinkley, KSWIN, nenhum | `update(erro_rotulado) -> alarme` |
 | Política | nenhuma, online, periódica, por drift, por desempenho, heurística de custo | `decide(contexto) -> ação/motivo`, `updated(contagem)` |
-| Fonte | 18 datasets do catálogo (`datasets/catalog.py`) | eventos ordenados + manifesto + conjuntos de diagnóstico opcionais |
+| Fonte | 17 datasets do catálogo (`datasets/catalog.py`) | eventos ordenados + manifesto + conjuntos de diagnóstico opcionais |
 | Persistência | ponto de recuperação local com gravação atômica, S3 MinIO, MLflow remoto | interfaces em `core/contracts.py` |
 
 Detector **não** decide retreinamento. As políticas de retreinamento impõem `cooldown`, `min_samples`, `min_window` e frequência. A política `online` atualiza a cada rótulo disponível após o aquecimento, sem esses guardas de retreinamento. `reset_retrain` cria modelo/preprocessador novos e treina do zero na janela limitada de rótulos já disponíveis; **não** reprocessa todo o histórico. `learn_one` atualiza o modelo existente só com o exemplo liberado. `reset_detector_on_retrain` torna explícito o reinício do detector. O modelo de referência `none` congela modelo/preprocessador após o aquecimento.

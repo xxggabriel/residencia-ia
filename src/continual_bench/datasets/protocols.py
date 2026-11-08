@@ -55,7 +55,7 @@ def permuted_tasks(samples, tasks, seed, feature_order):
 
 
 def temporal_tasks(samples, group_order):
-    """Preserve official CORe50/Stream51/CLEAR groups and source splits.
+    """Preserve official CORe50/CLEAR groups and source splits.
 
     The caller supplies the official session/bucket order and normalized records;
     this function never invents a split or shuffles a video sequence.
