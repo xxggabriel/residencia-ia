@@ -18,9 +18,11 @@ from continual_bench.datasets.catalog import DATASETS, load_dataset
 from continual_bench.infrastructure.storage import atomic_write, run_lock
 from continual_bench.models import MODELS
 
+from .artifacts import epoch_figures, system_figures, write_artifacts
 from .costs import account
 from .environment import dataset_fingerprint, encoded, environment, peak_rss_bytes
 from .scoring import metric_set
+from .system_metrics import SystemMetricsSampler
 from .typed import resolve_model
 
 __all__ = ["EpochConfig", "dataset_fingerprint", "run_epochs", "smoke_all", "split_records",
@@ -86,7 +88,6 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
         raise ValueError("unsupported epoch target type")
     if model_factory is None:
         model_factory, _ = resolve_model(task, config.model, models=models)
-    kind = task_kind(task)
     validate_records(records, task)
     train, test, split = split_records(records, manifest)
     payload = b"".join(encoded(asdict(row)) + b"\n" for row in records)
@@ -108,55 +109,68 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
             if (directory / "samples.jsonl").read_bytes() != payload:
                 raise ValueError("completed epoch sample artifact checksum changed")
             return report
-        model = model_factory()
-        epochs = []
         costs = config.costs.model_dump()
-        cumulative_errors = cumulative_train = cumulative_predict = 0.0
-        for epoch in range(config.epochs):
-            before = time.perf_counter()
-            for row in train:
-                if time.monotonic() - started > config.max_seconds:
-                    raise TimeoutError("epoch benchmark deadline exceeded")
-                model.learn_one(copy.deepcopy(row.x), row.y)
-            training_seconds = time.perf_counter() - before
-            frozen = copy.deepcopy(model)
-            scores = metric_set(task)
-            predictions = []
-            prediction_seconds = errors = 0.0
-            for row in test:
-                if time.monotonic() - started > config.max_seconds:
-                    raise TimeoutError("epoch evaluation deadline exceeded")
-                before_prediction = time.perf_counter()
-                prediction = frozen.predict_one(copy.deepcopy(row.x))
-                prediction_seconds += time.perf_counter() - before_prediction
-                prediction = kind.normalize_prediction(prediction)
-                errors += kind.error_units(row.y, prediction, costs)
-                for metric in scores.values():
-                    metric.update(row.y, prediction)
-                predictions.append({"sample_id": row.sample_id, "prediction": prediction})
-            cumulative_errors += errors
-            cumulative_train += training_seconds
-            cumulative_predict += prediction_seconds
-            epochs.append({"epoch": epoch + 1, "train_presentations": len(train), "test_examples": len(test),
-                           "training_seconds": training_seconds,
-                           "prediction_seconds": prediction_seconds,
-                           "costs": account(costs, errors=errors, presentations=len(train), updates=1,
-                                            train_seconds=training_seconds,
-                                            predict_seconds=prediction_seconds),
-                           "metrics": {name: metric.get() for name, metric in scores.items()},
-                           "prediction_digest": hashlib.sha256(encoded(predictions)).hexdigest()})
+        with SystemMetricsSampler(root) as sampler:
+            epochs, totals = _train_epochs(config, model_factory(), task, train, test, costs, started)
         report = {"version": "semana09-epochs-v1", "run_key": key, "complete": True,
                   "dataset": config.dataset, "unique_examples": len(records), "epochs": epochs,
                   "train_ids": [r.sample_id for r in train], "test_ids": [r.sample_id for r in test],
                   "contract": contract, "seconds": time.monotonic() - started,
                   "peak_rss_bytes_process": peak_rss_bytes(),
                   "scope": "train-only passes; frozen holdout after each epoch, no prequential claim"}
-        report["costs"] = account(costs, errors=cumulative_errors,
+        report["costs"] = account(costs, errors=totals["errors"],
                                   presentations=len(train) * config.epochs, updates=config.epochs,
-                                  train_seconds=cumulative_train, predict_seconds=cumulative_predict)
+                                  train_seconds=totals["train_seconds"],
+                                  predict_seconds=totals["predict_seconds"])
+        report["system_metrics"] = sampler.report()
+        report["artifacts"] = write_artifacts(
+            directory, epoch_figures(report) + system_figures(report["system_metrics"]),
+            {"summary/epochs": epochs, "costs/scenario": report["costs"],
+             "system/samples": report["system_metrics"]})
         atomic_write(directory / "samples.jsonl", payload)
         atomic_write(report_path, encoded(report))
         return report
+
+
+def _train_epochs(config, model, task, train, test, costs, started):
+    """Train-only passes, each followed by scoring a frozen copy on the holdout."""
+    kind = task_kind(task)
+    epochs = []
+    totals = {"errors": 0.0, "train_seconds": 0.0, "predict_seconds": 0.0}
+    for epoch in range(config.epochs):
+        before = time.perf_counter()
+        for row in train:
+            if time.monotonic() - started > config.max_seconds:
+                raise TimeoutError("epoch benchmark deadline exceeded")
+            model.learn_one(copy.deepcopy(row.x), row.y)
+        training_seconds = time.perf_counter() - before
+        frozen = copy.deepcopy(model)
+        scores = metric_set(task)
+        predictions = []
+        prediction_seconds = errors = 0.0
+        for row in test:
+            if time.monotonic() - started > config.max_seconds:
+                raise TimeoutError("epoch evaluation deadline exceeded")
+            before_prediction = time.perf_counter()
+            prediction = frozen.predict_one(copy.deepcopy(row.x))
+            prediction_seconds += time.perf_counter() - before_prediction
+            prediction = kind.normalize_prediction(prediction)
+            errors += kind.error_units(row.y, prediction, costs)
+            for metric in scores.values():
+                metric.update(row.y, prediction)
+            predictions.append({"sample_id": row.sample_id, "prediction": prediction})
+        totals["errors"] += errors
+        totals["train_seconds"] += training_seconds
+        totals["predict_seconds"] += prediction_seconds
+        epochs.append({"epoch": epoch + 1, "train_presentations": len(train), "test_examples": len(test),
+                       "training_seconds": training_seconds,
+                       "prediction_seconds": prediction_seconds,
+                       "costs": account(costs, errors=errors, presentations=len(train), updates=1,
+                                        train_seconds=training_seconds,
+                                        predict_seconds=prediction_seconds),
+                       "metrics": {name: metric.get() for name, metric in scores.items()},
+                       "prediction_digest": hashlib.sha256(encoded(predictions)).hexdigest()})
+    return epochs, totals
 
 
 def smoke_all(root, cache, *, download=False, real_directory=None):

@@ -64,6 +64,13 @@ class Client:
         assert key not in self.artifacts or self.artifacts[key] == content
         self.artifacts[key] = content
 
+    def log_artifacts(self, run_id, local_dir, artifact_path=None):
+        for path in sorted(Path(local_dir).rglob("*")):
+            if path.is_file():
+                relative = path.parent.relative_to(local_dir).as_posix()
+                folder = "/".join(p for p in (artifact_path, relative) if p and p != ".")
+                self.log_artifact(run_id, str(path), artifact_path=folder or None)
+
     def set_tag(self, run_id, key, value):
         assert run_id == "existing-run"
         self.operations.append((key, value))

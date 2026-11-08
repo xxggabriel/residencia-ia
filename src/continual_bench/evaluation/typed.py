@@ -17,9 +17,11 @@ from continual_bench.datasets.base import as_sample_source
 from continual_bench.infrastructure.storage import atomic_write, run_lock
 from continual_bench.models import MODELS, default_model
 
+from .artifacts import system_figures, typed_figures, write_artifacts
 from .costs import account, profile
 from .environment import environment, peak_rss_bytes
 from .scoring import metric_set
+from .system_metrics import SystemMetricsSampler
 
 TYPED_TASKS = (REGRESSION, MULTICLASS)
 TYPED_POLICIES = ("none", "online", "periodic")
@@ -133,103 +135,119 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
             if (directory / "samples.jsonl").read_bytes() != payload:
                 raise ValueError("typed materialized samples changed for a completed run")
             return json.loads(report_path.read_text())
-        model = model_factory()
-        schedule = PeriodicSchedule(policy, warmup, every)
-        metric_sets = {split: metric_set(task) for split in ("train", "validation", "test")}
-        counts = {split: 0 for split in metric_sets}
-        per_task, predictions, updates = {}, [], []
-        replay, pending = deque(maxlen=window), deque()
-        train_arrived = released_train = training_used = budget_blocked = 0
-        prediction_seconds = training_seconds = 0.0
-        prediction_errors = 0.0
+        with SystemMetricsSampler(root) as sampler:
+            model = model_factory()
+            schedule = PeriodicSchedule(policy, warmup, every)
+            metric_sets = {split: metric_set(task) for split in ("train", "validation", "test")}
+            counts = {split: 0 for split in metric_sets}
+            per_task, predictions, updates = {}, [], []
+            replay, pending = deque(maxlen=window), deque()
+            train_arrived = released_train = training_used = budget_blocked = 0
+            prediction_seconds = training_seconds = 0.0
+            prediction_errors = 0.0
 
-        def score(sample, prediction):
-            nonlocal prediction_errors
-            prediction_errors += kind.error_units(sample.y, prediction, costs)
-            counts[sample.split] += 1
-            for metric in metric_sets[sample.split].values():
-                metric.update(sample.y, prediction)
-            if sample.task_id is not None:
-                key = f"{sample.split}:{sample.task_id}"
-                entry = per_task.setdefault(key, {"n": 0, "metrics": metric_set(task)})
-                entry["n"] += 1
-                for metric in entry["metrics"].values():
+            def score(sample, prediction):
+                nonlocal prediction_errors
+                prediction_errors += kind.error_units(sample.y, prediction, costs)
+                counts[sample.split] += 1
+                for metric in metric_sets[sample.split].values():
                     metric.update(sample.y, prediction)
+                if sample.task_id is not None:
+                    key = f"{sample.split}:{sample.task_id}"
+                    entry = per_task.setdefault(key, {"n": 0, "metrics": metric_set(task)})
+                    entry["n"] += 1
+                    for metric in entry["metrics"].values():
+                        metric.update(sample.y, prediction)
 
-        def release(now):
-            nonlocal model, released_train, training_used, training_seconds, budget_blocked
-            while pending and pending[0][0].available_at <= now:
+            def release(now):
+                nonlocal model, released_train, training_used, training_seconds, budget_blocked
+                while pending and pending[0][0].available_at <= now:
+                    if time.monotonic() - started > max_seconds:
+                        raise TimeoutError("typed evaluation deadline exceeded")
+                    sample, prediction, train_index = pending.popleft()
+                    if sample.split != "train" or train_index >= warmup:
+                        score(sample, prediction)
+                    if sample.split != "train":
+                        continue
+                    released_train += 1
+                    replay.append(sample)
+                    initial, reset, learn = schedule.plan(train_index, released_train)
+                    if not learn:
+                        continue
+                    selected = list(replay) if reset else [sample]
+                    if (not initial and training_budget is not None
+                            and training_used + len(selected) > training_budget):
+                        budget_blocked += 1
+                        continue
+                    before = time.perf_counter()
+                    if reset:
+                        model = model_factory()
+                    for row in selected:
+                        model.learn_one(dict(row.x), row.y)
+                    seconds = time.perf_counter() - before
+                    training_seconds += seconds
+                    if not initial:
+                        training_used += len(selected)
+                        updates.append({"seq": sample.seq, "released_at": now,
+                                        "train_samples": len(selected),
+                                        "action": "reset_retrain" if reset else "learn_one",
+                                        "seconds": seconds})
+
+            for sample in records:
                 if time.monotonic() - started > max_seconds:
                     raise TimeoutError("typed evaluation deadline exceeded")
-                sample, prediction, train_index = pending.popleft()
-                if sample.split != "train" or train_index >= warmup:
-                    score(sample, prediction)
-                if sample.split != "train":
-                    continue
-                released_train += 1
-                replay.append(sample)
-                initial, reset, learn = schedule.plan(train_index, released_train)
-                if not learn:
-                    continue
-                selected = list(replay) if reset else [sample]
-                if (not initial and training_budget is not None
-                        and training_used + len(selected) > training_budget):
-                    budget_blocked += 1
-                    continue
                 before = time.perf_counter()
-                if reset:
-                    model = model_factory()
-                for row in selected:
-                    model.learn_one(dict(row.x), row.y)
-                seconds = time.perf_counter() - before
-                training_seconds += seconds
-                if not initial:
-                    training_used += len(selected)
-                    updates.append({"seq": sample.seq, "released_at": now, "train_samples": len(selected),
-                                    "action": "reset_retrain" if reset else "learn_one", "seconds": seconds})
-
-        for sample in records:
-            if time.monotonic() - started > max_seconds:
-                raise TimeoutError("typed evaluation deadline exceeded")
-            before = time.perf_counter()
-            prediction = model.predict_one(dict(sample.x))
-            prediction_seconds += time.perf_counter() - before
-            prediction = kind.normalize_prediction(prediction)
-            index = train_arrived if sample.split == "train" else None
-            if sample.split == "train":
-                train_arrived += 1
-            predictions.append({"sample_id": sample.sample_id, "seq": sample.seq,
-                                "prediction": prediction, "split": sample.split,
-                                "training_labels_available": released_train})
-            pending.append((sample, prediction, index))
-            release(sample.timestamp)
-        if pending:
-            release(pending[-1][0].available_at)
-        report = {"schema_version": "task_evaluation-typed-v1", "identity": identity,
-                  "run_key": identity, "complete": True, "config": config,
-                  "observed": len(records), "metrics": {
-                      split: {"n": counts[split], **{k: m.get() if counts[split] else None
-                                                     for k, m in values.items()}}
-                      for split, values in metric_sets.items()},
-                  "per_task": {k: {"n": e["n"], **{n: m.get() for n, m in e["metrics"].items()}}
-                               for k, e in per_task.items()},
-                  "prediction_digest": hashlib.sha256(_json(predictions)).hexdigest(),
-                  "updates": updates, "training": {"warmup_samples": warmup,
-                      "postwarmup_samples": training_used, "budget": training_budget,
-                      "blocked_decisions": budget_blocked},
-                  "compute": {"elapsed_seconds": time.monotonic() - started,
-                              "training_seconds": training_seconds, "prediction_seconds": prediction_seconds,
-                              "process_peak_rss_bytes": peak_rss_bytes(),
-                              "memory_scope": ("process lifetime high-water mark; "
-                                               "includes harness and dependencies")},
-                  "protocol": {"evaluation": "predict_before_label_release_and_train",
-                               "selection": "bounded published prefix", "heldout_training": False,
-                               "promotion": "automatic baseline; all trained candidates promoted",
-                               "task_matrix": "not computed; per-task prequential metrics are not forgetting",
-                               "resume": "complete-run idempotency; interrupted runs restart from scratch"}}
-        report["costs"] = account(costs, errors=prediction_errors,
-                                  presentations=warmup + training_used, updates=len(updates),
-                                  train_seconds=training_seconds, predict_seconds=prediction_seconds)
+                prediction = model.predict_one(dict(sample.x))
+                prediction_seconds += time.perf_counter() - before
+                prediction = kind.normalize_prediction(prediction)
+                index = train_arrived if sample.split == "train" else None
+                if sample.split == "train":
+                    train_arrived += 1
+                predictions.append({"sample_id": sample.sample_id, "seq": sample.seq,
+                                    "prediction": prediction, "split": sample.split,
+                                    "training_labels_available": released_train})
+                pending.append((sample, prediction, index))
+                release(sample.timestamp)
+            if pending:
+                release(pending[-1][0].available_at)
+            report = {"schema_version": "task_evaluation-typed-v1", "identity": identity,
+                      "run_key": identity, "complete": True, "config": config,
+                      "observed": len(records), "metrics": {
+                          split: {"n": counts[split], **{k: m.get() if counts[split] else None
+                                                         for k, m in values.items()}}
+                          for split, values in metric_sets.items()},
+                      "per_task": {k: {"n": e["n"], **{n: m.get() for n, m in e["metrics"].items()}}
+                                   for k, e in per_task.items()},
+                      "prediction_digest": hashlib.sha256(_json(predictions)).hexdigest(),
+                      "updates": updates, "training": {"warmup_samples": warmup,
+                          "postwarmup_samples": training_used, "budget": training_budget,
+                          "blocked_decisions": budget_blocked},
+                      "compute": {"elapsed_seconds": time.monotonic() - started,
+                                  "training_seconds": training_seconds,
+                                  "prediction_seconds": prediction_seconds,
+                                  "process_peak_rss_bytes": peak_rss_bytes(),
+                                  "memory_scope": ("process lifetime high-water mark; "
+                                                   "includes harness and dependencies")},
+                      "protocol": {"evaluation": "predict_before_label_release_and_train",
+                                   "selection": "bounded published prefix", "heldout_training": False,
+                                   "promotion": "automatic baseline; all trained candidates promoted",
+                                   "task_matrix": ("not computed; per-task prequential metrics are not "
+                                                   "forgetting"),
+                                   "resume": ("complete-run idempotency; interrupted runs restart "
+                                              "from scratch")}}
+            report["costs"] = account(costs, errors=prediction_errors,
+                                      presentations=warmup + training_used, updates=len(updates),
+                                      train_seconds=training_seconds, predict_seconds=prediction_seconds)
+        report["system_metrics"] = sampler.report()
+        timeline = [(r.seq, r.split, r.y, p["prediction"]) for r, p in zip(records, predictions)]
+        report["artifacts"] = write_artifacts(
+            directory, typed_figures(report, timeline) + system_figures(report["system_metrics"]),
+            {"summary/metrics": {"metrics": report["metrics"], "per_task": report["per_task"],
+                                 "training": report["training"], "compute": report["compute"]},
+             "costs/scenario": report["costs"], "events/updates": report["updates"],
+             "series/predictions": [{"seq": seq, "split": split, "target": y, "prediction": p}
+                                    for seq, split, y, p in timeline],
+             "system/samples": report["system_metrics"]})
         atomic_write(directory / "samples.jsonl", payload)
         atomic_write(directory / "predictions.json", _json(predictions))
         atomic_write(report_path, _json(report))

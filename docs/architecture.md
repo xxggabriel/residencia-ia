@@ -31,9 +31,9 @@ abaixo dela; `core` não importa River, Pydantic, Kafka, ZenML, MinIO nem MLflow
 | `datasets` | Catálogo único de datasets e adaptadores | `catalog`, `synthetic`, `openml`, `arff`, `local_manifest`, `protocols`, `real_streams`, `images`, `cifar_parquet`, `temporal_vision`, `base` |
 | `models` | Famílias de modelos com um construtor por tipo de tarefa | `__init__` (catálogo), `linear`, `tree`, `neighbors`, `encoding`, `serving` |
 | `detectors` | Catálogo de detectores de drift | `__init__`, `river` |
-| `evaluation` | Protocolos de avaliação e derivação de métricas | `binary`, `holdout`, `prequential`, `typed`, `epochs`, `tracking`, `reporting`, `costs`, `scoring`, `environment` |
+| `evaluation` | Protocolos de avaliação, derivação de métricas, métricas de sistema e gráficos | `binary`, `holdout`, `prequential`, `typed`, `epochs`, `tracking`, `reporting`, `costs`, `scoring`, `environment`, `system_metrics`, `artifacts` |
 | `application` | Casos de uso | `runner`, `components`, `matrix`, `campaign`, `readiness`, `plugin_identity` |
-| `infrastructure` | E/S externa | `storage`, `versioning`, `services`, `catalog`, `metric_tracking`, `epoch_tracking` |
+| `infrastructure` | E/S externa | `storage`, `versioning`, `services`, `catalog`, `metric_tracking`, `epoch_tracking`, `run_artifacts` |
 | `orchestration` | Pontos de entrada que agendam trabalho finito | `server`, `epoch_server`, `zenml_pipeline`, `zenml_steps`, `epoch_pipeline` |
 
 ## Padrões de projeto

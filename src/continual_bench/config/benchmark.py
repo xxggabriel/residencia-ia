@@ -106,6 +106,11 @@ class TrackingConfig(Strict):
         return self
 
 
+# Applied when a run omits `tracking`: every run records every metric family by
+# default, including adaptation shadows and frozen near-future windows.
+DEFAULT_TRACKING = TrackingConfig(adaptation_shadows=True, task_evaluation=FutureEvaluationConfig())
+
+
 class Config(Strict):
     protocol_version: Literal[1] = 1
     name: str = Field(default="baseline", pattern=r"^[A-Za-z0-9_-]{1,64}$")
@@ -166,6 +171,10 @@ class Config(Strict):
             if not re.fullmatch(r"[A-Za-z_][\w.]*", package):
                 raise ValueError("plugin_packages must contain importable package names")
         return self
+
+    def tracking_settings(self) -> TrackingConfig:
+        """Explicit tracking wins; otherwise the full default profile."""
+        return self.tracking if self.tracking is not None else DEFAULT_TRACKING
 
     def validate_components(self):
         """Built-in catalog compatibility; plugin components are checked when instantiated."""

@@ -9,10 +9,12 @@ import json
 import time
 from pathlib import Path
 
-from continual_bench.config import Config, TrackingConfig
+from continual_bench.config import Config
 from continual_bench.core.contracts import event_json
+from continual_bench.evaluation.artifacts import binary_figures, system_figures, write_artifacts
 from continual_bench.evaluation.binary import BinaryRun, Progress, protocol_for, read_events
 from continual_bench.evaluation.environment import environment, peak_rss_bytes
+from continual_bench.evaluation.system_metrics import SystemMetricsSampler
 from continual_bench.evaluation.tracking import metric_catalog, save_tracking_files
 from continual_bench.infrastructure.storage import LocalCheckpoints, atomic_write, run_lock
 from continual_bench.infrastructure.versioning import ModelVersions
@@ -87,7 +89,7 @@ def evaluate(config: Config, manifest: dict, root: str, transport=None, *, stop_
         if snapshot and snapshot.get("complete"):
             return json.loads(report_path.read_text())
         started = time.monotonic()
-        settings = (config.tracking or TrackingConfig()).model_dump(mode="json")
+        settings = config.tracking_settings().model_dump(mode="json")
         protocol = protocol_for(config.mode, config.batch_size)
         run = BinaryRun(
             config=config,
@@ -107,36 +109,63 @@ def evaluate(config: Config, manifest: dict, root: str, transport=None, *, stop_
             manifest=manifest,
             stop_after=stop_after,
         )
-        outcome = protocol.execute(run)
-        if isinstance(outcome, Progress):
-            return {"complete": False, "observed": outcome.observed, "run_key": identity}
-        report = outcome.report
-        probe = next(read_events(events_path)).x
-        report["model_versions"] = outcome.versions.finish(outcome.model, probe)
-        report.update(
-            {
-                "complete": True,
-                "run_key": identity,
-                "config": config.model_dump(mode="json"),
-                "protocol": protocol.name,
-                "transport": contract["transport"]["name"],
-                "environment": env,
-                "dataset": manifest,
-                "wall_seconds_this_attempt": time.monotonic() - started,
-                "peak_rss_bytes_process": peak_rss_bytes(),
-            }
-        )
-        save_tracking_files(directory, report, settings, outcome.observer)
-        if settings.get("task_evaluation") is not None:
-            from continual_bench.evaluation.reporting import supplemental_report
-
-            report["task_evaluation"] = supplemental_report(
-                report, directory, near_future=outcome.observer.near_future
-            )
+        with SystemMetricsSampler(root) as system:
+            outcome = protocol.execute(run)
+            if isinstance(outcome, Progress):
+                return {"complete": False, "observed": outcome.observed, "run_key": identity}
+            report = finalize(outcome, run, protocol, contract, env, started)
+        report["system_metrics"] = system.report()
+        report["artifacts"] = write_binary_artifacts(directory, report)
         # Report first, then complete checkpoint: either crash point is safe to recompute/reuse.
         atomic_write(report_path, json.dumps(report, indent=2).encode())
         checkpoints.save(identity, {"contract": contract, "state": outcome.state, "complete": True})
         return report
+
+
+def finalize(outcome, run, protocol, contract, env, started) -> dict:
+    """Attach versions, provenance, tracking and supplemental metrics to a finished outcome."""
+    config, directory, settings = run.config, run.versions.directory, run.settings
+    report = outcome.report
+    probe = next(read_events(run.events_path)).x
+    report["model_versions"] = outcome.versions.finish(outcome.model, probe)
+    report.update(
+        {
+            "complete": True,
+            "run_key": config.identity(),
+            "config": config.model_dump(mode="json"),
+            "protocol": protocol.name,
+            "transport": contract["transport"]["name"],
+            "environment": env,
+            "dataset": run.manifest,
+            "wall_seconds_this_attempt": time.monotonic() - started,
+            "peak_rss_bytes_process": peak_rss_bytes(),
+        }
+    )
+    save_tracking_files(directory, report, settings, outcome.observer)
+    if settings.get("task_evaluation") is not None:
+        from continual_bench.evaluation.reporting import supplemental_report
+
+        report["task_evaluation"] = supplemental_report(
+            report, directory, near_future=outcome.observer.near_future
+        )
+    return report
+
+
+def write_binary_artifacts(directory, report) -> dict:
+    tracking = report.get("tracking") or {}
+    figures = binary_figures(report) + system_figures(report["system_metrics"])
+    return write_artifacts(directory, figures, {
+        "summary/metrics": {"metrics": tracking.get("metrics"), "availability": tracking.get("availability"),
+                            "report_metrics": report["metrics"]},
+        "series/tracking": tracking.get("series"),
+        "series/windows": report["windows"],
+        "events/alarms": report["alarms"],
+        "events/adaptations": {"updates": report["updates"], "candidates": report.get("candidates", []),
+                               "training": report.get("training")},
+        "continual/retention_probes": report.get("retention_probes"),
+        "task_evaluation/supplemental": report.get("task_evaluation"),
+        "system/samples": report["system_metrics"],
+    })
 
 
 def run(config: Config, root="state", *, services=False):

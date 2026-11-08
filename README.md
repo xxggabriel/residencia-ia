@@ -200,6 +200,11 @@ probabilidades, apresentações de treino e tamanho dos artefatos; os tetos não
 
 ## Tracking ampliado das métricas da residência
 
+Toda execução coleta todas as métricas por padrão (perfil completo quando `tracking` é omitido),
+amostra métricas de sistema publicadas como `system/*` na aba *System metrics* do MLflow e gera,
+ao final, gráficos SVG segmentados em `plots/<grupo>/` com os dados correspondentes em
+`data/<grupo>/*.json`. Detalhes em [rastreamento no MLflow](docs/mlflow-tracking.md).
+
 O [catálogo versionado](configs/contracts/metric-definitions.json) e o
 [contrato de métricas](docs/tracking-metrics.md) distinguem medidas calculadas, definições
 condicionais e evidências ausentes. As novas runs registram classificação, ranking/calibração,
