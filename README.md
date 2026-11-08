@@ -86,7 +86,7 @@ Para adicionar uma extensão (plugin), implementar o contrato, registrar uma fun
 
 **Atualização em 27/10/2026:** MLflow corrigido com senha exclusiva e limites explícitos de threads; worker com prontidão autenticada. Airflow disponibiliza `benchmark_streaming`, `benchmark_incremental`, `benchmark_offline`, `benchmark_strategies`, `benchmark_full`, `benchmark_controlled` e `benchmark_versioned`, além do smoke. As DAGs são manuais e parametrizadas. ZenML usa o projeto `default`, identificado como **Continual Benchmark**, porque o painel OSS 0.98.0 não exibe projetos adicionais. A stack dedicada `benchmark-minio-v2` armazena novos logs e artefatos no bucket privado `zenml-artifacts`; a leitura de logs e visualizações pela API do servidor foi validada. Execuções antigas com armazenamento local são preservadas. Consulte [Operação do benchmark](docs/benchmark-operations.md) para executar o fluxo completo e [validação de 27/10](reports/validation-20261027.md) para a evidência atual. Usar `-f compose.yaml -f compose.homelab.yaml` nesta implantação.
 
-O diagnóstico inicial encontrou 28 CPUs lógicas, 30 GiB RAM, 762 GiB livres em `/`, Docker 29.1.3 e Compose 2.40.3, sem contêineres existentes. Limites do conjunto de serviços ficam no Compose, com fila de 16 tarefas e execução de até oito avaliações comparativas simultâneas. Nenhum Docker socket é montado.
+O diagnóstico inicial encontrou 28 CPUs lógicas, 30 GiB RAM, 762 GiB livres em `/`, Docker 29.1.3 e Compose 2.40.3, sem contêineres existentes. Limites do conjunto de serviços ficam no Compose, com admissão de até oito avaliações simultâneas em oito containers, cada um limitado a 1 vCPU e 2 GiB de RAM. Nenhum Docker socket é montado.
 
 1. Manter o arquivo de ambiente privado fora do Git no servidor. `.env.example` contém somente valores de exemplo. MinIO exige usuário de pelo menos 3 caracteres e senha de pelo menos 8. MLflow 3.17.2 exige senha de pelo menos 12 em `MLFLOW_PASSWORD`, independente das outras interfaces. O arquivo precisa das credenciais das interfaces web, MinIO e Postgres, Fernet/JWT do Airflow e segredo de sessão Flask do MLflow.
 2. Validar estrutura sem imprimir valores: carregar o arquivo aprovado no ambiente e executar `python3 scripts/preflight.py`. Não executar `docker compose config` sem `--quiet` usando credenciais reais.
@@ -116,9 +116,9 @@ Kafka, Postgres, API S3 e API de tarefas ficam somente na rede Docker. Nenhuma p
 ## Validar serviços reais
 
 ```bash
-docker compose --env-file /caminho/privado/benchmark.env exec worker \
+docker compose --env-file /caminho/privado/benchmark.env exec worker-1 \
   pytest -q -m services tests/test_services.py
-docker compose --env-file /caminho/privado/benchmark.env exec worker \
+docker compose --env-file /caminho/privado/benchmark.env exec worker-1 \
   continual-bench smoke --state /state/full-smoke --samples 600 --services --zenml --baselines
 docker compose --env-file /caminho/privado/benchmark.env exec airflow-scheduler \
   airflow dags list-import-errors
@@ -148,8 +148,9 @@ São 261 execuções, incluindo offline e controles que reproduzem os resultados
 `online` passa a executar 2900 atualizações individuais por fluxo, inclusive os rótulos drenados ao final.
 O controle histórico usa outro nome e ação periódica esparsa, preservando a evidência anterior.
 
-O Airflow admite oito tarefas `evaluate_and_publish` simultâneas e o worker executa oito subprocessos
-com configurações SDK ZenML isoladas. O contador real de concorrência é exposto em `/health`.
+O Airflow admite oito tarefas `evaluate_and_publish` simultâneas; o worker padrão executa até oito
+avaliações simultâneas em oito containers de execução, cada um com 1 vCPU e 2 GiB de RAM
+e configuração SDK ZenML isolada. O contador real de concorrência é exposto em `/health`.
 O teto de treino é medido em chamadas de aprendizado, incluindo replays; não equivale a segundos
 de CPU nem força os detectores a gastar todo o orçamento. Detalhes em
 [Operação do benchmark](docs/benchmark-operations.md#campanha-controlada-v3).
@@ -162,8 +163,8 @@ separados, a semente 42 histórica e a dispersão entre as cinco sementes.
 ## Datasets e modelos versionados
 
 `benchmark_versioned` executa `versioned-v4`: 255 configurações sintéticas (cinco sementes)
-e 34 configurações reais (um prefixo fixo de Electricity e outro de Airlines), com oito tarefas
-`evaluate_and_publish` paralelas. O manifesto [campaign-versioned-v4.json](configs/history/campaign-versioned-v4.json)
+e 34 configurações reais (um prefixo fixo de Electricity e outro de Airlines), com até oito tarefas
+`evaluate_and_publish` e até oito avaliações simultâneas no pool, uma por container. O manifesto [campaign-versioned-v4.json](configs/history/campaign-versioned-v4.json)
 fixa 3000 exemplos, atraso 3 e os orçamentos da v3. Sementes não criam repetições independentes
 dos datasets reais; o adaptador registra explicitamente `seed_ignored`.
 
@@ -190,7 +191,7 @@ Análise das políticas e detectores nos cinco datasets: [versioned-v4-analysis.
 A DAG `benchmark_nonlinear` compara logística, Hoeffding Tree e kNN com os mesmos 289 casos
 por família da v4: cinco datasets, cinco sementes sintéticas, prefixos reais fixos e tetos de
 2900/5800 apresentações de treino após o aquecimento. São 867 configurações, com até oito
-`evaluate_and_publish` simultâneas. O treino inicial e cada atualização preservam modelo e
+tarefas `evaluate_and_publish` no Airflow e até oito avaliações simultâneas no worker padrão. O treino inicial e cada atualização preservam modelo e
 seleção dos dados; o MLflow registra família/parâmetros e mantém os experimentos por política/detector.
 
 Consulte o [contrato e parâmetros](docs/nonlinear-v5-protocol.md), o
@@ -232,5 +233,13 @@ publisher de modelos nem altera relatórios, checkpoints, dados ou versões orig
 calibração e referências não gravadas permanecem indisponíveis nessas runs.
 
 ## Custos de execução
+
+O perfil padrão de execução reserva **oito containers de execução, cada um com 1 vCPU e 2 GiB de RAM e uma run por vez**.
+O distribuidor mantém até oito runs simultâneas, com orçamento agregado de 8 vCPUs e 16 GiB
+para as execuções, além dos recursos dos serviços de controle.
+O worker principal e os clientes de datasets/validação herdam os limites individuais de `compose.yaml`, serviço `worker-1`.
+A implantação desse perfil no homelab está pendente; os arquivos foram preparados sem alterar
+as campanhas em andamento. Consulte o [perfil de recursos](docs/benchmark-operations.md#perfil-padrão-de-recursos-dos-experimentos)
+para aplicação e limites de comparabilidade dos resultados históricos.
 
 Os fluxos principal, tipado e por épocas registram um cenário de custo configurável independente da política e uma estimativa AWS em USD, com CPU/RAM por tempo de processamento e modelos salvos por GB e retenção. Consulte [contabilização de custos](docs/cost-accounting.md) para coeficientes, escopos, publicação e migração dos nomes de avaliação.

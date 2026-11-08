@@ -10,6 +10,69 @@ MLflow usa `WEB_USER` e a senha exclusiva `MLFLOW_PASSWORD`, no arquivo privado
 `/home/gabriel/.config/continual-bench/benchmark.env`. A cópia local fica em `.env`.
 Esses arquivos têm modo 600 e não integram o Git. As outras interfaces mantêm suas credenciais.
 
+## Perfil padrão de recursos dos experimentos
+
+A referência para novas comparações é **até oito execuções simultâneas, cada uma em seu próprio
+container com 1 vCPU e 2 GiB de RAM**. Os serviços `worker-1` a `worker-8` executam um job por vez
+(`BENCH_CONCURRENCY=1` em cada container). O serviço `worker` é o distribuidor HTTP: mantém
+`http://worker:8088` para o Airflow e encaminha as solicitações para containers livres. Assim, a
+concorrência total continua sendo oito e os limites de CPU/RAM não são compartilhados entre runs.
+
+O orçamento agregado das execuções é **8 vCPUs e 16 GiB de RAM**. O distribuidor tem um limite
+separado de 0.25 vCPU e 256 MiB e não treina modelos. Cada quota de CPU equivale a 1 vCPU, sem
+fixar um núcleo físico. Cada limite de 2 GiB equivale a 2147483648 bytes e inclui o servidor de
+jobs, um subprocesso do experimento e seus SDKs. `memswap_limit: 2g`, igual à RAM, desabilita swap
+para que outra execução não consuma o orçamento do container por meio de memória adicional.
+Quotas e tetos não reservam fisicamente núcleos ou memória do host; garantir capacidade disponível
+para esses containers e para os serviços de controle antes de implantar.
+
+A fonte canônica dos limites individuais é `compose.yaml`, serviço `worker-1`; os outros sete
+containers herdam o mesmo template. O distribuidor consulta a ocupação dos backends, envia a um
+container livre e devolve HTTP 429 quando todos estão ocupados. O Airflow mantém seu limite global
+de oito tarefas e seus retries. O worker recusa um segundo job local, inclusive misturando jobs
+binários e por épocas. Um lock de admissão no volume compartilhado fica retido até terminar a
+publicação e impede executar a mesma identidade em dois containers. Timeouts em POST não são
+reenviados automaticamente a outro backend, pois a primeira requisição pode ter sido aceita.
+Status e recibos continuam no volume compartilhado; GET pode ser atendido por outro backend.
+
+`compose.dataset-benchmark.yaml` fornece o pool alternativo `dataset-worker-1` a
+`dataset-worker-8`, atrás de `http://dataset-worker:8088`. Cada backend tem os mesmos limites e
+um diretório SDK ZenML próprio. A prontidão de datasets continua exigindo a admissão completa.
+`compose.task-validation.yaml` herda apenas um container de execução para testes explicitamente
+selecionados; não inicia oito benchmarks nem um distribuidor. O script `scripts/run_task_homelab.sh`
+também usa 1 vCPU e 2 GiB em seu cliente isolado. O limite global do Airflow continua oito mesmo
+quando há pools distintos; clientes que submetem diretamente à API precisam respeitar esse teto
+entre pools. Não é necessário manter o pool de datasets ligado para usar o pool binário.
+
+As variáveis `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS` e
+`NUMEXPR_NUM_THREADS` ficam em 1 em cada execução. O Dockerfile define os mesmos valores para
+clientes fora do Compose. Execuções locais fora de containers não recebem quotas do Compose e
+não devem ser descritas como validadas neste perfil.
+
+O perfil AWS em `CostConfig.aws` e `configs/base/tracking.yaml` usa `vcpus: 1` e `memory_gb: 2`
+por run. Comparações devem manter região, tarifas, retenção, regras de cobrança, escopo dos tempos,
+dataset/split, seeds e protocolos compatíveis. O armazenamento contabiliza todas as versões salvas
+e a cópia final. A estimativa do aprendiz não inclui distribuidor, Airflow, MLflow, ZenML, Kafka,
+MinIO e PostgreSQL. Mesmo com containers independentes, CPU física, disco e rede do host podem
+ter contenção: registrar também as condições reais de concorrência.
+
+**Implantação pendente:** em 08/11/2026 foram atualizados apenas os arquivos, por decisão do
+operador, enquanto a campanha `policies-agrawal-20261108T154612` ainda estava em execução. O
+worker observado manteve 8 vCPUs, 8 GiB e oito subprocessos no mesmo container. Alterar arquivos
+ou reconstruir a imagem não modifica esse container. Após encerrar campanhas e drenar a fila,
+reconstruir a imagem e substituir o executor antigo pelo distribuidor e pelos oito backends.
+O bootstrap ZenML passa a ser executado em `worker-1`, que contém as credenciais e os volumes;
+o distribuidor `worker` não tem credenciais nem estado de treinamento. Conferir por `docker
+inspect` CPU/RAM/swap de **cada** backend e `concurrency=1` em seus `/health`; o `/health` do
+distribuidor deve informar oito workers saudáveis e concorrência agregada 8.
+
+O worker de datasets antes usava 6 GiB. Repetir sua admissão com os novos limites e diretórios
+novos de resultados/recibos; a admissão antiga não comprova execução em 2 GiB. Não ampliar memória
+silenciosamente em caso de OOM. Os resultados anteriores, inclusive a estimativa retrospectiva de
+`policies-airlines-v1`, não passam a representar treino medido no novo perfil. Usar outro nome de
+campanha/experimento, por exemplo `policies-airlines-1vcpu-2g-v1`, para não reutilizar jobs antigos.
+Não misturar resultados de perfis de recursos distintos no mesmo comparativo de tempo/custo.
+
 ## Executar no Airflow
 
 Todas as DAGs usam `schedule=None`: ativá-las permite disparos manuais, sem iniciar experimentos periódicos.
@@ -38,7 +101,9 @@ As configurações são determinísticas: repetir a mesma matriz reaproveita tra
 alterar uma configuração gera outra identidade. DAGs de protocolos e a DAG completa compartilham
 identidades para evitar repetir o mesmo experimento. Falhas não são convertidas em sucesso.
 
-O worker executa até oito avaliações em subprocessos isolados; Airflow admite até oito tarefas por DAG e oito globalmente, com timeout e retry.
+O pool executa **até oito avaliações simultâneas em oito containers**, cada um com
+**1 vCPU e 2 GiB de RAM exclusivos para uma avaliação**. Airflow admite até oito tarefas por DAG e oito globalmente;
+solicitações excedentes aguardam a fila. Timeout e retry continuam sendo controlados pelas DAGs.
 Para uma campanha com configurações novas, o tempo inclui captura dos logs ZenML e publicação autenticada.
 
 ## ZenML
@@ -87,7 +152,7 @@ Depois de provisionar esses recursos, executar no diretório remoto:
 
 ```bash
 docker compose --env-file /home/gabriel/.config/continual-bench/benchmark.env \
-  -f compose.yaml -f compose.homelab.yaml exec -T worker python scripts/bootstrap_zenml.py
+  -f compose.yaml -f compose.homelab.yaml exec -T worker-1 python scripts/bootstrap_zenml.py
 ```
 
 O script é idempotente e registra projeto/armazenamento/stack. Não cria credenciais administrativas.
@@ -125,7 +190,7 @@ Orçamentos incompatíveis com atualização online a cada rótulo são rejeitad
 Os controles `controlled-v3-bridge` usam política periódica de 100 rótulos com ação `learn_one`,
 reproduzindo as 29 atualizações do antigo online para validar a comparação histórica sem reintroduzir o erro.
 As execuções antigas e seus checkpoints permanecem intactos. Cada novo subprocesso tem seu próprio
-`ZENML_CONFIG_PATH`; configuração SDK mutável não é compartilhada entre os oito processos.
+`ZENML_CONFIG_PATH`; configuração SDK mutável não é compartilhada entre avaliações, inclusive nas oito execuções simultâneas.
 
 ### Resultado verificado da campanha v3
 
@@ -177,7 +242,7 @@ Antes de executar o pipeline, adquirir e admitir as fontes completas explicitame
 
 ```bash
 docker compose --env-file /home/gabriel/.config/continual-bench/benchmark.env \
-  -f compose.yaml -f compose.homelab.yaml exec -T worker \
+  -f compose.yaml -f compose.homelab.yaml exec -T worker-1 \
   python scripts/prepare_real_sources.py --directory /state/datasets
 ```
 
@@ -243,7 +308,7 @@ Auditoria após a conclusão:
 
 ```bash
 docker compose --env-file /home/gabriel/.config/continual-bench/benchmark.env \
-  -f compose.yaml -f compose.homelab.yaml exec -T worker \
+  -f compose.yaml -f compose.homelab.yaml exec -T worker-1 \
   python scripts/verify_versioned_campaign.py > versioned-v4-inputs.json
 ```
 
@@ -258,8 +323,9 @@ um ambiente de dependências do zero e cobre uma entrada de referência por data
 `benchmark_nonlinear` usa a mesma matriz de dados, sementes e orçamentos da v4 para cada uma
 das três famílias: logística, `hoeffding_tree` e `knn`. O manifesto está em
 `configs/history/campaign-nonlinear-v5.json`; filtrar `tags.campaign = 'nonlinear-v5'` no MLflow.
-Oito tarefas mapeadas `evaluate_and_publish` e oito subprocessos do worker são os limites de
-concorrência; o número real de tarefas simultâneas fica no registro operacional da campanha.
+As DAGs admitem até oito tarefas mapeadas `evaluate_and_publish`, mas o perfil padrão do worker
+encaminha até oito avaliações simultâneas para seus oito containers isolados. A campanha histórica v5 também usou até oito
+subprocessos, mas com outro orçamento de CPU/RAM; essa condição histórica não equivale ao novo perfil.
 
 O [protocolo](nonlinear-v5-protocol.md) fixa hiperparâmetros e representação. Os diários guardam
 cada estado treinado: árvore/online/Airlines gerou cerca de10GiB em um único diário no preflight.
