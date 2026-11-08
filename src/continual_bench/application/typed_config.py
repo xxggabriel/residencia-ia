@@ -4,10 +4,11 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from .config import DatasetConfig, Strict
+from .config import CostConfig, DatasetConfig, Strict
 
 
 class TypedConfig(Strict):
+    costs: CostConfig = Field(default_factory=lambda: CostConfig(train_sample=0.001, update=0.05))
     dataset: DatasetConfig
     policy: Literal["none", "online", "periodic"] = "online"
     warmup: int = Field(default=20, ge=1, le=10_000)

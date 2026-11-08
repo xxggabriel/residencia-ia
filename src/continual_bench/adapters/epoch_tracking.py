@@ -47,6 +47,10 @@ def publish_epochs(report, root):
 
         points = [(name, epoch["epoch"], value)
                   for epoch in report["epochs"] for name, value in epoch["metrics"].items()]
+        points.extend(("costs/" + name, epoch["epoch"], value)
+                      for epoch in report["epochs"] for name, value in epoch["costs"]["metrics"].items())
+        points.extend(("costs/total/" + name, 0, value)
+                      for name, value in report["costs"]["metrics"].items())
         log_metric_points(client, run_id, points)
         for filename in files:
             client.log_artifact(run_id, str(directory / filename))

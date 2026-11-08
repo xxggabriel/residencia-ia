@@ -15,6 +15,7 @@ from river import linear_model, metrics, optim, preprocessing, tree
 
 from continual_bench.adapters.local import atomic_write, run_lock
 
+from .costs import account, error_units, profile
 from .runner import environment
 
 
@@ -46,13 +47,14 @@ def _json(value):
 
 
 def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, window=128,
-              max_samples=1000, max_seconds=60, training_budget=None):
+              max_samples=1000, max_seconds=60, training_budget=None, costs=None):
     """Evaluate a deterministic prefix; never learn validation/test labels.
 
     `source` exposes samples_iter() of TaskSample plus manifest(). Labels are
     released after prediction at the current timestamp, including at delay zero.
     Complete reruns are idempotent by config/data/code identity; no partial resume.
     """
+    costs = profile(costs)
     manifest = source.manifest()
     task = task or manifest.get("task")
     if task not in {"regression", "multiclass"} or manifest.get("task") != task:
@@ -102,7 +104,7 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
     env = environment()
     config = {"schema_version": "task_evaluation-typed-v1", "task": task, "policy": policy, "warmup": warmup,
               "every": every, "window": window, "max_samples": max_samples, "max_seconds": max_seconds,
-              "training_budget": training_budget, "source": manifest,
+              "training_budget": training_budget, "costs": costs, "source": manifest,
               "samples_sha256": hashlib.sha256(payload).hexdigest(), "environment": env,
               "model": ({"name": "river.LinearRegression", "scaler": "StandardScaler", "sgd": 0.01}
                         if task == "regression" else {"name": "river.HoeffdingTreeClassifier",
@@ -124,15 +126,17 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
         replay, pending = deque(maxlen=window), deque()
         train_arrived = released_train = training_used = budget_blocked = 0
         prediction_seconds = training_seconds = 0.0
+        prediction_errors = 0.0
 
         def release(now):
-            nonlocal model, released_train, training_used, training_seconds, budget_blocked
+            nonlocal model, released_train, training_used, training_seconds, budget_blocked, prediction_errors
             while pending and pending[0][0].available_at <= now:
                 if time.monotonic() - started > max_seconds:
                     raise TimeoutError("typed evaluation deadline exceeded")
                 sample, prediction, train_index = pending.popleft()
                 scored = sample.split != "train" or train_index >= warmup
                 if scored:
+                    prediction_errors += error_units(task, sample.y, prediction, costs)
                     counts[sample.split] += 1
                     for metric in metric_sets[sample.split].values():
                         metric.update(sample.y, prediction)
@@ -211,6 +215,9 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
                                "promotion": "automatic baseline; all trained candidates promoted",
                                "task_matrix": "not computed; per-task prequential metrics are not forgetting",
                                "resume": "complete-run idempotency; interrupted runs restart from scratch"}}
+        report["costs"] = account(costs, errors=prediction_errors,
+                                  presentations=warmup + training_used, updates=len(updates),
+                                  train_seconds=training_seconds, predict_seconds=prediction_seconds)
         atomic_write(directory / "samples.jsonl", payload)
         atomic_write(directory / "predictions.json", _json(predictions))
         atomic_write(report_path, _json(report))

@@ -136,7 +136,8 @@ def test_nonzero_time_prices_require_timers_but_measured_zero_is_available():
 
 def test_missing_cost_and_unmeasured_quantities_are_null_not_zero():
     report = build_tracking(evidence(), settings())
-    for key in ("cost_total", "cost_scpe", "energy_kwh", "financial_ros", "ci_test_coverage",
+    assert report["metrics"]["cost_total"] == pytest.approx(4.11)
+    for key in ("cost_scpe", "energy_kwh", "financial_ros", "ci_test_coverage",
                 "performance_forecast_mae", "drift_roc_auc", "platform_time_overhead_ratio"):
         assert report["metrics"][key] is None
         assert report["availability"][key]["status"] == "unavailable"
@@ -270,7 +271,7 @@ def test_metric_points_namespace_is_versioned_and_unavailable_values_stay_null()
     tracking = build_tracking(evidence(), settings())
     points = metric_points(tracking)
     assert all(key.startswith("tracking_v1/") for key, step, value in points)
-    assert ("tracking_v1/summary/cost_total", 0, None) in points
+    assert ("tracking_v1/summary/cost_total", 0, 4.11) in points
     assert ("tracking_v1/summary/training_budget_blocked_decisions", 0, 0) in points
     assert ("tracking_v1/accuracy", 3, 0.4) in points
     json.dumps(tracking, allow_nan=False)

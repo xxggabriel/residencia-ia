@@ -15,12 +15,14 @@ from pydantic import Field
 from continual_bench.adapters.dataset_loading import DATASETS, load_dataset
 from continual_bench.adapters.local import atomic_write, run_lock
 
-from .config import Strict
+from .config import CostConfig, Strict
+from .costs import account, error_units
 from .runner import environment
 from .typed_benchmark import _metric_set, _model
 
 
 class EpochConfig(Strict):
+    costs: CostConfig = Field(default_factory=lambda: CostConfig(train_sample=0.001, update=0.05))
     dataset: str
     examples: int = Field(default=100, ge=10, le=1000)
     epochs: int = Field(default=2, ge=1, le=20)
@@ -127,6 +129,8 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
             return report
         model = _model(task)
         epochs = []
+        costs = config.costs.model_dump()
+        cumulative_errors = cumulative_train = cumulative_predict = 0.0
         for epoch in range(config.epochs):
             before = time.perf_counter()
             for row in train:
@@ -137,17 +141,28 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
             frozen = copy.deepcopy(model)
             scores = _metric_set(task)
             predictions = []
+            prediction_seconds = errors = 0.0
             for row in test:
                 if time.monotonic() - started > config.max_seconds:
                     raise TimeoutError("epoch evaluation deadline exceeded")
+                before_prediction = time.perf_counter()
                 prediction = frozen.predict_one(copy.deepcopy(row.x))
+                prediction_seconds += time.perf_counter() - before_prediction
                 if task == "multiclass" and prediction is None:
                     prediction = "__untrained__"
+                errors += error_units(task, row.y, prediction, costs)
                 for metric in scores.values():
                     metric.update(row.y, prediction)
                 predictions.append({"sample_id": row.sample_id, "prediction": prediction})
+            cumulative_errors += errors
+            cumulative_train += training_seconds
+            cumulative_predict += prediction_seconds
             epochs.append({"epoch": epoch + 1, "train_presentations": len(train), "test_examples": len(test),
                            "training_seconds": training_seconds,
+                           "prediction_seconds": prediction_seconds,
+                           "costs": account(costs, errors=errors, presentations=len(train), updates=1,
+                                            train_seconds=training_seconds,
+                                            predict_seconds=prediction_seconds),
                            "metrics": {name: metric.get() for name, metric in scores.items()},
                            "prediction_digest": hashlib.sha256(encoded(predictions)).hexdigest()})
         report = {"version": "semana09-epochs-v1", "run_key": key, "complete": True,
@@ -156,6 +171,9 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
                   "contract": contract, "seconds": time.monotonic() - started,
                   "peak_rss_bytes_process": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
                   "scope": "train-only passes; frozen holdout after each epoch, no prequential claim"}
+        report["costs"] = account(costs, errors=cumulative_errors,
+                                  presentations=len(train) * config.epochs, updates=config.epochs,
+                                  train_seconds=cumulative_train, predict_seconds=cumulative_predict)
         atomic_write(directory / "samples.jsonl", payload)
         atomic_write(report_path, encoded(report))
         return report

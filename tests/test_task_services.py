@@ -14,12 +14,13 @@ from continual_bench.application.runner import environment
 
 
 @pytest.mark.services
+@pytest.mark.parametrize("priced_time", [False, True])
 @pytest.mark.parametrize("source,mode,policy", [
     ("sea", "streaming", "cost_heuristic"),
     ("hyperplane", "incremental", "performance"),
     ("stagger", "offline", "none"),
 ])
-def test_task_evaluation_real_service_evidence(source, mode, policy):
+def test_task_evaluation_real_service_evidence(source, mode, policy, priced_time):
     from mlflow.tracking import MlflowClient
     from zenml.client import Client
 
@@ -32,7 +33,9 @@ def test_task_evaluation_real_service_evidence(source, mode, policy):
         "policy": {"name": policy, "min_samples": 20, "min_window": 8, "cooldown": 10,
                    **({"params": {"monitor_window": 10}} if mode != "offline" else {})},
         "tracking": {"probe_samples": 4, "continual_references": False,
-                     "task_evaluation": {"horizon": 8, "gap": 1, "max_windows": 2}},
+                     "task_evaluation": {"horizon": 8, "gap": 1, "max_windows": 2},
+                     **({"costs": {"unit": "custom_scenario", "train_sample": 0.02, "update": 0.3,
+                                   "train_second": 2, "predict_second": 3}} if priced_time else {})},
         **({"promotion": {"validation_samples": 8}} if mode == "incremental" else {}),
     })
     report = execute_pipeline(cfg, str(root), services=True)
@@ -49,6 +52,17 @@ def test_task_evaluation_real_service_evidence(source, mode, policy):
     mlflow = MlflowClient()
     tracked = mlflow.get_run(receipt["mlflow_run_id"])
     assert tracked.info.status == "FINISHED"
+    costs = report["tracking"]["costs"]
+    assert costs["metrics"]["cost_total"] is not None
+    assert costs["metrics"]["cost_total"] == pytest.approx(sum(
+        value for key, value in costs["metrics"].items() if key != "cost_total"
+    ))
+    for key, value in costs["metrics"].items():
+        history_cost = mlflow.get_metric_history(tracked.info.run_id, "tracking_v1/summary/" + key)
+        assert len(history_cost) == 1
+        assert history_cost[0].value == pytest.approx(value)
+    assert costs["settings"] == cfg.tracking.costs.model_dump()
+
     assert tracked.data.params["dataset_sha256"] == report["dataset"]["sha256"]
     assert mlflow.get_model_version(receipt["registered_model"], receipt["registered_model_version"]).run_id \
         == tracked.info.run_id
@@ -88,6 +102,7 @@ def test_task_evaluation_real_service_evidence(source, mode, policy):
     assert len(mlflow.get_metric_history(tracked.info.run_id, "accuracy")) == len(history)
     evidence = {"run_key": cfg.identity(), "source": source, "mode": mode, "policy": policy,
                 "mlflow_run_id": tracked.info.run_id, "zenml_run_id": str(latest.id),
+                "costs": costs, "mlflow_costs_verified": True,
                 "steps_verified": len(steps), "kafka": kafka_evidence,
                 "objects_sha256_verified": True, "publication_replay_idempotent": True}
     (directory / "service-evidence.json").write_text(json.dumps(evidence, indent=2))
