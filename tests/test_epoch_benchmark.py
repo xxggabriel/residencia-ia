@@ -3,8 +3,8 @@ from dataclasses import replace
 
 import pytest
 
-from continual_bench.adapters.task_sources import TaskSample
-from continual_bench.application.epoch_benchmark import EpochConfig, run_epochs, split_records
+from continual_bench.core.contracts import TaskSample
+from continual_bench.evaluation.epochs import EpochConfig, run_epochs, split_records
 
 
 class Fixture:
@@ -20,9 +20,7 @@ class Fixture:
                              split="test" if self.official and seq >= 80 else "train")
 
 
-def test_two_epochs_reuse_only_training_records_and_keep_test_isolated(tmp_path, monkeypatch):
-    import continual_bench.application.epoch_benchmark as module
-
+def test_two_epochs_reuse_only_training_records_and_keep_test_isolated(tmp_path):
     learned = []
 
     class Model:
@@ -32,15 +30,15 @@ def test_two_epochs_reuse_only_training_records_and_keep_test_isolated(tmp_path,
         def predict_one(self, x):
             return str(x["x"])
 
-    monkeypatch.setattr(module, "_model", lambda task: Model())
     config = EpochConfig(dataset="sea")
-    report = run_epochs(config, tmp_path, tmp_path, source=Fixture(official=True))
+    report = run_epochs(config, tmp_path, tmp_path, source=Fixture(official=True), model_factory=Model)
     assert report["unique_examples"] == 100 and len(report["epochs"]) == 2
     assert len(learned) == 160
     assert report["train_ids"] == [str(i) for i in range(80)]
     assert report["test_ids"] == [str(i) for i in range(80, 100)]
     assert all(e["metrics"]["accuracy"] == 1 for e in report["epochs"])
-    assert run_epochs(config, tmp_path, tmp_path, source=Fixture(official=True)) == report
+    repeated = run_epochs(config, tmp_path, tmp_path, source=Fixture(official=True), model_factory=Model)
+    assert repeated == report
     assert len(learned) == 160
 
 
@@ -55,9 +53,7 @@ def test_stream_purge_and_repeated_training_do_not_count_as_new_stream_events(tm
     assert json.loads((tmp_path / report["run_key"] / "epoch-report.json").read_text()) == report
 
 
-def test_bad_selection_and_failed_fit_never_create_completed_report(tmp_path, monkeypatch):
-    import continual_bench.application.epoch_benchmark as module
-
+def test_bad_selection_and_failed_fit_never_create_completed_report(tmp_path):
     with pytest.raises(ValueError, match="exactly 101"):
         run_epochs(EpochConfig(dataset="sea", examples=101), tmp_path, tmp_path, source=Fixture())
 
@@ -65,9 +61,8 @@ def test_bad_selection_and_failed_fit_never_create_completed_report(tmp_path, mo
         def learn_one(self, *args):
             raise RuntimeError("injected fit failure")
 
-    monkeypatch.setattr(module, "_model", lambda task: Broken())
     with pytest.raises(RuntimeError, match="injected"):
-        run_epochs(EpochConfig(dataset="sea"), tmp_path, tmp_path, source=Fixture())
+        run_epochs(EpochConfig(dataset="sea"), tmp_path, tmp_path, source=Fixture(), model_factory=Broken)
     assert not list(tmp_path.rglob("epoch-report.json"))
 
 
@@ -91,7 +86,7 @@ def test_malformed_source_is_rejected_before_training(tmp_path, change):
 
 
 def test_runtime_fingerprint_tracks_dependency_versions():
-    from continual_bench.application.epoch_benchmark import dataset_fingerprint
+    from continual_bench.evaluation.epochs import dataset_fingerprint
 
     left = {"code_sha256": "same", "python": "3.12", "packages": {"pillow": "13.0.0"}}
     right = {**left, "packages": {"pillow": "13.0.1"}}
@@ -99,7 +94,7 @@ def test_runtime_fingerprint_tracks_dependency_versions():
 
 
 def test_failed_all_dataset_repeat_revokes_prior_success(tmp_path, monkeypatch):
-    import continual_bench.application.epoch_benchmark as module
+    import continual_bench.evaluation.epochs as module
 
     receipt = tmp_path / "dataset-smoke-complete.json"
     receipt.write_text(json.dumps({"complete": True, "datasets": ["old-success"]}))

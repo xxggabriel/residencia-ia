@@ -4,10 +4,10 @@ import pickle
 
 import pytest
 
-from continual_bench.adapters.river import RiverModel
-from continual_bench.adapters.versioning import ModelVersions, load_version
-from continual_bench.application.config import Config
 from continual_bench.application.runner import run
+from continual_bench.config import Config
+from continual_bench.infrastructure.versioning import ModelVersions, load_version
+from continual_bench.models.linear import RiverModel
 
 
 def test_version_journal_recovers_uncommitted_tail_and_reloads_states(tmp_path):
@@ -71,7 +71,7 @@ def test_mlflow_model_flavor_loads_complete_preprocessing(tmp_path):
     import mlflow.pyfunc
     import pandas as pd
 
-    from continual_bench.adapters.catalog import prepare_mlflow_model
+    from continual_bench.infrastructure.catalog import prepare_mlflow_model
 
     config = Config.model_validate({"dataset": {"samples": 120}, "warmup": 20})
     report = run(config, tmp_path)
@@ -87,7 +87,7 @@ def test_mlflow_packaging_recovers_after_metadata_written_before_code(tmp_path, 
 
     import mlflow.pyfunc
 
-    from continual_bench.adapters.catalog import prepare_mlflow_model
+    from continual_bench.infrastructure.catalog import prepare_mlflow_model
 
     config = Config.model_validate({"dataset": {"samples": 120}, "warmup": 20})
     run(config, tmp_path)
@@ -108,5 +108,5 @@ def test_mlflow_packaging_recovers_after_metadata_written_before_code(tmp_path, 
     target = prepare_mlflow_model(directory)
     assert (target / ".ready.json").is_file()
     assert (target / "requirements.txt").is_file()
-    assert (target / "code/continual_bench/adapters/model_loader.py").is_file()
+    assert (target / "code/continual_bench/models/serving.py").is_file()
     assert prepare_mlflow_model(directory) == target

@@ -4,11 +4,11 @@ import pickle
 
 import pytest
 
-from continual_bench.adapters.river import RiverDetector
-from continual_bench.application.config import Config, TrackingConfig
-from continual_bench.domain.contracts import DecisionContext, Event
-from continual_bench.domain.engine import Engine
-from continual_bench.domain.policies import PolicyStrategy
+from continual_bench.config import Config, TrackingConfig
+from continual_bench.core.contracts import DecisionContext, Event
+from continual_bench.core.engine import Engine
+from continual_bench.core.policies import PolicyStrategy
+from continual_bench.detectors.river import RiverDetector
 
 
 class MajorityModel:

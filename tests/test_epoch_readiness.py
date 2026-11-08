@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from continual_bench.adapters.dataset_loading import DATASETS
-from continual_bench.application import epoch_server
+from continual_bench.datasets.catalog import DATASETS
+from continual_bench.orchestration import epoch_server
 
 
 def test_worker_refuses_missing_partial_or_stale_dataset_admission(tmp_path, monkeypatch):

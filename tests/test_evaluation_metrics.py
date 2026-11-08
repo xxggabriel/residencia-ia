@@ -5,13 +5,13 @@ from dataclasses import replace
 
 import pytest
 
-from continual_bench.application.evaluation_reporting import supplemental_report, validated_detection
-from continual_bench.domain.contracts import Event
-from continual_bench.domain.evaluation_metrics import (
+from continual_bench.core.contracts import Event
+from continual_bench.core.evaluation_metrics import (
     NearFutureEvaluation,
     task_matrix_metrics,
     validate_temporal_holdout,
 )
+from continual_bench.evaluation.reporting import supplemental_report, validated_detection
 
 
 class MutableModel:

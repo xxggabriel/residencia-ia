@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 from PIL import Image
 
-from continual_bench.adapters import cifar_parquet as module
+from continual_bench.datasets import cifar_parquet as module
 
 
 def png(mode="RGB", size=(32, 32), color=(10, 20, 30)):

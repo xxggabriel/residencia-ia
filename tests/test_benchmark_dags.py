@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.application.config import Config
+from continual_bench.config import Config
 
 
 def jobs_module():

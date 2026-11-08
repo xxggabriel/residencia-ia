@@ -172,7 +172,7 @@ services:
     build: .
     image: continual-bench-worker:0.1.0
     environment: *worker-env
-    command: [python, -c, "from continual_bench.adapters.services import S3Objects; s=S3Objects(); existing={b['Name'] for b in s.client.list_buckets()['Buckets']}; [s.client.create_bucket(Bucket=b) for b in ('benchmarks','mlflow') if b not in existing]"]
+    command: [python, -c, "from continual_bench.infrastructure.services import S3Objects; s=S3Objects(); existing={b['Name'] for b in s.client.list_buckets()['Buckets']}; [s.client.create_bucket(Bucket=b) for b in ('benchmarks','mlflow') if b not in existing]"]
     depends_on:
       minio: {condition: service_healthy}
     mem_limit: 256m

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.application.config import Config
 from continual_bench.application.runner import run
+from continual_bench.config import Config
 
 
 def test_csv_extension_preserves_real_time_and_purges_unavailable_training_labels(tmp_path):

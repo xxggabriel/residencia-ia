@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from continual_bench.application.config import Config
+from continual_bench.config import Config
 
 
 def main():

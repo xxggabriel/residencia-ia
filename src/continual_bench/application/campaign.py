@@ -8,9 +8,8 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from continual_bench.adapters.local import atomic_write, run_lock
-
-from .config import Config, Strict
+from continual_bench.config import Config, Strict
+from continual_bench.infrastructure.storage import atomic_write, run_lock
 
 
 class Campaign(Strict):
@@ -40,13 +39,10 @@ def execute_campaign(campaign, root, *, services=False, zenml=False, executor=No
     """
     if executor is None:
         if zenml:
-            from continual_bench.adapters.zenml_pipeline import execute_pipeline
+            raise ValueError("ZenML campaigns require the pipeline executor injected by the entry point")
+        from .runner import run
 
-            executor = execute_pipeline
-        else:
-            from .runner import run
-
-            executor = run
+        executor = run
     directory = Path(root) / campaign.identity()
     directory.mkdir(parents=True, exist_ok=True)
     journal = directory / "campaign.json"

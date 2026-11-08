@@ -1,19 +1,19 @@
 # Métricas e contratos da Semana 09
 
 Foi acrescentado o suplemento `semana09-metrics-v1`, preservando as definições e
-identidades da Semana 08. O módulo `domain/evaluation_metrics.py` acrescentou avaliação de horizontes futuros
+identidades da Semana 08. O módulo `core/evaluation_metrics.py` acrescentou avaliação de horizontes futuros
 com snapshots, validação temporal e um resumo de matrizes de tarefas. A montagem
 do relatório e a validação do matcher existente ficaram em
-`application/evaluation_reporting.py`, preservando o domínio sem dependências de I/O
+`evaluation/reporting.py`, preservando o domínio sem dependências de I/O
 ou da camada de aplicação.
 
 ## Cobertura e fontes
 
 | Componente | Fonte e versão | Implementação | Validação |
 | --- | --- | --- | --- |
-| Qualidade binária, calibração e probabilidades | `domain/metrics.py`, contrato `residency-metrics-v1` | Existente; precisão, recall, F1, AUROC/AP, Brier, log loss e calibração | Suíte existente |
-| Detecção com anotações | `application/tracking.py::detector_metrics`, contrato v1 | Reutilizada; suplemento validou offsets, unicidade, ordem e tolerância | `test_evaluation_metrics.py` cobriu matches, alarmes repetidos, censura e ausência de ground truth |
-| Recuperação e recursos | `application/tracking.py` e `domain/observability.py`, contrato v1 | Existente; suplemento referenciou o ledger sem recalcular custos | Suíte existente e teste do suplemento |
+| Qualidade binária, calibração e probabilidades | `core/metrics.py`, contrato `residency-metrics-v1` | Existente; precisão, recall, F1, AUROC/AP, Brier, log loss e calibração | Suíte existente |
+| Detecção com anotações | `evaluation/tracking.py::detector_metrics`, contrato v1 | Reutilizada; suplemento validou offsets, unicidade, ordem e tolerância | `test_evaluation_metrics.py` cobriu matches, alarmes repetidos, censura e ausência de ground truth |
+| Recuperação e recursos | `evaluation/tracking.py` e `core/observability.py`, contrato v1 | Existente; suplemento referenciou o ledger sem recalcular custos | Suíte existente e teste do suplemento |
 | BWT e FWT de GEM | [Lopez-Paz e Ranzato, arXiv 1706.08840v6, equações 3 e 4](https://arxiv.org/html/1706.08840v6) | Novo resumo de matriz; FWT exigiu baseline anterior ao aprendizado | Testes com matrizes calculáveis, células ausentes e transferência positiva |
 | Near-future accuracy | [Hammoud et al., arXiv 2305.09275v1, seção 3.5](https://arxiv.org/html/2305.09275v1) | Adaptação operacional binária com gap e horizonte declarados; sem reprodução do benchmark visual | Testes de snapshot, atraso, replay, falha, retomada e limites |
 | Separação temporal | Contrato local `validate_temporal_holdout` | Novo validador de disponibilidade e IDs nas partições | Testes de leakage por ID e por rótulos tardios |

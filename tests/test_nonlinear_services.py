@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.adapters.zenml_pipeline import execute_pipeline
-from continual_bench.application.config import Config
+from continual_bench.config import Config
+from continual_bench.orchestration.zenml_pipeline import execute_pipeline
 
 
 @pytest.mark.services

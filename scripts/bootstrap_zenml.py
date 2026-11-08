@@ -9,7 +9,7 @@ import os
 from zenml.client import Client
 from zenml.enums import StackComponentType
 
-from continual_bench.adapters.zenml_pipeline import configure_local_stack
+from continual_bench.orchestration.zenml_pipeline import configure_local_stack
 
 
 def main():

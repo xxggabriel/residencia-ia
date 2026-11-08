@@ -1,7 +1,7 @@
 import pytest
 
 from continual_bench.application.campaign import Campaign, execute_campaign
-from continual_bench.application.config import Config
+from continual_bench.config import Config
 
 
 def campaign():

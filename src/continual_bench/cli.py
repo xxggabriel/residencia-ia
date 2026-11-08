@@ -1,146 +1,227 @@
+"""Command-line entry point. Command pattern: one registered handler per subcommand."""
+
 import argparse
 import json
 from pathlib import Path
+from typing import Callable
 
-from .application.config import Config, load_config
-from .application.runner import run
+Configure = Callable[[argparse.ArgumentParser], None]
+Handler = Callable[[argparse.Namespace], None]
+COMMANDS: dict[str, tuple[Configure, Handler]] = {}
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="command", required=True)
-    execute = sub.add_parser("run")
-    execute.add_argument("config")
-    execute.add_argument("--state", default="state")
-    execute.add_argument("--services", action="store_true")
-    execute.add_argument("--zenml", action="store_true")
-    matrix = sub.add_parser("smoke")
-    matrix.add_argument("--state", default="state")
-    matrix.add_argument("--services", action="store_true")
-    matrix.add_argument("--zenml", action="store_true")
-    matrix.add_argument("--baselines", action="store_true")
-    matrix.add_argument("--samples", default=600, type=int)
-    sub.add_parser("serve")
-    campaign = sub.add_parser("campaign")
-    campaign.add_argument("config")
-    campaign.add_argument("--state", default="state/task_evaluation")
-    campaign.add_argument("--services", action="store_true")
-    campaign.add_argument("--zenml", action="store_true")
-    typed = sub.add_parser("typed")
-    typed.add_argument("config")
-    typed.add_argument("--state", default="state/task_evaluation-typed")
-    datasets = sub.add_parser("datasets")
-    datasets.add_argument("--dataset", default="all")
-    datasets.add_argument("--cache", default="state/datasets")
-    datasets.add_argument("--state", default="state/dataset-epochs")
-    datasets.add_argument("--real-directory")
-    datasets.add_argument("--download", action="store_true")
-    epoch_job = sub.add_parser("epoch-job")
-    epoch_job.add_argument("config")
-    epoch_job.add_argument("--cache", required=True)
-    epoch_job.add_argument("--state", required=True)
-    epoch_job.add_argument("--real-directory", required=True)
-    epoch_job.add_argument("--download", action="store_true")
-    epoch_job.add_argument("--services", action="store_true")
-    sub.add_parser("serve-datasets")
-    args = parser.parse_args()
-    if args.command == "serve-datasets":
-        from .application.epoch_server import serve
+def command(name: str, configure: Configure = lambda parser: None):
+    def register(handler):
+        COMMANDS[name] = (configure, handler)
+        return handler
 
-        serve()
-        return
-    if args.command == "epoch-job":
-        from .application.epoch_benchmark import EpochConfig, run_epochs
+    return register
 
-        config = EpochConfig.model_validate_json(Path(args.config).read_text())
-        if args.services:
-            from .adapters.epoch_pipeline import execute_epoch_pipeline
 
-            result = execute_epoch_pipeline(config, args.state, args.cache,
-                                            real_directory=args.real_directory, download=args.download)
-        else:
-            result = run_epochs(config, args.state, args.cache, real_directory=args.real_directory,
-                                download=args.download)
-        print(json.dumps(result, indent=2))
-        return
-    if args.command == "datasets":
-        from .application.epoch_benchmark import EpochConfig, run_epochs, smoke_all
+def emit(value):
+    print(json.dumps(value, indent=2))
 
-        if args.dataset == "all":
-            result = smoke_all(args.state, args.cache, download=args.download,
-                               real_directory=args.real_directory)
-        else:
-            result = run_epochs(EpochConfig(dataset=args.dataset), args.state, args.cache,
-                                download=args.download, real_directory=args.real_directory)
-        print(json.dumps(result, indent=2))
-        return
-    if args.command == "typed":
-        from .application.registry import default_registry, make_source
-        from .application.typed_benchmark import run_typed
-        from .application.typed_config import TypedConfig
 
-        specification = TypedConfig.model_validate_json(Path(args.config).read_text())
-        source = make_source(default_registry(), specification.dataset)
-        result = run_typed(source, args.state, **specification.model_dump(exclude={"dataset"}))
-        print(json.dumps({k: result[k] for k in ("run_key", "metrics", "complete")}, indent=2))
-        return
-    if args.command == "campaign":
-        from .application.campaign import Campaign, execute_campaign
+def _run_options(parser):
+    parser.add_argument("--state", default="state")
+    parser.add_argument("--services", action="store_true")
+    parser.add_argument("--zenml", action="store_true")
 
-        specification = Campaign.model_validate_json(Path(args.config).read_text())
-        result = execute_campaign(specification, args.state, services=args.services, zenml=args.zenml)
-        print(json.dumps(result, indent=2))
-        return
-    if args.command == "serve":
-        from .application.server import serve
 
-        serve()
-        return
+def _execute(config, args):
+    if args.zenml:
+        from .orchestration.zenml_pipeline import execute_pipeline
 
-    def execute(config):
-        if args.zenml:
-            from .adapters.zenml_pipeline import execute_pipeline
+        return execute_pipeline(config, args.state, services=args.services)
+    from .application.runner import run
 
-            return execute_pipeline(config, args.state, services=args.services)
-        return run(config, args.state, services=args.services)
+    return run(config, args.state, services=args.services)
 
-    if args.command == "run":
-        result = execute(load_config(args.config))
-        print(json.dumps({k: result[k] for k in ("run_key", "protocol", "metrics", "complete")}, indent=2))
+
+def _summary(result):
+    return {k: result[k] for k in ("run_key", "protocol", "metrics", "complete")}
+
+
+@command("run", lambda p: (p.add_argument("config"), _run_options(p)))
+def run_command(args):
+    from .config import load_config
+
+    emit(_summary(_execute(load_config(args.config), args)))
+
+
+def _smoke_options(parser):
+    _run_options(parser)
+    parser.add_argument("--baselines", action="store_true")
+    parser.add_argument("--samples", default=600, type=int)
+
+
+@command("smoke", _smoke_options)
+def smoke_command(args):
+    from .config import Config
+
+    results = []
+    for dataset in ("sea", "agrawal", "stagger"):
+        for mode in ("streaming", "incremental", "offline"):
+            policies = (["none"] if mode == "offline"
+                        else (["none", "periodic", "drift"] if args.baselines else ["drift"]))
+            for policy in policies:
+                config = Config.model_validate({
+                    "name": "smoke",
+                    "mode": mode,
+                    "dataset": {"name": dataset, "samples": args.samples, "label_delay": 3},
+                    "warmup": 50,
+                    "metric_window": 50,
+                    "policy": {"name": policy, "every": 100, "cooldown": 50, "min_samples": 50,
+                               "min_window": 25},
+                })
+                results.append(_summary(_execute(config, args)))
+                print(json.dumps({"dataset": dataset, "mode": mode, "policy": policy, **results[-1]}),
+                      flush=True)
+    Path(args.state).mkdir(parents=True, exist_ok=True)
+    (Path(args.state) / "smoke-summary.json").write_text(json.dumps(results, indent=2))
+
+
+@command("serve")
+def serve_command(args):
+    from .orchestration.server import serve
+
+    serve()
+
+
+@command("serve-datasets")
+def serve_datasets_command(args):
+    from .orchestration.epoch_server import serve
+
+    serve()
+
+
+def _campaign_options(parser):
+    parser.add_argument("config")
+    parser.add_argument("--state", default="state/task_evaluation")
+    parser.add_argument("--services", action="store_true")
+    parser.add_argument("--zenml", action="store_true")
+
+
+@command("campaign", _campaign_options)
+def campaign_command(args):
+    from .application.campaign import Campaign, execute_campaign
+
+    specification = Campaign.model_validate_json(Path(args.config).read_text())
+    executor = None
+    if args.zenml:
+        from .orchestration.zenml_pipeline import execute_pipeline as executor
+    emit(execute_campaign(specification, args.state, services=args.services, zenml=args.zenml,
+                          executor=executor))
+
+
+@command("typed", lambda p: (p.add_argument("config"),
+                             p.add_argument("--state", default="state/task_evaluation-typed")))
+def typed_command(args):
+    from .application.components import default_registry, make_source
+    from .config import TypedConfig
+    from .evaluation.typed import run_typed
+
+    specification = TypedConfig.model_validate_json(Path(args.config).read_text())
+    source = make_source(default_registry(), specification.dataset)
+    result = run_typed(source, args.state, **specification.model_dump(exclude={"dataset"}))
+    emit({k: result[k] for k in ("run_key", "metrics", "complete")})
+
+
+def _datasets_options(parser):
+    parser.add_argument("--dataset", default="all")
+    parser.add_argument("--cache", default="state/datasets")
+    parser.add_argument("--state", default="state/dataset-epochs")
+    parser.add_argument("--real-directory")
+    parser.add_argument("--download", action="store_true")
+
+
+@command("datasets", _datasets_options)
+def datasets_command(args):
+    from .config import EpochConfig
+    from .evaluation.epochs import run_epochs, smoke_all
+
+    if args.dataset == "all":
+        result = smoke_all(args.state, args.cache, download=args.download, real_directory=args.real_directory)
     else:
-        results = []
-        for dataset in ("sea", "agrawal", "stagger"):
-            for mode in ("streaming", "incremental", "offline"):
-                policies = (
-                    ["none"]
-                    if mode == "offline"
-                    else (["none", "periodic", "drift"] if args.baselines else ["drift"])
-                )
-                for policy in policies:
-                    config = Config.model_validate(
-                        {
-                            "name": "smoke",
-                            "mode": mode,
-                            "dataset": {"name": dataset, "samples": args.samples, "label_delay": 3},
-                            "warmup": 50,
-                            "metric_window": 50,
-                            "policy": {
-                                "name": policy,
-                                "every": 100,
-                                "cooldown": 50,
-                                "min_samples": 50,
-                                "min_window": 25,
-                            },
-                        }
-                    )
-                    result = execute(config)
-                    results.append({k: result[k] for k in ("run_key", "protocol", "metrics", "complete")})
-                    print(
-                        json.dumps({"dataset": dataset, "mode": mode, "policy": policy, **results[-1]}),
-                        flush=True,
-                    )
-        Path(args.state).mkdir(parents=True, exist_ok=True)
-        (Path(args.state) / "smoke-summary.json").write_text(json.dumps(results, indent=2))
+        result = run_epochs(EpochConfig(dataset=args.dataset), args.state, args.cache,
+                            download=args.download, real_directory=args.real_directory)
+    emit(result)
+
+
+def _epoch_job_options(parser):
+    parser.add_argument("config")
+    parser.add_argument("--cache", required=True)
+    parser.add_argument("--state", required=True)
+    parser.add_argument("--real-directory", required=True)
+    parser.add_argument("--download", action="store_true")
+    parser.add_argument("--services", action="store_true")
+
+
+@command("epoch-job", _epoch_job_options)
+def epoch_job_command(args):
+    from .config import EpochConfig
+
+    config = EpochConfig.model_validate_json(Path(args.config).read_text())
+    if args.services:
+        from .orchestration.epoch_pipeline import execute_epoch_pipeline
+
+        result = execute_epoch_pipeline(config, args.state, args.cache,
+                                        real_directory=args.real_directory, download=args.download)
+    else:
+        from .evaluation.epochs import run_epochs
+
+        result = run_epochs(config, args.state, args.cache, real_directory=args.real_directory,
+                            download=args.download)
+    emit(result)
+
+
+@command("components", lambda p: p.add_argument("--plugin", action="append", default=[]))
+def components_command(args):
+    from .application.components import default_registry
+
+    registry = default_registry(tuple(args.plugin))
+    emit({
+        "datasets": [{"name": s.name, "task": s.task or "declared_by_manifest", "family": s.family}
+                     for s in registry.sources],
+        "models": [{"name": m.name, "tasks": list(m.tasks)} for m in registry.models],
+        "detectors": list(registry.catalogs["detector"].names()),
+        "policies": list(registry.catalogs["policy"].names()),
+    })
+
+
+def _matrix_options(parser):
+    parser.add_argument("config", help="YAML or JSON ExperimentMatrix")
+    parser.add_argument("--state", default="state/matrices")
+    parser.add_argument("--cache", default="state/datasets")
+    parser.add_argument("--real-directory")
+    parser.add_argument("--dry-run", action="store_true", help="only print the expanded plan")
+
+
+@command("matrix", _matrix_options)
+def matrix_command(args):
+    import yaml
+
+    from .application.matrix import ExperimentMatrix, case_key, describe, execute_matrix
+
+    matrix = ExperimentMatrix.model_validate(yaml.safe_load(Path(args.config).read_text()))
+    if args.dry_run:
+        plan = matrix.plan()
+        emit({"matrix": plan["matrix"], "evaluator": plan["evaluator"], "cases": len(plan["cases"]),
+              "planned": [{"case": case_key(c), **describe(c)} for c in plan["cases"]],
+              "skipped": plan["skipped"]})
+        return
+    journal = execute_matrix(matrix, args.state, cache=args.cache, real_directory=args.real_directory)
+    emit({"complete": journal["complete"], "cases": len(journal["cases"]),
+          "skipped": len(journal["skipped"])})
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="continual-bench")
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name, (configure, _) in COMMANDS.items():
+        configure(sub.add_parser(name))
+    args = parser.parse_args(argv)
+    COMMANDS[args.command][1](args)
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from continual_bench.application.config import Config
 from continual_bench.application.readiness import StackNotReady, ensure_tracking_ready
+from continual_bench.config import Config
 
 
 class Response:
@@ -89,7 +89,7 @@ def test_services_cli_fails_before_materialization(tmp_path, monkeypatch):
 
 
 def test_zenml_fails_before_stack_mutation_or_pipeline_creation(tmp_path, monkeypatch):
-    from continual_bench.adapters import zenml_pipeline
+    from continual_bench.orchestration import zenml_pipeline
 
     monkeypatch.setenv("MLFLOW_TRACKING_PASSWORD", "short")
 

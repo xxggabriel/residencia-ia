@@ -5,11 +5,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from continual_bench.adapters.local import LocalCheckpoints, run_lock
-from continual_bench.adapters.river import RiverDetector, RiverModel
-from continual_bench.application.config import Config
-from continual_bench.application.registry import default_registry, make_source
+from continual_bench.application.components import default_registry, make_source
 from continual_bench.application.runner import evaluate, prepare, read_events, run
+from continual_bench.config import Config
+from continual_bench.detectors.river import RiverDetector
+from continual_bench.infrastructure.storage import LocalCheckpoints, run_lock
+from continual_bench.models.linear import RiverModel
 
 
 def config(mode="streaming", dataset="sea", policy="periodic"):

@@ -8,7 +8,7 @@ import urllib.error
 
 import pytest
 
-from continual_bench.adapters import image_datasets as images
+from continual_bench.datasets import images as images
 
 
 def asset(path):

@@ -8,8 +8,8 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from continual_bench.adapters.local import atomic_write
-from continual_bench.adapters.real_sources import REAL_SOURCES, validate_source
+from continual_bench.datasets.openml import REAL_SOURCES, validate_source
+from continual_bench.infrastructure.storage import atomic_write
 
 
 def prepare(name, directory, source_directory=None):

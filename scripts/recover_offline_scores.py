@@ -54,7 +54,7 @@ def main():
     import mlflow.pyfunc
 
     model = mlflow.pyfunc.load_model(request["uri"])
-    loader = importlib.import_module("continual_bench.adapters.model_loader")
+    loader = importlib.import_module(model.metadata.flavors["python_function"]["loader_module"])
     implementation = importlib.import_module(type(model._model_impl.model).__module__)
     print(json.dumps(recover_loaded(request, model, loader, implementation), allow_nan=False))
 

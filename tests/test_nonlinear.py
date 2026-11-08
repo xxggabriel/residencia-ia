@@ -5,8 +5,9 @@ import pickle
 
 import pytest
 
-from continual_bench.adapters.nonlinear import HoeffdingTreeModel, KNNModel
-from continual_bench.adapters.river import RiverModel
+from continual_bench.models.linear import RiverModel
+from continual_bench.models.neighbors import KNNModel
+from continual_bench.models.tree import HoeffdingTreeModel
 
 
 @pytest.mark.parametrize("factory", [HoeffdingTreeModel, KNNModel])
@@ -122,10 +123,10 @@ def test_tree_can_treat_integer_category_codes_as_nominal():
 
 @pytest.mark.parametrize("factory", [HoeffdingTreeModel, KNNModel])
 def test_frozen_engine_checkpoint_resume_preserves_prediction_digest(factory):
-    from continual_bench.adapters.river import NullDetector
-    from continual_bench.domain.contracts import Event
-    from continual_bench.domain.engine import Engine
-    from continual_bench.domain.policies import PolicyStrategy
+    from continual_bench.core.contracts import Event
+    from continual_bench.core.engine import Engine
+    from continual_bench.core.policies import PolicyStrategy
+    from continual_bench.detectors.river import NullDetector
 
     reference = Engine(factory, NullDetector, PolicyStrategy("none"), warmup=30, window=64, metric_window=20)
     events = [

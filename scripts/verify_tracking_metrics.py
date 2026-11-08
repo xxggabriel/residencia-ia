@@ -11,13 +11,13 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 
-from continual_bench.adapters.local import atomic_write
-from continual_bench.adapters.metric_tracking import EXECUTION_SCOPE, VERSION, metric_points
-from continual_bench.adapters.services import S3Objects
-from continual_bench.adapters.versioning import digest_json
-from continual_bench.application.runner import environment
-from continual_bench.application.tracking import confusion_metrics, metric_catalog
-from continual_bench.domain.metrics import Metrics
+from continual_bench.core.metrics import Metrics
+from continual_bench.evaluation.environment import environment
+from continual_bench.evaluation.tracking import confusion_metrics, metric_catalog
+from continual_bench.infrastructure.metric_tracking import EXECUTION_SCOPE, VERSION, metric_points
+from continual_bench.infrastructure.services import S3Objects
+from continual_bench.infrastructure.storage import atomic_write
+from continual_bench.infrastructure.versioning import digest_json
 
 LEGACY_METRICS = ("n", "accuracy", "f1", "brier", "log_loss")
 SCORE_METRICS = ("roc_auc", "average_precision", "ece", "mce", "mae_probability")

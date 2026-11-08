@@ -37,7 +37,7 @@ DORA como um conjunto.
 
 ## Qualidade preditiva binária
 
-A fonte executável é [Metrics](../src/continual_bench/domain/metrics.py). Suas 28
+A fonte executável é [Metrics](../src/continual_bench/core/metrics.py). Suas 28
 chaves cobrem contagens, qualidade por classe, agregações de F1, probabilidades,
 ranking e calibração. As fórmulas individuais estão no catálogo.
 
@@ -93,7 +93,7 @@ histórico de AA, não a média acumulada de acertos do fluxo. FM, BWT e FWT exi
 mais de um episódio. FWT neste contrato é **após o aprendizado da tarefa**, e não
 transferência zero-shot para tarefa ainda não aprendida.
 
-[ContinualEvaluation](../src/continual_bench/domain/continual.py) define referências
+[ContinualEvaluation](../src/continual_bench/core/continual.py) define referências
 operacionais `task_only` e `joint_prefix_one_pass`: o mesmo learner treinado em
 uma passagem, no range do episódio ou no prefixo de rótulos já liberados. Essas
 referências não são oráculos conjuntos convergidos. A comparação deve expor modelo,

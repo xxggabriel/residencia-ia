@@ -9,7 +9,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from continual_bench.adapters import metric_tracking, services
+from continual_bench.infrastructure import metric_tracking, services
 
 
 @dataclass

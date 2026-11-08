@@ -3,8 +3,9 @@ from dataclasses import replace
 
 import pytest
 
-from continual_bench.adapters.task_sources import FriedmanDriftSource, TaskSample
-from continual_bench.application.typed_benchmark import run_typed
+from continual_bench.core.contracts import TaskSample
+from continual_bench.datasets.synthetic import FriedmanDriftSource
+from continual_bench.evaluation.typed import run_typed
 
 
 class FixtureSource:
@@ -61,9 +62,7 @@ def test_typed_baselines_obey_training_budgets_and_heldout_split(tmp_path, polic
         assert report["training"]["blocked_decisions"] > 0
 
 
-def test_typed_predicts_before_release_and_never_trains_test_labels(tmp_path, monkeypatch):
-    import continual_bench.application.typed_benchmark as module
-
+def test_typed_predicts_before_release_and_never_trains_test_labels(tmp_path):
     learned = []
 
     class AuditModel:
@@ -73,10 +72,9 @@ def test_typed_predicts_before_release_and_never_trains_test_labels(tmp_path, mo
         def learn_one(self, x, y):
             learned.append((x["x"], y))
 
-    monkeypatch.setattr(module, "_model", lambda task: AuditModel())
     data = [TaskSample(str(i), i, i, i + 2, {"x": float(i)}, str(i % 2),
                        split="test" if i == 4 else "train") for i in range(10)]
-    report = run_typed(FixtureSource(data), tmp_path, warmup=2)
+    report = run_typed(FixtureSource(data), tmp_path, warmup=2, model_factory=AuditModel)
     predictions = json.loads((tmp_path / report["identity"] / "predictions.json").read_text())
     assert [r["training_labels_available"] for r in predictions[:4]] == [0, 0, 0, 1]
     assert len(learned) == 9 and all(x != 4.0 for x, _ in learned)
@@ -100,10 +98,7 @@ def test_typed_rejects_overlap_order_nonfinite_and_unsupported_policy(tmp_path):
         run_typed(FixtureSource(data, "regression"), tmp_path, warmup=2)
 
 
-def test_typed_failure_leaves_no_completion_and_retry_restarts_cleanly(tmp_path, monkeypatch):
-    import continual_bench.application.typed_benchmark as module
-
-    factory = module._model
+def test_typed_failure_leaves_no_completion_and_retry_restarts_cleanly(tmp_path):
 
     class BrokenModel:
         def predict_one(self, x):
@@ -112,11 +107,9 @@ def test_typed_failure_leaves_no_completion_and_retry_restarts_cleanly(tmp_path,
         def learn_one(self, x, y):
             raise RuntimeError("injected training failure")
 
-    monkeypatch.setattr(module, "_model", lambda task: BrokenModel())
     with pytest.raises(RuntimeError, match="injected"):
-        run_typed(FixtureSource(records()), tmp_path, warmup=2)
+        run_typed(FixtureSource(records()), tmp_path, warmup=2, model_factory=BrokenModel)
     assert not list(tmp_path.rglob("report.json"))
-    monkeypatch.setattr(module, "_model", factory)
     report = run_typed(FixtureSource(records()), tmp_path, warmup=2)
     assert report["observed"] == 30
     assert len(list(tmp_path.rglob("report.json"))) == 1
