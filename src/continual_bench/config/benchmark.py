@@ -57,7 +57,50 @@ class PromotionConfig(Strict):
     min_improvement: float = Field(default=0, ge=0, le=1, allow_inf_nan=False)
 
 
+class AwsCostConfig(Strict):
+    """Pinned public list prices; resource allocation and retention are scenario inputs."""
+
+    region: str = Field(default="us-east-1", min_length=1)
+    price_date: str = Field(default="2026-11-08", min_length=1)
+    compute_service: Literal["fargate-linux-x86"] = "fargate-linux-x86"
+    storage_class: Literal["s3-standard"] = "s3-standard"
+    vcpus: float = Field(default=1, gt=0, allow_inf_nan=False)
+    memory_gb: float = Field(default=2, gt=0, allow_inf_nan=False)
+    vcpu_hour_usd: float = Field(default=0.04048, ge=0, allow_inf_nan=False)
+    memory_gb_hour_usd: float = Field(default=0.004445, ge=0, allow_inf_nan=False)
+    storage_gb_month_usd: float = Field(default=0.023, ge=0, allow_inf_nan=False)
+    retention_days: float = Field(default=30, ge=0, allow_inf_nan=False)
+    billing_month_days: float = Field(default=30, gt=0, allow_inf_nan=False)
+    minimum_compute_seconds: int = Field(default=60, ge=60)
+    compute_source: str = (
+        "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECS/current/us-east-1/index.json"
+    )
+    storage_source: str = (
+        "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.json"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def explicit_regional_prices(cls, value):
+        if isinstance(value, dict) and value.get("region", "us-east-1") != "us-east-1":
+            required = {"vcpu_hour_usd", "memory_gb_hour_usd", "storage_gb_month_usd",
+                        "compute_source", "storage_source", "price_date"}
+            if not required <= value.keys():
+                raise ValueError("another AWS region requires explicit prices, sources and price_date")
+        return value
+
+    @model_validator(mode="after")
+    def supported_allocation(self):
+        options = {0.25: {0.5, 1, 2}, 0.5: set(range(1, 5)), 1: set(range(2, 9)),
+                   2: set(range(4, 17)), 4: set(range(8, 31)), 8: set(range(16, 61, 4)),
+                   16: set(range(32, 121, 8)), 32: {60, 120, 244}}
+        if self.memory_gb not in options.get(self.vcpus, set()):
+            raise ValueError("unsupported Fargate vCPU/memory allocation")
+        return self
+
+
 class CostConfig(Strict):
+    aws: AwsCostConfig | None = Field(default_factory=AwsCostConfig)
     unit: str = Field(default="scenario_unit", min_length=1, max_length=80)
     false_positive: float = Field(default=1, ge=0, allow_inf_nan=False)
     false_negative: float = Field(default=1, ge=0, allow_inf_nan=False)

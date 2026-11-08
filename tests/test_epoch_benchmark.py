@@ -112,6 +112,9 @@ def test_epoch_costs_count_repeated_presentations(tmp_path):
     report = run_epochs(EpochConfig(dataset="sea", costs={"train_sample": 2, "update": 3}),
                         tmp_path, tmp_path, source=Fixture(official=True))
     costs = report["costs"]
+    assert costs["aws"]["consumption"]["model_storage_bytes"] == 0
+    assert costs["aws"]["consumption"]["billed_compute_seconds"] == 60
+    assert all("aws" not in epoch["costs"] for epoch in report["epochs"])
     assert costs["consumption"]["training_presentations"] == 160
     assert costs["metrics"]["cost_training_presentations"] == 320
     assert costs["metrics"]["cost_update_events"] == 6

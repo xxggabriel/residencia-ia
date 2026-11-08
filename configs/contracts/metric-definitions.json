@@ -228,6 +228,23 @@
       "kind": "executable_source",
       "path": "src/continual_bench/application/tracking.py",
       "locator": "build_tracking, detector_metrics, recovery_metrics, save_tracking_files"
+    },
+    "aws_fargate_pricing": {
+      "kind": "primary_documentation",
+      "title": "AWS Fargate pricing",
+      "url": "https://aws.amazon.com/fargate/pricing/",
+      "locator": "Linux/x86; reserved CPU/RAM; per second, minimum 60 seconds"
+    },
+    "aws_s3_price_list": {
+      "kind": "primary_documentation",
+      "title": "Amazon S3 us-east-1 public price list",
+      "url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.json",
+      "locator": "TimedStorage-ByteHrs, Standard, first 51200 GB-month"
+    },
+    "aws_cost_source": {
+      "kind": "executable_source",
+      "path": "src/continual_bench/evaluation/costs.py",
+      "locator": "aws_account"
     }
   },
   "families": {
@@ -5266,6 +5283,118 @@
       ],
       "status": "conditional_definition",
       "interpretation_limits": []
+    },
+    "aws_cost_cpu_usd": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "vcpus * max(minimum_compute_seconds, ceil(train_seconds + prediction_seconds)) / 3600 * vcpu_hour_usd",
+      "direction": "minimize",
+      "unit": "USD",
+      "scopes": [
+        "run"
+      ],
+      "prerequisites": [
+        "perfil AWS declarado; capacidade reservada como hipótese",
+        "tempos de treino/predição e bytes de modelos salvos conhecidos"
+      ],
+      "na_reasons": [
+        "required_resource_consumption_missing"
+      ],
+      "sources": [
+        "aws_cost_source",
+        "aws_fargate_pricing",
+        "aws_s3_price_list"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Estimativa de infraestrutura; não é fatura AWS nem custo de erro de predição.",
+        "Duração do aprendiz exclui startup, ociosidade e infraestrutura de avaliação/publicação.",
+        "Retenção e duração do mês configuradas como cenário; não é RAM observada."
+      ]
+    },
+    "aws_cost_ram_usd": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "memory_gb * max(minimum_compute_seconds, ceil(train_seconds + prediction_seconds)) / 3600 * memory_gb_hour_usd",
+      "direction": "minimize",
+      "unit": "USD",
+      "scopes": [
+        "run"
+      ],
+      "prerequisites": [
+        "perfil AWS declarado; capacidade reservada como hipótese",
+        "tempos de treino/predição e bytes de modelos salvos conhecidos"
+      ],
+      "na_reasons": [
+        "required_resource_consumption_missing"
+      ],
+      "sources": [
+        "aws_cost_source",
+        "aws_fargate_pricing",
+        "aws_s3_price_list"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Estimativa de infraestrutura; não é fatura AWS nem custo de erro de predição.",
+        "Duração do aprendiz exclui startup, ociosidade e infraestrutura de avaliação/publicação.",
+        "Retenção e duração do mês configuradas como cenário; não é RAM observada."
+      ]
+    },
+    "aws_cost_model_storage_usd": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "model_storage_bytes / 1024^3 * retention_days / billing_month_days * storage_gb_month_usd",
+      "direction": "minimize",
+      "unit": "USD",
+      "scopes": [
+        "run"
+      ],
+      "prerequisites": [
+        "perfil AWS declarado; capacidade reservada como hipótese",
+        "tempos de treino/predição e bytes de modelos salvos conhecidos"
+      ],
+      "na_reasons": [
+        "required_resource_consumption_missing"
+      ],
+      "sources": [
+        "aws_cost_source",
+        "aws_fargate_pricing",
+        "aws_s3_price_list"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Estimativa de infraestrutura; não é fatura AWS nem custo de erro de predição.",
+        "Duração do aprendiz exclui startup, ociosidade e infraestrutura de avaliação/publicação.",
+        "Retenção e duração do mês configuradas como cenário; não é RAM observada."
+      ]
+    },
+    "aws_cost_total_usd": {
+      "family": "adaptation",
+      "study_status": "extension",
+      "formula": "aws_cost_cpu_usd + aws_cost_ram_usd + aws_cost_model_storage_usd",
+      "direction": "minimize",
+      "unit": "USD",
+      "scopes": [
+        "run"
+      ],
+      "prerequisites": [
+        "perfil AWS declarado; capacidade reservada como hipótese",
+        "tempos de treino/predição e bytes de modelos salvos conhecidos"
+      ],
+      "na_reasons": [
+        "required_resource_consumption_missing"
+      ],
+      "sources": [
+        "aws_cost_source",
+        "aws_fargate_pricing",
+        "aws_s3_price_list"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "Estimativa de infraestrutura; não é fatura AWS nem custo de erro de predição.",
+        "Duração do aprendiz exclui startup, ociosidade e infraestrutura de avaliação/publicação.",
+        "Retenção e duração do mês configuradas como cenário; não é RAM observada."
+      ]
     }
   },
   "evidence_limits": [
