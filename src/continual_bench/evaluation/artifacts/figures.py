@@ -490,6 +490,20 @@ def epoch_figures(report) -> list[Figure]:
 
 SYSTEM_FIGURES = {
     "cpu": ("CPU (%)", ("cpu_utilization_percentage", "process_cpu_utilization_percentage"), "%"),
+    "container_cpu_percentage": (
+        "CPU do container (% da cota)", ("container_cpu_utilization_percentage",), "%",
+    ),
+    "container_cpu_vcpus": (
+        "CPU do container (vCPU)", ("container_cpu_usage_vcpus", "container_cpu_limit_vcpus"), "vCPU",
+    ),
+    "container_memory_percentage": (
+        "RAM do container (% do limite)", ("container_memory_usage_percentage",), "%",
+    ),
+    "container_memory_megabytes": (
+        "RAM do container (MiB)",
+        ("container_memory_usage_megabytes", "container_memory_limit_megabytes"),
+        "MiB",
+    ),
     "memory_percentage": (
         "Memória e disco (%)",
         ("system_memory_usage_percentage", "disk_usage_percentage"),

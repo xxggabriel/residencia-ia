@@ -9,6 +9,7 @@ import pytest
 from continual_bench.application.components import default_registry, make_source
 from continual_bench.application.runner import run
 from continual_bench.config import DEFAULT_TRACKING, Config, DatasetConfig, EpochConfig
+from continual_bench.evaluation import system_metrics
 from continual_bench.evaluation.artifacts import svg
 from continual_bench.evaluation.epochs import run_epochs
 from continual_bench.evaluation.system_metrics import SystemMetricsSampler
@@ -62,7 +63,8 @@ def test_svg_charts_are_well_formed_and_handle_gaps_and_empty_data():
     assert svg.nice_ticks(0, 1) == [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
 
-def test_sampler_records_mlflow_named_series_at_start_interval_and_stop(tmp_path):
+def test_sampler_records_mlflow_named_series_at_start_interval_and_stop(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_metrics, "_current_cgroup", lambda: None)
     with SystemMetricsSampler(tmp_path, interval=0.05) as sampler:
         sum(i * i for i in range(200_000))
     report = sampler.report()
@@ -78,6 +80,34 @@ def test_sampler_records_mlflow_named_series_at_start_interval_and_stop(tmp_path
     points, stamps = system_metric_points(report)
     assert points and all(key.startswith("system/") for key, _, _ in points)
     assert all(isinstance(stamps[key, step], int) for key, step, _ in points)
+
+
+def test_sampler_publishes_container_usage_relative_to_cgroup_limits(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_metrics, "_current_cgroup", lambda: tmp_path)
+    clock = iter((1_000_000_000, 1_500_000_000))
+    monkeypatch.setattr(system_metrics.time, "monotonic_ns", lambda: next(clock))
+    (tmp_path / "cpu.max").write_text("100000 100000\n")
+    usage = tmp_path / "cpu.stat"
+    usage.write_text("usage_usec 1000000\nuser_usec 900000\n")
+    (tmp_path / "memory.max").write_text(str(2 * 1024**3))
+    (tmp_path / "memory.current").write_text(str(512 * 1024**2))
+    sampler = SystemMetricsSampler(tmp_path)
+    sampler._started = system_metrics.time.monotonic()
+    sampler.sample(cpu=False)
+    usage.write_text("usage_usec 1250000\nuser_usec 1100000\n")
+    sampler.sample()
+    points, _ = system_metric_points(sampler.report())
+    latest = {name: value for name, _, value in points}
+    assert latest["system/container_cpu_utilization_percentage"] == 50
+    assert latest["system/container_cpu_usage_vcpus"] == 0.5
+    assert latest["system/container_cpu_limit_vcpus"] == 1
+    assert latest["system/container_memory_usage_megabytes"] == 512
+    assert latest["system/container_memory_limit_megabytes"] == 2048
+    assert latest["system/container_memory_usage_percentage"] == 25
+    assert "system/cpu_utilization_percentage" not in latest
+    assert "system/system_memory_usage_percentage" not in latest
+    if sampler.report()["collector"] == "psutil":
+        assert latest["system/process_threads"] >= 1
 
 
 def test_runs_without_tracking_collect_the_full_default_profile(tmp_path):
