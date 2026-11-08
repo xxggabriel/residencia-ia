@@ -18,6 +18,7 @@ from continual_bench.infrastructure.storage import atomic_write, run_lock
 ROOT = Path(os.environ.get("BENCH_STATE", "/state/runs"))
 CONCURRENCY = int(os.environ.get("BENCH_CONCURRENCY", "1"))
 EXECUTOR = ThreadPoolExecutor(max_workers=CONCURRENCY)
+SLOTS = threading.BoundedSemaphore(CONCURRENCY)
 JOBS = {}
 ACTIVE = set()
 PEAK_ACTIVE = 0
@@ -25,15 +26,11 @@ GUARD = threading.Lock()
 
 
 def perform(config):
-    global PEAK_ACTIVE
     identity = config.identity()
     directory = ROOT / identity
     directory.mkdir(parents=True, exist_ok=True)
     config_path = directory / "submitted.json"
     atomic_write(config_path, config.model_dump_json(indent=2).encode())
-    with GUARD:
-        ACTIVE.add(identity)
-        PEAK_ACTIVE = max(PEAK_ACTIVE, len(ACTIVE))
     status = {"run_key": identity, "status": "running", "started_at": time.time()}
     atomic_write(directory / "job.json", json.dumps(status).encode())
     try:
@@ -95,9 +92,66 @@ def perform(config):
     finally:
         status["finished_at"] = time.time()
         atomic_write(directory / "job.json", json.dumps(status).encode())
+
+
+def health_snapshot():
+    with GUARD:
+        return {"status": "ok", "queue": len(JOBS), "active": len(ACTIVE),
+                "peak_active": PEAK_ACTIVE, "concurrency": CONCURRENCY}
+
+
+def submit_job(root, identity, config, perform_job, *, key_field="run_key"):
+    """One slot per backend; shared-volume claims prevent duplicate jobs across replicas."""
+    root = Path(root)
+    path = root / identity / "job.json"
+    claim = run_lock(root / ".job-claims", identity)
+    try:
+        claim.__enter__()
+    except RuntimeError:
+        return 202, {key_field: identity, "status": "queued_or_running"}
+    try:
+        if path.exists():
+            previous = json.loads(path.read_text())
+            if previous["status"] == "succeeded":
+                return 200, previous
+        if not SLOTS.acquire(blocking=False):
+            return 429, {"error": "worker_busy"}
+        token = str(root), identity
+        try:
+            atomic_write(path, json.dumps({key_field: identity, "status": "queued"}).encode())
+            with GUARD:
+                JOBS[token] = True
+            EXECUTOR.submit(_run_claimed, token, config, perform_job, claim)
+        except Exception:
+            with GUARD:
+                JOBS.pop(token, None)
+            SLOTS.release()
+            raise
+        claim = None  # The executor now owns the lease until publication finishes.
+        return 202, {key_field: identity, "status": "queued"}
+    finally:
+        if claim is not None:
+            claim.__exit__(None, None, None)
+
+
+def _run_claimed(token, config, perform_job, claim):
+    global PEAK_ACTIVE
+    with GUARD:
+        ACTIVE.add(token)
+        PEAK_ACTIVE = max(PEAK_ACTIVE, len(ACTIVE))
+    try:
+        perform_job(config)
+    except Exception as error:
+        path = Path(token[0]) / token[1] / "job.json"
+        status = json.loads(path.read_text())
+        status.update(status="failed", error=type(error).__name__, finished_at=time.time())
+        atomic_write(path, json.dumps(status).encode())
+    finally:
         with GUARD:
-            ACTIVE.discard(identity)
-            JOBS.pop(identity, None)
+            ACTIVE.discard(token)
+            JOBS.pop(token, None)
+        claim.__exit__(None, None, None)
+        SLOTS.release()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -117,10 +171,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(503, {"ready": False, "error": str(error)})
             return
         if self.path == "/health":
-            with GUARD:
-                snapshot = {"status": "ok", "queue": len(JOBS), "active": len(ACTIVE),
-                            "peak_active": PEAK_ACTIVE, "concurrency": CONCURRENCY}
-            self.respond(200, snapshot)
+            self.respond(200, health_snapshot())
             return
         if self.path.startswith("/runs/"):
             identity = self.path.removeprefix("/runs/")
@@ -152,24 +203,8 @@ class Handler(BaseHTTPRequestHandler):
         except StackNotReady as error:
             self.respond(503, {"ready": False, "error": str(error)})
             return
-        with GUARD:
-            if identity in JOBS:
-                self.respond(202, {"run_key": identity, "status": "queued_or_running"})
-                return
-            previous = ROOT / identity / "job.json"
-            if previous.exists():
-                status = json.loads(previous.read_text())
-                if status["status"] == "succeeded":
-                    self.respond(200, status)
-                    return
-            if len(JOBS) >= 16:
-                self.respond(429, {"error": "queue_full"})
-                return
-            JOBS[identity] = True
-            (ROOT / identity).mkdir(parents=True, exist_ok=True)
-            atomic_write(previous, json.dumps({"run_key": identity, "status": "queued"}).encode())
-            EXECUTOR.submit(perform, config)
-        self.respond(202, {"run_key": identity, "status": "queued"})
+        code, status = submit_job(ROOT, identity, config, perform)
+        self.respond(code, status)
 
 
 def serve():

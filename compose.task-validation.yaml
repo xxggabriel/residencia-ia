@@ -4,15 +4,14 @@ services:
   validation:
     extends:
       file: compose.yaml
-      service: worker
+      service: worker-1
     restart: "no"
     depends_on: !reset {}
     volumes: !override
       - ${TASK_BENCH_CODE:?required}:/work:ro
       - ${TASK_BENCH_STATE:?required}:/state
     working_dir: /work
-    cpus: 2
-    mem_limit: 2g
+    # Inherit the standard 1-vCPU / 2-GiB limits from compose.yaml:worker-1.
     pids_limit: 192
     healthcheck:
       disable: true

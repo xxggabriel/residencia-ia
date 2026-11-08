@@ -5,7 +5,6 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -19,8 +18,6 @@ from . import server
 
 EPOCH_ROOT = Path(os.environ.get("BENCH_EPOCH_ROOT", "/state/epoch-jobs"))
 SMOKE_ROOT = Path(os.environ.get("BENCH_DATASET_SMOKES", "/state/dataset-smokes"))
-EPOCH_ACTIVE = set()
-EPOCH_GUARD = threading.Lock()
 
 
 def request_key(config):
@@ -72,8 +69,6 @@ def perform_epoch(config):
     finally:
         status["finished_at"] = time.time()
         atomic_write(directory / "job.json", json.dumps(status).encode())
-        with EPOCH_GUARD:
-            EPOCH_ACTIVE.discard(key)
 
 
 class Handler(server.Handler):
@@ -111,21 +106,8 @@ class Handler(server.Handler):
             self.respond(400, {"error": str(error)})
             return
         key = request_key(config)
-        path = EPOCH_ROOT / key / "job.json"
-        with EPOCH_GUARD:
-            if key in EPOCH_ACTIVE:
-                self.respond(202, {"request_key": key, "status": "queued_or_running"})
-                return
-            if path.exists() and json.loads(path.read_text()).get("status") == "succeeded":
-                self.respond(200, json.loads(path.read_text()))
-                return
-            if len(EPOCH_ACTIVE) >= 16:
-                self.respond(429, {"error": "queue_full"})
-                return
-            EPOCH_ACTIVE.add(key)
-            atomic_write(path, json.dumps({"request_key": key, "status": "queued"}).encode())
-            server.EXECUTOR.submit(perform_epoch, config)
-        self.respond(202, {"request_key": key, "status": "queued"})
+        code, status = server.submit_job(EPOCH_ROOT, key, config, perform_epoch, key_field="request_key")
+        self.respond(code, status)
 
 
 def serve():

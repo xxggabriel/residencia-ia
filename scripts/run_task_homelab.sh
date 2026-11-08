@@ -5,7 +5,7 @@ set -euo pipefail
 : "${TASK_BENCH_SERVICE_ENV:?Set the existing Compose environment file path}"
 case "$(hostname)" in gabriel) ;; *) echo 'Run this script via SSH on the authorized homelab.' >&2; exit 2;; esac
 if [[ "${1:-}" == unit ]]; then
-  timeout 240 docker run --rm --network none --cpus 2 --memory 2g --pids-limit 128 \
+  timeout 240 docker run --rm --network none --cpus 1 --memory 2g --memory-swap 2g --pids-limit 128 \
     --read-only --tmpfs /tmp:rw,size=256m -v "$TASK_BENCH_ROOT/code:/work:ro" -w /work \
     -e PYTHONPATH=/work/src -e PYTHONHASHSEED=0 -e PYTHONDONTWRITEBYTECODE=1 \
     --entrypoint python continual-bench-worker:0.1.0 -m pytest -q -p no:cacheprovider

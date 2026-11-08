@@ -7,7 +7,7 @@ from task_jobs import configurations, execute, readiness
 
 
 @dag(dag_id="benchmark_task_suite", schedule=None, catchup=False, max_active_runs=1,
-     max_active_tasks=2, tags=["benchmark", "semana09", "all-datasets"],
+     max_active_tasks=8, tags=["benchmark", "semana09", "all-datasets"],
      params={"samples": Param(3000, type="integer", minimum=300, maximum=100000),
              "dataset_examples": Param(100, type="integer", minimum=100, maximum=1000),
              "epochs": Param(2, type="integer", minimum=1, maximum=20),

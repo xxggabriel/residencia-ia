@@ -36,7 +36,12 @@ x-worker-env: &worker-env
   PYTHONHASHSEED: "0"
   BENCH_STATE: /state/runs
   BENCH_DATASETS: /state/datasets
-  BENCH_CONCURRENCY: "8"
+  # Exactly one run in each independently limited execution container.
+  BENCH_CONCURRENCY: "1"
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
   KAFKA_BOOTSTRAP_SERVERS: kafka:9092
   S3_ENDPOINT_URL: http://minio:9000
   AWS_ACCESS_KEY_ID: ${MINIO_USER:?required}
@@ -182,6 +187,31 @@ services:
     <<: *common
     build: .
     image: continual-bench-worker:0.1.0
+    command: [python, -m, continual_bench.orchestration.worker_pool]
+    environment:
+      BENCH_WORKER_URLS: "http://worker-1:8088,http://worker-2:8088,http://worker-3:8088,http://worker-4:8088,http://worker-5:8088,http://worker-6:8088,http://worker-7:8088,http://worker-8:8088"
+    depends_on:
+      worker-1: {condition: service_healthy}
+      worker-2: {condition: service_healthy}
+      worker-3: {condition: service_healthy}
+      worker-4: {condition: service_healthy}
+      worker-5: {condition: service_healthy}
+      worker-6: {condition: service_healthy}
+      worker-7: {condition: service_healthy}
+      worker-8: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8088/ready', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+    cpus: 0.25
+    mem_limit: 256m
+    memswap_limit: 256m
+
+  worker-1: &execution-worker
+    <<: *common
+    build: .
+    image: continual-bench-worker:0.1.0
     environment: *worker-env
     volumes: [worker-data:/state, zen-artifacts:/state/zen-artifacts]
     depends_on:
@@ -194,9 +224,33 @@ services:
       interval: 15s
       timeout: 10s
       retries: 12
-    mem_limit: 8g
-    cpus: 8
+    # Each execution owns this budget; the pool has eight independent containers.
+    # Keep aligned with CostConfig.aws and configs/base/tracking.yaml.
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1
     pids_limit: 768
+
+  worker-2:
+    <<: *execution-worker
+
+  worker-3:
+    <<: *execution-worker
+
+  worker-4:
+    <<: *execution-worker
+
+  worker-5:
+    <<: *execution-worker
+
+  worker-6:
+    <<: *execution-worker
+
+  worker-7:
+    <<: *execution-worker
+
+  worker-8:
+    <<: *execution-worker
 
   airflow-init:
     <<: *airflow
