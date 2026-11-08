@@ -128,3 +128,15 @@ def test_typed_prefix_budget_records_selection_and_rejects_insufficient_warmup(t
     assert report["protocol"]["selection"] == "bounded published prefix"
     with pytest.raises(ValueError, match="warmup"):
         run_typed(FixtureSource(records()), tmp_path, warmup=10, max_samples=10)
+
+
+@pytest.mark.parametrize("policy", ["none", "online", "periodic"])
+def test_costs_are_independent_of_policy(tmp_path, policy):
+    report = run_typed(FixtureSource(records()), tmp_path, policy=policy, warmup=3,
+                       costs={"train_sample": 2, "update": 3})
+    costs = report["costs"]
+    assert costs["metrics"]["cost_total"] >= 0
+    assert costs["consumption"]["training_presentations"] == 3 + report["training"]["postwarmup_samples"]
+    assert costs["metrics"]["cost_update_events"] == 3 * len(report["updates"])
+    assert run_typed(FixtureSource(records()), tmp_path, policy=policy, warmup=3,
+                     costs={"train_sample": 2, "update": 3}) == report

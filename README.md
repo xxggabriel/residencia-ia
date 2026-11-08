@@ -223,3 +223,7 @@ Para enriquecer campanhas históricas, `scripts/backfill_tracking_metrics.py` ge
 com proveniência e acrescenta somente métricas deriváveis às runs existentes. Não chama o
 publisher de modelos nem altera relatórios, checkpoints, dados ou versões originais. AUROC,
 calibração e referências não gravadas permanecem indisponíveis nessas runs.
+
+## Custos de execução
+
+Os fluxos principal, tipado e por épocas registram um cenário de custo configurável independente da política. Consulte [contabilização de custos](docs/cost-accounting.md) para coeficientes, escopos, publicação e migração dos nomes de avaliação.

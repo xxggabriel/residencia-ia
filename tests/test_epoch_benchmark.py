@@ -111,3 +111,14 @@ def test_failed_all_dataset_repeat_revokes_prior_success(tmp_path, monkeypatch):
     with pytest.raises(FileNotFoundError, match="official source unavailable"):
         module.smoke_all(tmp_path, tmp_path)
     assert json.loads(receipt.read_text())["complete"] is False
+
+
+def test_epoch_costs_count_repeated_presentations(tmp_path):
+    report = run_epochs(EpochConfig(dataset="sea", costs={"train_sample": 2, "update": 3}),
+                        tmp_path, tmp_path, source=Fixture(official=True))
+    costs = report["costs"]
+    assert costs["consumption"]["training_presentations"] == 160
+    assert costs["metrics"]["cost_training_presentations"] == 320
+    assert costs["metrics"]["cost_update_events"] == 6
+    assert costs["metrics"]["cost_total"] == sum(e["costs"]["metrics"]["cost_total"]
+                                               for e in report["epochs"])

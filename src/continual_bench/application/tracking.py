@@ -430,33 +430,18 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
         for a, b in zip(sensitivity, sensitivity[1:])
     )
     available("cost_sensitivity_auc", area, scope="configured_alpha_grid_not_UPF_oracle_campaign_AUC")
-    costs = settings.get("costs")
-    cost_total = None
-    if costs is not None:
-        error_cost = metrics["fp"] * costs["false_positive"] + metrics["fn"] * costs["false_negative"]
-        available("cost_prediction_errors", error_cost, scope=costs["unit"])
-        available(
-            "cost_training_presentations", (initial + used) * costs["train_sample"], scope=costs["unit"]
-        )
-        available("cost_update_events", len(candidates) * costs["update"], scope=costs["unit"])
-        timed_train = metrics["train_seconds"]
-        timed_predict = metrics["prediction_seconds"]
-        if (not costs["train_second"] or timed_train is not None) and (
-            not costs["predict_second"] or timed_predict is not None
-        ):
-            cost_total = (
-                error_cost
-                + (initial + used) * costs["train_sample"]
-                + len(candidates) * costs["update"]
-                + (timed_train or 0) * costs["train_second"]
-                + (timed_predict or 0) * costs["predict_second"]
-            )
-    for key in ("cost_prediction_errors", "cost_training_presentations", "cost_update_events"):
-        if key not in metrics:
-            available(key, None, "cost_coefficients_not_configured")
-    available(
-        "cost_total", cost_total, "cost_profile_or_required_timers_missing", costs["unit"] if costs else None
+    from .costs import account, profile
+
+    costs = profile(settings.get("costs"))
+    settings["costs"] = costs
+    cost_report = account(
+        costs, errors=metrics["fp"] * costs["false_positive"] + metrics["fn"] * costs["false_negative"],
+        presentations=initial + used, updates=len(candidates),
+        train_seconds=metrics["train_seconds"], predict_seconds=metrics["prediction_seconds"],
     )
+    cost_total = cost_report["metrics"]["cost_total"]
+    for key, value in cost_report["metrics"].items():
+        available(key, value, "required_timer_missing", costs["unit"])
     def adaptation_cost(update):
         if costs is None or costs["predict_second"]:
             return None
@@ -681,6 +666,7 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
                 "unit": "normalized_scenario_cost", "paper_UPF_AUC": False,
             },
         },
+        "costs": cost_report,
         "adaptation": gain_rows,
         "adaptation_coverage": {"updates": len(updates), "eligible_updates": len(eligible),
                                 "omitted_update_seqs": [u["seq"] for u in omitted],

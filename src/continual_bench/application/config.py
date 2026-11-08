@@ -62,6 +62,9 @@ class CostConfig(Strict):
     unit: str = Field(default="scenario_unit", min_length=1, max_length=80)
     false_positive: float = Field(default=1, ge=0, allow_inf_nan=False)
     false_negative: float = Field(default=1, ge=0, allow_inf_nan=False)
+    classification_error: float = Field(default=1, ge=0, allow_inf_nan=False)
+    regression_error: float = Field(default=1, ge=0, allow_inf_nan=False)
+    regression_scale: float = Field(default=1, gt=0, allow_inf_nan=False)
     train_sample: float = Field(default=0, ge=0, allow_inf_nan=False)
     update: float = Field(default=0, ge=0, allow_inf_nan=False)
     train_second: float = Field(default=0, ge=0, allow_inf_nan=False)
@@ -85,7 +88,7 @@ class TrackingConfig(Strict):
     continual_references: bool = True
     reference_budget: int | None = Field(default=None, ge=0)
     adaptation_shadows: bool = False
-    costs: CostConfig | None = None
+    costs: CostConfig = Field(default_factory=lambda: CostConfig(train_sample=0.001, update=0.05))
     upf_alpha: float = Field(default=1, ge=0, allow_inf_nan=False)
     upf_alphas: tuple[float, ...] = (0, 0.1, 1, 10)
     reference: dict | None = None
