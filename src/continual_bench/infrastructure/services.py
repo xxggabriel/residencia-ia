@@ -9,6 +9,7 @@ from continual_bench.core.contracts import Event
 
 from .catalog import publish_catalog, register_final_model, strategy_name
 from .metric_tracking import log_metric_points, publish_tracking
+from .run_artifacts import publish_run_artifacts
 
 
 class KafkaTransport:
@@ -240,10 +241,13 @@ class MLflowTracker:
                                RunTag("registered_model", registry["registered_model"]),
                                RunTag("registered_model_version", registry["registered_model_version"])],
                          synchronous=True)
+        artifacts = publish_run_artifacts(client, run_id, Path(files[0]).parent, report)
+        # The tracking completion tag stays the last write before termination.
         tracking = publish_tracking(client, run_id, report, Path(files[0]).parent, objects=objects)
         client.set_terminated(run_id, "FINISHED")
         return {"mlflow_run_id": run_id, "mlflow_experiment_id": experiment_id,
-                "mlflow_experiment_name": name, **registry, **({"tracking": tracking} if tracking else {})}
+                "mlflow_experiment_name": name, **registry, "run_artifacts": artifacts,
+                **({"tracking": tracking} if tracking else {})}
 
 
 def publish(config, report, root):

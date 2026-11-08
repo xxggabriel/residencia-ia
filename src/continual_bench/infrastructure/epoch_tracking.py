@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from .catalog import put_immutable
+from .run_artifacts import publish_run_artifacts
 from .services import S3Objects
 from .storage import atomic_write, publication_lock
 
@@ -51,11 +52,14 @@ def publish_epochs(report, root):
                       for epoch in report["epochs"] for name, value in epoch["costs"]["metrics"].items())
         points.extend(("costs/total/" + name, 0, value)
                       for name, value in report["costs"]["metrics"].items())
+        points.extend(("compute/" + name, epoch["epoch"], epoch[name])
+                      for epoch in report["epochs"] for name in ("training_seconds", "prediction_seconds"))
         log_metric_points(client, run_id, points)
         for filename in files:
             client.log_artifact(run_id, str(directory / filename))
+        artifacts = publish_run_artifacts(client, run_id, directory, report)
         client.set_terminated(run_id, "FINISHED")
         receipt = {"run_key": key, "mlflow_run_id": run_id, "mlflow_experiment_id": experiment_id,
-                   "files": files, "complete": True}
+                   "files": files, "run_artifacts": artifacts, "complete": True}
         atomic_write(directory / "epoch-receipt.json", json.dumps(receipt, indent=2).encode())
     return receipt
