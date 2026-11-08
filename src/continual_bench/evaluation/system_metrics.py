@@ -1,10 +1,9 @@
-"""Background host/process sampling during an evaluation attempt.
+"""Background container, host and process sampling during an evaluation attempt.
 
 Names follow MLflow's system-metrics convention; the publisher logs them as
 `system/<name>`, which MLflow shows in the run's "System metrics" tab. Sampling
 is read-only and never influences predictions, policies or report digests.
-psutil is optional: without it only the Linux process RSS is recorded and the
-report states why the other series are unavailable.
+Container metrics come from Linux cgroup v2 independently of psutil.
 """
 
 import os
@@ -17,6 +16,16 @@ from .environment import current_rss_bytes
 MEGABYTE = 1024**2
 DEFAULT_INTERVAL = float(os.environ.get("BENCH_SYSTEM_METRICS_INTERVAL", "0.5"))
 MAX_SAMPLES = 3600
+
+
+def _current_cgroup() -> Path | None:
+    try:
+        for line in Path("/proc/self/cgroup").read_text().splitlines():
+            if line.startswith("0::"):
+                return Path("/sys/fs/cgroup") / line[3:].lstrip("/")
+    except OSError:
+        pass
+    return None
 
 
 class SystemMetricsSampler:
@@ -41,6 +50,8 @@ class SystemMetricsSampler:
             psutil = None
         self._psutil = psutil
         self._process = psutil.Process() if psutil else None
+        self._cgroup = _current_cgroup()
+        self._previous_cpu: tuple[int, int] | None = None
         self._network_start = None
         self._gpus = self._gpu_handles()
 
@@ -54,15 +65,50 @@ class SystemMetricsSampler:
         except Exception:  # No NVIDIA library or driver: GPU series are simply absent.
             return None, []
 
-    def _measure(self, cpu: bool = True) -> dict:
+    def _container_metrics(self, cpu: bool) -> dict:
         values = {}
+        if self._cgroup is None:
+            return values
+        try:
+            limit = int((self._cgroup / "memory.max").read_text())
+            used = int((self._cgroup / "memory.current").read_text())
+            if limit > 0 and used >= 0:
+                values.update(container_memory_usage_megabytes=used / MEGABYTE,
+                              container_memory_limit_megabytes=limit / MEGABYTE,
+                              container_memory_usage_percentage=100 * used / limit)
+        except (OSError, ValueError):
+            pass
+        try:
+            quota, period = map(int, (self._cgroup / "cpu.max").read_text().split())
+            counters = dict(line.split() for line in (self._cgroup / "cpu.stat").read_text().splitlines())
+            used_us = int(counters["usage_usec"])
+            if quota > 0 and period > 0:
+                capacity = quota / period
+                values["container_cpu_limit_vcpus"] = capacity
+                now_ns = time.monotonic_ns()
+                previous = self._previous_cpu
+                self._previous_cpu = (now_ns, used_us)
+                if cpu and previous is not None:
+                    elapsed_ns = now_ns - previous[0]
+                    delta_us = used_us - previous[1]
+                    if elapsed_ns > 0 and delta_us >= 0:
+                        used_vcpus = delta_us * 1000 / elapsed_ns
+                        values["container_cpu_usage_vcpus"] = used_vcpus
+                        values["container_cpu_utilization_percentage"] = 100 * used_vcpus / capacity
+        except (OSError, ValueError, KeyError):
+            self._previous_cpu = None
+        return values
+
+    def _measure(self, cpu: bool = True) -> dict:
+        values = self._container_metrics(cpu)
         if self._psutil is not None:
             psutil = self._psutil
-            memory = psutil.virtual_memory()
-            if cpu:  # A CPU percentage needs an elapsed interval; the priming read has none.
+            if cpu and "container_cpu_limit_vcpus" not in values:
                 values["cpu_utilization_percentage"] = psutil.cpu_percent(interval=None)
-            values["system_memory_usage_megabytes"] = memory.used / MEGABYTE
-            values["system_memory_usage_percentage"] = memory.percent
+            if "container_memory_limit_megabytes" not in values:
+                memory = psutil.virtual_memory()
+                values["system_memory_usage_megabytes"] = memory.used / MEGABYTE
+                values["system_memory_usage_percentage"] = memory.percent
             try:
                 disk = psutil.disk_usage(self.disk_path)
                 values["disk_usage_percentage"] = disk.percent
@@ -147,7 +193,7 @@ class SystemMetricsSampler:
         return {
             "version": "system-metrics-v1",
             "naming": "MLflow system metrics; published as system/<name>",
-            "scope": ("evaluation attempt in this process, including metric derivation; "
+            "scope": ("container and process sampled during evaluation and metric derivation; "
                       "excludes plots and publication"),
             "interval_seconds": self.interval,
             "collector": "psutil" if self._psutil is not None else "procfs_rss_only",

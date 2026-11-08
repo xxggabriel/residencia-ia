@@ -24,24 +24,29 @@ Os runs de épocas recebem as métricas por época, os custos, `compute/training
 
 ## Métricas de sistema (aba *System metrics*)
 
-Durante cada tentativa de avaliação, `SystemMetricsSampler` lê o host e o processo em segundo
+Durante cada tentativa de avaliação, `SystemMetricsSampler` lê o container, o host e o processo em segundo
 plano: na partida, a cada `BENCH_SYSTEM_METRICS_INTERVAL` segundos (padrão 0,5) e no fim. Os nomes
 seguem a convenção do MLflow e são publicados com o prefixo `system/` e o timestamp real de cada
 leitura:
 
 | Métrica | Origem |
 |---|---|
-| `system/cpu_utilization_percentage`, `system/process_cpu_utilization_percentage` | CPU do host e do processo |
-| `system/system_memory_usage_megabytes`, `system/system_memory_usage_percentage` | memória do host |
-| `system/process_memory_rss_megabytes`, `system/process_threads` | processo executor |
+| `system/container_cpu_usage_vcpus`, `system/container_cpu_limit_vcpus`, `system/container_cpu_utilization_percentage` | CPU acumulada do cgroup v2 por intervalo, em vCPUs e em porcentagem da cota |
+| `system/container_memory_usage_megabytes`, `system/container_memory_limit_megabytes`, `system/container_memory_usage_percentage` | memória contabilizada no cgroup v2, em MiB e em porcentagem do limite |
+| `system/cpu_utilization_percentage`, `system/system_memory_usage_*` | CPU e memória do host quando o respectivo limite de cgroup está indisponível |
+| `system/process_cpu_utilization_percentage`, `system/process_memory_rss_megabytes`, `system/process_threads` | CPU, RSS e número de threads do processo executor, em séries separadas |
 | `system/disk_usage_percentage`, `system/disk_usage_megabytes`, `system/disk_available_megabytes` | disco do diretório de estado |
 | `system/network_receive_megabytes`, `system/network_transmit_megabytes` | rede acumulada desde a partida |
 | `system/gpu_<i>_utilization_percentage`, `system/gpu_<i>_memory_usage_*` | GPUs NVIDIA, quando `pynvml` e o driver existem |
 
-A primeira leitura não inclui CPU, porque um percentual de CPU exige um intervalo decorrido.
+A primeira leitura inclui a cota de CPU, quando disponível. O uso depende da diferença em
+`cpu.stat:usage_usec` entre duas leituras e do tempo decorrido. Nos workers padrão, 100% equivale
+a 1 vCPU ou 2.048 MiB de RAM, conforme a série. Amostras curtas de CPU podem passar de 100%
+devido ao alinhamento com o período da cota. A memória inclui cache contabilizado em
+`memory.current`. A quantidade de threads é independente da cota de CPU.
 Leituras longas são limitadas a 3.600 amostras: ao atingir o limite, metade é descartada e o
-intervalo dobra. O psutil já vem na imagem do worker; sem ele, só o RSS do processo (Linux) é
-registrado e `system_metrics.unavailable_reason` explica a ausência. A amostragem só observa: não
+intervalo dobra. O psutil já vem na imagem do worker. Sem ele, a leitura do cgroup e do RSS via
+procfs continua disponível. A amostragem só observa: não
 altera predições, decisões nem digests. O escopo é a tentativa de avaliação no processo, incluindo
 a derivação das métricas e excluindo a geração de gráficos e a publicação.
 
