@@ -8,8 +8,10 @@ from pathlib import Path
 
 
 def tracking_profile():
-    path = Path(__file__).resolve().parents[1] / "configs/tracking-metrics-profile.json"
-    return json.loads(path.read_text())
+    import yaml
+
+    path = Path(__file__).resolve().parents[1] / "configs/base/tracking.yaml"
+    return yaml.safe_load(path.read_text())
 
 
 def configurations(params, suite):

@@ -88,12 +88,11 @@ def test_cli_lists_components_and_dry_runs_a_matrix(tmp_path, capsys):
     assert plan["cases"] == 1 and plan["planned"][0]["model"] == "knn" and len(plan["skipped"]) == 1
 
 
-@pytest.mark.parametrize("name", ["matrix-example.yaml", "matrix-any-model.yaml"])
+@pytest.mark.parametrize("name", ["binary-comparison.yaml", "any-model.yaml"])
 def test_versioned_example_matrices_plan_without_errors(name):
     from pathlib import Path
 
-    import yaml
+    from continual_bench.config import load_model
 
-    data = yaml.safe_load((Path(__file__).parents[1] / "configs" / name).read_text())
-    plan = ExperimentMatrix.model_validate(data).plan()
+    plan = load_model(ExperimentMatrix, Path(__file__).parents[1] / "configs" / "matrices" / name).plan()
     assert plan["cases"] and all(s["reason"] for s in plan["skipped"])

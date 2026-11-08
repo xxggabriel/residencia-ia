@@ -34,8 +34,8 @@ def _json(value):
 def image_dataset_locks():
     candidates = (
         Path(__file__).resolve().parents[1] / "image-datasets.lock.json",
-        Path(__file__).resolve().parents[3] / "configs/image-datasets.lock.json",
-        Path("configs/image-datasets.lock.json"),
+        Path(__file__).resolve().parents[3] / "configs/contracts/image-datasets.lock.json",
+        Path("configs/contracts/image-datasets.lock.json"),
     )
     for path in candidates:
         if path.is_file():

@@ -737,7 +737,7 @@ def render_report(
             "## Proveniência e reprodução\n",
             f"SHA principal do manifesto congelado: `{summary['source_sha256']}`; "
             "as revisões autorizadas por run estão detalhadas acima. "
-            "Configurações: [manifesto](../configs/campaign-nonlinear-v5.json). "
+            "Configurações: [manifesto](../configs/history/campaign-nonlinear-v5.json). "
             "[Ambiente e imagens](nonlinear-v5-environment.json).\n",
         ]
     )
@@ -793,7 +793,7 @@ def main():
     parser.add_argument("--comparison", default="reports/nonlinear-v5-comparison.json")
     parser.add_argument("--current", default="reports/generated/nonlinear-v5-inputs.json")
     parser.add_argument("--references", default="reports/versioned-v4-reference-baselines.json")
-    parser.add_argument("--manifest", default="configs/campaign-nonlinear-v5.json")
+    parser.add_argument("--manifest", default="configs/history/campaign-nonlinear-v5.json")
     parser.add_argument("--output-directory", default="reports")
     args = parser.parse_args()
     paths = {name: Path(getattr(args, name)) for name in ("comparison", "current", "references", "manifest")}

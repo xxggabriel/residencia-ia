@@ -1,6 +1,6 @@
 # Contrato de métricas e rastreamento da residência
 
-O catálogo [metric-definitions.json](../configs/metric-definitions.json), versão
+O catálogo [metric-definitions.json](../configs/contracts/metric-definitions.json), versão
 `residency-metrics-v1`, reúne o inventário das Semanas 01–07 e as extensões do
 benchmark. Cada definição contém família, fórmula, direção, unidade, escopos,
 pré-requisitos, motivos de indisponibilidade e fontes observadas. O catálogo inclui

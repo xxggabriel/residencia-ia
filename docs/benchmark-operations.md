@@ -109,7 +109,7 @@ os demais parâmetros de cada configuração em experimentos controlados.
 ## Campanha controlada v3
 
 A DAG manual `benchmark_controlled` usa cinco sementes (42–46), 3000 amostras e atraso de rótulo 3.
-O manifesto executável é `configs/campaign-controlled-v3.json`: 261 configurações únicas
+O manifesto executável é `configs/history/campaign-controlled-v3.json`: 261 configurações únicas
 (240 prequential, 15 offline e seis controles que reproduzem o antigo online esparso na semente 42).
 O online agora aprende cada rótulo disponível após o aquecimento, sem cooldown, incluindo a drenagem final.
 No incremental, todas as predições do lote continuam anteriores às atualizações daquele lote.
@@ -168,7 +168,7 @@ exclusivamente à paralelização.
 
 A DAG `benchmark_versioned` usa cinco sementes 42–46 nos sintéticos e um único prefixo de cada
 fonte real. No padrão são 289 configurações: 255 sintéticas e 17 por fonte real, incluindo
-streaming/Kafka, incremental e offline. `configs/campaign-versioned-v4.json` fixa as configurações
+streaming/Kafka, incremental e offline. `configs/history/campaign-versioned-v4.json` fixa as configurações
 executadas, identidades e SHA do código. O argumento `samples` limita os exemplos usados;
 esta campanha usa 3000, sem alegar execução de todas as linhas brutas. Nenhum resultado real
 é artificialmente repetido com cinco sementes ignoradas pelo adaptador.
@@ -184,7 +184,7 @@ docker compose --env-file /home/gabriel/.config/continual-bench/benchmark.env \
 O script verifica SHA-256, número de linhas, esquema, categorias, valores finitos
 e ausência de missing nas duas fontes. Se os arquivos já existirem, verifica-os novamente.
 O pipeline somente lê os ARFF admitidos em `BENCH_DATASETS`; não baixa dados implicitamente.
-As versões e URLs constam em `configs/real-sources.lock.json` e são conferidas com os pins do adaptador.
+As versões e URLs constam em `configs/contracts/real-sources.lock.json` e são conferidas com os pins do adaptador.
 
 - Electricity: OpenML 151 v1, 45312 linhas, 8 atributos; positivo `UP`.
 - Airlines: OpenML 1169 v1, 539383 linhas, 7 atributos; positivo `1`.
@@ -257,7 +257,7 @@ um ambiente de dependências do zero e cobre uma entrada de referência por data
 
 `benchmark_nonlinear` usa a mesma matriz de dados, sementes e orçamentos da v4 para cada uma
 das três famílias: logística, `hoeffding_tree` e `knn`. O manifesto está em
-`configs/campaign-nonlinear-v5.json`; filtrar `tags.campaign = 'nonlinear-v5'` no MLflow.
+`configs/history/campaign-nonlinear-v5.json`; filtrar `tags.campaign = 'nonlinear-v5'` no MLflow.
 Oito tarefas mapeadas `evaluate_and_publish` e oito subprocessos do worker são os limites de
 concorrência; o número real de tarefas simultâneas fica no registro operacional da campanha.
 

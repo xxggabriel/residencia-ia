@@ -54,7 +54,8 @@ def prediction_evidence(directory):
 
 
 def test_all_867_frozen_configuration_dumps_and_identities_remain_identical():
-    manifest = json.loads((Path(__file__).parents[1] / "configs/campaign-nonlinear-v5.json").read_text())
+    path = Path(__file__).parents[1] / "configs/history/campaign-nonlinear-v5.json"
+    manifest = json.loads(path.read_text())
     assert len(manifest["configurations"]) == 867
     for row in manifest["configurations"]:
         config = Config.model_validate(row["config"])

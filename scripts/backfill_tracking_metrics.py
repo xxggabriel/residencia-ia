@@ -11,7 +11,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from continual_bench.config import TrackingConfig
+from continual_bench.config import TrackingConfig, load_model
 from continual_bench.core.metrics import Metrics
 from continual_bench.evaluation.tracking import build_tracking, confusion_metrics, metric_catalog
 from continual_bench.infrastructure.storage import atomic_write, run_lock
@@ -201,9 +201,9 @@ def enriched_report(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--inputs", default="/state/nonlinear-v5-inputs.json")
-    parser.add_argument("--manifest", default="/app/configs/campaign-nonlinear-v5.json")
+    parser.add_argument("--manifest", default="/app/configs/history/campaign-nonlinear-v5.json")
     parser.add_argument("--state", default="/state/runs")
-    parser.add_argument("--settings", default="/app/configs/tracking-metrics-profile.json")
+    parser.add_argument("--settings", default="/app/configs/base/tracking.yaml")
     parser.add_argument("--output", default="/state/tracking-v1-backfill.json")
     parser.add_argument("--workers", type=int, default=4, choices=range(1, 9))
     parser.add_argument("--limit", type=int)
@@ -217,7 +217,7 @@ def main():
     assert inputs["complete_campaign"] and inputs["runs_verified"] == len(inputs["records"])
     assert len(manifest["configurations"]) == len(inputs["records"])
     expected = {r["run_key"]: r for r in manifest["configurations"]}
-    settings = TrackingConfig.model_validate_json(Path(args.settings).read_text()).model_dump(mode="json")
+    settings = load_model(TrackingConfig, args.settings).model_dump(mode="json")
     _, definitions = metric_catalog()
     records = inputs["records"][: args.limit] if args.limit else inputs["records"]
     client = objects = None

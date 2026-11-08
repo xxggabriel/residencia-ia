@@ -9,7 +9,7 @@ Foram implementados loaders dos dados originais, com aquisição explícita e li
 | INSECTS | [USP Data Stream Repository](https://sites.google.com/view/uspdsrepository), Souza et al. 2020; arquivo público `abrupt_balanced.csv` indicado pelo [River 0.26.1](https://github.com/online-ml/river/blob/0.26.1/river/datasets/insects.py) | 52.848 linhas, 33 atributos numéricos e seis classes; arquivo completo esperado de 14.151.769 bytes |
 | Gas Sensor Array Drift | [UCI 224](https://archive.ics.uci.edu/dataset/224/gas+sensor+array+drift+dataset), DOI 10.24432/C5RP6W, batch10 corrigido em 14 de outubro de 2013 | 13.910 linhas, 128 atributos e seis classes, dez lotes na ordem 1 a 10; ZIP limitado a 16 MiB e conteúdo relevante descomprimido a 64 MiB |
 
-Os URLs públicos, limites e requisitos ficaram em `configs/real-streams.lock.json`. O download de Gas publicado pela UCI foi anunciado como aproximadamente 9,5 MB. A aquisição armazenou somente as duas fontes selecionadas; não baixou o ZIP geral do repositório USP.
+Os URLs públicos, limites e requisitos ficaram em `configs/contracts/real-streams.lock.json`. O download de Gas publicado pela UCI foi anunciado como aproximadamente 9,5 MB. A aquisição armazenou somente as duas fontes selecionadas; não baixou o ZIP geral do repositório USP.
 
 O repositório USP declarou CC BY 4.0 e ressalvou direitos de fontes externas. A licença atual no catálogo UCI também declarou CC BY 4.0, enquanto o texto descritivo histórico manteve a restrição a pesquisa. Esse contraste foi preservado no manifesto; a finalidade desta execução foi pesquisa da Residência IA. Não foi implementado aceite de termos, autenticação, confirmação de páginas HTML, cookies ou evasão de negação HTTP.
 

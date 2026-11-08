@@ -15,9 +15,9 @@ VERSION = "residency-metrics-v1"
 def metric_catalog():
     candidates = (
         Path(__file__).resolve().parents[1] / "metric-definitions.json",
-        Path(__file__).resolve().parents[3] / "configs/metric-definitions.json",
-        Path("configs/metric-definitions.json"),
-        Path("/app/configs/metric-definitions.json"),
+        Path(__file__).resolve().parents[3] / "configs/contracts/metric-definitions.json",
+        Path("configs/contracts/metric-definitions.json"),
+        Path("/app/configs/contracts/metric-definitions.json"),
     )
     for path in candidates:
         if path.is_file():

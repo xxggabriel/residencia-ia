@@ -13,7 +13,7 @@ uma fonte com `samples_iter()` de `TaskSample` e `manifest()`. Apenas
 Split e Permuted MNIST reutilizaram os mesmos quatro arquivos IDX.
 
 Os arquivos e tamanhos foram fixados por SHA-256 no
-`configs/image-datasets.lock.json`, com base nos catálogos oficiais de checksums
+`configs/contracts/image-datasets.lock.json`, com base nos catálogos oficiais de checksums
 do [TensorFlow Datasets](https://github.com/tensorflow/datasets/tree/master/tensorflow_datasets/url_checksums).
 Os links e bytes efetivamente utilizados ficaram no manifesto. A versão foi
 derivada do conteúdo e do protocolo, independente da localização do cache.

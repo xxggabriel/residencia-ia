@@ -128,7 +128,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reports", default="reports/generated/controlled-v3-inputs.json")
     parser.add_argument("--historical", default="reports/benchmark-analysis-inputs-20261027.json")
-    parser.add_argument("--manifest", default="configs/campaign-controlled-v3.json")
+    parser.add_argument("--manifest", default="configs/history/campaign-controlled-v3.json")
     parser.add_argument("--label-balance", default="reports/controlled-v3-label-balance.json")
     parser.add_argument("--output", default="reports/controlled-v3-comparison.json")
     args = parser.parse_args()

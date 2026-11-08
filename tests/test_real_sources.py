@@ -132,5 +132,5 @@ def test_prep_copies_verified_source_atomically_and_rejects_bad_cache(admitted_f
 
 
 def test_lock_matches_packaged_source_pins():
-    lock = json.loads((Path(__file__).parents[1] / "configs/real-sources.lock.json").read_text())
+    lock = json.loads((Path(__file__).parents[1] / "configs/contracts/real-sources.lock.json").read_text())
     assert lock["sources"] == REAL_SOURCES

@@ -1,0 +1,18 @@
+# Bounded smoke case: tiny streams, tight guards and near-future evaluation windows.
+extends: run.yaml
+name: semana09-smoke-v1
+dataset:
+  samples: 180
+warmup: 30
+metric_window: 30
+replay_window: 60
+max_seconds: 60
+policy:
+  every: 30
+  cooldown: 20
+  min_samples: 30
+  min_window: 15
+tracking:
+  continual_references: false
+  probe_samples: 8
+  task_evaluation: {horizon: 16, gap: 1, max_windows: 3}
