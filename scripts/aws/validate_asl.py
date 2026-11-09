@@ -125,6 +125,26 @@ def validate_scope(definition: dict, where: str, errors: list, *, in_map=False):
         errors.append(f"{where}: no reachable terminal state")
 
 
+def unique_state_names(definition: dict, name: str, errors: list):
+    """State names are unique across the whole machine, nested Map/Parallel scopes included."""
+    seen: dict[str, str] = {}
+
+    def walk(scope: dict, where: str):
+        for state_name, state in (scope.get("States") or {}).items():
+            here = f"{where}/{state_name}"
+            if state_name in seen:
+                errors.append(f"{name}: duplicate state name {state_name!r} at {here} and {seen[state_name]}")
+            else:
+                seen[state_name] = here
+            nested = state.get("ItemProcessor") or state.get("Iterator")
+            if nested:
+                walk(nested, here)
+            for index, branch in enumerate(state.get("Branches") or []):
+                walk(branch, f"{here}/Branches/{index}")
+
+    walk(definition, "")
+
+
 def project_rules(name: str, definition: dict, errors: list):
     text = json.dumps(definition)
     if "benchmark" in name:
@@ -146,6 +166,7 @@ def validate_file(path: Path, substitutions=SAMPLE_SUBSTITUTIONS) -> list[str]:
         errors.append(f"{path.name}: undefined substitutions {sorted(unknown)}")
     definition = json.loads(text)
     _json_paths(definition, path.name, errors)
+    unique_state_names(definition, path.name, errors)
     validate_scope(definition, path.name, errors)
     project_rules(path.name, definition, errors)
     return errors
