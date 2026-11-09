@@ -199,6 +199,23 @@ Resources:
                          iam:DetachRolePolicy, iam:UpdateAssumeRolePolicy, iam:ListRolePolicies,
                          iam:ListAttachedRolePolicies]
                 Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}/${Project}-*"
+              - Sid: LookupAndCleanUpRuntimeRolesByName
+                # IAM can evaluate name-only calls against an ARN without the role path
+                # before the new role is visible or after it is gone during rollback.
+                Effect: Allow
+                Action: [iam:GetRole, iam:GetRolePolicy, iam:DeleteRolePolicy, iam:DeleteRole]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-acquisition"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-benchmark-job"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-control"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-feature-store"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-firehose"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-flink"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-glue"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-prepare-job"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-sagemaker"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-states"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-task-execution"
               - Sid: PassProjectRolesToTheirServices
                 Effect: Allow
                 Action: iam:PassRole
