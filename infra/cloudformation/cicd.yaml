@@ -27,6 +27,13 @@ Parameters:
     Type: String
     Default: config/runtime-parameters.json
     Description: Optional operator overrides (activation flags, budget, email) in the artifacts bucket.
+  PipelineArtifactPrefix:
+    Type: String
+    Default: continual-bench-rele
+    AllowedPattern: "^[A-Za-z0-9_.-]{1,20}$"
+    Description: >-
+      Key prefix CodePipeline uses in the artifact store: the first 20 characters of the pipeline
+      name (Project + "-release"). Must match persistent.yaml so IAM and lifecycle cover the artifacts.
   BuildComputeType:
     Type: String
     Default: BUILD_GENERAL1_MEDIUM
@@ -80,7 +87,7 @@ Resources:
                 Resource:
                   - {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
                   - !Sub
-                    - "${Arn}/pipeline/*"
+                    - "${Arn}/${PipelineArtifactPrefix}/*"
                     - Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
               - Effect: Allow
                 Action: [kms:Decrypt, kms:GenerateDataKey]
@@ -113,7 +120,7 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
                 Resource: !Sub
-                  - "${Arn}/pipeline/*"
+                  - "${Arn}/${PipelineArtifactPrefix}/*"
                   - Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
               - Effect: Allow
                 Action: [kms:Decrypt, kms:GenerateDataKey]
@@ -156,7 +163,7 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
                 Resource:
-                  - !Sub ["${Arn}/pipeline/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
+                  - !Sub ["${Arn}/${PipelineArtifactPrefix}/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
                   - !Sub ["${Arn}/lambda/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
                   - !Sub ["${Arn}/templates/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
                   - !Sub ["${Arn}/flink/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
@@ -261,7 +268,7 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
                 Resource:
-                  - !Sub ["${Arn}/pipeline/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
+                  - !Sub ["${Arn}/${PipelineArtifactPrefix}/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
                   - !Sub ["${Arn}/templates/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
                   - !Sub ["${Arn}/${RuntimeConfigKey}", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
               - Effect: Allow
@@ -306,7 +313,7 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject]
                 Resource:
-                  - !Sub ["${Arn}/pipeline/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
+                  - !Sub ["${Arn}/${PipelineArtifactPrefix}/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
               - Effect: Allow
                 Action: [kms:Decrypt, kms:GenerateDataKey]
                 Resource: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
