@@ -6,6 +6,12 @@ import urllib.request
 from copy import deepcopy
 from pathlib import Path
 
+from continual_bench.application.project_suite import (
+    controlled_configurations,
+    nonlinear_configurations,
+    versioned_configurations,
+)
+
 
 def tracking_profile():
     import yaml
@@ -125,92 +131,6 @@ def policy_configurations(params):
                                "detector": {"name": detector}, "policy": deepcopy(policy)})
         result.append({**common, "mode": "offline", "dataset": dict(data), "model": deepcopy(component),
                        "detector": {"name": "none"}, "policy": {"name": "none"}})
-    return result
-
-
-def nonlinear_configurations(params):
-    """Paired v4 protocols and budgets, with model families interleaved per case."""
-    models = (
-        {"name": "logistic", "params": {"learning_rate": 0.05}},
-        {"name": "hoeffding_tree", "params": {
-            "grace_period": 50, "max_depth": 8, "max_size": 8,
-            "memory_estimate_period": 100, "leaf_prediction": "nba",
-        }},
-        {"name": "knn", "params": {"n_neighbors": 11, "window_size": 256, "weighted": True}},
-    )
-    template = versioned_configurations(params)
-    # The deployed Airflow mapping limit is 1024; fail in plan, before task expansion.
-    case_count = len(template) * len(models)
-    if case_count > 1024:
-        raise ValueError(
-            f"nonlinear campaign has {case_count} configurations; Airflow max_map_length=1024 "
-            "allows at most six seeds"
-        )
-
-    def model_for_source(config, model):
-        model = deepcopy(model)
-        nominal = {
-            "agrawal": ["elevel", "car", "zipcode"],
-            "stagger": ["size", "color", "shape"],
-        }
-        if model["name"] == "hoeffding_tree" and config["dataset"]["name"] in nominal:
-            # River generators encode these categorical features as integers.
-            model["params"]["nominal_attributes"] = nominal[config["dataset"]["name"]]
-        return model
-
-    return [
-        {**deepcopy(config), "name": "nonlinear-v5", "model": model_for_source(config, model)}
-        for config in template
-        for model in models
-    ]
-
-
-def versioned_configurations(params):
-    """All five datasets; deterministic real prefixes are not fake independent seed trials."""
-    synthetic = controlled_configurations(params)
-    result = [{**c, "name": "versioned-v4"} for c in synthetic if not c["name"].endswith("bridge")]
-    # Reuse the same strategy matrix for each real dataset, once (seed has no effect on these prefixes).
-    first_seed = {**params, "seeds": [params["seeds"][0]]}
-    template = [c for c in controlled_configurations(first_seed)
-                if c["dataset"]["name"] == "sea" and not c["name"].endswith("bridge")]
-    for dataset in ("electricity", "airlines"):
-        result += [{**c, "name": "versioned-v4", "dataset": {**c["dataset"], "name": dataset}}
-                   for c in template]
-    return result
-
-
-def controlled_configurations(params):
-    """Five paired seeds; shared sample-visit ceilings, not forced equal consumption."""
-    result = []
-    labels = params["samples"] - 100
-    for seed in params["seeds"]:
-        for dataset in ("sea", "agrawal", "stagger"):
-            for mode in ("streaming", "incremental"):
-                variants = [("none", "none", 0), ("none", "online", labels)]
-                variants += [(detector, policy, budget)
-                             for budget in (labels, 2 * labels)
-                             for detector, policy in (("none", "periodic"),
-                                                      ("adwin", "drift"), ("ddm", "drift"))]
-                # Bridge reproduces the old 'online' behavior, only for the historical seed.
-                if seed == 42:
-                    variants += [("none", "sparse_bridge", None)]
-                for detector, policy, budget in variants:
-                    sparse = policy == "sparse_bridge"
-                    result.append({
-                        "name": "controlled-v3-bridge" if sparse else "controlled-v3",
-                        "mode": mode, "dataset": {"name": dataset, "samples": params["samples"],
-                                                   "seed": seed, "label_delay": params["label_delay"]},
-                        "detector": {"name": detector}, "training_budget": budget,
-                        "policy": {"name": "periodic" if sparse else policy,
-                                   "every": 100 if sparse else 200,
-                                   "cooldown": 0 if policy == "online" else 100,
-                                   "action": "learn_one" if policy == "online" or sparse
-                                   else "reset_retrain"},
-                    })
-            result.append({"name": "controlled-v3", "mode": "offline",
-                           "dataset": {"name": dataset, "samples": params["samples"], "seed": seed,
-                                       "label_delay": params["label_delay"]},
-                           "detector": {"name": "none"}, "policy": {"name": "none"}})
     return result
 
 

@@ -7,6 +7,7 @@ Container metrics come from Linux cgroup v2 independently of psutil.
 """
 
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -132,6 +133,13 @@ class SystemMetricsSampler:
                 values["process_memory_rss_megabytes"] = self._process.memory_info().rss / MEGABYTE
                 values["process_threads"] = self._process.num_threads()
         else:
+            try:
+                disk = shutil.disk_usage(self.disk_path)
+                values["disk_usage_percentage"] = 100 * disk.used / disk.total
+                values["disk_usage_megabytes"] = disk.used / MEGABYTE
+                values["disk_available_megabytes"] = disk.free / MEGABYTE
+            except OSError:
+                pass
             rss = current_rss_bytes()
             if rss is not None:
                 values["process_memory_rss_megabytes"] = rss / MEGABYTE
@@ -196,7 +204,7 @@ class SystemMetricsSampler:
             "scope": ("container and process sampled during evaluation and metric derivation; "
                       "excludes plots and publication"),
             "interval_seconds": self.interval,
-            "collector": "psutil" if self._psutil is not None else "procfs_rss_only",
+            "collector": "psutil" if self._psutil is not None else "procfs_and_disk_usage",
             "unavailable_reason": None if self._psutil is not None else "psutil is not installed",
             "gpus": len(self._gpus[1]),
             "metrics": names,

@@ -82,10 +82,13 @@ def _stamp():
 
 # Benchmark campaign ---------------------------------------------------------------------------------
 def plan_campaign(ctx, event):
+    from continual_bench.application.cloud.matrix_sources import verify_plan_sources
+
     request = CampaignRequest(**event["request"])
     release = planning.resolve_release(ctx.store, request.release)
     snapshot = snapshots.verify_snapshot(ctx.store, request.snapshot) if request.snapshot else None
     plan = planning.build_plan(request, release, snapshot_manifest=snapshot, project_root=ctx.project_root)
+    verify_plan_sources(ctx.store, plan["units"])
     evidence = ctx.capacity(plan["concurrency"])
     from continual_bench.infrastructure.object_store import put_json
 

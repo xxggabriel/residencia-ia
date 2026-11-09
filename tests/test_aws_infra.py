@@ -3,6 +3,7 @@
 import copy
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -74,12 +75,50 @@ def test_job_definitions_match_the_reference_campaign():
     assert "AWS::ECS::Service" not in {r["Type"] for r in resources.values()}
 
 
+def test_release_revisions_survive_runtime_updates():
+    resources = template("modules/execution.yaml")["Resources"]
+    for name in ("BenchmarkJobDefinition", "PrepareJobDefinition"):
+        assert resources[name]["Properties"]["ResourceRetentionPolicy"]["SkipDeregisterOnUpdate"] is True
+    assert resources["ControlVersion"]["UpdateReplacePolicy"] == "Retain"
+
+
+def test_distributed_map_writes_to_the_encrypted_artifacts_bucket():
+    resources = template("modules/execution.yaml")["Resources"]
+    substitutions = resources["BenchmarkStateMachine"]["Properties"]["DefinitionSubstitutions"]
+    assert substitutions["MapResultsBucket"] == {"Ref": "ArtifactsBucketName"}
+    definition = json.loads((ROOT / "infra" / "statemachines" / "benchmark.asl.json").read_text())
+    writer = definition["States"]["DistributedRuns"]["ResultWriter"]["Parameters"]
+    assert writer["Bucket"] == "${MapResultsBucket}" and "map-results/" in writer["Prefix.$"]
+    role = list(statements(resources["StatesRole"]))
+    write = next(s for s in role if s.get("Sid") == "WriteDistributedMapResults")
+    assert write["Resource"]["Fn::Sub"].endswith("${ArtifactsBucketName}/map-results/*")
+
+
+def test_dataset_launcher_builds_the_execution_name(tmp_path, monkeypatch):
+    aws = tmp_path / "aws"
+    aws.write_text('#!/usr/bin/env bash\ncase "$1" in\ncloudformation) echo arn:dataset;;\n'
+                   'stepfunctions) printf "%s\\n" "$@";;\nesac\n')
+    aws.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', os.defpath)}")
+    output = subprocess.check_output(
+        ["bash", "scripts/aws/start_dataset.sh", "infra/examples/dataset-social-smoke.json", "retry1"],
+        cwd=ROOT, text=True,
+    )
+    assert "social-smoke-download--retry1" in output.splitlines()
+
+
 def test_worker_roles_reach_s3_only_through_the_gateway_endpoint():
     resources = template("modules/execution.yaml")["Resources"]
     for name in ("BenchmarkJobRole", "PrepareJobRole"):
         for statement in statements(resources[name]):
             actions = statement["Action"] if isinstance(statement["Action"], list) else [statement["Action"]]
-            if any(a.startswith("s3:") for a in actions):
+            if statement.get("Sid") == "ReadModelArchiveForRegistration":
+                assert name == "BenchmarkJobRole" and actions == ["s3:GetObject"]
+                assert statement["Condition"] == {
+                    "StringEquals": {"aws:CalledViaFirst": "sagemaker.amazonaws.com"}
+                }
+                assert statement["Resource"]["Fn::Sub"].endswith("/attempts/*/model/model.tar.gz")
+            elif any(a.startswith("s3:") for a in actions):
                 assert statement["Condition"]["StringEquals"]["aws:SourceVpce"] == {
                     "Ref": "S3GatewayEndpointId"
                 }
