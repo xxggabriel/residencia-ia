@@ -1,0 +1,209 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Optional Feature Store module: offline SageMaker feature group for the prepared Zia social
+  features (online store only on explicit activation), a Glue ETL job that materializes a
+  point-in-time training snapshot as versioned Parquet, and Glue Data Quality rules over the
+  prepared snapshot table.
+
+Parameters:
+  Project:
+    Type: String
+  DataBucketName:
+    Type: String
+  DataBucketArn:
+    Type: String
+  ArtifactsBucketName:
+    Type: String
+  ArtifactsBucketArn:
+    Type: String
+  DataKeyArn:
+    Type: String
+  AnalyticsDatabase:
+    Type: String
+  EnableOnlineStore:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Online store bills per GB-month and per read/write unit; keep false unless testing.
+  PreparedPrefix:
+    Type: String
+    Default: datasets/social/8518bf04c105df75ab72c13bbec1e12b270eb92f/prepared/zia-temporal-v1/full/
+  GlueScriptKey:
+    Type: String
+    Default: glue/materialize_features.py
+
+Conditions:
+  OnlineStore: !Equals [!Ref EnableOnlineStore, "true"]
+
+Resources:
+  FeatureStoreRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-feature-store"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: sagemaker.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: offline-store
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject, s3:GetBucketAcl, s3:ListBucket]
+                Resource: [!Ref DataBucketArn, !Sub "${DataBucketArn}/features/*"]
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey, kms:DescribeKey, kms:CreateGrant]
+                Resource: !Ref DataKeyArn
+              - Effect: Allow
+                Action: [glue:GetTable, glue:CreateTable, glue:UpdateTable, glue:GetDatabase, glue:BatchCreatePartition]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                  - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/${AnalyticsDatabase}"
+                  - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:table/${AnalyticsDatabase}/*"
+
+  SocialFeatureGroup:
+    Type: AWS::SageMaker::FeatureGroup
+    Properties:
+      FeatureGroupName: !Sub "${Project}-zia-social-edges"
+      Description: Point-in-time social edge features computed by prepare() from prior dates only
+      RecordIdentifierFeatureName: event_id
+      EventTimeFeatureName: event_time
+      RoleArn: !GetAtt FeatureStoreRole.Arn
+      FeatureDefinitions:
+        - {FeatureName: event_id, FeatureType: String}
+        - {FeatureName: event_time, FeatureType: Fractional}
+        - {FeatureName: label, FeatureType: Integral}
+        - {FeatureName: same_region, FeatureType: Fractional}
+        - {FeatureName: source_age, FeatureType: Fractional}
+        - {FeatureName: target_age, FeatureType: Fractional}
+        - {FeatureName: source_in, FeatureType: Fractional}
+        - {FeatureName: source_out, FeatureType: Fractional}
+        - {FeatureName: target_in, FeatureType: Fractional}
+        - {FeatureName: target_out, FeatureType: Fractional}
+      OfflineStoreConfig:
+        S3StorageConfig:
+          S3Uri: !Sub "s3://${DataBucketName}/features/offline"
+          KmsKeyId: !Ref DataKeyArn
+        DisableGlueTableCreation: false
+        TableFormat: Iceberg
+      OnlineStoreConfig: !If
+        - OnlineStore
+        - {EnableOnlineStore: true, SecurityConfig: {KmsKeyId: !Ref DataKeyArn}}
+        - !Ref AWS::NoValue
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: feature-store}]
+
+  PreparedSocialTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref AnalyticsDatabase
+      TableInput:
+        Name: prepared_social
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataBucketName}/${PreparedPrefix}"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo: {SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe}
+          Columns:
+            - {Name: event_time, Type: bigint}
+            - {Name: label, Type: int}
+            - {Name: same_region, Type: float}
+            - {Name: source_age, Type: float}
+            - {Name: target_age, Type: float}
+            - {Name: source_in, Type: float}
+            - {Name: source_out, Type: float}
+            - {Name: target_in, Type: float}
+            - {Name: target_out, Type: float}
+
+  PreparedQualityRules:
+    Type: AWS::Glue::DataQualityRuleset
+    Properties:
+      Name: !Sub "${Project}-prepared-social"
+      Description: Contract of the prepared social snapshot (labels, completeness, feature ranges)
+      TargetTable: {DatabaseName: !Ref AnalyticsDatabase, TableName: !Ref PreparedSocialTable}
+      Ruleset: >-
+        Rules = [
+          RowCount > 0,
+          IsComplete "event_time",
+          IsComplete "label",
+          ColumnValues "label" in [0, 1, 2, 3],
+          ColumnValues "same_region" in [0, 1],
+          ColumnValues "source_age" >= 0,
+          ColumnValues "target_age" >= 0,
+          ColumnValues "source_in" >= 0,
+          ColumnValues "target_out" >= 0
+        ]
+
+  GlueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-glue"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: glue.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSGlueServiceRole"
+      Policies:
+        - PolicyName: materialize
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "${DataBucketArn}/datasets/*/prepared/*"
+                  - !Sub "${DataBucketArn}/features/offline/*"
+                  - !Sub "${ArtifactsBucketArn}/${GlueScriptKey}"
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: [!Sub "${DataBucketArn}/features/materialized/*", !Sub "${DataBucketArn}/features/quality/*"]
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Ref DataBucketArn
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: !Ref DataKeyArn
+
+  MaterializeJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "${Project}-materialize-features"
+      Description: Point-in-time materialization of the training snapshot from the prepared Parquet
+      Role: !GetAtt GlueRole.Arn
+      GlueVersion: "5.0"
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 120
+      MaxRetries: 0
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub "s3://${ArtifactsBucketName}/${GlueScriptKey}"
+      DefaultArguments:
+        "--job-language": python
+        "--enable-glue-datacatalog": "true"
+        "--input_uri": !Sub "s3://${DataBucketName}/${PreparedPrefix}"
+        "--output_uri": !Sub "s3://${DataBucketName}/features/materialized/"
+        "--snapshot_version": zia-temporal-v1
+      ExecutionProperty: {MaxConcurrentRuns: 1}
+      Tags: {cb-stack: !Ref Project, cb-component: feature-store}
+
+Outputs:
+  FeatureGroupName:
+    Value: !Ref SocialFeatureGroup
+  MaterializeJobName:
+    Value: !Ref MaterializeJob
+  QualityRulesetName:
+    Value: !Ref PreparedQualityRules

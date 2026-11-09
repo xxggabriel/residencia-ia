@@ -1,0 +1,14 @@
+# Deploy stage: create, inspect and execute a change set for the runtime stack.
+# An empty change set (same commit re-run) is deleted and the stage succeeds.
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+  build:
+    commands:
+      - test -n "$GIT_SHA"
+      - >-
+        bash scripts/aws/deploy_change_set.sh "$RUNTIME_STACK"
+        "$CODEBUILD_SRC_DIR_BuildOutput/packaged-root.yaml"
+        "$CODEBUILD_SRC_DIR_BuildOutput/runtime-parameters.json" "$CFN_EXECUTION_ROLE" "$GIT_SHA"

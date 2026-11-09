@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Billing: AWS Data Exports CUR 2.0 (hourly, resource IDs, split cost allocation data) to the
+  retained billing bucket, a Glue table for Athena, a monthly budget and Cost Anomaly
+  Detection. Data Exports, Budgets and Cost Explorer resources exist in us-east-1 only.
+  Activating cost allocation tags and split cost allocation data requires the management
+  (payer) account; see docs/aws/costs.md.
+
+Parameters:
+  Project:
+    Type: String
+  BillingBucketName:
+    Type: String
+  AlertTopicArn:
+    Type: String
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 100
+    MinValue: 1
+  AnomalyThresholdUsd:
+    Type: Number
+    Default: 10
+    MinValue: 1
+  BudgetEmail:
+    Type: String
+    Default: ""
+  ExportName:
+    Type: String
+    Default: continual-bench-cur2
+
+Conditions:
+  HasEmail: !Not [!Equals [!Ref BudgetEmail, ""]]
+
+Resources:
+  CostAndUsageExport:
+    Type: AWS::BCMDataExports::Export
+    Properties:
+      Export:
+        Name: !Ref ExportName
+        Description: CUR 2.0 with resource IDs and split cost allocation data for continual-bench
+        DataQuery:
+          QueryStatement: >-
+            SELECT bill_billing_period_start_date, bill_payer_account_id, line_item_usage_account_id,
+            line_item_line_item_type, line_item_usage_start_date, line_item_usage_end_date,
+            line_item_product_code, line_item_usage_type, line_item_operation, line_item_resource_id,
+            line_item_usage_amount, line_item_unblended_cost, line_item_net_unblended_cost,
+            pricing_unit, product_region_code, resource_tags,
+            split_line_item_parent_resource_id, split_line_item_split_usage,
+            split_line_item_split_usage_ratio, split_line_item_reserved_usage,
+            split_line_item_actual_usage, split_line_item_split_cost, split_line_item_unused_cost,
+            split_line_item_public_on_demand_split_cost, split_line_item_public_on_demand_unused_cost
+            FROM COST_AND_USAGE_REPORT
+          TableConfigurations:
+            COST_AND_USAGE_REPORT:
+              TIME_GRANULARITY: HOURLY
+              INCLUDE_RESOURCES: "TRUE"
+              INCLUDE_SPLIT_COST_ALLOCATION_DATA: "TRUE"
+              INCLUDE_MANUAL_DISCOUNT_COMPATIBILITY: "FALSE"
+        DestinationConfigurations:
+          S3Destination:
+            S3Bucket: !Ref BillingBucketName
+            S3Prefix: cur2
+            S3Region: us-east-1
+            S3OutputConfigurations:
+              Compression: PARQUET
+              Format: PARQUET
+              OutputType: CUSTOM
+              Overwrite: OVERWRITE_REPORT
+        RefreshCadence:
+          Frequency: SYNCHRONOUS
+      Tags:
+        - {Key: cb-stack, Value: !Ref Project}
+
+  BillingDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Join ["_", [!Join ["_", !Split ["-", !Ref Project]], billing]]
+
+  CurTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref BillingDatabase
+      TableInput:
+        Name: cur2
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          projection.enabled: "true"
+          projection.billing_period.type: date
+          projection.billing_period.format: yyyy-MM
+          projection.billing_period.range: 2026-01,NOW
+          projection.billing_period.interval: "1"
+          projection.billing_period.interval.unit: MONTHS
+          storage.location.template: !Sub "s3://${BillingBucketName}/cur2/${ExportName}/data/BILLING_PERIOD=${!billing_period}/"
+        PartitionKeys: [{Name: billing_period, Type: string}]
+        StorageDescriptor:
+          Location: !Sub "s3://${BillingBucketName}/cur2/${ExportName}/data/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo: {SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe}
+          Columns:
+            - {Name: bill_billing_period_start_date, Type: timestamp}
+            - {Name: bill_payer_account_id, Type: string}
+            - {Name: line_item_usage_account_id, Type: string}
+            - {Name: line_item_line_item_type, Type: string}
+            - {Name: line_item_usage_start_date, Type: timestamp}
+            - {Name: line_item_usage_end_date, Type: timestamp}
+            - {Name: line_item_product_code, Type: string}
+            - {Name: line_item_usage_type, Type: string}
+            - {Name: line_item_operation, Type: string}
+            - {Name: line_item_resource_id, Type: string}
+            - {Name: line_item_usage_amount, Type: double}
+            - {Name: line_item_unblended_cost, Type: double}
+            - {Name: line_item_net_unblended_cost, Type: double}
+            - {Name: pricing_unit, Type: string}
+            - {Name: product_region_code, Type: string}
+            - {Name: resource_tags, Type: "map<string,string>"}
+            - {Name: split_line_item_parent_resource_id, Type: string}
+            - {Name: split_line_item_split_usage, Type: double}
+            - {Name: split_line_item_split_usage_ratio, Type: double}
+            - {Name: split_line_item_reserved_usage, Type: double}
+            - {Name: split_line_item_actual_usage, Type: double}
+            - {Name: split_line_item_split_cost, Type: double}
+            - {Name: split_line_item_unused_cost, Type: double}
+            - {Name: split_line_item_public_on_demand_split_cost, Type: double}
+            - {Name: split_line_item_public_on_demand_unused_cost, Type: double}
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub "${Project}-monthly"
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: {Amount: !Ref MonthlyBudgetUsd, Unit: USD}
+        CostTypes: {IncludeTax: true, IncludeSupport: false, UseBlended: false}
+      NotificationsWithSubscribers:
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 80, ThresholdType: PERCENTAGE}
+          Subscribers: !If
+            - HasEmail
+            - [{SubscriptionType: SNS, Address: !Ref AlertTopicArn}, {SubscriptionType: EMAIL, Address: !Ref BudgetEmail}]
+            - [{SubscriptionType: SNS, Address: !Ref AlertTopicArn}]
+        - Notification: {NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100, ThresholdType: PERCENTAGE}
+          Subscribers: [{SubscriptionType: SNS, Address: !Ref AlertTopicArn}]
+
+  ServiceAnomalyMonitor:
+    Type: AWS::CE::AnomalyMonitor
+    Properties:
+      MonitorName: !Sub "${Project}-services"
+      MonitorType: DIMENSIONAL
+      MonitorDimension: SERVICE
+
+  AnomalySubscription:
+    Type: AWS::CE::AnomalySubscription
+    Properties:
+      SubscriptionName: !Sub "${Project}-anomalies"
+      Frequency: IMMEDIATE
+      MonitorArnList: [!Ref ServiceAnomalyMonitor]
+      Subscribers: [{Type: SNS, Address: !Ref AlertTopicArn}]
+      ThresholdExpression: !Sub '{"Dimensions": {"Key": "ANOMALY_TOTAL_IMPACT_ABSOLUTE", "MatchOptions": ["GREATER_THAN_OR_EQUAL"], "Values": ["${AnomalyThresholdUsd}"]}}'
+
+Outputs:
+  ExportArn:
+    Value: !GetAtt CostAndUsageExport.ExportArn
+  BillingDatabaseName:
+    Value: !Ref BillingDatabase

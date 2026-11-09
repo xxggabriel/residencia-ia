@@ -32,9 +32,9 @@ abaixo dela; `core` não importa River, Pydantic, Kafka, ZenML, MinIO nem MLflow
 | `models` | Famílias de modelos com um construtor por tipo de tarefa | `__init__` (catálogo), `linear`, `tree`, `neighbors`, `encoding`, `serving` |
 | `detectors` | Catálogo de detectores de drift | `__init__`, `river` |
 | `evaluation` | Protocolos de avaliação, derivação de métricas, métricas de sistema e gráficos | `binary`, `holdout`, `prequential`, `typed`, `epochs`, `tracking`, `reporting`, `costs`, `scoring`, `environment`, `system_metrics`, `artifacts` |
-| `application` | Casos de uso | `runner`, `components`, `matrix`, `campaign`, `readiness`, `plugin_identity` |
-| `infrastructure` | E/S externa | `storage`, `versioning`, `services`, `catalog`, `metric_tracking`, `epoch_tracking`, `run_artifacts` |
-| `orchestration` | Pontos de entrada que agendam trabalho finito | `server`, `epoch_server`, `zenml_pipeline`, `zenml_steps`, `epoch_pipeline` |
+| `application` | Casos de uso | `runner`, `components`, `matrix`, `campaign`, `readiness`, `plugin_identity`, `cloud/*` (perfil AWS) |
+| `infrastructure` | E/S externa | `storage`, `versioning`, `services`, `catalog`, `metric_tracking`, `epoch_tracking`, `run_artifacts`, `object_store`, `stream_order`, `aws/*` (boto3) |
+| `orchestration` | Pontos de entrada que agendam trabalho finito | `server`, `epoch_server`, `zenml_pipeline`, `zenml_steps`, `epoch_pipeline`, `aws_control`, `aws_cli`, `sagemaker` |
 
 ## Padrões de projeto
 
@@ -119,3 +119,11 @@ Os arquivos de `configs/` seguem a estrutura base → sobrescrita descrita em
 definições de métricas versionados; `history/` guarda os manifestos congelados das campanhas
 executadas. `continual_bench.config.load_model(schema, caminho)` resolve a herança e valida o
 resultado.
+
+## Perfil AWS gerenciado
+
+`application.cloud` implementa aquisição, preparação, plano, execução de uma run, publicação,
+reconciliação e custos do perfil AWS. Os adaptadores boto3 ficam em `infrastructure.aws` e
+são injetados nas fronteiras de I/O. O perfil reaproveita o avaliador Zia, os geradores de
+artefatos e o planejador de matrizes. Ele não usa Airflow, ZenML, MinIO, Kafka nem MLflow.
+Veja [docs/aws/README.md](aws/README.md).

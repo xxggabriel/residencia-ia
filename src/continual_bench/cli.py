@@ -215,6 +215,19 @@ def matrix_command(args):
           "skipped": len(journal["skipped"])})
 
 
+def _aws_options(parser):
+    from .orchestration.aws_cli import configure
+
+    configure(parser)
+
+
+@command("aws", _aws_options)
+def aws_command(args):
+    from .orchestration.aws_cli import handle
+
+    handle(args)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="continual-bench")
     sub = parser.add_subparsers(dest="command", required=True)
