@@ -178,6 +178,25 @@ def test_control_can_read_back_write_once_analytics_rows():
     assert {"Fn::Sub": "${DataBucketArn}/analytics/*"} in write["Resource"]
 
 
+def test_model_registration_reads_only_the_project_inference_repository():
+    execution = template("modules/execution.yaml")
+    role = execution["Resources"]["BenchmarkJobRole"]
+    registry = next(
+        policy["Fn::If"] for policy in role["Properties"]["Policies"] if "Fn::If" in policy
+    )
+    assert registry[0] == "ModelRegistry"
+    image = next(
+        statement for statement in registry[1]["PolicyDocument"]["Statement"]
+        if statement.get("Sid") == "ReadInferenceImageForRegistration"
+    )
+    assert set(image["Action"]) == {"ecr:BatchGetImage", "ecr:DescribeImages"}
+    assert image["Resource"] == {"Ref": "MlRepositoryArn"}
+    root = template("root.yaml")["Resources"]["Execution"]
+    assert root["Properties"]["Parameters"]["MlRepositoryArn"] == {
+        "Fn::ImportValue": {"Fn::Sub": "${Project}-MlRepositoryArn"}
+    }
+
+
 def test_roles_are_separate_and_passrole_is_scoped():
     execution = template("modules/execution.yaml")["Resources"]
     cicd = template("cicd.yaml")["Resources"]
