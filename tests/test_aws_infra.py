@@ -264,6 +264,12 @@ def test_asl_validator_rejects_unsafe_definitions(tmp_path):
     )
     path.write_text(json.dumps(definition).replace("${JobQueue}", "${UnknownQueue}"))
     assert any("undefined substitutions" in e for e in ASL.validate_file(path))
+    # Step Functions rejects a state name reused in another Map processor (DUPLICATE_STATE_NAME).
+    reused = copy.deepcopy(definition)
+    distributed = reused["States"]["DistributedRuns"]["ItemProcessor"]
+    distributed["States"]["Route"] = distributed["States"].pop("DistributedRoute")
+    path.write_text(json.dumps(reused))
+    assert any("duplicate state name 'Route'" in e for e in ASL.validate_file(path))
 
 
 def test_runtime_parameters_pin_build_outputs():

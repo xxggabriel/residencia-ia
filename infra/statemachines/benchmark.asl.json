@@ -363,9 +363,9 @@
           "Mode": "DISTRIBUTED",
           "ExecutionType": "STANDARD"
         },
-        "StartAt": "Reconcile",
+        "StartAt": "DistributedReconcile",
         "States": {
-          "Reconcile": {
+          "DistributedReconcile": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
             "Parameters": {
@@ -400,33 +400,33 @@
                   "States.ALL"
                 ],
                 "ResultPath": "$.error",
-                "Next": "UnitFailed"
+                "Next": "DistributedUnitFailed"
               }
             ],
-            "Next": "Route"
+            "Next": "DistributedRoute"
           },
-          "Route": {
+          "DistributedRoute": {
             "Type": "Choice",
             "Choices": [
               {
                 "Variable": "$.reconciled.decision",
                 "StringEquals": "skip",
-                "Next": "Reused"
+                "Next": "DistributedReused"
               },
               {
                 "Variable": "$.reconciled.decision",
                 "StringEquals": "wait",
-                "Next": "WaitForExistingJob"
+                "Next": "DistributedWaitForExistingJob"
               },
               {
                 "Variable": "$.reconciled.decision",
                 "StringEquals": "exhausted",
-                "Next": "UnitFailed"
+                "Next": "DistributedUnitFailed"
               }
             ],
-            "Default": "Submit"
+            "Default": "DistributedSubmit"
           },
-          "Submit": {
+          "DistributedSubmit": {
             "Type": "Task",
             "Resource": "arn:aws:states:::batch:submitJob.sync",
             "Parameters": {
@@ -455,17 +455,17 @@
                   "States.ALL"
                 ],
                 "ResultPath": "$.error",
-                "Next": "RecordFailure"
+                "Next": "DistributedRecordFailure"
               }
             ],
-            "Next": "RecordSuccess"
+            "Next": "DistributedRecordSuccess"
           },
-          "WaitForExistingJob": {
+          "DistributedWaitForExistingJob": {
             "Type": "Wait",
             "Seconds": 60,
-            "Next": "DescribeExistingJob"
+            "Next": "DistributedDescribeExistingJob"
           },
-          "DescribeExistingJob": {
+          "DistributedDescribeExistingJob": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
             "Parameters": {
@@ -500,23 +500,23 @@
                   "States.ALL"
                 ],
                 "ResultPath": "$.error",
-                "Next": "RecordFailure"
+                "Next": "DistributedRecordFailure"
               }
             ],
-            "Next": "ExistingJobDone"
+            "Next": "DistributedExistingJobDone"
           },
-          "ExistingJobDone": {
+          "DistributedExistingJobDone": {
             "Type": "Choice",
             "Choices": [
               {
                 "Variable": "$.existing.terminal",
                 "BooleanEquals": true,
-                "Next": "RecordSuccess"
+                "Next": "DistributedRecordSuccess"
               }
             ],
-            "Default": "WaitForExistingJob"
+            "Default": "DistributedWaitForExistingJob"
           },
-          "RecordSuccess": {
+          "DistributedRecordSuccess": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
             "Parameters": {
@@ -551,23 +551,23 @@
                   "States.ALL"
                 ],
                 "ResultPath": "$.error",
-                "Next": "UnitFailed"
+                "Next": "DistributedUnitFailed"
               }
             ],
-            "Next": "Published"
+            "Next": "DistributedPublished"
           },
-          "Published": {
+          "DistributedPublished": {
             "Type": "Choice",
             "Choices": [
               {
                 "Variable": "$.outcome.status",
                 "StringEquals": "SUCCEEDED",
-                "Next": "UnitSucceeded"
+                "Next": "DistributedUnitSucceeded"
               }
             ],
-            "Default": "Reconcile"
+            "Default": "DistributedReconcile"
           },
-          "RecordFailure": {
+          "DistributedRecordFailure": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
             "Parameters": {
@@ -599,12 +599,12 @@
                   "States.ALL"
                 ],
                 "ResultPath": "$.error",
-                "Next": "UnitFailed"
+                "Next": "DistributedUnitFailed"
               }
             ],
-            "Next": "Reconcile"
+            "Next": "DistributedReconcile"
           },
-          "Reused": {
+          "DistributedReused": {
             "Type": "Pass",
             "Parameters": {
               "run_id.$": "$.item.run_id",
@@ -612,7 +612,7 @@
             },
             "End": true
           },
-          "UnitSucceeded": {
+          "DistributedUnitSucceeded": {
             "Type": "Pass",
             "Parameters": {
               "run_id.$": "$.item.run_id",
@@ -621,7 +621,7 @@
             },
             "End": true
           },
-          "UnitFailed": {
+          "DistributedUnitFailed": {
             "Type": "Pass",
             "Parameters": {
               "run_id.$": "$.item.run_id",
