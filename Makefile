@@ -8,7 +8,7 @@ smoke:
 compose-check:
 	docker compose --env-file .env.example config --quiet
 aws-validate:
-	CFN_LINT="uvx --from cfn-lint==1.38.0 cfn-lint" uv run python scripts/aws/validate_templates.py
+	CFN_LINT="uvx --from cfn-lint==1.60.0 cfn-lint" uv run python scripts/aws/validate_templates.py
 	uv run python scripts/aws/validate_asl.py infra/statemachines/benchmark.asl.json infra/statemachines/dataset.asl.json
 aws-smoke:
 	uv run continual-bench aws local-smoke --root state/aws-local-smoke

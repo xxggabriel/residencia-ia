@@ -63,11 +63,15 @@ def acquire(args):
 def prepare(args):
     from continual_bench.application.cloud.contracts import DatasetRequest
     from continual_bench.application.cloud.snapshots import prepare_snapshot
+    from continual_bench.evaluation.system_metrics import SystemMetricsSampler
 
     snapshot = DatasetRequest(
         dataset=args.dataset, scope=args.scope, revision=args.revision, mode="prepare"
     ).snapshot()
-    with tempfile.TemporaryDirectory(dir=args.workdir) as workdir:
+    with (
+        tempfile.TemporaryDirectory(dir=args.workdir) as workdir,
+        SystemMetricsSampler(workdir, 5) as sampler,
+    ):
         result = prepare_snapshot(
             _store(args), snapshot, workdir, image_digest=os.environ.get("BENCH_IMAGE_DIGEST")
         )
@@ -76,6 +80,7 @@ def prepare(args):
             "reused": result["reused"],
             "rows": result["prepared"]["rows"],
             "sha256": result["prepared"]["sha256"],
+            "resources": sampler.report()["summary"],
         }
     )
 
@@ -89,6 +94,18 @@ def publish_snapshot(args):
     ).snapshot()
     result = run(_store(args), snapshot)
     _emit({k: result[k] for k in ("manifest_uri", "marker_uri", "created", "snapshot_id")})
+
+
+def publish_matrix_source(args):
+    from continual_bench.application.cloud.matrix_sources import publish_source
+
+    if not args.local_root and not os.environ.get("BENCH_KMS_KEY_ID"):
+        raise SystemExit("BENCH_KMS_KEY_ID must contain the data bucket KMS key ARN")
+    with tempfile.TemporaryDirectory() as workdir:
+        _emit(publish_source(
+            _store(args), args.dataset, cache=args.cache, workdir=workdir, examples=args.examples,
+            seed=args.seed, real_directory=args.real_directory, download=args.download,
+        ))
 
 
 def run_unit(args):
@@ -181,7 +198,7 @@ def local_smoke(args):
 
     root = Path(args.root).resolve()
     store = LocalObjectStore(root / "store")
-    snapshot = publish_fixture_snapshot(store, root)
+    snapshot = publish_fixture_snapshot(store, root, args.dataset)
     release = publish_fixture_release(store)
     request = CampaignRequest(
         campaign_id=args.campaign, snapshot=snapshot.model_dump(), max_parallel=args.parallel
@@ -328,6 +345,13 @@ def configure(parser: argparse.ArgumentParser):
     )
     add("prepare", prepare, dataset)
     add("publish-snapshot", publish_snapshot, dataset)
+    matrix_source = add("publish-matrix-source", publish_matrix_source)
+    matrix_source.add_argument("--dataset", required=True)
+    matrix_source.add_argument("--cache", default="state/datasets")
+    matrix_source.add_argument("--real-directory")
+    matrix_source.add_argument("--examples", type=int, default=100)
+    matrix_source.add_argument("--seed", type=int, default=42)
+    matrix_source.add_argument("--download", action="store_true")
     add(
         "run-unit",
         run_unit,
@@ -348,6 +372,7 @@ def configure(parser: argparse.ArgumentParser):
         lambda c: (
             c.add_argument("--root", default="state/aws-local-smoke"),
             c.add_argument("--campaign", default="local-smoke"),
+            c.add_argument("--dataset", choices=["fraud", "social", "ecommerce"], default="social"),
             c.add_argument("--parallel", type=int, default=4),
             c.add_argument("--timeout", type=int, default=900),
         ),
