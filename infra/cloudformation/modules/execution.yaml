@@ -202,6 +202,7 @@ Resources:
                 Resource:
                   - !Sub "${DataBucketArn}/datasets/*/manifests/*"
                   - !Sub "${DataBucketArn}/datasets/*/prepared/*"
+                  - !Sub "${DataBucketArn}/datasets/matrix/*"
                   - !Sub "${DataBucketArn}/campaigns/*/units/*"
                   - !Sub "${DataBucketArn}/campaigns/*/runs/*"
                 Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
@@ -245,6 +246,12 @@ Resources:
                   Resource:
                     - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package-group/${Project}-*"
                     - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package/${Project}-*"
+                - Sid: ReadModelArchiveForRegistration
+                  # SageMaker validates ModelDataUrl on behalf of the caller outside the worker VPC.
+                  Effect: Allow
+                  Action: s3:GetObject
+                  Resource: !Sub "${DataBucketArn}/campaigns/*/runs/*/attempts/*/model/model.tar.gz"
+                  Condition: {StringEquals: {aws:CalledViaFirst: sagemaker.amazonaws.com}}
           - !Ref AWS::NoValue
 
   PrepareJobRole:
@@ -442,12 +449,14 @@ Resources:
               - Effect: Allow
                 Action: [codebuild:StartBuild, codebuild:StopBuild, codebuild:BatchGetBuilds]
                 Resource: !GetAtt AcquisitionProject.Arn
-              - Sid: DistributedMapItemsAndResults
+              - Sid: ReadDistributedMapItems
                 Effect: Allow
-                Action: [s3:GetObject, s3:PutObject, s3:ListMultipartUploadParts, s3:AbortMultipartUpload]
-                Resource:
-                  - !Sub "${DataBucketArn}/campaigns/*/plan-items.json"
-                  - !Sub "${DataBucketArn}/campaigns/*/map-results/*"
+                Action: s3:GetObject
+                Resource: !Sub "${DataBucketArn}/campaigns/*/plan-items.json"
+              - Sid: WriteDistributedMapResults
+                Effect: Allow
+                Action: [s3:PutObject, s3:ListMultipartUploadParts, s3:AbortMultipartUpload]
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactsBucketName}/map-results/*"
               - Effect: Allow
                 Action: [kms:Decrypt, kms:GenerateDataKey]
                 Resource: !Ref DataKeyArn
@@ -457,7 +466,9 @@ Resources:
                 Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${Project}-benchmark"
               - Effect: Allow
                 Action: [states:DescribeExecution, states:StopExecution]
-                Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${Project}-benchmark/*"
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${Project}-benchmark:*"
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${Project}-benchmark/*"
               - Sid: StatesLogDelivery
                 Effect: Allow
                 Action: [logs:CreateLogDelivery, logs:GetLogDelivery, logs:UpdateLogDelivery, logs:DeleteLogDelivery,
@@ -497,8 +508,11 @@ Resources:
 
   BenchmarkJobDefinition:
     Type: AWS::Batch::JobDefinition
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       JobDefinitionName: !Sub "${Project}-benchmark"
+      ResourceRetentionPolicy: {SkipDeregisterOnUpdate: true}
       Type: container
       PlatformCapabilities: [FARGATE]
       PropagateTags: true
@@ -545,8 +559,11 @@ Resources:
 
   PrepareJobDefinition:
     Type: AWS::Batch::JobDefinition
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       JobDefinitionName: !Sub "${Project}-prepare"
+      ResourceRetentionPolicy: {SkipDeregisterOnUpdate: true}
       Type: container
       PlatformCapabilities: [FARGATE]
       PropagateTags: true
@@ -660,6 +677,8 @@ Resources:
 
   ControlVersion:
     Type: AWS::Lambda::Version
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       FunctionName: !Ref ControlFunction
       CodeSha256: !Ref ControlCodeSha256
@@ -676,6 +695,7 @@ Resources:
         ControlFunction: !Ref ControlVersion
         JobQueue: !Ref JobQueue
         Project: !Ref Project
+        MapResultsBucket: !Ref ArtifactsBucketName
       LoggingConfiguration:
         Level: ERROR
         IncludeExecutionData: false

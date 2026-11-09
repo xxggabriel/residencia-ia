@@ -246,12 +246,16 @@ def test_sagemaker_profiles_build_valid_requests():
     spec = importlib.util.spec_from_file_location("jobs", Path("scripts/aws/sagemaker_jobs.py"))
     jobs = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(jobs)
-    common = {"bucket": "b", "role": "arn:aws:iam::1:role/r", "git_sha": "a" * 40}
+    kms = "arn:aws:kms:us-east-1:123456789012:key/example"
+    common = {"bucket": "b", "role": "arn:aws:iam::1:role/r", "git_sha": "a" * 40, "kms_key_arn": kms}
     training = jobs.training_request(jobs.profile("training"), image="ml@sha256:1", **common)
     tuning = jobs.tuning_request(
         jobs.profile("tuning"), jobs.profile("training"), image="ml@sha256:1", **common
     )
     processing = jobs.processing_request(jobs.profile("processing"), image="rt@sha256:1", **common)
+    assert processing["ProcessingOutputConfig"]["KmsKeyId"] == kms
+    assert training["OutputDataConfig"]["KmsKeyId"] == kms
+    assert tuning["TrainingJobDefinition"]["OutputDataConfig"]["KmsKeyId"] == kms
     stubber_client = boto3.client(
         "sagemaker", region_name="us-east-1", aws_access_key_id="x", aws_secret_access_key="y"
     )
