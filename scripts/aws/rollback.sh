@@ -7,6 +7,7 @@ GIT_SHA="${1:?git sha of a published release}"
 cd "$(dirname "$0")/../.."
 PROJECT="${PROJECT:-continual-bench}"
 DATA="$(aws cloudformation list-exports --query "Exports[?Name=='$PROJECT-DataBucket'].Value" --output text)"
+DATA_KEY_ARN="$(aws cloudformation list-exports --query "Exports[?Name=='$PROJECT-DataKeyArn'].Value" --output text)"
 ARTIFACTS="$(aws cloudformation list-exports --query "Exports[?Name=='$PROJECT-ArtifactsBucket'].Value" --output text)"
 ROLE="$(aws cloudformation describe-stacks --stack-name "$PROJECT-cicd" --query "Stacks[0].Outputs[?OutputKey=='CloudFormationExecutionRoleArn'].OutputValue" --output text)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
@@ -31,5 +32,6 @@ aws cloudformation package --template-file "$WORK/infra/cloudformation/root.yaml
   --s3-prefix "templates/$GIT_SHA" --output-template-file "$WORK/packaged-root.yaml" >/dev/null
 bash scripts/aws/deploy_change_set.sh "$PROJECT-runtime" "$WORK/packaged-root.yaml" "$WORK/runtime-parameters.json" "$ROLE" "$GIT_SHA"
 aws s3api put-object --bucket "$DATA" --key releases/latest.json --content-type application/json \
+  --server-side-encryption aws:kms --ssekms-key-id "$DATA_KEY_ARN" \
   --body <(printf '{"git_sha": "%s", "release_key": "releases/%s/release.json", "rollback": true}' "$GIT_SHA" "$GIT_SHA") >/dev/null
 echo "runtime rolled back to $GIT_SHA; releases/latest.json points to it"

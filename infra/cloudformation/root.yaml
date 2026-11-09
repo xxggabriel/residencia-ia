@@ -95,6 +95,11 @@ Parameters:
   AnomalyThresholdUsd:
     Type: Number
     Default: 10
+  ExistingServiceAnomalyMonitorArn:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^arn:aws(?:-[a-z0-9-]+)?:ce::[0-9]{12}:anomalymonitor/[a-zA-Z0-9-]+$'
+    Description: ARN of an existing AWS services cost anomaly monitor in this account.
   EnableStreaming:
     Type: String
     Default: "false"
@@ -235,6 +240,7 @@ Resources:
         AlertTopicArn: !GetAtt Observability.Outputs.AlertTopicArn
         MonthlyBudgetUsd: !Ref MonthlyBudgetUsd
         AnomalyThresholdUsd: !Ref AnomalyThresholdUsd
+        ExistingServiceAnomalyMonitorArn: !Ref ExistingServiceAnomalyMonitorArn
         BudgetEmail: !Ref AlertEmail
       Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: billing}]
 
@@ -298,6 +304,8 @@ Resources:
       Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: bi}]
 
 Outputs:
+  DataKeyArn:
+    Value: !GetAtt Execution.Outputs.DataKeyArn
   GitSha:
     Value: !Ref GitSha
   RuntimeImage:
