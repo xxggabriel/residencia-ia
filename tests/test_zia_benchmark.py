@@ -28,7 +28,8 @@ def test_binned_metrics_preserve_binary_confusion_and_calibration():
 
 
 @pytest.mark.parametrize("learner", ["boost", "logistic"])
-def test_models_roundtrip_and_continue(learner):
+@pytest.mark.parametrize("online_update", [False, True])
+def test_models_roundtrip_and_continue(learner, online_update):
     if learner == "boost":
         pytest.importorskip("xgboost")
         make = FraudOrReturnBooster
@@ -43,8 +44,35 @@ def test_models_roundtrip_and_continue(learner):
     restored = make()
     restored.load(first.payload()[0])
     np.testing.assert_allclose(restored.predict(x), prediction)
-    restored.fit(x, y, True)
+    if online_update:
+        restored.fit_online(x, 1 - y)
+        assert not np.array_equal(restored.predict(x), prediction)
+        if learner == "boost":
+            assert restored.model.num_boosted_rounds() == first.model.num_boosted_rounds()
+    else:
+        restored.fit(x, y, True)
     np.testing.assert_allclose(restored.predict(x).sum(axis=1), 1)
+    reloaded = make()
+    reloaded.load(restored.payload()[0])
+    np.testing.assert_array_equal(reloaded.predict(x), restored.predict(x))
+
+
+@pytest.mark.parametrize("policy", ["drift_adwin", "drift_ddm"])
+def test_zia_detectors_receive_the_same_binary_errors(policy):
+    from continual_bench.evaluation.zia import drift_alarms
+
+    class Recorder:
+        def __init__(self):
+            self.errors = []
+
+        def update(self, error):
+            self.errors.append(error)
+            self.drift_detected = len(self.errors) == 2
+
+    detector = Recorder()
+    assert drift_alarms(detector, policy, np.array([[0.5, 0.5], [0.8, 0.2], [0.1, 0.9]]),
+                        np.array([1, 1, 0]), {}) == 1
+    assert detector.errors == [0, 1, 1]
 
 
 def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
@@ -88,14 +116,24 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
     assert reports["frozen"]["metrics"]["update_count"] == 0
     assert reports["periodic"]["metrics"]["retrain_count"] == 2
     assert reports["incremental"]["metrics"]["training_unique_examples"] == 8996
+    assert reports["online"]["metrics"]["training_unique_examples"] == 8996
+    assert reports["online"]["metrics"]["retrain_count"] == 0
+    assert reports["online"]["model"] == reports["frozen"]["model"]
+    online_warmup = reports["online"]["model_versions"][0]
+    assert online_warmup["sha256"] == reports["frozen"]["model_versions"][0]["sha256"]
+    assert {v["action"] for v in reports["online"]["model_versions"]} == {"initial", "online"}
+    assert reports["cost_heuristic"]["metrics"]["retrain_count"] == 0
+    for policy in ("incremental", "online"):
+        report = reports[policy]
+        native = tmp_path / policy
+        replay = tmp_path / f"replay-{policy}"
+        copytree(native / "models", replay / "models")
+        replay_predictions(replay, report, tmp_path)
+        assert prediction_manifest(replay, report)["parts"] == prediction_manifest(native, report)["parts"]
     report = reports["incremental"]
-    native = tmp_path / "incremental"
-    replay = tmp_path / "replay"
-    copytree(native / "models", replay / "models")
-    replay_predictions(replay, report, tmp_path)
+    replay = tmp_path / "replay-incremental"
     evidence = prediction_manifest(replay, report)
     assert evidence["origin"] == "replayed_from_checkpoints"
-    assert evidence["parts"] == prediction_manifest(native, report)["parts"]
     tracking = tracking_report(report, evidence)
     assert tracking["tracking"]["metrics"]["fading_accuracy"] == pytest.approx(1)
     assert tracking["tracking"]["metrics"]["drift_tp"] is None

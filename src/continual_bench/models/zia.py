@@ -7,8 +7,9 @@ import io
 from typing import Any
 
 import numpy as np
+from river import optim
 from scipy.optimize import minimize
-from scipy.special import logsumexp, softmax
+from scipy.special import expit, logsumexp, softmax
 
 from continual_bench.config.iterative import IterativeTrainingConfig
 from continual_bench.models.training.loop import (
@@ -94,6 +95,11 @@ class FraudOrReturnBooster:
     }
     initial_rounds = 100
     continued_rounds = 100
+    online_params = {
+        "optimizer": "xgboost_refresh",
+        "gradient": "river_log_loss",
+        "minibatch_rows": 8192,
+    }
 
     def __init__(self, config: IterativeTrainingConfig | dict[str, Any] | None = None):
         enforce_single_thread_env()
@@ -113,6 +119,38 @@ class FraudOrReturnBooster:
         self._cached_dmatrix = None
         self._cached_dmatrix_key: tuple[int, tuple[int, ...], int, tuple[int, ...]] | None = None
         self.last_training_result: TrainingResult | None = None
+
+    def fit_online(self, x, y):
+        """Update the leaves of the existing booster with River's logistic gradient."""
+        loss = optim.losses.Log()
+
+        def objective(margins, matrix):
+            gradient = loss.gradient(matrix.get_label(), margins.clip(-80, 80))
+            p = expit(margins)
+            return gradient, np.maximum(p * (1 - p), 1e-16)
+
+        params = {
+            **self.params,
+            "process_type": "update",
+            "updater": "refresh",
+            "refresh_leaf": True,
+            "verbosity": 0,
+        }
+        rounds = self.model.num_boosted_rounds()
+        size = self.online_params["minibatch_rows"]
+        steps = 0
+        for start in range(0, len(y), size):
+            stop = start + size
+            matrix = self.xgb.DMatrix(x[start:stop], label=y[start:stop], nthread=1)
+            self.model = self.xgb.train(
+                params,
+                matrix,
+                num_boost_round=rounds,
+                xgb_model=self.model,
+                obj=objective,
+            )
+            steps += rounds
+        return steps
 
     def _xgb_params(self) -> dict[str, Any]:
         clean = {k: v for k, v in self.params.items() if k in _XGB_ALLOWED_PARAMS}
@@ -265,6 +303,7 @@ class MultinomialLogistic:
     }
     initial_rounds = 100
     continued_rounds = 100
+    online_params = {"optimizer": "river_sgd", "learning_rate": 0.05, "minibatch_rows": 1024}
 
     def __init__(
         self,
@@ -274,6 +313,7 @@ class MultinomialLogistic:
         enforce_single_thread_env()
         self.classes = int(classes)
         self.weights: np.ndarray | None = None
+        self._online_optimizer = optim.SGD(self.online_params["learning_rate"])
         self.params = dict(self.params)
         if config is not None:
             cfg = IterativeTrainingConfig.from_params(config)
@@ -284,6 +324,21 @@ class MultinomialLogistic:
             self.initial_rounds = cfg.max_epochs
             self.continued_rounds = cfg.max_epochs
         self.last_training_result: TrainingResult | None = None
+
+    def fit_online(self, x: np.ndarray, y: np.ndarray) -> int:
+        """Apply River SGD to the same softmax weights and intercept fitted at warm-up."""
+        size = self.online_params["minibatch_rows"]
+        for start in range(0, len(y), size):
+            labels = y[start : start + size]
+            features = x[start : start + size]
+            residuals = self.predict(features)
+            residuals[np.arange(len(labels)), labels] -= 1
+            gradient = np.empty_like(self.weights)
+            gradient[:-1] = features.T @ residuals / len(labels)
+            gradient[:-1] += self.params["l2"] * self.weights[:-1]
+            gradient[-1] = residuals.mean(axis=0)
+            self.weights = self._online_optimizer.step(self.weights, gradient)
+        return (len(y) + size - 1) // size
 
     def _objective_and_grad(
         self,
@@ -441,6 +496,18 @@ class MultinomialLogistic:
         }
 
 
+def make_zia_model(
+    name: str,
+    classes: int,
+    config: IterativeTrainingConfig | dict[str, Any] | None = None,
+):
+    if name == "xgboost":
+        return FraudOrReturnBooster(config=config)
+    if name == "multinomial_logistic":
+        return MultinomialLogistic(classes, config=config)
+    raise ValueError(f"unknown Zia model: {name}")
+
+
 class ZiaPredictor:
     """Load a native checkpoint and score prepared numeric features in training order."""
 
@@ -455,11 +522,7 @@ class ZiaPredictor:
         if hashlib.sha256(payload).hexdigest() != metadata["state_sha256"]:
             raise ValueError("Zia model checkpoint checksum mismatch")
         self.features = metadata["features"]
-        self.model = (
-            FraudOrReturnBooster()
-            if metadata["model"] == "xgboost"
-            else MultinomialLogistic(len(metadata["classes"]))
-        )
+        self.model = make_zia_model(metadata["model"], len(metadata["classes"]))
         self.model.load(payload)
 
     def predict(self, data, params=None):
