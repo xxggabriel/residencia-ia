@@ -190,6 +190,23 @@ def test_pipeline_triggers_on_push_to_main_only():
     assert "startExecution" not in text and "dataset" not in text.lower()
 
 
+def test_pipeline_artifact_prefix_matches_codepipeline_key_layout():
+    """CodePipeline writes artifacts under the first 20 characters of the pipeline name."""
+    cicd = template("cicd.yaml")
+    persistent = template("persistent.yaml")
+    pipeline_name = cicd["Parameters"]["Project"]["Default"] + "-release"
+    prefix = cicd["Parameters"]["PipelineArtifactPrefix"]["Default"]
+    assert prefix == pipeline_name[:20]
+    assert persistent["Parameters"]["PipelineArtifactPrefix"]["Default"] == prefix
+    rules = persistent["Resources"]["ArtifactsBucket"]["Properties"]["LifecycleConfiguration"]["Rules"]
+    (expiry,) = [r for r in rules if r["Id"] == "pipeline-artifacts"]
+    assert expiry["Prefix"] == {"Fn::Sub": "${PipelineArtifactPrefix}/"}
+    text = json.dumps(cicd["Resources"])
+    assert "/pipeline/*" not in text
+    for name in ("PipelineRole", "TestRole", "BuildRole", "DeployRole", "ReleaseRole"):
+        assert "${Arn}/${PipelineArtifactPrefix}/*" in json.dumps(cicd["Resources"][name]), name
+
+
 def test_buildspecs_never_acquire_data_or_start_campaigns():
     for path in (ROOT / "infra" / "buildspecs").glob("*.yml"):
         text = path.read_text()
