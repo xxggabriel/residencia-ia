@@ -406,9 +406,15 @@ Resources:
                   - !Ref JobQueue
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-benchmark:*"
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-prepare:*"
-              - Effect: Allow
+              - Sid: TagJobsOnSubmission
+                Effect: Allow
                 Action: batch:TagResource
-                Resource: !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*"
+                # A tagged SubmitJob also checks TagResource against the queue and job definition.
+                Resource:
+                  - !Ref JobQueue
+                  - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-benchmark:*"
+                  - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-prepare:*"
+                  - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*"
                 Condition: {StringEquals: {aws:RequestTag/cb-stack: !Ref Project}}
               - Effect: Allow
                 Action: batch:DescribeJobs
@@ -621,7 +627,8 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub "${Project}-control"
-      Description: Plan, reconcile, record and observe campaigns and dataset snapshots
+      # Release-only changes can keep the same code package. Publishing still needs a config change.
+      Description: !Sub "Plan, reconcile, record and observe campaigns and dataset snapshots (git ${GitSha})"
       Runtime: python3.12
       Architectures: [x86_64]
       Handler: continual_bench.orchestration.aws_control.handler
