@@ -111,7 +111,7 @@ def test_existing_experiment_matrix_becomes_independent_units(tmp_path):
     assert len({u["run_id"] for u in plan["units"]}) == len(plan["units"])
 
 
-def test_matrix_needing_network_is_refused(tmp_path):
+def test_matrix_without_a_published_source_binding_is_refused(tmp_path):
     matrix = tmp_path / "configs" / "matrices" / "online.yaml"
     matrix.parent.mkdir(parents=True)
     matrix.write_text(
@@ -125,8 +125,95 @@ def test_matrix_needing_network_is_refused(tmp_path):
     request = CampaignRequest(
         campaign_id="m", matrix={"kind": "experiment_matrix", "path": "configs/matrices/online.yaml"}
     )
-    with pytest.raises(ValueError, match="offline families"):
+    with pytest.raises(ValueError, match="source_digests for: electricity"):
         planning.build_plan(request, publish_fixture_release(store), project_root=tmp_path)
+
+
+def test_project_suite_preserves_all_cases_and_binds_external_inputs(tmp_path):
+    from continual_bench.datasets.catalog import CATALOG
+
+    sources = {
+        spec.name: "a" * 64 for spec in CATALOG
+        if spec.family in {"openml", "real_stream", "image", "temporal_vision"}
+    }
+    request = CampaignRequest(
+        campaign_id="suite", matrix={"kind": "project_suite"}, source_digests=sources,
+    )
+    plan = planning.build_plan(request, publish_fixture_release(LocalObjectStore(tmp_path)))
+    assert plan["mode"] == "distributed" and len(plan["units"]) == 548
+    bound = [unit for unit in plan["units"] if unit["params"].get("source_sha256")]
+    assert len(bound) == 113 and {u["labels"]["dataset"] for u in bound} == sources.keys()
+    assert len({u["run_id"] for u in plan["units"]}) == 548
+
+
+def test_worker_executes_a_checksum_bound_external_epoch_source(tmp_path, monkeypatch):
+    from continual_bench.application.cloud import matrix_sources
+    from continual_bench.core.contracts import TaskSample
+    from continual_bench.datasets.images import PreparedImageSource
+
+    source = PreparedImageSource(
+        [
+            TaskSample(str(i), i, i, i, {"f": float(i % 2)}, str(i % 2),
+                       split="train" if i < 80 else "test")
+            for i in range(100)
+        ],
+        {"name": "insects", "task": "multiclass", "labels": ["0", "1"], "version": "fixture"},
+    )
+    monkeypatch.setattr(matrix_sources, "load_dataset", lambda *a, **kw: source)
+    store = LocalObjectStore(tmp_path / "store")
+    binding = matrix_sources.publish_source(store, "insects", cache=tmp_path, workdir=tmp_path,
+                                            examples=100, seed=42)
+    path = tmp_path / "configs" / "matrices"
+    path.mkdir(parents=True)
+    (path / "epochs.yaml").write_text(
+        "name: epochs\nevaluator: epochs\nmodels: [{name: hoeffding_tree}]\n"
+        "datasets: [{name: insects, samples: 100}]\n"
+    )
+    (tmp_path / "configs" / "base").mkdir()
+    (tmp_path / "configs" / "base" / "tracking.yaml").write_text("{}")
+    request = CampaignRequest(
+        campaign_id="epochs", matrix={"kind": "experiment_matrix", "path": "configs/matrices/epochs.yaml"},
+        source_digests={"insects": binding["sha256"]},
+    )
+    plan = planning.build_plan(request, publish_fixture_release(store), project_root=tmp_path)
+    matrix_sources.verify_plan_sources(store, plan["units"])
+    plan["units"][0]["params"]["config"]["examples"] = 101
+    with pytest.raises(ValueError, match="count and seed"):
+        matrix_sources.verify_plan_sources(store, plan["units"])
+    plan["units"][0]["params"]["config"]["examples"] = 100
+    planning.publish_plan(store, plan)
+    assert run_unit(store, plan["units"][0]["unit_key"], tmp_path / "worker", env=_env()) == EXIT_OK
+    rows = store.get_bytes(layout.analytics_key("runs", "epochs", plan["units"][0]["run_id"]))
+    assert json.loads(rows)["model"] == "hoeffding_tree" and json.loads(rows)["seed"] == 42
+
+
+def test_openml_is_materialized_from_pinned_arff_without_changing_the_run_config(tmp_path, monkeypatch):
+    from continual_bench.application.cloud import matrix_sources
+    from continual_bench.config import Config
+    from continual_bench.datasets.openml import REAL_SOURCES
+    from continual_bench.infrastructure.object_store import sha256_path
+
+    raw = tmp_path / "electricity.arff"
+    raw.write_text(
+        "@relation fixture\n@attribute x numeric\n@attribute class {UP,DOWN}\n@data\n"
+        + "0,UP\n1,DOWN\n" * 150
+    )
+    monkeypatch.setitem(REAL_SOURCES, "electricity", {
+        **REAL_SOURCES["electricity"], "sha256": sha256_path(raw), "rows": 300,
+        "columns": ["x", "class"], "nominal": ["class"],
+    })
+    store = LocalObjectStore(tmp_path / "store")
+    result = matrix_sources.publish_source(
+        store, "electricity", cache=tmp_path, workdir=tmp_path, real_directory=tmp_path,
+        examples=100, seed=42,
+    )
+    config = Config(dataset={"name": "electricity", "samples": 300})
+    source = matrix_sources.materialize_source(
+        store, "electricity", result["sha256"], tmp_path / "private", config, "binary"
+    )
+    assert config.dataset.params == {}
+    assert len(list(source.events())) == 300
+    assert source.path == tmp_path / "private" / "electricity.arff"
 
 
 def _env(index=0, digest=None):

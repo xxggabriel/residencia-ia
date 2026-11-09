@@ -28,6 +28,7 @@ SAMPLE_SUBSTITUTIONS = {
     "ControlFunction": "arn:aws:lambda:us-east-1:123456789012:function:continual-bench-control:1",
     "JobQueue": "arn:aws:batch:us-east-1:123456789012:job-queue/continual-bench-jobs",
     "AcquisitionProject": "continual-bench-acquisition",
+    "MapResultsBucket": "continual-bench-artifacts-123456789012-us-east-1",
     "Project": "continual-bench",
 }
 

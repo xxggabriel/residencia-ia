@@ -22,6 +22,10 @@ def raw_manifest_key(dataset, revision):
     return f"{dataset_root(dataset, revision)}/raw/_manifest.json"
 
 
+def matrix_source_key(dataset, sha256):
+    return f"datasets/matrix/{dataset}/{sha256}/source"
+
+
 def prepared_key(snapshot, suffix):
     """Parquet sits alone under `<scope>/` so Glue/Athena tables read no JSON sidecars."""
     base = f"{dataset_root(snapshot.dataset, snapshot.revision)}/prepared/{snapshot.preparation_version}"

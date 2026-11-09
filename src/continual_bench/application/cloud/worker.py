@@ -222,14 +222,22 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log) -> dict:
     }
 
 
-def execute_matrix_case(unit: RunUnit, workdir: Path, log) -> dict:
+def execute_matrix_case(store, unit: RunUnit, workdir: Path) -> dict:
     from continual_bench.application.matrix import _execute_case, _headline
     from continual_bench.config import Config, EpochConfig, TypedConfig
 
-    schema = {"binary": Config, "typed": TypedConfig, "epochs": EpochConfig}[unit.params["evaluator"]]
+    evaluator = unit.params["evaluator"]
+    schema = {"binary": Config, "typed": TypedConfig, "epochs": EpochConfig}[evaluator]
     config = schema.model_validate(unit.params["config"])
     output = workdir / "run"
-    report = _execute_case(config, output, str(workdir / "cache"), None)
+    source = None
+    if "source_sha256" in unit.params:
+        from .matrix_sources import materialize_source
+
+        source = materialize_source(
+            store, unit.labels["dataset"], unit.params["source_sha256"], workdir / "source", config, evaluator
+        )
+    report = _execute_case(config, output, str(workdir / "cache"), None, source=source)
     return {"report": report, "headline": _headline(report), "output": output}
 
 
@@ -287,7 +295,7 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
         if unit.kind == "zia":
             outcome = execute_zia(unit, store, workdir, log)
         else:
-            outcome = execute_matrix_case(unit, workdir, log)
+            outcome = execute_matrix_case(store, unit, workdir)
         evaluation_seconds = time.monotonic() - started
         prefix = layout.attempt_prefix(unit.campaign_id, unit.run_id, attempt_key)
         outputs_uri = store.uri(prefix)
@@ -361,8 +369,15 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
                 }
             )
         else:
+            from continual_bench.models import default_model
+
+            dimensions = ("model", "mode", "detector", "seed")
+            coordinates = {k: unit.labels[k] for k in dimensions if k in unit.labels}
+            if "model" not in coordinates and unit.params["evaluator"] == "epochs":
+                coordinates["model"] = default_model(outcome["report"]["contract"]["source"]["task"])
+            coordinates["seed"] = int(coordinates["seed"])
             rows = matrix_rows(
-                _base(unit, attempt_key),
+                {**_base(unit, attempt_key), **coordinates},
                 outcome["headline"],
                 outcome["report"],
                 store.uri(final_key),
@@ -373,6 +388,7 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
             final.update(
                 {
                     "metrics": outcome["headline"],
+                    "matrix_coordinates": coordinates,
                     "published": published,
                     "run_key": outcome["report"].get("run_key"),
                 }

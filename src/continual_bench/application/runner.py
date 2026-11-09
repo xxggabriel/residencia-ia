@@ -26,9 +26,10 @@ __all__ = ["environment", "evaluate", "prepare", "read_events", "run"]
 MATERIALIZATION_BUDGET = 256 * 1024**2
 
 
-def prepare(config: Config, root: str) -> dict:
+def prepare(config: Config, root: str, *, source=None) -> dict:
     registry = default_registry(config.plugins)
-    source = make_source(registry, config.dataset)
+    if source is None:
+        source = make_source(registry, config.dataset)
     directory = Path(root) / config.identity()
     directory.mkdir(parents=True, exist_ok=True)
     data_path = directory / "events.jsonl"
@@ -168,12 +169,12 @@ def write_binary_artifacts(directory, report) -> dict:
     })
 
 
-def run(config: Config, root="state", *, services=False):
+def run(config: Config, root="state", *, services=False, source=None):
     if services:
         from .readiness import ensure_tracking_ready
 
         ensure_tracking_ready()
-    manifest = prepare(config, root)
+    manifest = prepare(config, root, source=source)
     transport = None
     if services and config.mode == "streaming":
         from continual_bench.infrastructure.services import KafkaTransport
