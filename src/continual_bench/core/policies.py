@@ -6,7 +6,7 @@ trigger to subclasses. `PolicyStrategy(kind, ...)` remains the factory entry poi
 """
 
 import math
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from .contracts import Decision, DecisionContext
 
@@ -14,6 +14,8 @@ ACTIONS = frozenset({"reset_retrain", "learn_one"})
 SCENARIO_PARAMS = frozenset({"error_threshold", "target_error", "horizon",
                              "error_cost", "fixed_train_cost", "sample_train_cost"})
 PERMITTED_PARAMS = SCENARIO_PARAMS | {"monitor_window"}
+ZiaPolicy = Literal["frozen", "online", "drift", "drift_adwin", "drift_ddm",
+                    "incremental", "periodic", "cost_heuristic"]
 
 
 class RetrainingPolicy:

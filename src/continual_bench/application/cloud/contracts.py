@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from continual_bench.config import Strict
+from continual_bench.core.policies import ZiaPolicy
 from continual_bench.datasets.zia import DATASETS, FORMAT, SCOPES
 
 CAMPAIGN_ID = r"^[a-z0-9][a-z0-9-]{0,39}$"
@@ -111,7 +112,7 @@ class ReleaseManifest(Strict):
 
 class ZiaMatrix(Strict):
     kind: Literal["zia"] = "zia"
-    policies: tuple[Literal["frozen", "drift", "incremental", "periodic"], ...] = ZIA_POLICIES
+    policies: tuple[ZiaPolicy, ...] = ZIA_POLICIES
 
     @field_validator("policies")
     @classmethod

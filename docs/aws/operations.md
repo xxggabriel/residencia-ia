@@ -144,6 +144,31 @@ Timeouts: `jobStateTimeLimitActions` da fila cancela jobs presos em `RUNNABLE` (
 execução por item. Códigos de saída: 0 sucesso ou reaproveitamento, 1 falha de execução,
 2 contrato (imagem ou perfil divergente do plano), 3 snapshot.
 
+### Campanha integral dos três datasets Zia
+
+Os exemplos `dataset-{fraud,social,ecommerce}-full.json` preparam 50, 100 e 50 milhões
+de eventos, respectivamente. Aguarde os três marcadores `_SUCCESS.json` no escopo `full`
+e confira as contagens no manifesto antes de iniciar as campanhas.
+
+Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem sete jobs independentes
+por dataset. Fixe o mesmo SHA de release nos três arquivos. Para disparar as três campanhas
+em paralelo, confira se a fila, o compute environment e a quota regional permitem **21 jobs
+simultâneos**. Cada job usa 1 vCPU e 2 GiB de RAM (`BenchmarkVcpus=1` e
+`BenchmarkMemoryMiB=2048`). Reserve pelo menos 21 vCPUs livres no ambiente compartilhado.
+Os exemplos pedem sete jobs simultâneos por campanha e uma tentativa por job.
+
+As variantes são `frozen`, `online`, `drift_adwin`, `drift_ddm`, `incremental`,
+`periodic` e `cost_heuristic`. Todas usam o mesmo modelo por dataset, o mesmo warm-up e
+as mesmas fronteiras temporais. O modo `online` atualiza em minibatches após a predição
+do bloco. Em Social, River SGD atualiza os coeficientes da regressão logística multinomial.
+Em Fraud e E-commerce, a perda logística do River fornece os gradientes e o XGBoost
+atualiza os pesos das folhas das árvores existentes. O holdout usa o último checkpoint.
+
+Os dois detectores recebem o mesmo sinal binário de erro de cada predição e podem acionar
+um retreino por bloco. A heurística compara o custo de retreinar com a redução projetada
+no erro, usando os quatro últimos blocos e os custos do perfil de tracking em unidades de
+cenário. O relatório registra os parâmetros de decisão e o método de atualização.
+
 ### Suíte de todos os datasets
 
 `matrix.kind=project_suite` usa o mesmo gerador de casos da DAG `benchmark_task_suite`.
