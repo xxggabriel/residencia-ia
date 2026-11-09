@@ -95,3 +95,31 @@ class MultinomialLogistic:
     def explanation(self, features):
         return {"coefficients": {name: row.tolist() for name, row in zip(
             [*features, "intercept"], self.weights, strict=True)}}
+
+
+class ZiaPredictor:
+    """Load a native checkpoint and score prepared numeric features in training order."""
+
+    def __init__(self, directory):
+        import hashlib
+        import json
+        from pathlib import Path
+
+        directory = Path(directory)
+        metadata = json.loads((directory / "model-metadata.json").read_text())
+        payload = (directory / metadata["payload"]).read_bytes()
+        if hashlib.sha256(payload).hexdigest() != metadata["state_sha256"]:
+            raise ValueError("Zia model checkpoint checksum mismatch")
+        self.features = metadata["features"]
+        self.model = (FraudOrReturnBooster() if metadata["model"] == "xgboost"
+                      else MultinomialLogistic(len(metadata["classes"])))
+        self.model.load(payload)
+
+    def predict(self, data, params=None):
+        if not data.columns.is_unique or set(data.columns) != set(self.features):
+            raise ValueError("inference feature schema differs from the Zia model")
+        return self.model.predict(data[self.features].to_numpy(dtype=np.float32))
+
+
+def _load_pyfunc(path):
+    return ZiaPredictor(path)
