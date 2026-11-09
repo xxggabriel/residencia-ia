@@ -3,6 +3,7 @@
 import copy
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -319,6 +320,21 @@ def test_billing_export_includes_resources_and_split_costs():
     assert "split_line_item_split_cost" in export["DataQuery"]["QueryStatement"]
 
 
+def test_billing_can_subscribe_to_an_existing_service_anomaly_monitor():
+    root = template("root.yaml")
+    billing = template("modules/billing.yaml")
+    param = "ExistingServiceAnomalyMonitorArn"
+    create = "CreateServiceAnomalyMonitor"
+    assert root["Parameters"][param]["Default"] == billing["Parameters"][param]["Default"] == ""
+    assert root["Resources"]["Billing"]["Properties"]["Parameters"][param] == {"Ref": param}
+    assert billing["Conditions"][create] == {"Fn::Equals": [{"Ref": param}, ""]}
+    resources = billing["Resources"]
+    assert resources["ServiceAnomalyMonitor"]["Condition"] == create
+    assert resources["AnomalySubscription"]["Properties"]["MonitorArnList"] == [
+        {"Fn::If": [create, {"Ref": "ServiceAnomalyMonitor"}, {"Ref": param}]}
+    ]
+
+
 def test_state_machines_validate_offline():
     for path in (ROOT / "infra" / "statemachines").glob("*.asl.json"):
         assert ASL.validate_file(path) == []
@@ -397,6 +413,55 @@ def test_release_manifest_composition_refuses_mismatched_deploys():
             "stack",
             None,
         )
+
+
+def test_release_uploads_use_the_data_buckets_kms_key(monkeypatch, tmp_path):
+    release = script("write_release")
+    root = template("root.yaml")
+    execution = template("modules/execution.yaml")
+    assert root["Outputs"]["DataKeyArn"]["Value"] == {"Fn::GetAtt": "Execution.Outputs.DataKeyArn"}
+    assert execution["Outputs"]["DataKeyArn"]["Value"] == {"Ref": "DataKeyArn"}
+    key_arn = "arn:aws:kms:us-east-1:123456789012:key/example"
+    sha = "a" * 40
+    build_output = tmp_path / "build-output.json"
+    build_output.write_text("{}")
+    uploads = []
+
+    def upload(*args, check=True):
+        assert args[:2] == ("s3api", "put-object")
+        uploads.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(release, "aws", upload)
+    monkeypatch.setattr(release, "stack_outputs", lambda _: {"DataKeyArn": key_arn})
+    monkeypatch.setattr(release, "compose", lambda *_: {"images": {}})
+    monkeypatch.setattr(release.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(
+        release.sys,
+        "argv",
+        [
+            "write_release.py",
+            "--stack",
+            "stack",
+            "--bucket",
+            "data",
+            "--git-sha",
+            sha,
+            "--build-output",
+            str(build_output),
+        ],
+    )
+    release.main()
+
+    assert [args[args.index("--key") + 1] for args in uploads] == [
+        f"releases/{sha}/release.json",
+        "releases/latest.json",
+    ]
+    for args in uploads:
+        assert args[args.index("--server-side-encryption") + 1] == "aws:kms"
+        assert args[args.index("--ssekms-key-id") + 1] == key_arn
+    assert uploads[0][uploads[0].index("--if-none-match") + 1] == "*"
+    assert "--if-none-match" not in uploads[1]
 
 
 def test_control_lambda_dependencies_come_from_the_aws_lock():

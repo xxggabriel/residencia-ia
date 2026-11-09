@@ -79,7 +79,7 @@ def ecr_digest(repository: str, tag: str) -> str:
     return detail["imageDigest"]
 
 
-def put_once(bucket: str, key: str, manifest: dict) -> str:
+def put_once(bucket: str, key: str, manifest: dict, kms_key_arn: str) -> str:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as body:
         json.dump(manifest, body, indent=2, sort_keys=True)
     created = aws(
@@ -93,6 +93,10 @@ def put_once(bucket: str, key: str, manifest: dict) -> str:
         body.name,
         "--content-type",
         "application/json",
+        "--server-side-encryption",
+        "aws:kms",
+        "--ssekms-key-id",
+        kms_key_arn,
         "--if-none-match",
         "*",
         check=False,
@@ -119,12 +123,14 @@ def main():
     parser.add_argument("--pipeline-execution-id", default="")
     args = parser.parse_args()
     build = json.loads(open(args.build_output).read())
-    manifest = compose(stack_outputs(args.stack), build, args.git_sha, args.stack, args.pipeline_execution_id)
+    outputs = stack_outputs(args.stack)
+    manifest = compose(outputs, build, args.git_sha, args.stack, args.pipeline_execution_id)
+    kms_key_arn = outputs["DataKeyArn"]
     for role, image in manifest["images"].items():
         if ecr_digest(image["repository"], image["tag"]) != image["digest"]:
             raise SystemExit(f"ECR tag {image['tag']} of {role} does not point to {image['digest']}")
     key = f"releases/{args.git_sha}/release.json"
-    status = put_once(args.bucket, key, manifest)
+    status = put_once(args.bucket, key, manifest, kms_key_arn)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as pointer:
         json.dump({"git_sha": args.git_sha, "release_key": key}, pointer)
     aws(
@@ -138,6 +144,10 @@ def main():
         pointer.name,
         "--content-type",
         "application/json",
+        "--server-side-encryption",
+        "aws:kms",
+        "--ssekms-key-id",
+        kms_key_arn,
     )
     json.dump({"release": key, "status": status, **manifest}, sys.stdout, indent=2)
 

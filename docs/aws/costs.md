@@ -38,6 +38,11 @@ retido. Também cria a tabela `continual_bench_billing.cur2` com projeção por 
 o orçamento mensal (alertas a 80% do real e 100% do previsto) e um monitor de anomalias por
 serviço com assinatura no SNS.
 
+Se a conta já tiver um monitor de anomalias do tipo `DIMENSIONAL` para `SERVICE`, informe
+o ARN em `ExistingServiceAnomalyMonitorArn` no objeto `config/runtime-parameters.json`
+do bucket de artefatos. A stack cria a assinatura do projeto no monitor existente.
+A conta continua responsável pelo monitor e pelas assinaturas que já estavam associadas a ele.
+
 Etapas que exigem a conta pagadora (management account), fora do CloudFormation:
 
 1. **Tags de alocação**: Billing → Cost allocation tags → ativar `cb-stack`, `cb-campaign`,
