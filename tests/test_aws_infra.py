@@ -118,6 +118,27 @@ def test_tagged_submission_can_authorize_the_job_queue_and_definitions():
     assert tag["Condition"] == {"StringEquals": {"aws:RequestTag/cb-stack": {"Ref": "Project"}}}
 
 
+def test_worker_can_list_and_register_versions_in_project_model_groups():
+    """ListModelPackages/CreateModelPackage are evaluated on model-package/<group>/*."""
+    role = template("modules/execution.yaml")["Resources"]["BenchmarkJobRole"]
+    registry = next(
+        p["Fn::If"][1] for p in role["Properties"]["Policies"] if isinstance(p, dict) and "Fn::If" in p
+    )
+    sid = "ListAndRegisterVersionsInProjectGroups"
+    versions = next(s for s in registry["PolicyDocument"]["Statement"] if s.get("Sid") == sid)
+    assert {"sagemaker:ListModelPackages", "sagemaker:CreateModelPackage"} <= set(versions["Action"])
+    arns = json.dumps(versions["Resource"])
+    assert "model-package/${Project}-*" in arns and "model-package-group/${Project}-*" in arns
+
+
+def test_control_can_read_back_write_once_analytics_rows():
+    role = template("modules/execution.yaml")["Resources"]["ControlRole"]
+    read = next(s for s in statements(role) if s.get("Sid") == "ReadReleasesAndSnapshots")
+    write = next(s for s in statements(role) if s.get("Sid") == "WriteCampaignStateManifestsAndAnalytics")
+    assert {"Fn::Sub": "${DataBucketArn}/analytics/*"} in read["Resource"]
+    assert {"Fn::Sub": "${DataBucketArn}/analytics/*"} in write["Resource"]
+
+
 def test_roles_are_separate_and_passrole_is_scoped():
     execution = template("modules/execution.yaml")["Resources"]
     cicd = template("cicd.yaml")["Resources"]
