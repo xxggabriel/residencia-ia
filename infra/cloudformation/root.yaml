@@ -1,0 +1,338 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  continual-bench runtime root stack (deployed by the pipeline on every merge to main). Nests
+  the network/security, execution, observability and tracking modules (Core profile) and the
+  explicitly activated Streaming, Feature Store, ML, BI and billing modules. Persistent data
+  lives in the separate persistent stack, referenced through its exports.
+
+Parameters:
+  Project:
+    Type: String
+    Default: continual-bench
+  GitSha:
+    Type: String
+    AllowedPattern: "^[0-9a-f]{40}$"
+  RuntimeImage:
+    Type: String
+  MlImage:
+    Type: String
+  ControlCodeKey:
+    Type: String
+  ControlCodeSha256:
+    Type: String
+  AvailabilityZoneCount:
+    Type: Number
+    Default: 2
+    AllowedValues: [1, 2]
+  S3PrefixListId:
+    Type: String
+    Default: pl-63a5400a
+  MaxVcpus:
+    Type: Number
+    Default: 8
+  FargateCapacity:
+    Type: String
+    Default: FARGATE
+    AllowedValues: [FARGATE, FARGATE_SPOT]
+  BenchmarkVcpus:
+    Type: String
+    Default: "1"
+  BenchmarkMemoryMiB:
+    Type: Number
+    Default: 2048
+  BenchmarkEphemeralGiB:
+    Type: Number
+    Default: 50
+  BenchmarkTimeoutSeconds:
+    Type: Number
+    Default: 172800
+  PrepareVcpus:
+    Type: String
+    Default: "2"
+  PrepareMemoryMiB:
+    Type: Number
+    Default: 8192
+  PrepareEphemeralGiB:
+    Type: Number
+    Default: 150
+  PrepareTimeoutSeconds:
+    Type: Number
+    Default: 43200
+  QueueWaitTimeoutSeconds:
+    Type: Number
+    Default: 3600
+  JobAttempts:
+    Type: Number
+    Default: 2
+  LogRetentionDays:
+    Type: Number
+    Default: 90
+  AcquisitionComputeType:
+    Type: String
+    Default: BUILD_GENERAL1_LARGE
+  AcquisitionTimeoutMinutes:
+    Type: Number
+    Default: 480
+  AlertEmail:
+    Type: String
+    Default: ""
+  EnableModelRegistry:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  EnableBilling:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 100
+  AnomalyThresholdUsd:
+    Type: Number
+    Default: 10
+  EnableStreaming:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableFeatureStore:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableOnlineStore:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableMl:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableEndpoint:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EndpointModelDataUrl:
+    Type: String
+    Default: ""
+  EnableBi:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  QuickSightPrincipalArn:
+    Type: String
+    Default: ""
+
+Conditions:
+  Billing: !Equals [!Ref EnableBilling, "true"]
+  Streaming: !Equals [!Ref EnableStreaming, "true"]
+  FeatureStore: !Equals [!Ref EnableFeatureStore, "true"]
+  Ml: !Equals [!Ref EnableMl, "true"]
+  Bi: !Equals [!Ref EnableBi, "true"]
+
+Rules:
+  BiNeedsPrincipal:
+    RuleCondition: !Equals [!Ref EnableBi, "true"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref QuickSightPrincipalArn, ""]]
+        AssertDescription: EnableBi=true requires QuickSightPrincipalArn
+  EndpointNeedsMl:
+    RuleCondition: !Equals [!Ref EnableEndpoint, "true"]
+    Assertions:
+      - Assert: !Equals [!Ref EnableMl, "true"]
+        AssertDescription: EnableEndpoint=true requires EnableMl=true
+
+Resources:
+  Network:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: modules/network.yaml
+      Parameters:
+        Project: !Ref Project
+        AvailabilityZoneCount: !Ref AvailabilityZoneCount
+        DataBucketArn: {"Fn::ImportValue": !Sub "${Project}-DataBucketArn"}
+        ArtifactsBucketArn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
+        S3PrefixListId: !Ref S3PrefixListId
+        EnableModelRegistry: !Ref EnableModelRegistry
+        EnableStreaming: !Ref EnableStreaming
+        EnableFeatureStore: !Ref EnableFeatureStore
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: network}]
+
+  Execution:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: modules/execution.yaml
+      Parameters:
+        Project: !Ref Project
+        DataBucketName: {"Fn::ImportValue": !Sub "${Project}-DataBucket"}
+        DataBucketArn: {"Fn::ImportValue": !Sub "${Project}-DataBucketArn"}
+        ArtifactsBucketName: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucket"}
+        DataKeyArn: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
+        RuntimeRepositoryArn: {"Fn::ImportValue": !Sub "${Project}-RuntimeRepositoryArn"}
+        PrivateSubnets: !GetAtt Network.Outputs.PrivateSubnets
+        WorkerSecurityGroupId: !GetAtt Network.Outputs.WorkerSecurityGroupId
+        S3GatewayEndpointId: !GetAtt Network.Outputs.S3GatewayEndpointId
+        RuntimeImage: !Ref RuntimeImage
+        MlImage: !Ref MlImage
+        GitSha: !Ref GitSha
+        ControlCodeKey: !Ref ControlCodeKey
+        ControlCodeSha256: !Ref ControlCodeSha256
+        MaxVcpus: !Ref MaxVcpus
+        FargateCapacity: !Ref FargateCapacity
+        BenchmarkVcpus: !Ref BenchmarkVcpus
+        BenchmarkMemoryMiB: !Ref BenchmarkMemoryMiB
+        BenchmarkEphemeralGiB: !Ref BenchmarkEphemeralGiB
+        BenchmarkTimeoutSeconds: !Ref BenchmarkTimeoutSeconds
+        PrepareVcpus: !Ref PrepareVcpus
+        PrepareMemoryMiB: !Ref PrepareMemoryMiB
+        PrepareEphemeralGiB: !Ref PrepareEphemeralGiB
+        PrepareTimeoutSeconds: !Ref PrepareTimeoutSeconds
+        QueueWaitTimeoutSeconds: !Ref QueueWaitTimeoutSeconds
+        JobAttempts: !Ref JobAttempts
+        LogRetentionDays: !Ref LogRetentionDays
+        AcquisitionComputeType: !Ref AcquisitionComputeType
+        AcquisitionTimeoutMinutes: !Ref AcquisitionTimeoutMinutes
+        EnableModelRegistry: !Ref EnableModelRegistry
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: execution}]
+
+  Observability:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: modules/observability.yaml
+      Parameters:
+        Project: !Ref Project
+        DataKeyArn: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
+        ControlFunctionVersionArn: !GetAtt Execution.Outputs.ControlFunctionVersionArn
+        ControlFunctionName: !GetAtt Execution.Outputs.ControlFunctionName
+        JobQueueArn: !GetAtt Execution.Outputs.JobQueueArn
+        BenchmarkStateMachineArn: !GetAtt Execution.Outputs.BenchmarkStateMachineArn
+        DatasetStateMachineArn: !GetAtt Execution.Outputs.DatasetStateMachineArn
+        AlertEmail: !Ref AlertEmail
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: observability}]
+
+  Analytics:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: modules/analytics.yaml
+      Parameters:
+        Project: !Ref Project
+        DataBucketName: {"Fn::ImportValue": !Sub "${Project}-DataBucket"}
+        DataKeyArn: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: analytics}]
+
+  Billing:
+    Type: AWS::CloudFormation::Stack
+    Condition: Billing
+    Properties:
+      TemplateURL: modules/billing.yaml
+      Parameters:
+        Project: !Ref Project
+        BillingBucketName: {"Fn::ImportValue": !Sub "${Project}-BillingBucket"}
+        AlertTopicArn: !GetAtt Observability.Outputs.AlertTopicArn
+        MonthlyBudgetUsd: !Ref MonthlyBudgetUsd
+        AnomalyThresholdUsd: !Ref AnomalyThresholdUsd
+        BudgetEmail: !Ref AlertEmail
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: billing}]
+
+  Streaming:
+    Type: AWS::CloudFormation::Stack
+    Condition: Streaming
+    Properties:
+      TemplateURL: modules/streaming.yaml
+      Parameters:
+        Project: !Ref Project
+        DataBucketArn: {"Fn::ImportValue": !Sub "${Project}-DataBucketArn"}
+        ArtifactsBucketArn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
+        DataKeyArn: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
+        FlinkCodeKey: !Sub "flink/${GitSha}/event_time_windows.zip"
+        LogRetentionDays: !Ref LogRetentionDays
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: streaming}]
+
+  Features:
+    Type: AWS::CloudFormation::Stack
+    Condition: FeatureStore
+    Properties:
+      TemplateURL: modules/features.yaml
+      Parameters:
+        Project: !Ref Project
+        DataBucketName: {"Fn::ImportValue": !Sub "${Project}-DataBucket"}
+        DataBucketArn: {"Fn::ImportValue": !Sub "${Project}-DataBucketArn"}
+        ArtifactsBucketName: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucket"}
+        ArtifactsBucketArn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
+        DataKeyArn: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
+        AnalyticsDatabase: !GetAtt Analytics.Outputs.DatabaseName
+        EnableOnlineStore: !Ref EnableOnlineStore
+        GlueScriptKey: !Sub "glue/${GitSha}/materialize_features.py"
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: features}]
+
+  Ml:
+    Type: AWS::CloudFormation::Stack
+    Condition: Ml
+    Properties:
+      TemplateURL: modules/ml.yaml
+      Parameters:
+        Project: !Ref Project
+        DataBucketArn: {"Fn::ImportValue": !Sub "${Project}-DataBucketArn"}
+        DataKeyArn: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
+        MlRepositoryArn: {"Fn::ImportValue": !Sub "${Project}-MlRepositoryArn"}
+        RuntimeRepositoryArn: {"Fn::ImportValue": !Sub "${Project}-RuntimeRepositoryArn"}
+        EnableEndpoint: !Ref EnableEndpoint
+        MlImage: !Ref MlImage
+        EndpointModelDataUrl: !Ref EndpointModelDataUrl
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: ml}]
+
+  Bi:
+    Type: AWS::CloudFormation::Stack
+    Condition: Bi
+    Properties:
+      TemplateURL: modules/bi.yaml
+      Parameters:
+        Project: !Ref Project
+        WorkGroupName: !GetAtt Analytics.Outputs.WorkGroupName
+        AnalyticsDatabase: !GetAtt Analytics.Outputs.DatabaseName
+        QuickSightPrincipalArn: !Ref QuickSightPrincipalArn
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: bi}]
+
+Outputs:
+  GitSha:
+    Value: !Ref GitSha
+  RuntimeImage:
+    Value: !Ref RuntimeImage
+  MlImage:
+    Value: !Ref MlImage
+  JobQueueArn:
+    Value: !GetAtt Execution.Outputs.JobQueueArn
+  BenchmarkJobDefinitionArn:
+    Value: !GetAtt Execution.Outputs.BenchmarkJobDefinitionArn
+  PrepareJobDefinitionArn:
+    Value: !GetAtt Execution.Outputs.PrepareJobDefinitionArn
+  ControlFunctionVersionArn:
+    Value: !GetAtt Execution.Outputs.ControlFunctionVersionArn
+  BenchmarkStateMachineArn:
+    Value: !GetAtt Execution.Outputs.BenchmarkStateMachineArn
+  DatasetStateMachineArn:
+    Value: !GetAtt Execution.Outputs.DatasetStateMachineArn
+  AcquisitionProjectName:
+    Value: !GetAtt Execution.Outputs.AcquisitionProjectName
+  JobLogGroupName:
+    Value: !GetAtt Execution.Outputs.JobLogGroupName
+  AlertTopicArn:
+    Value: !GetAtt Observability.Outputs.AlertTopicArn
+  AthenaWorkGroup:
+    Value: !GetAtt Analytics.Outputs.WorkGroupName
+  AnalyticsDatabase:
+    Value: !GetAtt Analytics.Outputs.DatabaseName
+  VpcId:
+    Value: !GetAtt Network.Outputs.VpcId
+  InterfaceEndpoints:
+    Value: !GetAtt Network.Outputs.InterfaceEndpointCount
+  StreamName:
+    Condition: Streaming
+    Value: !GetAtt Streaming.Outputs.StreamName
+  FlinkApplicationName:
+    Condition: Streaming
+    Value: !GetAtt Streaming.Outputs.FlinkApplicationName
+  FeatureGroupName:
+    Condition: FeatureStore
+    Value: !GetAtt Features.Outputs.FeatureGroupName
+  SageMakerRoleArn:
+    Condition: Ml
+    Value: !GetAtt Ml.Outputs.SageMakerRoleArn

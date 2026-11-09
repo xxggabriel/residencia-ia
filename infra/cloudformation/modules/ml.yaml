@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Optional advanced ML module: SageMaker execution role for the Processing, Training,
+  Automatic Model Tuning and Inference profiles (launched by scripts/aws/sagemaker_jobs.py),
+  and an inference endpoint created only on explicit activation. The endpoint uses serverless
+  inference (billed per request and duration) and is removed by setting EnableEndpoint=false.
+
+Parameters:
+  Project:
+    Type: String
+  DataBucketArn:
+    Type: String
+  DataKeyArn:
+    Type: String
+  MlRepositoryArn:
+    Type: String
+  RuntimeRepositoryArn:
+    Type: String
+  EnableEndpoint:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  MlImage:
+    Type: String
+    Default: ""
+  EndpointModelDataUrl:
+    Type: String
+    Default: ""
+    Description: model.tar.gz of an approved Model Registry candidate (required when EnableEndpoint=true).
+  EndpointMemoryMiB:
+    Type: Number
+    Default: 2048
+    AllowedValues: [1024, 2048, 3072, 4096, 5120, 6144]
+
+Conditions:
+  Endpoint: !Equals [!Ref EnableEndpoint, "true"]
+
+Rules:
+  EndpointNeedsModel:
+    RuleCondition: !Equals [!Ref EnableEndpoint, "true"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref EndpointModelDataUrl, ""]]
+        AssertDescription: EnableEndpoint=true requires EndpointModelDataUrl
+      - Assert: !Not [!Equals [!Ref MlImage, ""]]
+        AssertDescription: EnableEndpoint=true requires MlImage
+
+Resources:
+  SageMakerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-sagemaker"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: sagemaker.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: profiles
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "${DataBucketArn}/datasets/*/prepared/*"
+                  - !Sub "${DataBucketArn}/features/materialized/*"
+                  - !Sub "${DataBucketArn}/campaigns/*/runs/*/model/*"
+                  - !Sub "${DataBucketArn}/sagemaker/*"
+              - Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload]
+                Resource: !Sub "${DataBucketArn}/sagemaker/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Ref DataBucketArn
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey, kms:CreateGrant, kms:DescribeKey]
+                Resource: !Ref DataKeyArn
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: [!Ref MlRepositoryArn, !Ref RuntimeRepositoryArn]
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/sagemaker/*"
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition: {StringLike: {cloudwatch:namespace: "/aws/sagemaker/*"}}
+
+  InferenceModel:
+    Type: AWS::SageMaker::Model
+    Condition: Endpoint
+    Properties:
+      ExecutionRoleArn: !GetAtt SageMakerRole.Arn
+      PrimaryContainer:
+        Image: !Ref MlImage
+        ModelDataUrl: !Ref EndpointModelDataUrl
+        Environment: {OMP_NUM_THREADS: "1"}
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: inference}]
+
+  InferenceEndpointConfig:
+    Type: AWS::SageMaker::EndpointConfig
+    Condition: Endpoint
+    Properties:
+      KmsKeyId: !Ref AWS::NoValue
+      ProductionVariants:
+        - VariantName: candidate
+          ModelName: !GetAtt InferenceModel.ModelName
+          ServerlessConfig: {MemorySizeInMB: !Ref EndpointMemoryMiB, MaxConcurrency: 1}
+      Tags: [{Key: cb-stack, Value: !Ref Project}]
+
+  InferenceEndpoint:
+    Type: AWS::SageMaker::Endpoint
+    Condition: Endpoint
+    Properties:
+      EndpointName: !Sub "${Project}-candidate"
+      EndpointConfigName: !GetAtt InferenceEndpointConfig.EndpointConfigName
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: inference}]
+
+Outputs:
+  SageMakerRoleArn:
+    Value: !GetAtt SageMakerRole.Arn
+  EndpointName:
+    Condition: Endpoint
+    Value: !GetAtt InferenceEndpoint.EndpointName

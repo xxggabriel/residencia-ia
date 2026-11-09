@@ -16,6 +16,48 @@ from continual_bench.infrastructure.zia_tracking import publish_run_metrics
 from continual_bench.models.zia import FraudOrReturnBooster, MultinomialLogistic, ZiaPredictor
 
 
+def dataset_source_uri(source):
+    return (f"https://huggingface.co/datasets/ziadatalabs/{source['repo']}"
+            f"/resolve/{source['revision']}/{source['file']}")
+
+
+def run_documents(report, adapted, base_uri):
+    """Model metadata, catalog links and JSON documents of a completed Zia run (sink-independent)."""
+    versions = report["model_versions"]
+    manifest, env = adapted["dataset"], adapted["environment"]
+    source = manifest["source"]
+    final = versions[-1]
+    metadata = {
+        "model": report["model"], "model_params": report["model_params"], "features": manifest["features"],
+        "classes": source["classes"], "dataset_version": manifest["sha256"],
+        "code_sha256": env["code_sha256"], "state_sha256": final["sha256"],
+        "final_version_id": final["sha256"], "native_path": final["file"],
+        "payload": Path(final["file"]).name, "output": "class probabilities in classes order",
+    }
+    catalog = {
+        "dataset_version": manifest["sha256"], "source": manifest,
+        "feature_schema": {name: "numeric" for name in manifest["features"]},
+        "selection": {"kind": report["scope"], "seq_range": [0, manifest["rows"]]},
+    }
+    links = {
+        "dataset_version": manifest["sha256"],
+        "dataset_source_uri": dataset_source_uri(source),
+        "dataset_catalog_uri": f"{base_uri}/dataset-catalog.json",
+        "model_states_uri": f"{base_uri}/models", "model_index_uri": f"{base_uri}/model-versions.json",
+        "model_state_sha256": final["sha256"], "model_versions_count": len(versions),
+    }
+    files = {
+        "manifest.json": manifest, "environment.json": env, "model-metadata.json": metadata,
+        "model-versions.json": {"versions": versions, "final_version_id": final["sha256"],
+                                "count": len(versions), "storage_bytes": sum(v["bytes"] for v in versions)},
+        "dataset-catalog.json": catalog, "catalog-links.json": links,
+        "config.json": {"dataset": report["dataset"], "scope": report["scope"], "policy": report["policy"],
+                        "model": report["model"], "model_params": report["model_params"],
+                        "tracking": adapted["tracking"]["settings"], "contract": report["contract"]},
+    }
+    return metadata, links, files
+
+
 def replay_predictions(directory, report, root):
     from continual_bench.evaluation.zia import batches
 
@@ -152,39 +194,7 @@ def publish_artifacts(client, directory, run_id, report, root, *, derived=False,
         }
     write_zia_artifacts(directory, report, adapted)
     artifacts = publish_run_artifacts(client, run_id, directory, report)
-    manifest, env = adapted["dataset"], adapted["environment"]
-    source = manifest["source"]
-    final = versions[-1]
-    base_uri = run.info.artifact_uri.rstrip("/")
-    metadata = {
-        "model": report["model"], "model_params": report["model_params"], "features": manifest["features"],
-        "classes": source["classes"], "dataset_version": manifest["sha256"],
-        "code_sha256": env["code_sha256"], "state_sha256": final["sha256"],
-        "final_version_id": final["sha256"], "native_path": final["file"],
-        "payload": Path(final["file"]).name, "output": "class probabilities in classes order",
-    }
-    catalog = {
-        "dataset_version": manifest["sha256"], "source": manifest,
-        "feature_schema": {name: "numeric" for name in manifest["features"]},
-        "selection": {"kind": report["scope"], "seq_range": [0, manifest["rows"]]},
-    }
-    links = {
-        "dataset_version": manifest["sha256"],
-        "dataset_source_uri": f"https://huggingface.co/datasets/ziadatalabs/{source['repo']}"
-                              f"/resolve/{source['revision']}/{source['file']}",
-        "dataset_catalog_uri": f"{base_uri}/dataset-catalog.json",
-        "model_states_uri": f"{base_uri}/models", "model_index_uri": f"{base_uri}/model-versions.json",
-        "model_state_sha256": final["sha256"], "model_versions_count": len(versions),
-    }
-    files = {
-        "manifest.json": manifest, "environment.json": env, "model-metadata.json": metadata,
-        "model-versions.json": {"versions": versions, "final_version_id": final["sha256"],
-                                "count": len(versions), "storage_bytes": sum(v["bytes"] for v in versions)},
-        "dataset-catalog.json": catalog, "catalog-links.json": links,
-        "config.json": {"dataset": report["dataset"], "scope": report["scope"], "policy": report["policy"],
-                        "model": report["model"], "model_params": report["model_params"],
-                        "tracking": adapted["tracking"]["settings"], "contract": report["contract"]},
-    }
+    metadata, links, files = run_documents(report, adapted, run.info.artifact_uri.rstrip("/"))
     for name, value in files.items():
         path = directory / name
         atomic_write(path, encoded(value))

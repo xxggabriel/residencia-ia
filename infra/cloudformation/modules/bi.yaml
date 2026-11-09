@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Optional BI module: Amazon Quick Sight data source on the Athena workgroup, a dataset joining
+  run metrics with per-attempt cost estimates, and an analysis comparing policies. Requires an
+  active Quick Sight subscription (Enterprise) and a Quick Sight principal; see docs/aws/modules.md.
+
+Parameters:
+  Project:
+    Type: String
+  WorkGroupName:
+    Type: String
+  AnalyticsDatabase:
+    Type: String
+  QuickSightPrincipalArn:
+    Type: String
+    Description: arn:aws:quicksight:us-east-1:<account>:user/default/<user> or a group ARN
+
+Resources:
+  AthenaSource:
+    Type: AWS::QuickSight::DataSource
+    Properties:
+      AwsAccountId: !Ref AWS::AccountId
+      DataSourceId: !Sub "${Project}-athena"
+      Name: !Sub "${Project} Athena"
+      Type: ATHENA
+      DataSourceParameters:
+        AthenaParameters: {WorkGroup: !Ref WorkGroupName}
+      Permissions:
+        - Principal: !Ref QuickSightPrincipalArn
+          Actions: [quicksight:DescribeDataSource, quicksight:DescribeDataSourcePermissions,
+                    quicksight:PassDataSource, quicksight:UpdateDataSource, quicksight:DeleteDataSource,
+                    quicksight:UpdateDataSourcePermissions]
+
+  ExperimentCosts:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      AwsAccountId: !Ref AWS::AccountId
+      DataSetId: !Sub "${Project}-experiment-costs"
+      Name: !Sub "${Project} experiments and costs"
+      ImportMode: DIRECT_QUERY
+      PhysicalTableMap:
+        runs:
+          CustomSql:
+            DataSourceArn: !GetAtt AthenaSource.Arn
+            Name: experiment_costs
+            SqlQuery: !Sub >-
+              SELECT m.campaign_id, m.run_id, m.dataset, m.scope, m.policy,
+              max(CASE WHEN m.partition = 'holdout' AND m.metric = 'accuracy' THEN m.value END) AS holdout_accuracy,
+              max(CASE WHEN m.partition = 'prequential' AND m.metric = 'accuracy' THEN m.value END) AS prequential_accuracy,
+              max(CASE WHEN m.partition = 'prequential' AND m.metric = 'log_loss' THEN m.value END) AS prequential_log_loss,
+              max(CASE WHEN m.partition = 'prequential' AND m.metric = 'scenario_total_cost' THEN m.value END) AS scenario_cost_units,
+              max(c.total_usd) AS estimated_usd, max(c.seconds) AS task_seconds
+              FROM "${AnalyticsDatabase}".metrics m
+              LEFT JOIN "${AnalyticsDatabase}".cost_estimates c ON c.run_id = m.run_id AND c.status = 'SUCCEEDED'
+              GROUP BY 1, 2, 3, 4, 5
+            Columns:
+              - {Name: campaign_id, Type: STRING}
+              - {Name: run_id, Type: STRING}
+              - {Name: dataset, Type: STRING}
+              - {Name: scope, Type: STRING}
+              - {Name: policy, Type: STRING}
+              - {Name: holdout_accuracy, Type: DECIMAL}
+              - {Name: prequential_accuracy, Type: DECIMAL}
+              - {Name: prequential_log_loss, Type: DECIMAL}
+              - {Name: scenario_cost_units, Type: DECIMAL}
+              - {Name: estimated_usd, Type: DECIMAL}
+              - {Name: task_seconds, Type: DECIMAL}
+      Permissions:
+        - Principal: !Ref QuickSightPrincipalArn
+          Actions: [quicksight:DescribeDataSet, quicksight:DescribeDataSetPermissions, quicksight:PassDataSet,
+                    quicksight:DescribeIngestion, quicksight:ListIngestions, quicksight:UpdateDataSet,
+                    quicksight:DeleteDataSet, quicksight:CreateIngestion, quicksight:CancelIngestion,
+                    quicksight:UpdateDataSetPermissions]
+
+  PolicyComparison:
+    Type: AWS::QuickSight::Analysis
+    Properties:
+      AwsAccountId: !Ref AWS::AccountId
+      AnalysisId: !Sub "${Project}-policy-comparison"
+      Name: !Sub "${Project} policy comparison"
+      Definition:
+        DataSetIdentifierDeclarations:
+          - {Identifier: experiments, DataSetArn: !GetAtt ExperimentCosts.Arn}
+        Sheets:
+          - SheetId: policies
+            Name: Policies
+            Visuals:
+              - BarChartVisual:
+                  VisualId: holdout-accuracy
+                  Title: {Visibility: VISIBLE, FormatText: {PlainText: Holdout accuracy by policy}}
+                  ChartConfiguration:
+                    FieldWells:
+                      BarChartAggregatedFieldWells:
+                        Category:
+                          - CategoricalDimensionField:
+                              FieldId: policy
+                              Column: {DataSetIdentifier: experiments, ColumnName: policy}
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: holdout_accuracy
+                              Column: {DataSetIdentifier: experiments, ColumnName: holdout_accuracy}
+                              AggregationFunction: {SimpleNumericalAggregation: AVERAGE}
+              - TableVisual:
+                  VisualId: runs-and-costs
+                  Title: {Visibility: VISIBLE, FormatText: {PlainText: "Runs, metrics and estimated USD"}}
+                  ChartConfiguration:
+                    FieldWells:
+                      TableAggregatedFieldWells:
+                        GroupBy:
+                          - CategoricalDimensionField:
+                              FieldId: campaign
+                              Column: {DataSetIdentifier: experiments, ColumnName: campaign_id}
+                          - CategoricalDimensionField:
+                              FieldId: policy-row
+                              Column: {DataSetIdentifier: experiments, ColumnName: policy}
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: prequential
+                              Column: {DataSetIdentifier: experiments, ColumnName: prequential_accuracy}
+                              AggregationFunction: {SimpleNumericalAggregation: AVERAGE}
+                          - NumericalMeasureField:
+                              FieldId: usd
+                              Column: {DataSetIdentifier: experiments, ColumnName: estimated_usd}
+                              AggregationFunction: {SimpleNumericalAggregation: SUM}
+                          - NumericalMeasureField:
+                              FieldId: scenario
+                              Column: {DataSetIdentifier: experiments, ColumnName: scenario_cost_units}
+                              AggregationFunction: {SimpleNumericalAggregation: SUM}
+      Permissions:
+        - Principal: !Ref QuickSightPrincipalArn
+          Actions: [quicksight:RestoreAnalysis, quicksight:UpdateAnalysisPermissions, quicksight:DeleteAnalysis,
+                    quicksight:DescribeAnalysisPermissions, quicksight:QueryAnalysis, quicksight:DescribeAnalysis,
+                    quicksight:UpdateAnalysis]
+
+Outputs:
+  AnalysisId:
+    Value: !Sub "${Project}-policy-comparison"

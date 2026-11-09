@@ -1,0 +1,303 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Network and security boundary: private-only VPC (no internet gateway, NAT, Elastic IP or
+  public load balancer), private DNS, S3 gateway endpoint and the interface endpoints the
+  private Fargate workers call. Interface endpoints bill per hour per AZ plus per GB.
+
+Parameters:
+  Project:
+    Type: String
+  VpcCidr:
+    Type: String
+    Default: 10.42.0.0/16
+  AvailabilityZoneCount:
+    Type: Number
+    Default: 2
+    AllowedValues: [1, 2]
+    Description: Each interface endpoint costs one hourly charge per AZ.
+  DataBucketArn:
+    Type: String
+  ArtifactsBucketArn:
+    Type: String
+  S3PrefixListId:
+    Type: String
+    Default: pl-63a5400a
+    Description: com.amazonaws.us-east-1.s3 managed prefix list (aws ec2 describe-prefix-lists).
+  EnableModelRegistry:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  EnableStreaming:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableFeatureStore:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableKmsAndSecretsEndpoints:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Only for modules that call KMS or Secrets Manager directly from inside the VPC.
+
+Conditions:
+  TwoZones: !Equals [!Ref AvailabilityZoneCount, 2]
+  ModelRegistry: !Equals [!Ref EnableModelRegistry, "true"]
+  Streaming: !Equals [!Ref EnableStreaming, "true"]
+  FeatureStore: !Equals [!Ref EnableFeatureStore, "true"]
+  KmsSecrets: !Equals [!Ref EnableKmsAndSecretsEndpoints, "true"]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: !Sub "${Project}-private"}]
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 4, 12]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: !Sub "${Project}-private-a"}]
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Condition: TwoZones
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 4, 12]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: !Sub "${Project}-private-b"}]
+
+  # The only route besides "local" is the S3 gateway prefix-list route added by the endpoint.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: !Sub "${Project}-private"}]
+
+  SubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PrivateSubnetA, RouteTableId: !Ref PrivateRouteTable}
+
+  SubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: TwoZones
+    Properties: {SubnetId: !Ref PrivateSubnetB, RouteTableId: !Ref PrivateRouteTable}
+
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Private Batch Fargate workers; HTTPS to VPC endpoints and the S3 gateway only
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - Description: HTTPS to S3 through the gateway endpoint
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !Ref S3PrefixListId
+
+  WorkerToEndpoints:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref WorkerSecurityGroup
+      Description: HTTPS to interface endpoints
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref EndpointSecurityGroup
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Interface endpoints accept HTTPS from workers only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: HTTPS from workers
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref WorkerSecurityGroup
+      SecurityGroupEgress:
+        - Description: No egress needed
+          IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 127.0.0.1/32
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRouteTable]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ProjectBuckets
+            Effect: Allow
+            Principal: "*"
+            Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:ListBucket, s3:GetBucketLocation,
+                     s3:AbortMultipartUpload, s3:ListMultipartUploadParts]
+            Resource:
+              - !Ref DataBucketArn
+              - !Sub "${DataBucketArn}/*"
+              - !Ref ArtifactsBucketArn
+              - !Sub "${ArtifactsBucketArn}/*"
+          - Sid: EcrImageLayers
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:${AWS::Partition}:s3:::prod-${AWS::Region}-starport-layer-bucket/*"
+
+  # Interface endpoints restrict callers to this account's principals.
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [ecr:GetAuthorizationToken, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer,
+                     ecr:BatchCheckLayerAvailability]
+            Resource: "*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  EcrDockerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+            Resource: "*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+            Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  SageMakerApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: ModelRegistry
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.sagemaker.api"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [sagemaker:DescribeModelPackageGroup, sagemaker:CreateModelPackageGroup,
+                     sagemaker:ListModelPackages, sagemaker:DescribeModelPackage, sagemaker:CreateModelPackage,
+                     sagemaker:AddTags]
+            Resource: "*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  KinesisEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: Streaming
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.kinesis-streams"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [kinesis:PutRecords, kinesis:GetRecords, kinesis:GetShardIterator, kinesis:ListShards,
+                     kinesis:DescribeStreamSummary]
+            Resource: !Sub "arn:${AWS::Partition}:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${Project}-*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  FeatureStoreRuntimeEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: FeatureStore
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.sagemaker.featurestore-runtime"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  KmsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: KmsSecrets
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.kms"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: KmsSecrets
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+  PrivateSubnets:
+    Value: !If [TwoZones, !Join [",", [!Ref PrivateSubnetA, !Ref PrivateSubnetB]], !Ref PrivateSubnetA]
+  WorkerSecurityGroupId:
+    Value: !Ref WorkerSecurityGroup
+  S3GatewayEndpointId:
+    Value: !Ref S3GatewayEndpoint
+  InterfaceEndpointCount:
+    Description: Billed interface endpoints (each × AZ count × hours)
+    Value: !Join ["", [!If [ModelRegistry, "4", "3"], "+", !If [Streaming, "1", "0"], "+",
+                       !If [FeatureStore, "1", "0"], "+", !If [KmsSecrets, "2", "0"]]]
