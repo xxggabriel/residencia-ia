@@ -319,6 +319,21 @@ def test_billing_export_includes_resources_and_split_costs():
     assert "split_line_item_split_cost" in export["DataQuery"]["QueryStatement"]
 
 
+def test_billing_can_subscribe_to_an_existing_service_anomaly_monitor():
+    root = template("root.yaml")
+    billing = template("modules/billing.yaml")
+    param = "ExistingServiceAnomalyMonitorArn"
+    create = "CreateServiceAnomalyMonitor"
+    assert root["Parameters"][param]["Default"] == billing["Parameters"][param]["Default"] == ""
+    assert root["Resources"]["Billing"]["Properties"]["Parameters"][param] == {"Ref": param}
+    assert billing["Conditions"][create] == {"Fn::Equals": [{"Ref": param}, ""]}
+    resources = billing["Resources"]
+    assert resources["ServiceAnomalyMonitor"]["Condition"] == create
+    assert resources["AnomalySubscription"]["Properties"]["MonitorArnList"] == [
+        {"Fn::If": [create, {"Ref": "ServiceAnomalyMonitor"}, {"Ref": param}]}
+    ]
+
+
 def test_state_machines_validate_offline():
     for path in (ROOT / "infra" / "statemachines").glob("*.asl.json"):
         assert ASL.validate_file(path) == []
