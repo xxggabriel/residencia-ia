@@ -60,7 +60,7 @@ def publish(client, directory, run_id, experiment_id, report):
     points.extend((f"tracking_v1/summary/{k}", 0, v) for k, v in report["metrics"].items())
     points.extend((f"holdout/{k}", 0, v) for k, v in report["holdout"].items())
     for window in report["windows"]:
-        points.extend((f"{window['scope']}/{k}", window["end_seq"], v) for k, v in window.items()
+        points.extend((f"{window['scope']}/windows/{k}", window["end_seq"], v) for k, v in window.items()
                       if k not in {"scope", "end_seq", "start_time_ms", "end_time_ms"})
     for group in ("class_metrics", "holdout_class_metrics"):
         points.extend((f"{group}/{label}/{key}", 0, value) for label, row in report[group].items()
