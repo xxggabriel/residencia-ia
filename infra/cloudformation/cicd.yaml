@@ -208,6 +208,12 @@ Resources:
                     iam:PassedToService: [ecs-tasks.amazonaws.com, lambda.amazonaws.com, states.amazonaws.com,
                                           codebuild.amazonaws.com, firehose.amazonaws.com,
                                           kinesisanalytics.amazonaws.com, sagemaker.amazonaws.com, glue.amazonaws.com]
+              - Sid: PassItselfToNestedStacks
+                # The root stack creates its nested module stacks with this same service role.
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}/${Project}-cfn-execution"
+                Condition: {StringEquals: {iam:PassedToService: cloudformation.amazonaws.com}}
               - Effect: Allow
                 Action: iam:CreateServiceLinkedRole
                 Resource: "*"
