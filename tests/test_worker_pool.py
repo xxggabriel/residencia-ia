@@ -179,6 +179,22 @@ def test_standard_pool_requires_exactly_eight_distinct_workers(count):
         WorkerPool(["http://same-slot"] * 8)
 
 
+def test_shared_tracking_probes_mlflow_once_for_a_healthy_pool():
+    tracking_probes = []
+
+    def opener(request, timeout):
+        if request.full_url.endswith("/ready"):
+            tracking_probes.append(request.full_url)
+            return Response(b'{"ready":true}')
+        return Response(b'{"queue":0,"active":0,"concurrency":1}')
+
+    urls = [f"http://slot-{i}" for i in range(8)]
+    pool = WorkerPool(urls, opener, shared_tracking=True)
+    assert pool.get("/health")[1]["concurrency"] == 8
+    assert pool.get("/ready")[1]["ready"] is True
+    assert tracking_probes == ["http://slot-0/ready"]
+
+
 def test_dataset_admission_requires_matching_code_and_preserves_dag_metadata():
     def opener(request, timeout):
         code = "other-code" if urlparse(request.full_url).hostname == "slot-7" else "same-code"
