@@ -65,7 +65,7 @@ class WorkerPool:
             }
         # Job status lives on the volume shared by all execution containers.
         prefix, _, identity = path.rpartition("/")
-        if prefix not in {"/runs", "/epoch-runs"} or len(identity) != 24 or any(
+        if prefix not in {"/runs", "/epoch-runs", "/zia-runs"} or len(identity) != 24 or any(
                 c not in "0123456789abcdef" for c in identity):
             return 404, {"error": "not_found"}
         for url in self.urls:
@@ -75,7 +75,7 @@ class WorkerPool:
         return 503, {"error": "no_available_worker"}
 
     def submit(self, path, body):
-        if path not in {"/runs", "/epoch-runs"}:
+        if path not in {"/runs", "/epoch-runs", "/zia-runs"}:
             return 404, {"error": "not_found"}
         # Serialize placement, not execution. Admission reserves the backend slot before replying.
         with self.guard:
