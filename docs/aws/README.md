@@ -107,8 +107,9 @@ release depois do deploy.
 - **IAM**: há roles separadas para CodePipeline, cada estágio do CodeBuild (teste, build,
   deploy, release), execução do CloudFormation, Step Functions, execução da task, job de
   benchmark, job de preparação, aquisição, Lambda de controle, Firehose, Flink, Feature Store,
-  Glue e SageMaker. As roles dos workers exigem `aws:SourceVpce` do gateway endpoint em todo
-  acesso ao S3. `TerminateJob` exige a tag `cb-stack`. `iam:PassRole` só aparece no deploy,
+  Glue e SageMaker. O acesso direto dos workers ao S3 exige `aws:SourceVpce` do gateway
+  endpoint. O SageMaker pode ler apenas o arquivo do modelo quando valida um candidato
+  em nome do worker. `TerminateJob` exige a tag `cb-stack`. `iam:PassRole` só aparece no deploy,
   restrito à role do CloudFormation, e na role do CloudFormation, restrito às roles do projeto
   e ao serviço de destino.
 - **Dados**: KMS com rotação em buckets, logs, SNS, Kinesis e ECR. Versionamento, bloqueio de

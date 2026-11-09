@@ -79,8 +79,12 @@ O runtime passa a usar esses grupos existentes, e a retenção deles é gerencia
 scripts/aws/rollback.sh <sha-de-uma-release-anterior>
 ```
 
-O rollback reaplica templates, imagens e Lambda daquela release, sem rebuild, e move
-`releases/latest.json`. Campanhas em andamento continuam com a própria release.
+O rollback reaplica os templates e os artefatos da release sem rebuild, preservando os
+parâmetros ativos do runtime. O script exige as revisões Batch ativas, a versão da Lambda
+disponível e os digests no ECR antes de aplicar o change set. Ele repete a verificação
+antes de mover `releases/latest.json` e recusa sobrescrever um ponteiro alterado
+durante a operação. Releases que já perderam essas referências exigem uma nova publicação.
+Faça rollback em uma janela sem deploy concorrente.
 
 ## 3. Datasets (manual)
 
@@ -139,6 +143,36 @@ Timeouts: `jobStateTimeLimitActions` da fila cancela jobs presos em `RUNNABLE` (
 `AttemptDurationSeconds` limita a execução. `TimeoutSecondsPath` do `.sync` limita espera mais
 execução por item. Códigos de saída: 0 sucesso ou reaproveitamento, 1 falha de execução,
 2 contrato (imagem ou perfil divergente do plano), 3 snapshot.
+
+### Suíte de todos os datasets
+
+`matrix.kind=project_suite` usa o mesmo gerador de casos da DAG `benchmark_task_suite`.
+O padrão tem 548 unidades e usa 3.000 eventos nos casos binários, 100 exemplos e duas
+épocas nos casos por épocas, atraso de três e seed 42. `matrix` aceita os campos
+`samples`, `dataset_examples`, `epochs`, `label_delay` e `seed`.
+
+Publique os inputs numa máquina com acesso às fontes. Prepare primeiro os arquivos ARFF
+de Electricity e Airlines com `scripts/prepare_real_sources.py` e informe o diretório
+via `--real-directory`. Para as outras nove fontes, use o cache existente ou acrescente
+`--download` para aquisição explícita. Exemplo para INSECTS:
+
+```bash
+continual-bench aws publish-matrix-source --dataset insects --cache state/datasets \
+  --examples 100 --seed 42 --bucket "$BUCKET"
+```
+
+Defina `BENCH_KMS_KEY_ID` com o ARN da chave do bucket de dados. Guarde o `dataset` e o
+`sha256` retornados por cada publicação no objeto `request.source_digests`, mapeado por
+nome de dataset. A mesma publicação OpenML atende aos modos binário, tipado e por épocas.
+Os bundles das outras fontes atendem ao avaliador por épocas e precisam corresponder à
+contagem e à seed da campanha. Fixe o SHA em `request.release` e use um novo `campaign_id`
+ao alterar dados ou release.
+
+O planejador valida os objetos antes de publicar o plano. Cada worker confere o SHA-256
+do conteúdo ao baixar pelo gateway do S3. O Distributed Map lê o plano do bucket de dados
+e exporta o resultado da orquestração para `map-results/<campanha>/` no bucket de
+artefatos com SSE-KMS por padrão. Manifestos e métricas das unidades continuam no bucket
+de dados.
 
 ## 5. Cancelamento e reconciliação
 
