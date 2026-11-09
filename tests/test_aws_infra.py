@@ -207,6 +207,35 @@ def test_pipeline_artifact_prefix_matches_codepipeline_key_layout():
         assert "${Arn}/${PipelineArtifactPrefix}/*" in json.dumps(cicd["Resources"][name]), name
 
 
+def _pass_role_statements(role):
+    for policy in role["Properties"]["Policies"]:
+        for statement in policy["PolicyDocument"]["Statement"]:
+            if statement.get("Action") == "iam:PassRole":
+                yield statement
+
+
+def test_cfn_execution_role_can_pass_every_runtime_role():
+    """Nested stacks need the execution role to pass itself; module roles go to their own services."""
+    role = template("cicd.yaml")["Resources"]["CloudFormationExecutionRole"]
+    assert role["Properties"]["RoleName"] == {"Fn::Sub": "${Project}-cfn-execution"}
+    statements = list(_pass_role_statements(role))
+    (self_pass,) = [s for s in statements if s.get("Sid") == "PassItselfToNestedStacks"]
+    assert self_pass["Resource"]["Fn::Sub"].endswith(":role/${Project}/${Project}-cfn-execution")
+    assert self_pass["Condition"] == {"StringEquals": {"iam:PassedToService": "cloudformation.amazonaws.com"}}
+    assert any(r["Type"] == "AWS::CloudFormation::Stack" for r in template("root.yaml")["Resources"].values())
+
+    (services,) = [s for s in statements if s.get("Sid") == "PassProjectRolesToTheirServices"]
+    allowed = set(services["Condition"]["StringEquals"]["iam:PassedToService"])
+    for module in (CFN / "modules").glob("*.yaml"):
+        for name, resource in template(f"modules/{module.name}")["Resources"].items():
+            if resource["Type"] != "AWS::IAM::Role":
+                continue
+            for trust in resource["Properties"]["AssumeRolePolicyDocument"]["Statement"]:
+                principal = trust["Principal"]["Service"]
+                for service in [principal] if isinstance(principal, str) else principal:
+                    assert service in allowed, (module.name, name, service)
+
+
 def test_buildspecs_never_acquire_data_or_start_campaigns():
     for path in (ROOT / "infra" / "buildspecs").glob("*.yml"):
         text = path.read_text()
