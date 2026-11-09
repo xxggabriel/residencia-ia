@@ -93,6 +93,10 @@ Parameters:
     Type: Number
     Default: 90
     AllowedValues: [7, 14, 30, 60, 90, 180, 365, 731]
+  ReuseRuntimeLogGroups:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
   AcquisitionComputeType:
     Type: String
     Default: BUILD_GENERAL1_LARGE
@@ -110,10 +114,12 @@ Parameters:
 Conditions:
   ModelRegistry: !Equals [!Ref EnableModelRegistry, "true"]
   Spot: !Equals [!Ref FargateCapacity, FARGATE_SPOT]
+  CreateRuntimeLogGroups: !Equals [!Ref ReuseRuntimeLogGroups, "false"]
 
 Resources:
   JobLogGroup:
     Type: AWS::Logs::LogGroup
+    Condition: CreateRuntimeLogGroups
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
@@ -137,6 +143,7 @@ Resources:
 
   AcquisitionLogGroup:
     Type: AWS::Logs::LogGroup
+    Condition: CreateRuntimeLogGroups
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
@@ -170,7 +177,7 @@ Resources:
                 Resource: [!Ref RuntimeRepositoryArn]
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
-                Resource: !Sub "${JobLogGroup.Arn}:*"
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/batch:log-stream:*"
 
   BenchmarkJobRole:
     Type: AWS::IAM::Role
@@ -331,7 +338,7 @@ Resources:
                 Resource: !Ref RuntimeRepositoryArn
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
-                Resource: !Sub "${AcquisitionLogGroup.Arn}:*"
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/acquisition:log-stream:*"
 
   ControlRole:
     Type: AWS::IAM::Role
@@ -530,7 +537,7 @@ Resources:
         LogConfiguration:
           LogDriver: awslogs
           Options:
-            awslogs-group: !Ref JobLogGroup
+            awslogs-group: !If [CreateRuntimeLogGroups, !Ref JobLogGroup, !Sub "/${Project}/batch"]
             awslogs-region: !Ref AWS::Region
             awslogs-stream-prefix: benchmark
         Environment:
@@ -576,7 +583,7 @@ Resources:
         LogConfiguration:
           LogDriver: awslogs
           Options:
-            awslogs-group: !Ref JobLogGroup
+            awslogs-group: !If [CreateRuntimeLogGroups, !Ref JobLogGroup, !Sub "/${Project}/batch"]
             awslogs-region: !Ref AWS::Region
             awslogs-stream-prefix: prepare
         Environment:
@@ -624,7 +631,9 @@ Resources:
                   continual-bench aws acquire --dataset "$DATASET" --scope "$SCOPE" --mode "$MODE" \
                     --workdir "$CODEBUILD_SRC_DIR/acquisition" $extra
       LogsConfig:
-        CloudWatchLogs: {Status: ENABLED, GroupName: !Ref AcquisitionLogGroup}
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !If [CreateRuntimeLogGroups, !Ref AcquisitionLogGroup, !Sub "/${Project}/acquisition"]
       Tags:
         - {Key: cb-stack, Value: !Ref Project}
         - {Key: cb-component, Value: acquisition}
@@ -725,6 +734,6 @@ Outputs:
   AcquisitionProjectName:
     Value: !Ref AcquisitionProject
   JobLogGroupName:
-    Value: !Ref JobLogGroup
+    Value: !If [CreateRuntimeLogGroups, !Ref JobLogGroup, !Sub "/${Project}/batch"]
   ComputeEnvironmentArn:
     Value: !Ref ComputeEnvironment

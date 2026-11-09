@@ -67,6 +67,11 @@ Parameters:
   LogRetentionDays:
     Type: Number
     Default: 90
+  ReuseRuntimeLogGroups:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Use the Batch and acquisition log groups retained by a previous runtime stack.
   AcquisitionComputeType:
     Type: String
     Default: BUILD_GENERAL1_LARGE
@@ -188,6 +193,7 @@ Resources:
         QueueWaitTimeoutSeconds: !Ref QueueWaitTimeoutSeconds
         JobAttempts: !Ref JobAttempts
         LogRetentionDays: !Ref LogRetentionDays
+        ReuseRuntimeLogGroups: !Ref ReuseRuntimeLogGroups
         AcquisitionComputeType: !Ref AcquisitionComputeType
         AcquisitionTimeoutMinutes: !Ref AcquisitionTimeoutMinutes
         EnableModelRegistry: !Ref EnableModelRegistry

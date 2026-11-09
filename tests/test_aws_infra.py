@@ -169,6 +169,31 @@ def test_network_is_private_with_required_endpoints():
     assert routes == []  # only the local route and the gateway endpoint's prefix-list route exist
 
 
+def test_runtime_can_reuse_retained_log_groups_after_stack_deletion():
+    root = template("root.yaml")
+    execution = template("modules/execution.yaml")
+    resources = execution["Resources"]
+    reuse = "ReuseRuntimeLogGroups"
+    create = "CreateRuntimeLogGroups"
+    assert root["Parameters"][reuse]["Default"] == execution["Parameters"][reuse]["Default"] == "false"
+    assert root["Resources"]["Execution"]["Properties"]["Parameters"][reuse] == {"Ref": reuse}
+    assert execution["Conditions"][create] == {"Fn::Equals": [{"Ref": reuse}, "false"]}
+
+    names = {}
+    for group in ("JobLogGroup", "AcquisitionLogGroup"):
+        resource = resources[group]
+        assert resource["Condition"] == create
+        assert resource["DeletionPolicy"] == "Retain"
+        names[group] = {"Fn::If": [create, {"Ref": group}, resource["Properties"]["LogGroupName"]]}
+
+    for definition in ("BenchmarkJobDefinition", "PrepareJobDefinition"):
+        logging = resources[definition]["Properties"]["ContainerProperties"]["LogConfiguration"]
+        assert logging["Options"]["awslogs-group"] == names["JobLogGroup"]
+    assert execution["Outputs"]["JobLogGroupName"]["Value"] == names["JobLogGroup"]
+    acquisition_logs = resources["AcquisitionProject"]["Properties"]["LogsConfig"]["CloudWatchLogs"]
+    assert acquisition_logs["GroupName"] == names["AcquisitionLogGroup"]
+
+
 def test_bucket_policy_admits_writers_outside_the_vpc():
     policy = template("persistent.yaml")["Resources"]["DataBucketPolicy"]["Properties"]["PolicyDocument"]
     assert "aws:SourceVpce" not in json.dumps(policy)
