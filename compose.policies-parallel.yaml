@@ -1,0 +1,40 @@
+# Optional homelab profile: up to eight datasets sharing eight independent slots.
+services:
+  mlflow:
+    # Concurrent artifact uploads and metric-history requests share this service.
+    cpus: 8
+
+  worker:
+    cpus: 1
+    environment:
+      BENCH_SHARED_TRACKING: "true"
+
+  worker-1:
+    healthcheck: &slot-health
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8088/health', timeout=5)"]
+
+  worker-2:
+    healthcheck: *slot-health
+  worker-3:
+    healthcheck: *slot-health
+  worker-4:
+    healthcheck: *slot-health
+  worker-5:
+    healthcheck: *slot-health
+  worker-6:
+    healthcheck: *slot-health
+  worker-7:
+    healthcheck: *slot-health
+  worker-8:
+    healthcheck: *slot-health
+
+  airflow-scheduler:
+    environment: &parallel-policies
+      AIRFLOW__CORE__PARALLELISM: "8"
+      BENCH_POLICY_DATASET_PARALLELISM: "8"
+
+  airflow-api:
+    environment: *parallel-policies
+
+  airflow-dag-processor:
+    environment: *parallel-policies

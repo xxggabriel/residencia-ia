@@ -1,6 +1,7 @@
 """Manual, parameterized production benchmark DAGs, independent of smoke checks."""
 
 import logging
+import os
 from datetime import timedelta
 
 from airflow.exceptions import AirflowFailException
@@ -8,11 +9,17 @@ from airflow.sdk import Param, dag, task
 from bench_jobs import POLICY_DATASETS, configurations, consolidate, execute_job, tracking_profile
 from bench_readiness import require_dependencies
 
+POLICY_DATASET_PARALLELISM = int(os.environ.get("BENCH_POLICY_DATASET_PARALLELISM", "1"))
+if not 1 <= POLICY_DATASET_PARALLELISM <= 8:
+    raise ValueError("BENCH_POLICY_DATASET_PARALLELISM must be between 1 and 8")
+
 
 def build_dag(suite):
+    parallel_datasets = POLICY_DATASET_PARALLELISM if suite == "policies" else 1
+
     @dag(
         dag_id=f"benchmark_{suite}", schedule=None, catchup=False,
-        max_active_runs=1, max_active_tasks=8,
+        max_active_runs=parallel_datasets, max_active_tasks=8,
         tags=["benchmark", suite, "zenml", "mlflow"],
         params={
             "samples": Param(300 if suite == "metrics_smoke" else 3000,
@@ -53,7 +60,7 @@ def build_dag(suite):
         def plan(params=None):
             return configurations(params, suite)
 
-        @task(execution_timeout=timedelta(
+        @task(max_active_tis_per_dagrun=8 // parallel_datasets, execution_timeout=timedelta(
             minutes=40 if suite in ("metrics", "metrics_smoke", "policies") else 22))
         def evaluate_and_publish(config):
             return execute_job(config)

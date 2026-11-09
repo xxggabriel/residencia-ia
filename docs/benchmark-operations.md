@@ -10,6 +10,18 @@ MLflow usa `WEB_USER` e a senha exclusiva `MLFLOW_PASSWORD`, no arquivo privado
 `/home/gabriel/.config/continual-bench/benchmark.env`. A cópia local fica em `.env`.
 Esses arquivos têm modo 600 e não integram o Git. As outras interfaces mantêm suas credenciais.
 
+## Campanhas de políticas em paralelo no homelab
+
+Com `compose.policies-parallel.yaml` aplicado após `compose.yaml` e `compose.homelab.yaml`,
+o distribuidor mantém oito containers de execução, cada um com 1 vCPU e 2 GiB. A DAG
+`benchmark_policies` admite até oito campanhas e executa uma avaliação por campanha de cada vez.
+Submeter uma campanha por dataset, com nomes de campanha e experimento distintos. Os sete
+datasets da matriz podem avançar em paralelo.
+
+O teto agregado dos workers é de 8 vCPUs e 16 GiB. Nesse perfil, o distribuidor recebe 1 vCPU
+e o MLflow recebe 8 vCPUs para atender a publicação concorrente. Usar os mesmos três arquivos
+Compose nos comandos de operação desse perfil.
+
 ## Perfil padrão de recursos dos experimentos
 
 A referência para novas comparações é **até oito execuções simultâneas, cada uma em seu próprio

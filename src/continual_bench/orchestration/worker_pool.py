@@ -1,4 +1,4 @@
-"""Internal HTTP distributor for eight independently resource-limited worker containers."""
+"""Internal HTTP distributor for independently resource-limited worker containers."""
 
 import json
 import os
@@ -10,10 +10,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class WorkerPool:
-    def __init__(self, urls, opener=None):
+    def __init__(self, urls, opener=None, *, shared_tracking=False):
         self.urls = tuple(url.rstrip("/") for url in urls)
         if len(self.urls) != 8 or len(set(self.urls)) != 8:
             raise ValueError("the standard pool requires eight distinct workers")
+        self.shared_tracking = shared_tracking
         self.opener = opener or urllib.request.urlopen
         self.guard = threading.Lock()
 
@@ -36,6 +37,17 @@ class WorkerPool:
             return dict(zip(self.urls, executor.map(lambda url: self.call(url, path), self.urls)))
 
     def get(self, path):
+        if path == "/ready" and self.shared_tracking:
+            # This profile shares one MLflow server and the same credentials.
+            # Check every execution slot, then probe tracking once to avoid flooding MLflow.
+            code, health = self.get("/health")
+            if code != 200:
+                return 503, {"ready": False, "workers": health["workers"]}
+            code, tracking = self.call(self.urls[0], "/ready")
+            ready = code == 200 and tracking.get("ready") is True
+            return (200 if ready else 503), {
+                "ready": ready, "workers": health["workers"], "tracking": tracking,
+            }
         if path in {"/ready", "/datasets-ready"}:
             snapshots = self.snapshots(path)
             ready = all(code == 200 and status.get("ready") for code, status in snapshots.values())
@@ -120,7 +132,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve():
-    Handler.pool = WorkerPool(os.environ["BENCH_WORKER_URLS"].split(","))
+    Handler.pool = WorkerPool(
+        os.environ["BENCH_WORKER_URLS"].split(","),
+        shared_tracking=os.environ.get("BENCH_SHARED_TRACKING", "false").lower() == "true",
+    )
     ThreadingHTTPServer(("0.0.0.0", 8088), Handler).serve_forever()
 
 
