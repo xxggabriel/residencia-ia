@@ -24,6 +24,11 @@ O projeto original foi confirmado pelo chat Codex `01a1789a-e60c-77d0-895d-caa19
 
 Requer Python 3.12. Dependências do serviço executor (worker) fixadas em `uv.lock` e exportadas com hashes em `requirements.lock`. Airflow usa um ambiente Python separado.
 
+O perfil AWS gerenciado (CodePipeline, Batch sobre Fargate, Step Functions, S3, Athena,
+SageMaker e CUR 2.0) usa o lock próprio `requirements-aws.lock`, sem MLflow, ZenML ou Kafka.
+Ele é documentado em [docs/aws/README.md](docs/aws/README.md). O smoke local com fixtures é
+`uv run continual-bench aws local-smoke`.
+
 ```bash
 uv sync --frozen --extra dev --extra services --extra datasets
 PYTHONPATH=. uv run pytest -q
