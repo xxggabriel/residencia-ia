@@ -10,6 +10,8 @@ Parameters:
     Type: String
   DataBucketArn:
     Type: String
+  ArtifactsBucketName:
+    Type: String
   ArtifactsBucketArn:
     Type: String
   DataKeyArn:
@@ -131,8 +133,15 @@ Resources:
                 Action: s3:GetObject
                 Resource: !Sub "${ArtifactsBucketArn}/${FlinkCodeKey}"
               - Effect: Allow
-                Action: [s3:PutObject, s3:GetObject]
-                Resource: !Sub "${DataBucketArn}/archive/windows/*"
+                Action: [s3:PutObject, s3:GetObject, s3:AbortMultipartUpload]
+                Resource: !Sub "${ArtifactsBucketArn}/archive/windows/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Ref ArtifactsBucketArn
+                Condition: {StringLike: {s3:prefix: ["archive/windows", "archive/windows/*"]}}
+              - Effect: Allow
+                Action: s3:GetBucketLocation
+                Resource: !Ref ArtifactsBucketArn
               - Effect: Allow
                 Action: [kms:Decrypt, kms:GenerateDataKey]
                 Resource: !Ref DataKeyArn
@@ -174,12 +183,12 @@ Resources:
               PropertyMap: {python: event_time_windows.py, jarfile: lib/flink-sql-connector-kinesis.jar}
             - PropertyGroupId: windows
               PropertyMap:
-                stream: !Ref EventStream
+                stream_arn: !GetAtt EventStream.Arn
                 region: !Ref AWS::Region
                 window_ms: "3600000"
                 out_of_orderness_ms: "60000"
                 allowed_lateness_ms: "300000"
-                output_path: !Sub "s3://${Project}-data-${AWS::AccountId}-${AWS::Region}/archive/windows/"
+                output_path: !Sub "s3://${ArtifactsBucketName}/archive/windows/"
         ApplicationSnapshotConfiguration: {SnapshotsEnabled: true}
       Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: streaming}]
 

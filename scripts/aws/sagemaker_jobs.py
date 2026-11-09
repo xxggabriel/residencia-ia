@@ -28,7 +28,7 @@ def job_name(kind, git_sha):
     return f"cb-{kind}-{git_sha[:8]}-{time.strftime('%Y%m%d%H%M%S', time.gmtime())}"
 
 
-def processing_request(spec, *, bucket, role, image, git_sha, name=None):
+def processing_request(spec, *, bucket, role, image, git_sha, name=None, kms_key_arn=None):
     name = name or job_name("proc", git_sha)
     return {
         "ProcessingJobName": name,
@@ -53,6 +53,7 @@ def processing_request(spec, *, bucket, role, image, git_sha, name=None):
             }
         ],
         "ProcessingOutputConfig": {
+            **({"KmsKeyId": kms_key_arn} if kms_key_arn else {}),
             "Outputs": [
                 {
                     "OutputName": "profile",
@@ -70,7 +71,8 @@ def processing_request(spec, *, bucket, role, image, git_sha, name=None):
     }
 
 
-def training_request(spec, *, bucket, role, image, git_sha, name=None, hyperparameters=None):
+def training_request(spec, *, bucket, role, image, git_sha, name=None, hyperparameters=None,
+                     kms_key_arn=None):
     name = name or job_name("train", git_sha)
     return {
         "TrainingJobName": name,
@@ -93,7 +95,10 @@ def training_request(spec, *, bucket, role, image, git_sha, name=None, hyperpara
                 },
             }
         ],
-        "OutputDataConfig": {"S3OutputPath": f"s3://{bucket}/{spec['output_prefix']}"},
+        "OutputDataConfig": {
+            "S3OutputPath": f"s3://{bucket}/{spec['output_prefix']}",
+            **({"KmsKeyId": kms_key_arn} if kms_key_arn else {}),
+        },
         "ResourceConfig": {
             "InstanceType": spec["instance_type"],
             "InstanceCount": 1,
@@ -105,13 +110,14 @@ def training_request(spec, *, bucket, role, image, git_sha, name=None, hyperpara
     }
 
 
-def tuning_request(spec, training, *, bucket, role, image, git_sha):
+def tuning_request(spec, training, *, bucket, role, image, git_sha, kms_key_arn=None):
     base = training_request(
         training,
         bucket=bucket,
         role=role,
         image=image,
         git_sha=git_sha,
+        kms_key_arn=kms_key_arn,
         hyperparameters=spec["static_hyperparameters"],
     )
     definition = {
@@ -177,6 +183,7 @@ def main():
     parser.add_argument("--release", default="latest")
     parser.add_argument("--bucket")
     parser.add_argument("--role")
+    parser.add_argument("--kms-key-arn", help="SSE-KMS key for job outputs (default: the data bucket key)")
     parser.add_argument("--model-data")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--delete-after", action="store_true")
@@ -193,10 +200,20 @@ def main():
     else:
         from continual_bench.infrastructure.aws.s3 import S3ObjectStore
 
-        release = resolve_release(S3ObjectStore(args.bucket), args.release)
+        if not args.bucket or not args.role:
+            parser.error("--bucket and --role are required")
+        store = S3ObjectStore(args.bucket)
+        release = resolve_release(store, args.release)
         git_sha, images = release.git_sha, {k: v.uri for k, v in release.images.items()}
+        if args.kind != "inference" and not args.kms_key_arn:
+            response = store.client.get_bucket_encryption(Bucket=args.bucket)
+            rules = response["ServerSideEncryptionConfiguration"]
+            encryption = rules["Rules"][0]["ApplyServerSideEncryptionByDefault"]
+            args.kms_key_arn = encryption.get("KMSMasterKeyID")
+            if encryption["SSEAlgorithm"] != "aws:kms" or not (args.kms_key_arn or "").startswith("arn:"):
+                parser.error("provide the data bucket customer-managed KMS key ARN using --kms-key-arn")
     spec = profile(args.kind)
-    common = {"bucket": args.bucket, "role": args.role, "git_sha": git_sha}
+    common = {"bucket": args.bucket, "role": args.role, "git_sha": git_sha, "kms_key_arn": args.kms_key_arn}
     if args.kind == "processing":
         request = processing_request(spec, image=images["runtime"], **common)
     elif args.kind == "training":
