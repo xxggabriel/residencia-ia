@@ -8,6 +8,7 @@ Usage: python scripts/aws/feature_store_smoke.py --group continual-bench-zia-soc
 import argparse
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
@@ -16,11 +17,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 def rows(parquet, limit):
     import pyarrow.parquet as pq
 
-    table = pq.read_table(parquet).slice(0, limit).to_pylist()
+    with pq.ParquetFile(parquet) as source:
+        table = next(source.iter_batches(batch_size=limit)).to_pylist()
     return [
         {
             "event_id": f"edge-{i}",
-            "event_time": float(r["event_time"]) / 1000,
+            "event_time": datetime.fromtimestamp(r["event_time"] / 1000, UTC)
+            .isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             **{k: v for k, v in r.items() if k != "event_time"},
         }
         for i, r in enumerate(table)
@@ -49,15 +52,22 @@ def main():
     if args.online:
         read = [store.get(r["event_id"]) for r in prepared]
         materialized = [
-            {**{k: float(v) for k, v in r.items() if k not in ("event_id",)}, "event_id": r["event_id"]}
+            {**r, "event_time": datetime.fromisoformat(r["event_time"])}
             for r in read
             if r
         ]
         features = [k for k in prepared[0] if k not in ("event_id", "event_time", "label")]
         result["parity"] = parity(prepared, materialized, features, tolerance=1e-6)
+        requests = [
+            {"entity_id": row["event_id"], "event_time": datetime.fromisoformat(row["event_time"])}
+            for row in prepared
+        ]
         joined = point_in_time(
-            [{"entity_id": r["event_id"], "event_time": r["event_time"]} for r in prepared],
-            [{"entity_id": r["event_id"], "event_time": float(r["event_time"])} for r in materialized],
+            requests,
+            [{"entity_id": r["event_id"], "event_time": r["event_time"]} for r in materialized],
+        )
+        result["timestamp_mismatches"] = sum(
+            j["features"] is None or j["features"]["event_time"] != j["event_time"] for j in joined
         )
         result["leakage_checked_rows"] = assert_no_leakage(
             [
@@ -66,7 +76,7 @@ def main():
             ]
         )
     print(json.dumps(result, indent=2))
-    if args.online and not result["parity"]["ok"]:
+    if args.online and (not result["parity"]["ok"] or result["timestamp_mismatches"]):
         sys.exit(1)
 
 
