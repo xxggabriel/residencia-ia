@@ -1,0 +1,288 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Native tracking catalog: Glue Data Catalog tables over the JSON Lines records and Parquet
+  predictions the workers publish to S3, and an Athena workgroup with enforced, encrypted results.
+
+Parameters:
+  Project:
+    Type: String
+  DataBucketName:
+    Type: String
+  DataKeyArn:
+    Type: String
+  BytesScannedCutoffPerQuery:
+    Type: Number
+    Default: 10737418240
+    MinValue: 10000000
+
+Resources:
+  Database:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Join ["_", !Split ["-", !Ref Project]]
+        Description: continual-bench runs, metrics, windows, model versions, attempts and costs
+
+  WorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Ref Project
+      State: ENABLED
+      RecursiveDeleteOption: false
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        BytesScannedCutoffPerQuery: !Ref BytesScannedCutoffPerQuery
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${DataBucketName}/athena-results/"
+          EncryptionConfiguration: {EncryptionOption: SSE_KMS, KmsKey: !Ref DataKeyArn}
+      Tags: [{Key: cb-stack, Value: !Ref Project}]
+
+  RunsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref Database
+      TableInput:
+        Name: runs
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: json}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataBucketName}/analytics/runs/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters: {ignore.malformed.json: "false"}
+          Columns:
+            - {Name: campaign_id, Type: string}
+            - {Name: run_id, Type: string}
+            - {Name: attempt_key, Type: string}
+            - {Name: kind, Type: string}
+            - {Name: dataset, Type: string}
+            - {Name: scope, Type: string}
+            - {Name: policy, Type: string}
+            - {Name: model, Type: string}
+            - {Name: protocol, Type: string}
+            - {Name: git_sha, Type: string}
+            - {Name: rows, Type: bigint}
+            - {Name: holdout_rows, Type: bigint}
+            - {Name: holdout_start, Type: bigint}
+            - {Name: block_rows, Type: bigint}
+            - {Name: dataset_sha256, Type: string}
+            - {Name: model_versions_count, Type: int}
+            - {Name: final_uri, Type: string}
+            - {Name: outputs_uri, Type: string}
+            - {Name: report_uri, Type: string}
+            - {Name: predictions_uri, Type: string}
+
+  MetricsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref Database
+      TableInput:
+        Name: metrics
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: json}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataBucketName}/analytics/metrics/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo: {SerializationLibrary: org.openx.data.jsonserde.JsonSerDe}
+          Columns:
+            - {Name: campaign_id, Type: string}
+            - {Name: run_id, Type: string}
+            - {Name: attempt_key, Type: string}
+            - {Name: dataset, Type: string}
+            - {Name: scope, Type: string}
+            - {Name: policy, Type: string}
+            - {Name: kind, Type: string}
+            - {Name: git_sha, Type: string}
+            - {Name: partition, Type: string, Comment: "prequential | holdout | <partition>_class:<label> | final"}
+            - {Name: metric, Type: string}
+            - {Name: value, Type: double}
+            - {Name: step, Type: bigint}
+
+  WindowsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref Database
+      TableInput:
+        Name: windows
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: json}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataBucketName}/analytics/windows/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo: {SerializationLibrary: org.openx.data.jsonserde.JsonSerDe}
+          Columns:
+            - {Name: campaign_id, Type: string}
+            - {Name: run_id, Type: string}
+            - {Name: dataset, Type: string}
+            - {Name: scope, Type: string}
+            - {Name: policy, Type: string}
+            - {Name: partition, Type: string, Comment: "prequential | holdout"}
+            - {Name: step, Type: bigint, Comment: "end_seq of the window"}
+            - {Name: end_seq, Type: bigint}
+            - {Name: start_time_ms, Type: bigint}
+            - {Name: end_time_ms, Type: bigint}
+            - {Name: metric, Type: string}
+            - {Name: value, Type: double}
+
+  ModelVersionsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref Database
+      TableInput:
+        Name: model_versions
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: json}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataBucketName}/analytics/model_versions/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo: {SerializationLibrary: org.openx.data.jsonserde.JsonSerDe}
+          Columns:
+            - {Name: campaign_id, Type: string}
+            - {Name: run_id, Type: string}
+            - {Name: dataset, Type: string}
+            - {Name: policy, Type: string}
+            - {Name: version, Type: int}
+            - {Name: end_seq, Type: bigint}
+            - {Name: start_seq, Type: bigint}
+            - {Name: action, Type: string}
+            - {Name: sha256, Type: string}
+            - {Name: bytes, Type: bigint}
+            - {Name: train_samples, Type: bigint}
+            - {Name: train_seconds, Type: double}
+            - {Name: iterations, Type: int}
+            - {Name: uri, Type: string}
+
+  AttemptsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref Database
+      TableInput:
+        Name: attempts
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: json}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataBucketName}/analytics/attempts/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo: {SerializationLibrary: org.openx.data.jsonserde.JsonSerDe}
+          Columns:
+            - {Name: campaign_id, Type: string}
+            - {Name: run_id, Type: string}
+            - {Name: job_id, Type: string}
+            - {Name: job_name, Type: string}
+            - {Name: status, Type: string}
+            - {Name: status_reason, Type: string}
+            - {Name: created_at, Type: bigint}
+            - {Name: started_at, Type: bigint}
+            - {Name: stopped_at, Type: bigint}
+            - {Name: exit_code, Type: int}
+            - {Name: task_arn, Type: string}
+            - {Name: job_definition, Type: string}
+            - {Name: resources, Type: "map<string,string>"}
+            - {Name: ephemeral_gib, Type: int}
+
+  CampaignsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref Database
+      TableInput:
+        Name: campaigns
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: json}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataBucketName}/analytics/campaigns/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo: {SerializationLibrary: org.openx.data.jsonserde.JsonSerDe}
+          Columns:
+            - {Name: campaign_id, Type: string}
+            - {Name: release, Type: string}
+            - {Name: snapshot_id, Type: string}
+            - {Name: succeeded, Type: int}
+            - {Name: total, Type: int}
+            - {Name: complete, Type: boolean}
+            - {Name: final_manifests, Type: "array<string>"}
+
+  CostEstimatesTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref Database
+      TableInput:
+        Name: cost_estimates
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: json}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataBucketName}/analytics/cost_estimates/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo: {SerializationLibrary: org.openx.data.jsonserde.JsonSerDe}
+          Columns:
+            - {Name: campaign_id, Type: string}
+            - {Name: run_id, Type: string}
+            - {Name: job_id, Type: string}
+            - {Name: status, Type: string}
+            - {Name: seconds, Type: double}
+            - {Name: billed_seconds, Type: bigint}
+            - {Name: queue_seconds, Type: double}
+            - {Name: vcpu_seconds, Type: double}
+            - {Name: vcpu_usd, Type: double}
+            - {Name: memory_usd, Type: double}
+            - {Name: ephemeral_storage_usd, Type: double}
+            - {Name: total_usd, Type: double}
+            - {Name: price_snapshot, Type: string}
+
+  PredictionsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref Database
+      TableInput:
+        Name: predictions
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          projection.enabled: "true"
+          projection.campaign_id.type: injected
+          projection.run_id.type: injected
+          projection.attempt_key.type: injected
+          storage.location.template: !Sub "s3://${DataBucketName}/campaigns/${!campaign_id}/runs/${!run_id}/attempts/${!attempt_key}/predictions/"
+        PartitionKeys:
+          - {Name: campaign_id, Type: string}
+          - {Name: run_id, Type: string}
+          - {Name: attempt_key, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataBucketName}/campaigns/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo: {SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe}
+          Columns:
+            - {Name: seq, Type: bigint}
+            - {Name: event_time_ms, Type: bigint}
+            - {Name: label, Type: int}
+            - {Name: prediction, Type: int}
+            - {Name: holdout, Type: boolean}
+            - {Name: model_end_seq, Type: bigint}
+            - {Name: p_0, Type: double}
+            - {Name: p_1, Type: double}
+            - {Name: p_2, Type: double}
+            - {Name: p_3, Type: double}
+
+Outputs:
+  DatabaseName:
+    Value: !Ref Database
+  WorkGroupName:
+    Value: !Ref WorkGroup

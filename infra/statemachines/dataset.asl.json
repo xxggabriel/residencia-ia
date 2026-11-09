@@ -1,0 +1,117 @@
+{
+  "Comment": "Manual dataset snapshot pipeline: resolve the catalog source, acquire (download over HTTPS or import an S3 copy) in CodeBuild outside the VPC, verify raw, prepare in a private Batch job, then publish the manifest and its completion marker. Valid snapshots are reused.",
+  "StartAt": "ResolveSource",
+  "States": {
+    "ResolveSource": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ControlFunction}",
+        "Payload": {"action": "resolve_dataset", "request.$": "$.request", "release.$": "$.release"}
+      },
+      "ResultSelector": {
+        "decision.$": "$.Payload.decision",
+        "snapshot.$": "$.Payload.snapshot",
+        "snapshot_id.$": "$.Payload.snapshot_id",
+        "mode.$": "$.Payload.mode",
+        "import_uri.$": "$.Payload.import_uri",
+        "runtime_image.$": "$.Payload.runtime_image",
+        "prepare_job_definition.$": "$.Payload.prepare_job_definition",
+        "control_function.$": "$.Payload.control_function",
+        "job_name.$": "$.Payload.job_name"
+      },
+      "ResultPath": "$.resolved",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 6, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SnapshotFailed"}],
+      "Next": "Route"
+    },
+    "Route": {
+      "Type": "Choice",
+      "Choices": [
+        {"Variable": "$.resolved.decision", "StringEquals": "ready", "Next": "SnapshotReady"},
+        {"Variable": "$.resolved.decision", "StringEquals": "publish", "Next": "PublishManifest"},
+        {"Variable": "$.resolved.decision", "StringEquals": "prepare", "Next": "Prepare"},
+        {"Variable": "$.resolved.decision", "StringEquals": "acquire", "Next": "Acquire"}
+      ],
+      "Default": "SnapshotFailed"
+    },
+    "Acquire": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::codebuild:startBuild.sync",
+      "Parameters": {
+        "ProjectName": "${AcquisitionProject}",
+        "ImageOverride.$": "$.resolved.runtime_image",
+        "EnvironmentVariablesOverride": [
+          {"Name": "DATASET", "Type": "PLAINTEXT", "Value.$": "$.resolved.snapshot.dataset"},
+          {"Name": "SCOPE", "Type": "PLAINTEXT", "Value.$": "$.resolved.snapshot.scope"},
+          {"Name": "MODE", "Type": "PLAINTEXT", "Value.$": "$.resolved.mode"},
+          {"Name": "IMPORT_URI", "Type": "PLAINTEXT", "Value.$": "$.resolved.import_uri"}
+        ]
+      },
+      "ResultSelector": {"build_id.$": "$.Build.Id", "status.$": "$.Build.BuildStatus"},
+      "ResultPath": "$.acquired",
+      "Retry": [
+        {"ErrorEquals": ["CodeBuild.AccountLimitExceededException", "CodeBuild.CodeBuildException"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2}
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SnapshotFailed"}],
+      "Next": "VerifyRaw"
+    },
+    "VerifyRaw": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {"FunctionName.$": "$.resolved.control_function", "Payload": {"action": "verify_raw", "snapshot.$": "$.resolved.snapshot"}},
+      "ResultSelector": {"files.$": "$.Payload.files"},
+      "ResultPath": "$.raw",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 6, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SnapshotFailed"}],
+      "Next": "Prepare"
+    },
+    "Prepare": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::batch:submitJob.sync",
+      "Parameters": {
+        "JobName.$": "$.resolved.job_name",
+        "JobQueue": "${JobQueue}",
+        "JobDefinition.$": "$.resolved.prepare_job_definition",
+        "Parameters": {"dataset.$": "$.resolved.snapshot.dataset", "scope.$": "$.resolved.snapshot.scope"},
+        "Tags": {"cb-stack": "${Project}", "cb-snapshot.$": "$.resolved.snapshot_id"},
+        "PropagateTags": true
+      },
+      "ResultSelector": {"job_id.$": "$.JobId", "status.$": "$.Status"},
+      "ResultPath": "$.prepared",
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SnapshotFailed"}],
+      "Next": "PublishManifest"
+    },
+    "PublishManifest": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {"FunctionName.$": "$.resolved.control_function", "Payload": {"action": "publish_snapshot", "snapshot.$": "$.resolved.snapshot"}},
+      "ResultSelector": {"manifest_uri.$": "$.Payload.manifest_uri", "marker_uri.$": "$.Payload.marker_uri", "snapshot_id.$": "$.Payload.snapshot_id"},
+      "ResultPath": "$.published",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 6, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SnapshotFailed"}],
+      "Next": "SnapshotReady"
+    },
+    "SnapshotReady": {"Type": "Succeed"},
+    "SnapshotFailed": {
+      "Type": "Fail",
+      "Error": "SnapshotFailed",
+      "Cause": "Source resolution, acquisition, raw verification, preparation or publication failed. Published evidence is kept; rerun the same input to resume."
+    }
+  }
+}

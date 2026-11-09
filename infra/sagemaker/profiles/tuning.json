@@ -1,0 +1,14 @@
+{
+  "kind": "tuning",
+  "description": "Separate Automatic Model Tuning run over l2 and iterations, minimizing validation log loss on its own chronological validation split.",
+  "base": "training",
+  "objective": {"Type": "Minimize", "MetricName": "validation:log_loss"},
+  "max_jobs": 8,
+  "max_parallel_jobs": 2,
+  "strategy": "Bayesian",
+  "ranges": {
+    "ContinuousParameterRanges": [{"Name": "l2", "MinValue": "0.00001", "MaxValue": "0.1", "ScalingType": "Logarithmic"}],
+    "IntegerParameterRanges": [{"Name": "max_iterations", "MinValue": "8", "MaxValue": "64", "ScalingType": "Linear"}]
+  },
+  "static_hyperparameters": {"scope": "smoke", "validation_fraction": "0.1", "max_train_rows": "2000000"}
+}
