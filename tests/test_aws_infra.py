@@ -107,6 +107,17 @@ def test_only_tagged_jobs_can_be_terminated():
     assert {"Ref": "JobQueue"} in submit["Resource"] and len(submit["Resource"]) == 3
 
 
+def test_tagged_submission_can_authorize_the_job_queue_and_definitions():
+    role = template("modules/execution.yaml")["Resources"]["StatesRole"]
+    submit = next(s for s in statements(role) if s.get("Sid") == "SubmitToThisQueueOnly")
+    tag = next(s for s in statements(role) if s["Action"] == "batch:TagResource")
+    assert tag["Resource"] == [
+        *submit["Resource"],
+        {"Fn::Sub": "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*"},
+    ]
+    assert tag["Condition"] == {"StringEquals": {"aws:RequestTag/cb-stack": {"Ref": "Project"}}}
+
+
 def test_roles_are_separate_and_passrole_is_scoped():
     execution = template("modules/execution.yaml")["Resources"]
     cicd = template("cicd.yaml")["Resources"]
