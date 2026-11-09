@@ -233,13 +233,18 @@ Resources:
             PolicyDocument:
               Version: "2012-10-17"
               Statement:
-                - Effect: Allow
-                  Action: [sagemaker:DescribeModelPackageGroup, sagemaker:CreateModelPackageGroup,
-                           sagemaker:ListModelPackages, sagemaker:AddTags]
+                - Sid: ManageProjectGroups
+                  Effect: Allow
+                  Action: [sagemaker:DescribeModelPackageGroup, sagemaker:CreateModelPackageGroup, sagemaker:AddTags]
                   Resource: !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package-group/${Project}-*"
-                - Effect: Allow
-                  Action: [sagemaker:CreateModelPackage, sagemaker:DescribeModelPackage]
-                  Resource: !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package/${Project}-*"
+                - Sid: ListAndRegisterVersionsInProjectGroups
+                  # ListModelPackages and CreateModelPackage are authorized against the versions'
+                  # ARN (model-package/<group>/*), not the group's, so both forms are granted.
+                  Effect: Allow
+                  Action: [sagemaker:ListModelPackages, sagemaker:CreateModelPackage, sagemaker:DescribeModelPackage]
+                  Resource:
+                    - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package-group/${Project}-*"
+                    - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package/${Project}-*"
           - !Ref AWS::NoValue
 
   PrepareJobRole:
@@ -339,12 +344,15 @@ Resources:
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !Sub "${ControlLogGroup.Arn}:*"
               - Sid: ReadReleasesAndSnapshots
+                # analytics/* is read back when a write-once row already exists (retries and
+                # repeated RecordAttempt calls compare the stored row instead of failing).
                 Effect: Allow
                 Action: [s3:GetObject]
                 Resource:
                   - !Sub "${DataBucketArn}/releases/*"
                   - !Sub "${DataBucketArn}/datasets/*"
                   - !Sub "${DataBucketArn}/campaigns/*"
+                  - !Sub "${DataBucketArn}/analytics/*"
               - Sid: WriteCampaignStateManifestsAndAnalytics
                 Effect: Allow
                 Action: [s3:PutObject]
