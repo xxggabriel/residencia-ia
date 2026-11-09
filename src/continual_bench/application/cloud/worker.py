@@ -489,7 +489,8 @@ def sagemaker_registrar(model_registry, inference_image: str):
     """Adapter from a finished Zia run to a pending Model Registry candidate."""
 
     def register(unit, report, metadata, archive_uri, snapshot):
-        group = f"continual-bench-zia-{report['dataset']}-{report['policy']}" + (
+        policy_slug = report["policy"].replace("_", "-")
+        group = f"continual-bench-zia-{report['dataset']}-{policy_slug}" + (
             "-smoke" if report["scope"] == "smoke" else ""
         )
         model_registry.ensure_group(

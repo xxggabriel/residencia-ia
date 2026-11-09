@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from continual_bench.application.cloud import layout, planning
-from continual_bench.application.cloud.contracts import CampaignRequest
+from continual_bench.application.cloud.contracts import CampaignRequest, DatasetRequest
 from continual_bench.application.cloud.fixtures import (
     FIXTURE_SHA,
     publish_fixture_release,
@@ -73,6 +73,29 @@ def test_plan_is_published_once_before_submission(campaign):
     )
     with pytest.raises(planning.CampaignConflict):
         planning.publish_plan(store, changed)
+
+
+def test_zia_full_examples_plan_all_twenty_one_independent_jobs(campaign):
+    _, _, release, _, _ = campaign
+    jobs = set()
+    for dataset in ("fraud", "social", "ecommerce"):
+        def request(filename):
+            path = Path("infra/examples") / f"{filename}-{dataset}-full.json"
+            return json.loads(path.read_text())["request"]
+
+        full = CampaignRequest.model_validate(request("campaign"))
+        prepare = DatasetRequest.model_validate(request("dataset"))
+        assert full.snapshot == prepare.snapshot() and full.snapshot.scope == "full"
+        plan = planning.build_plan(full, release, snapshot_manifest={
+            "manifest_sha256": "a" * 64, "manifest_uri": "s3://bucket/snapshot.json",
+            "prepared": {"sha256": "b" * 64},
+        })
+        assert plan["concurrency"] == len(plan["units"]) == 7
+        assert {u["params"]["policy"] for u in plan["units"]} == {
+            "frozen", "online", "drift_adwin", "drift_ddm", "incremental", "periodic", "cost_heuristic",
+        }
+        jobs.update(u["job_name"] for u in plan["units"])
+    assert len(jobs) == 21
 
 
 def test_latest_release_resolution_is_pinned_in_the_plan(campaign):

@@ -13,7 +13,7 @@ from continual_bench.infrastructure.metric_tracking import log_metric_points, pu
 from continual_bench.infrastructure.run_artifacts import publish_run_artifacts
 from continual_bench.infrastructure.storage import atomic_write, publication_lock
 from continual_bench.infrastructure.zia_tracking import publish_run_metrics
-from continual_bench.models.zia import FraudOrReturnBooster, MultinomialLogistic, ZiaPredictor
+from continual_bench.models.zia import ZiaPredictor, make_zia_model
 
 
 def dataset_source_uri(source):
@@ -67,7 +67,7 @@ def replay_predictions(directory, report, root):
     if local_manifest != manifest or sha256_file(path) != manifest["sha256"]:
         raise ValueError("cannot replay predictions on a different prepared dataset")
     classes = manifest["source"]["classes"]
-    model = FraudOrReturnBooster() if report["model"] == "xgboost" else MultinomialLogistic(len(classes))
+    model = make_zia_model(report["model"], len(classes))
     versions = iter(report["model_versions"])
     active = next(versions)
     pending = next(versions, None)
