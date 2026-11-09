@@ -65,6 +65,14 @@ aws batch describe-job-definitions --job-definitions "$(scripts/aws/outputs.sh B
 O digest do ECR, o `images.runtime.digest` do release e o sufixo `@sha256:` da imagem da job
 definition devem coincidir.
 
+### Recriar o runtime com os logs preservados
+
+Para recriar a stack de runtime após rollback ou remoção, confirme se os grupos
+`/continual-bench/batch` e `/continual-bench/acquisition` foram preservados. Se ambos
+existirem com a chave KMS e a retenção esperadas, acrescente
+`"ReuseRuntimeLogGroups": "true"` ao objeto `config/runtime-parameters.json` no bucket de artefatos.
+O runtime passa a usar esses grupos existentes, e a retenção deles é gerenciada separadamente.
+
 ### Rollback por digest
 
 ```bash
