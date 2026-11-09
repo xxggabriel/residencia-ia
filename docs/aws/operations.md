@@ -119,8 +119,13 @@ Fargate (`L-3032A538`), o `maxvCpus` dos compute environments e o estado da fila
 publica o plano. Antes de cada submissão, `reconcile_unit` procura o manifesto final e jobs
 com o nome determinístico `cb-<campanha>-<run_id>`. Isso evita reenvio quando a resposta
 de uma submissão se perde. Jobs duplicados ativos são terminados, mantendo o mais antigo.
-Cada tentativa grava a própria evidência em `attempts/<job>-<n>/`. O manifesto final usa
-`If-None-Match: *`. Uma saída 0 sem manifesto final conta como `FAILED_PUBLICATION`.
+Cada tentativa grava a própria evidência em `attempts/<job>-<n>/`, incluindo as linhas do
+Athena (`analytics-rows.json`). O manifesto final usa `If-None-Match: *`. Depois dele, as
+linhas da tentativa vencedora são publicadas e o marcador `analytics.json` é gravado. Se essa
+etapa for interrompida, um job reaproveitado ou a consolidação da campanha refazem a
+publicação. Uma saída 0 sem manifesto final conta como `FAILED_PUBLICATION`. A reconciliação
+só termina jobs cujo nome é exatamente `cb-<campanha>-<run_id de 20 hex>`, para não alcançar
+campanhas cujo ID começa com o mesmo prefixo.
 
 Timeouts: `jobStateTimeLimitActions` da fila cancela jobs presos em `RUNNABLE` (espera na fila).
 `AttemptDurationSeconds` limita a execução. `TimeoutSecondsPath` do `.sync` limita espera mais

@@ -88,6 +88,11 @@ def final_key(campaign_id, run_id):
     return f"{run_prefix(campaign_id, run_id)}/final.json"
 
 
+def analytics_marker_key(campaign_id, run_id):
+    """Written after the winning attempt's Athena rows are published; absent means repair needed."""
+    return f"{run_prefix(campaign_id, run_id)}/analytics.json"
+
+
 def event_key(campaign_id, run_id, stamp, job_id, status):
     return f"{run_prefix(campaign_id, run_id)}/events/{stamp}-{job_id}-{status}.json"
 

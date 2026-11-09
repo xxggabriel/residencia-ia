@@ -243,3 +243,55 @@ def test_worker_refuses_another_release_image(campaign, tmp_path):
     )
     status = get_json(store, layout.attempt_status_key("social-smoke", unit["run_id"], "job-7-1"))
     assert status["diagnostic"]["error_type"] == "ContractError"
+
+
+def test_loader_sample_reads_only_the_needed_row_groups(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from continual_bench.application.cloud.worker import read_row_range
+
+    path = tmp_path / "groups.parquet"
+    pq.write_table(
+        pa.table({"seq": list(range(95)), "x": [float(i) for i in range(95)]}), path, row_group_size=10
+    )
+    calls = []
+    original = pq.ParquetFile.read_row_group
+    monkeypatch.setattr(
+        pq.ParquetFile, "read_row_group", lambda self, i, **kw: calls.append(i) or original(self, i, **kw)
+    )
+    assert read_row_range(path, ["seq"], 17, 30).column("seq").to_pylist() == list(range(17, 47))
+    assert calls == [1, 2, 3, 4]
+    with pytest.raises(ValueError, match="outside"):
+        read_row_range(path, ["seq"], 200, 5)
+
+
+def test_analytics_publication_is_repaired_after_finalization(campaign, tmp_path, monkeypatch):
+    from continual_bench.application.cloud import lifecycle, records
+
+    store, snapshot, release, _, plan = campaign
+    planning.publish_plan(store, plan)
+    unit = plan["units"][0]
+    original, calls = records.publish_rows, []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("transient storage error after the final manifest")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(records, "publish_rows", flaky)
+    assert run_unit(store, unit["unit_key"], tmp_path / "a", env=_env(0)) != EXIT_OK
+    assert store.head(layout.final_key("social-smoke", unit["run_id"])) is not None
+    assert store.head(layout.analytics_marker_key("social-smoke", unit["run_id"])) is None
+    assert store.head(layout.analytics_key("metrics", "social-smoke", unit["run_id"])) is None
+    assert run_unit(store, unit["unit_key"], tmp_path / "b", env=_env(1)) == EXIT_OK
+    reused = get_json(store, layout.attempt_status_key("social-smoke", unit["run_id"], "job-1-1"))
+    assert reused["state"] == "REUSED" and reused["analytics"] == "repaired"
+    marker = get_json(store, layout.analytics_marker_key("social-smoke", unit["run_id"]))
+    assert marker["attempt_key"] == "job-0-1"
+    rows = store.get_bytes(layout.analytics_key("metrics", "social-smoke", unit["run_id"])).decode()
+    assert '"attempt_key": "job-0-1"' in rows
+    summary = lifecycle.consolidate(store, "social-smoke")
+    assert summary["succeeded"] == 1
+    assert get_json(store, layout.summary_key("social-smoke"))["units"][0]["analytics"] == "present"

@@ -7,7 +7,7 @@ Não havia AWS CLI nem credenciais nesta máquina. Nenhum recurso foi criado na 
 
 | Verificação | Comando | Resultado |
 |---|---|---|
-| Suíte completa (585 testes existentes + 80 novos) | `uv run pytest -q` | 665 aprovados, 50 desmarcados (`services`/`benchmark`, como antes) |
+| Suíte completa (585 testes existentes + 84 novos) | `uv run pytest -q` | 669 aprovados, 50 desmarcados (`services`/`benchmark`, como antes) |
 | Lint | `uv run ruff check src tests dags examples scripts` | sem erros |
 | CloudFormation | `make aws-validate` (cfn-lint 1.38.0 + invariantes) | 12 templates, 0 erros de invariantes, cfn-lint sem erros (W3002 ignorado: caminhos resolvidos por `package`) |
 | ASL | `scripts/aws/validate_asl.py` offline | 2 definições, 0 erros |

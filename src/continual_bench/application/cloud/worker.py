@@ -27,7 +27,7 @@ from continual_bench.infrastructure.object_store import (
 
 from . import layout
 from .contracts import RunUnit, SnapshotRef
-from .records import matrix_rows, publish_rows, zia_rows
+from .records import ROWS_FILE, ensure_rows, matrix_rows, zia_rows
 from .snapshots import SnapshotNotReady, materialize, verify_snapshot
 
 EXIT_OK, EXIT_FAILED, EXIT_CONTRACT, EXIT_SNAPSHOT = 0, 1, 2, 3
@@ -123,6 +123,27 @@ def model_tarball(directory: Path, metadata: dict) -> bytes:
     return buffer.getvalue()
 
 
+def read_row_range(path, columns, start: int, count: int):
+    """Rows [start, start + count) reading only the row groups that contain them (bounded memory)."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    tables, offset = [], 0
+    with pq.ParquetFile(path) as source:
+        for index in range(source.metadata.num_row_groups):
+            size = source.metadata.row_group(index).num_rows
+            if offset + size > start and offset < start + count:
+                group = source.read_row_group(index, columns=columns, use_threads=False)
+                low = max(0, start - offset)
+                tables.append(group.slice(low, min(size, start + count - offset) - low))
+            offset += size
+            if offset >= start + count:
+                break
+    if not tables:
+        raise ValueError(f"rows {start}..{start + count} are outside {path}")
+    return pa.concat_tables(tables)
+
+
 def verify_native_loader(directory: Path, report: dict, data_root: Path, rows: int = 256) -> dict:
     """The project's loader must reproduce the archived holdout predictions of the final model."""
     import numpy as np
@@ -141,8 +162,7 @@ def verify_native_loader(directory: Path, report: dict, data_root: Path, rows: i
     predictor = ZiaPredictor(staging)
     path, manifest = load_manifest(data_root, report["dataset"], report["scope"])
     start = report["contract"]["holdout_start"]
-    table = pq.read_table(path, columns=manifest["features"]).slice(start, rows)
-    features = table.to_pandas().astype("float64")
+    features = read_row_range(path, manifest["features"], start, rows).to_pandas().astype("float64")
     expected = pd.concat(
         [
             pq.read_table(part, filters=[("seq", ">=", start), ("seq", "<", start + rows)]).to_pandas()
@@ -242,12 +262,21 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
         "labels": unit.labels,
     }
     if store.head(final_key) is not None:
+        try:
+            analytics = ensure_rows(store, get_json(store, final_key))
+        except Exception as error:  # Repair failed: report it, keep the final manifest untouched.
+            log.error("analytics repair failed", exc_info=True)
+            put_json(store, status_key, {**status, "state": "REUSED_ANALYTICS_FAILED", "finished_at": clock(),
+                                         "diagnostic": {"error_type": type(error).__name__,
+                                                        "message": str(error)[:2000]}})
+            return EXIT_FAILED
         put_json(
             store,
             status_key,
-            {**status, "state": "REUSED", "finished_at": clock(), "final_uri": store.uri(final_key)},
+            {**status, "state": "REUSED", "finished_at": clock(), "final_uri": store.uri(final_key),
+             "analytics": analytics},
         )
-        log.info("run already final; reusing published evidence")
+        log.info("run already final; reusing published evidence", extra={"fields": {"analytics": analytics}})
         return EXIT_OK
     put_json(store, status_key, {**status, "state": "RUNNING"})
     started = time.monotonic()
@@ -284,6 +313,8 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
             loader = verify_native_loader(output, report, outcome["data_root"])
             (output / "model").mkdir(exist_ok=True)
             (output / "model" / "model.tar.gz").write_bytes(model_tarball(output, metadata))
+            rows = zia_rows(_base(unit, attempt_key), report, store.uri(final_key), outputs_uri)
+            (output / ROWS_FILE).write_text(json.dumps(rows, sort_keys=True, allow_nan=False))
             published = publish_directory(store, output, prefix)
             model_package = None
             if registry is not None:
@@ -329,8 +360,15 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
                     "published": published,
                 }
             )
-            rows = zia_rows(_base(unit, attempt_key), report, store.uri(final_key), outputs_uri)
         else:
+            rows = matrix_rows(
+                _base(unit, attempt_key),
+                outcome["headline"],
+                outcome["report"],
+                store.uri(final_key),
+                outputs_uri,
+            )
+            (outcome["output"] / ROWS_FILE).write_text(json.dumps(rows, sort_keys=True, allow_nan=False))
             published = publish_directory(store, outcome["output"], prefix)
             final.update(
                 {
@@ -339,21 +377,14 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
                     "run_key": outcome["report"].get("run_key"),
                 }
             )
-            rows = matrix_rows(
-                _base(unit, attempt_key),
-                outcome["headline"],
-                outcome["report"],
-                store.uri(final_key),
-                outputs_uri,
-            )
         try:
             put_json(store, final_key, final, if_absent=True)
             state = "SUCCEEDED"
         except ObjectExists:
             state = "SUPERSEDED"  # Another attempt published first; this attempt's evidence stays.
             log.warning("final manifest already exists; attempt kept as superseded evidence")
-        if state == "SUCCEEDED":
-            publish_rows(store, unit.campaign_id, unit.run_id, rows)
+        # Rows come from the winning attempt's archived file; a failure here is repaired later.
+        analytics = ensure_rows(store, get_json(store, final_key))
         finished = clock()
         put_json(
             store,
@@ -365,6 +396,7 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
                 "wall_seconds": time.monotonic() - started,
                 "final_uri": store.uri(final_key),
                 "published_bytes": final["published"]["bytes"],
+                "analytics": analytics,
             },
         )
         if emit:

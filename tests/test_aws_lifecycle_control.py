@@ -295,3 +295,29 @@ def test_control_plane_imports_stay_light():
         ).stdout.replace("'", '"')
     )
     assert loaded == []
+
+
+def test_reconciliation_ignores_campaigns_sharing_a_prefix(planned):
+    store, _, items = planned
+    sibling = "cb-c1-b-" + "f" * 20  # campaign "c1-b" also matches the Batch filter cb-c1-*
+    jobs = FakeJobs(
+        {
+            "own": job(items[0]["job_name"], "RUNNING", task="arn:aws:ecs:us-east-1:1:task/c/own"),
+            "sibling": job(sibling, "RUNNING", task="arn:aws:ecs:us-east-1:1:task/c/sib"),
+        }
+    )
+    report = lifecycle.reconcile_campaign(store, jobs, "c1", "post-campaign verification")
+    assert report["terminated"] == ["own"] and jobs.jobs["sibling"]["status"] == "RUNNING"
+    assert lifecycle.campaign_job_name("c1").match(items[0]["job_name"])
+    assert not lifecycle.campaign_job_name("c1").match(sibling)
+
+
+def test_consolidation_accepts_the_distributed_map_descriptor(planned):
+    store, plan, _ = planned
+    descriptor = {
+        "MapRunArn": "arn:aws:states:us-east-1:1:mapRun:x/y:z",
+        "ResultWriterDetails": {"Bucket": "b", "Key": "campaigns/c1/map-results/manifest.json"},
+    }
+    result = lifecycle.consolidate(store, "c1", descriptor)
+    assert (result["complete"], result["succeeded"], result["total"]) == (False, 0, 4)
+    assert {u["status"] for u in get_json(store, layout.summary_key("c1"))["units"]} == {"FAILED"}

@@ -76,6 +76,7 @@ releases/<sha>/release.json, releases/latest.json
 campaigns/<id>/request.json, plan.json, plan-items.json, units/<run_id>.json, preflight/<data>.json
 campaigns/<id>/runs/<run_id>/attempts/<job>-<tentativa>/...        evidência de cada tentativa
 campaigns/<id>/runs/<run_id>/final.json                            manifesto final (If-None-Match: *)
+campaigns/<id>/runs/<run_id>/analytics.json                        marcador: linhas do Athena da tentativa vencedora publicadas
 campaigns/<id>/runs/<run_id>/events/...                            ciclo de vida vindo do EventBridge e do workflow
 campaigns/<id>/summary.json, reconciliation/<data>.json
 analytics/<tabela>/<campanha>__<run_id>[__<job>].json              JSON Lines para o Glue/Athena
