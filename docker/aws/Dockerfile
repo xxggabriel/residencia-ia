@@ -5,7 +5,8 @@
 #   ml:      SageMaker Training/Tuning (`train`) and Inference (`serve` on :8080).
 # Both share the dependency layer; they differ only in entry point, so they are separate tags.
 # No MLflow, ZenML, Kafka, MinIO or Airflow is installed.
-ARG PYTHON_IMAGE=python:3.12.13-slim-bookworm
+# Use the official mirror to avoid Docker Hub rate limits in CodeBuild.
+ARG PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
 # Releases are always linux/amd64. IMAGE_PLATFORM=linux/arm64 exists only for native smoke
 # checks on Apple Silicon, where amd64 emulation (QEMU) cannot run pyarrow.
 ARG IMAGE_PLATFORM=linux/amd64
