@@ -173,37 +173,49 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self.respond(200, health_snapshot())
             return
-        if self.path.startswith("/runs/"):
-            identity = self.path.removeprefix("/runs/")
+        prefix, _, identity = self.path.rpartition("/")
+        if prefix in ("/runs", "/zia-runs"):
             if len(identity) == 24 and all(c in "0123456789abcdef" for c in identity):
-                path = ROOT / identity / "job.json"
+                root = ROOT
+                if prefix == "/zia-runs":
+                    from .zia_jobs import JOB_ROOT
+
+                    root = JOB_ROOT
+                path = root / identity / "job.json"
                 if path.exists():
                     self.respond(200, json.loads(path.read_text()))
                     return
         self.respond(404, {"error": "not_found"})
 
     def do_POST(self):
-        if self.path != "/runs":
+        if self.path not in ("/runs", "/zia-runs"):
             self.respond(404, {"error": "not_found"})
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= 65536:
                 raise ValueError("body size must be 1..65536")
-            config = Config.model_validate_json(self.rfile.read(length))
-            # Internal API accepts built-ins only. Plugins run from the trusted CLI/config deployment path.
-            if config.plugins:
-                raise ValueError("plugins must be installed/configured by operator, not HTTP requests")
+            payload = self.rfile.read(length)
+            if self.path == "/zia-runs":
+                from . import zia_jobs
+
+                config = zia_jobs.Job.model_validate_json(payload)
+                root, identity, handler = zia_jobs.JOB_ROOT, zia_jobs.identity(config), zia_jobs.perform
+            else:
+                config = Config.model_validate_json(payload)
+                # Plugins run only from the trusted CLI/config deployment path.
+                if config.plugins:
+                    raise ValueError("plugins must be installed/configured by operator, not HTTP requests")
+                root, identity, handler = ROOT, config.identity(), perform
         except Exception as error:
             self.respond(400, {"error": str(error)})
             return
-        identity = config.identity()
         try:
             ensure_tracking_ready()
         except StackNotReady as error:
             self.respond(503, {"ready": False, "error": str(error)})
             return
-        code, status = submit_job(ROOT, identity, config, perform)
+        code, status = submit_job(root, identity, config, handler)
         self.respond(code, status)
 
 

@@ -39,6 +39,9 @@ Avaliação comparativa ampliada, executada separadamente: `uv run python script
 
 ## Conjuntos de dados e protocolos
 
+Os [benchmarks Zia Data Labs](docs/zia-benchmarks.md) executam quatro políticas sobre
+fluxos Parquet temporais de fraude, rede social e devoluções no homelab.
+
 | Fonte | Variante | Mudança de conceito sintética conhecida | Justificativa |
 |---|---|---|---|
 | SEA | River 0.26.1, variantes 0→1→2, sem ruído | índices `N//3` e `2*N//3` | Classificação numérica leve |
