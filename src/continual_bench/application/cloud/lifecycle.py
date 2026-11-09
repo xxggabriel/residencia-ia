@@ -6,13 +6,14 @@ manifests, attempt records) and in Batch (jobs found by their deterministic name
 """
 
 import json
+import re
 import time
 
 from continual_bench.infrastructure.object_store import get_json, put_json
 
 from . import layout
 from .costs import attempt_estimate
-from .records import put_row_once
+from .records import ensure_rows, put_row_once
 
 ACTIVE = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING")
 STOPPED_TASK_STATES = ("STOPPED", "DEPROVISIONING")
@@ -160,13 +161,29 @@ def record_attempt(
     }
 
 
-def consolidate(store, campaign_id: str, results: list[dict] | None = None, *, clock=time.time) -> dict:
+def reported_outcomes(results) -> dict:
+    """Inline Map results are a list of unit outcomes; a Distributed Map with ResultWriter passes
+    a descriptor (MapRunArn, ResultWriterDetails) instead. Final manifests remain the source of
+    truth either way, so the descriptor contributes no per-unit status."""
+    if not isinstance(results, list):
+        return {}
+    return {r["run_id"]: r for r in results if isinstance(r, dict) and "run_id" in r}
+
+
+def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> dict:
     plan = get_json(store, layout.plan_key(campaign_id))
-    units = []
+    reported_by_run = reported_outcomes(results)
+    units, analytics_errors = [], []
     for unit in plan["units"]:
         final_key = layout.final_key(campaign_id, unit["run_id"])
         if store.head(final_key) is not None:
             final = get_json(store, final_key)
+            try:
+                analytics = ensure_rows(store, final)
+            except Exception as error:  # Keep consolidating; the campaign is reported incomplete.
+                analytics = "error"
+                analytics_errors.append({"run_id": unit["run_id"], "error_type": type(error).__name__,
+                                         "message": str(error)[:500]})
             units.append(
                 {
                     "run_id": unit["run_id"],
@@ -177,10 +194,11 @@ def consolidate(store, campaign_id: str, results: list[dict] | None = None, *, c
                     "holdout": final.get("holdout"),
                     "attempt": final["attempt"],
                     "model_package_arn": (final.get("model") or {}).get("model_package_arn"),
+                    "analytics": analytics,
                 }
             )
         else:
-            reported = next((r for r in results or [] if r.get("run_id") == unit["run_id"]), {})
+            reported = reported_by_run.get(unit["run_id"], {})
             units.append(
                 {
                     "run_id": unit["run_id"],
@@ -198,7 +216,8 @@ def consolidate(store, campaign_id: str, results: list[dict] | None = None, *, c
         "units": units,
         "succeeded": succeeded,
         "total": len(units),
-        "complete": succeeded == len(units),
+        "complete": succeeded == len(units) and not analytics_errors,
+        "analytics_errors": analytics_errors,
         "consolidated_at": clock(),
         "final_manifests": [u["final_uri"] for u in units if u["final_uri"]],
     }
@@ -216,9 +235,18 @@ def consolidate(store, campaign_id: str, results: list[dict] | None = None, *, c
     }
 
 
+def campaign_job_name(campaign_id: str):
+    """Exact job-name pattern of one campaign: `cb-<campaign_id>-<20-hex run_id>`.
+
+    The Batch name filter only supports a prefix wildcard, so `cb-a-*` also matches campaign
+    `a-b`; this pattern keeps reconciliation from touching another campaign's jobs."""
+    return re.compile(rf"^cb-{re.escape(campaign_id)}-[0-9a-f]{{20}}$")
+
+
 def reconcile_campaign(store, jobs, campaign_id: str, reason: str, *, clock=time.time) -> dict:
     """Terminate every non-terminal job of the campaign and report the ECS task states."""
-    found = jobs.find(f"cb-{campaign_id}-*")
+    own = campaign_job_name(campaign_id)
+    found = [job for job in jobs.find(f"cb-{campaign_id}-*") if own.match(job["jobName"])]
     terminated = []
     for job in found:
         if job["status"] in ACTIVE:

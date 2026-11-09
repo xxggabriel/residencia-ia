@@ -5,6 +5,8 @@ import math
 
 from . import layout
 
+ROWS_FILE = "analytics-rows.json"
+
 
 def _numeric(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
@@ -140,3 +142,25 @@ def put_row_once(store, key, row) -> bool:
         if store.get_bytes(key) != data:
             raise
         return False
+
+
+def ensure_rows(store, final: dict) -> str:
+    """Publish the winning attempt's Athena rows unless its completion marker exists.
+
+    Rows are archived with the attempt evidence (`analytics-rows.json`) before the final
+    manifest is created, so an interruption between finalization and publication is repaired
+    by any later reader of the final manifest (a reused job or the campaign consolidation).
+    """
+    from continual_bench.infrastructure.object_store import put_json
+
+    campaign, run_id = final["campaign_id"], final["run_id"]
+    marker = layout.analytics_marker_key(campaign, run_id)
+    if store.head(marker) is not None:
+        return "present"
+    prefix = (final.get("published") or {}).get("prefix")
+    if not prefix:
+        return "unavailable"
+    tables = json.loads(store.get_bytes(f"{prefix}/{ROWS_FILE}"))
+    written = publish_rows(store, campaign, run_id, tables)
+    put_json(store, marker, {"attempt_key": final["attempt"]["attempt_key"], "tables": written})
+    return "repaired"
