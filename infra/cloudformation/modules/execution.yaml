@@ -17,6 +17,8 @@ Parameters:
     Type: String
   RuntimeRepositoryArn:
     Type: String
+  MlRepositoryArn:
+    Type: String
   PrivateSubnets:
     Type: List<AWS::EC2::Subnet::Id>
   WorkerSecurityGroupId:
@@ -252,6 +254,10 @@ Resources:
                   Action: s3:GetObject
                   Resource: !Sub "${DataBucketArn}/campaigns/*/runs/*/attempts/*/model/model.tar.gz"
                   Condition: {StringEquals: {aws:CalledViaFirst: sagemaker.amazonaws.com}}
+                - Sid: ReadInferenceImageForRegistration
+                  Effect: Allow
+                  Action: [ecr:BatchGetImage, ecr:DescribeImages]
+                  Resource: !Ref MlRepositoryArn
           - !Ref AWS::NoValue
 
   PrepareJobRole:
