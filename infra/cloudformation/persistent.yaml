@@ -22,6 +22,11 @@ Parameters:
     Type: Number
     Default: 180
     MinValue: 30
+  PipelineArtifactPrefix:
+    Type: String
+    Default: continual-bench-rele
+    AllowedPattern: "^[A-Za-z0-9_.-]{1,20}$"
+    Description: CodePipeline artifact key prefix (first 20 characters of the pipeline name); must match cicd.yaml.
   ImagesToKeep:
     Type: Number
     Default: 100
@@ -202,7 +207,7 @@ Resources:
         Rules:
           - Id: pipeline-artifacts
             Status: Enabled
-            Prefix: pipeline/
+            Prefix: !Sub "${PipelineArtifactPrefix}/"
             ExpirationInDays: !Ref ArtifactRetentionDays
           - Id: noncurrent
             Status: Enabled
