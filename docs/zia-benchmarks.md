@@ -53,6 +53,22 @@ e agregações macro. Métricas do catálogo que dependem de drift anotado,
 contrafactuais, medições de CI ou custos de negócio têm disponibilidade
 explícita no relatório.
 
+Cada run também publica o índice de gráficos, SVGs e seus dados em `plots/`
+e `data/`, definições e métricas versionadas em `tracking/`, configuração,
+ambiente, catálogo e linhagem das versões. O modelo final é carregável em
+`model/` e tem uma versão no Model Registry. A assinatura recebe as
+features numéricas preparadas na ordem registrada e devolve uma coluna de
+probabilidade por classe. Famílias de teste usam o sufixo `-smoke`.
+
+`predictions/` guarda o rótulo, a predição, as probabilidades, o timestamp,
+a versão do modelo e a partição temporal de cada linha avaliada, em partes
+Parquet com checksums. O custo de armazenamento dos modelos contabiliza
+os pesos nativos. O tamanho do arquivo de predições é uma métrica separada.
+Para recuperar uma run concluída, execute no worker
+`python scripts/backfill_zia_artifacts.py ID_DO_EXPERIMENTO`. O script usa
+os pesos e o Parquet retidos, confere a paridade por janela e publica nos
+mesmos IDs de run, com origem `replayed_from_checkpoints`.
+
 Os custos `aws_cost_*` usam os tempos de treino e predição e o tamanho de
 todos os modelos publicados. `aws_evaluation_cost_*` usa o tempo de
 avaliação incluindo leitura dos dados, métricas e serialização. Ambos usam

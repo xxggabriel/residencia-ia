@@ -4,8 +4,7 @@ import json
 from pathlib import Path
 
 from .metric_tracking import log_metric_points
-from .run_artifacts import publish_run_artifacts
-from .storage import atomic_write, publication_lock
+from .storage import publication_lock
 
 
 def begin(client, directory, dataset, scope, policy, campaign):
@@ -25,7 +24,7 @@ def begin(client, directory, dataset, scope, policy, campaign):
     return run.info.run_id, experiment_id
 
 
-def publish(client, directory, run_id, experiment_id, report):
+def publish_run_metrics(client, directory, run_id, report):
     from mlflow.entities import Dataset, DatasetInput, InputTag, Param
 
     contract = report["contract"]
@@ -71,13 +70,7 @@ def publish(client, directory, run_id, experiment_id, report):
     points.extend(("tracking_v1/posthoc_cost_sensitivity", index, value)
                   for index, (_, value) in enumerate(report["cost_sensitivity"]))
     log_metric_points(client, run_id, points)
-    publish_run_artifacts(client, run_id, directory, report)
     client.log_artifact(run_id, str(directory / "report.json"))
     # Only recorded model versions count toward AWS storage and are published.
     for model in report["model_versions"]:
         client.log_artifact(run_id, str(directory / model["file"]), artifact_path="models")
-    client.set_tag(run_id, "benchmark_complete", "true")
-    client.set_terminated(run_id, "FINISHED")
-    receipt = {"mlflow_run_id": run_id, "mlflow_experiment_id": experiment_id, "complete": True}
-    atomic_write(directory / "receipt.json", json.dumps(receipt).encode())
-    return receipt

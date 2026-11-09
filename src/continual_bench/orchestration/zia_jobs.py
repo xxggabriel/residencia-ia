@@ -54,7 +54,20 @@ def perform(job):
         if result.returncode:
             raise RuntimeError(f"benchmark exited {result.returncode}; inspect {key}/worker.log")
         report = json.loads((directory / "report.json").read_text())
-        receipt = json.loads((directory / "receipt.json").read_text())
+        receipt_path = directory / "receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        elapsed = time.time() - started
+        from mlflow.tracking import MlflowClient
+
+        from continual_bench.evaluation.zia_artifacts import tracking_report
+        from continual_bench.evaluation.zia_predictions import prediction_manifest
+        from continual_bench.infrastructure.metric_tracking import publish_execution
+
+        receipt["tracking"] = publish_execution(
+            MlflowClient(), receipt["mlflow_run_id"],
+            tracking_report(report, prediction_manifest(directory, report)), directory, elapsed,
+        )
+        atomic_write(receipt_path, encoded(receipt))
         status.update(status="succeeded", receipt=receipt, summary={
             "complete": report["complete"], "protocol": report["protocol"],
             "dataset": job.dataset, "policy": job.policy, "model": report["model"],

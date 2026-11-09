@@ -19,6 +19,7 @@ from continual_bench.evaluation.environment import encoded, environment, peak_rs
 from continual_bench.evaluation.system_metrics import SystemMetricsSampler
 from continual_bench.evaluation.tracking import metric_catalog
 from continual_bench.evaluation.zia_metrics import SCORE_BINS, ClassificationMetrics, ratio
+from continual_bench.evaluation.zia_predictions import PredictionArchive, prediction_manifest
 from continual_bench.infrastructure.storage import atomic_write
 from continual_bench.models.zia import FraudOrReturnBooster, MultinomialLogistic
 
@@ -88,7 +89,9 @@ def run(root, dataset, scope, policy, output, tracking_settings):
     block_rows = BLOCK_ROWS[scope]
     warmup = 0
     split = manifest["rows"] - int(manifest["rows"] * HOLDOUT_FRACTION)
-    with monitoring:
+    with monitoring, PredictionArchive(
+        output, spec["classes"], manifest["sha256"], "native", tracking_settings["fading_factor"],
+    ) as predictions:
         for step, (timestamps, x, y, is_holdout) in enumerate(batches(path, block_rows, split)):
             if ((last_timestamp is not None and timestamps[0] < last_timestamp)
                     or np.any(timestamps[1:] < timestamps[:-1]) or np.any(y >= classes)):
@@ -106,6 +109,7 @@ def run(root, dataset, scope, policy, output, tracking_settings):
                 predict_seconds += elapsed
                 window = ClassificationMetrics(classes)
                 window.add(y, probabilities)
+                predictions.add(start, timestamps, y, probabilities, is_holdout, versions[-1]["end_seq"])
                 (holdout if is_holdout else online).merge(window)
                 metrics, _ = window.metrics()
                 windows.append({
@@ -255,7 +259,8 @@ def main():
     if args.campaign:
         from mlflow.tracking import MlflowClient
 
-        from continual_bench.infrastructure.zia_tracking import begin, publish
+        from continual_bench.evaluation.zia_publication import publish
+        from continual_bench.infrastructure.zia_tracking import begin
 
         client = MlflowClient()
         run_id, experiment_id = begin(
@@ -269,12 +274,16 @@ def main():
                 report = run(
                     args.root, args.dataset, args.scope, args.policy, args.output, settings,
                 )
-            publish(client, args.output, run_id, experiment_id, report)
+            publish(client, args.output, run_id, experiment_id, report, args.root)
         except Exception:
             client.set_terminated(run_id, "FAILED")
             raise
     else:
+        from continual_bench.evaluation.zia_artifacts import tracking_report, write_zia_artifacts
+
         report = run(args.root, args.dataset, args.scope, args.policy, args.output, settings)
+        evidence = prediction_manifest(args.output, report)
+        write_zia_artifacts(args.output, report, tracking_report(report, evidence))
     print(json.dumps(report["metrics"], indent=2))
 
 

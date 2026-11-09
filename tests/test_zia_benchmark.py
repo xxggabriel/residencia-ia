@@ -1,5 +1,6 @@
 from functools import partial
 from pathlib import Path
+from shutil import copytree
 
 import numpy as np
 import pytest
@@ -54,6 +55,9 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
     from continual_bench.datasets.zia import DATASETS, FORMAT, sha256_file
     from continual_bench.evaluation.environment import encoded
     from continual_bench.evaluation.zia import POLICIES, run
+    from continual_bench.evaluation.zia_artifacts import tracking_report, write_zia_artifacts
+    from continual_bench.evaluation.zia_predictions import prediction_manifest
+    from continual_bench.evaluation.zia_publication import replay_predictions
 
     folder = tmp_path / "social"
     folder.mkdir()
@@ -84,3 +88,19 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
     assert reports["frozen"]["metrics"]["update_count"] == 0
     assert reports["periodic"]["metrics"]["retrain_count"] == 2
     assert reports["incremental"]["metrics"]["training_unique_examples"] == 8996
+    report = reports["incremental"]
+    native = tmp_path / "incremental"
+    replay = tmp_path / "replay"
+    copytree(native / "models", replay / "models")
+    replay_predictions(replay, report, tmp_path)
+    evidence = prediction_manifest(replay, report)
+    assert evidence["origin"] == "replayed_from_checkpoints"
+    assert evidence["parts"] == prediction_manifest(native, report)["parts"]
+    tracking = tracking_report(report, evidence)
+    assert tracking["tracking"]["metrics"]["fading_accuracy"] == pytest.approx(1)
+    assert tracking["tracking"]["metrics"]["drift_tp"] is None
+    assert {w["scope"] for w in tracking["windows"]} == {"prequential"}
+    write_zia_artifacts(replay, report, tracking)
+    for artifact in ("data/index.json", "plots/performance/holdout_confusion.svg",
+                     "plots/performance/fading_accuracy.svg", "plots/costs/aws_usd.svg"):
+        assert (replay / "artifacts" / artifact).is_file()
