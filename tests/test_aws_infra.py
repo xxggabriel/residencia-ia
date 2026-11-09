@@ -236,6 +236,31 @@ def test_cfn_execution_role_can_pass_every_runtime_role():
                     assert service in allowed, (module.name, name, service)
 
 
+def test_cfn_execution_role_can_lookup_and_clean_up_runtime_roles_without_iam_path():
+    role = template("cicd.yaml")["Resources"]["CloudFormationExecutionRole"]
+    (fallback,) = [
+        statement
+        for statement in statements(role)
+        if statement.get("Sid") == "LookupAndCleanUpRuntimeRolesByName"
+    ]
+    assert fallback["Effect"] == "Allow"
+    assert set(fallback["Action"]) == {
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DeleteRole",
+    }
+
+    prefix = "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/"
+    expected = {
+        prefix + resource["Properties"]["RoleName"]["Fn::Sub"]
+        for module in (CFN / "modules").glob("*.yaml")
+        for resource in template(f"modules/{module.name}")["Resources"].values()
+        if resource["Type"] == "AWS::IAM::Role"
+    }
+    assert {resource["Fn::Sub"] for resource in fallback["Resource"]} == expected
+
+
 def test_buildspecs_never_acquire_data_or_start_campaigns():
     for path in (ROOT / "infra" / "buildspecs").glob("*.yml"):
         text = path.read_text()
