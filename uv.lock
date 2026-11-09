@@ -299,6 +299,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+aws = [
+    { name = "boto3" },
+    { name = "pandas" },
+]
 datasets = [
     { name = "pillow" },
     { name = "pyarrow" },
@@ -323,10 +327,12 @@ services = [
 
 [package.metadata]
 requires-dist = [
+    { name = "boto3", marker = "extra == 'aws'", specifier = "==1.43.117" },
     { name = "boto3", marker = "extra == 'services'", specifier = "==1.43.117" },
     { name = "confluent-kafka", marker = "extra == 'services'", specifier = "==2.16.0" },
     { name = "duckdb", marker = "extra == 'large-datasets'", specifier = "==1.5.4" },
     { name = "mlflow-skinny", marker = "extra == 'services'", specifier = "==3.17.2" },
+    { name = "pandas", marker = "extra == 'aws'", specifier = "==2.3.3" },
     { name = "pandas", marker = "extra == 'services'", specifier = "==2.3.3" },
     { name = "pillow", marker = "extra == 'datasets'", specifier = "==13.0.0" },
     { name = "pyarrow", marker = "extra == 'datasets'", specifier = "==26.0.1" },
@@ -340,7 +346,7 @@ requires-dist = [
     { name = "xgboost-cpu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'large-datasets'", specifier = "==3.2.0" },
     { name = "zenml", marker = "extra == 'services'", specifier = "==0.98.0" },
 ]
-provides-extras = ["datasets", "large-datasets", "services", "dev"]
+provides-extras = ["datasets", "large-datasets", "services", "aws", "dev"]
 
 [[package]]
 name = "cryptography"
