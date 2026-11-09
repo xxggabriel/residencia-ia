@@ -1,0 +1,15 @@
+{
+  "kind": "training",
+  "description": "Fit the Zia social multinomial logistic model on a chronological train split; validation is a later split and the temporal holdout is never read.",
+  "image_role": "ml",
+  "instance_type": "ml.m5.large",
+  "volume_gb": 50,
+  "max_runtime_seconds": 7200,
+  "train_prefix": "datasets/social/8518bf04c105df75ab72c13bbec1e12b270eb92f/prepared/zia-temporal-v1/",
+  "output_prefix": "sagemaker/training/",
+  "hyperparameters": {"scope": "smoke", "l2": "0.001", "max_iterations": "24", "validation_fraction": "0.1", "max_train_rows": "2000000"},
+  "metric_definitions": [
+    {"Name": "validation:log_loss", "Regex": "validation:log_loss=([0-9.eE+-]+);"},
+    {"Name": "validation:accuracy", "Regex": "validation:accuracy=([0-9.eE+-]+);"}
+  ]
+}

@@ -1,0 +1,353 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  continual-bench persistent data plane (deploy once, update rarely): KMS key, data, artifact,
+  billing and access-log buckets, ECR repositories. Every stateful resource is retained on
+  stack deletion and on replacement so datasets, models and billing history survive.
+
+Parameters:
+  Project:
+    Type: String
+    Default: continual-bench
+    AllowedPattern: "^[a-z][a-z0-9-]{2,24}$"
+  NoncurrentVersionDays:
+    Type: Number
+    Default: 365
+    MinValue: 30
+    Description: Days before noncurrent object versions in the data bucket expire.
+  AthenaResultsDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+  ArtifactRetentionDays:
+    Type: Number
+    Default: 180
+    MinValue: 30
+  ImagesToKeep:
+    Type: Number
+    Default: 100
+    MinValue: 10
+    Description: Commit-tagged images kept per ECR repository (rollback window).
+
+Resources:
+  DataKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub "${Project} data, logs, topics, streams and images"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AccountAdministrationThroughIam
+            Effect: Allow
+            Principal: {AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"}
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: CloudWatchLogs
+            Effect: Allow
+            Principal: {Service: !Sub "logs.${AWS::Region}.amazonaws.com"}
+            Action: [kms:Encrypt*, kms:Decrypt*, kms:ReEncrypt*, kms:GenerateDataKey*, kms:Describe*]
+            Resource: "*"
+            Condition:
+              ArnLike:
+                kms:EncryptionContext:aws:logs:arn: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/*"
+          - Sid: ServicesPublishingToEncryptedTopics
+            Effect: Allow
+            Principal:
+              Service: [events.amazonaws.com, cloudwatch.amazonaws.com, budgets.amazonaws.com, costalerts.amazonaws.com]
+            Action: [kms:GenerateDataKey*, kms:Decrypt]
+            Resource: "*"
+            Condition:
+              StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}
+
+  DataKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${Project}"
+      TargetKeyId: !Ref DataKey
+
+  AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${Project}-access-logs-${AWS::AccountId}-${AWS::Region}"
+      OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Server access logging targets support SSE-S3 only.
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]
+      LifecycleConfiguration:
+        Rules:
+          - {Id: expire-access-logs, Status: Enabled, ExpirationInDays: 365}
+
+  AccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AccessLogsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3ServerAccessLogs
+            Effect: Allow
+            Principal: {Service: logging.s3.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub "${AccessLogsBucket.Arn}/*"
+            Condition:
+              StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt AccessLogsBucket.Arn, !Sub "${AccessLogsBucket.Arn}/*"]
+            Condition: {Bool: {aws:SecureTransport: "false"}}
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${Project}-data-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: {Status: Enabled}
+      OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: "aws:kms", KMSMasterKeyID: !GetAtt DataKey.Arn}
+            BucketKeyEnabled: true
+      LoggingConfiguration:
+        DestinationBucketName: !Ref AccessLogsBucket
+        LogFilePrefix: data/
+      LifecycleConfiguration:
+        Rules:
+          - Id: abort-incomplete-multipart
+            Status: Enabled
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 7}
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: !Ref NoncurrentVersionDays}
+          - Id: athena-results
+            Status: Enabled
+            Prefix: athena-results/
+            ExpirationInDays: !Ref AthenaResultsDays
+          - Id: raw-datasets-infrequent-access
+            Status: Enabled
+            Prefix: datasets/
+            Transitions: [{StorageClass: INTELLIGENT_TIERING, TransitionInDays: 30}]
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        # No VPC-endpoint-only deny here on purpose: the acquisition CodeBuild project (public
+        # internet), Firehose and the control Lambda write from outside the private VPC. The
+        # worker roles carry their own aws:SourceVpce conditions.
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt DataBucket.Arn, !Sub "${DataBucket.Arn}/*"]
+            Condition: {Bool: {aws:SecureTransport: "false"}}
+          - Sid: DenyOtherKmsKeys
+            Effect: Deny
+            Principal: "*"
+            Action: s3:PutObject
+            Resource: !Sub "${DataBucket.Arn}/*"
+            Condition:
+              StringNotEqualsIfExists: {s3:x-amz-server-side-encryption-aws-kms-key-id: !GetAtt DataKey.Arn}
+          - Sid: DenyDeletingEvidence
+            Effect: Deny
+            Principal: "*"
+            Action: [s3:DeleteObjectVersion]
+            Resource:
+              - !Sub "${DataBucket.Arn}/datasets/*"
+              - !Sub "${DataBucket.Arn}/campaigns/*"
+              - !Sub "${DataBucket.Arn}/releases/*"
+            Condition:
+              ArnNotLike: {aws:PrincipalArn: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-data-steward"}
+
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${Project}-artifacts-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: {Status: Enabled}
+      OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: "aws:kms", KMSMasterKeyID: !GetAtt DataKey.Arn}
+            BucketKeyEnabled: true
+      LoggingConfiguration:
+        DestinationBucketName: !Ref AccessLogsBucket
+        LogFilePrefix: artifacts/
+      LifecycleConfiguration:
+        Rules:
+          - Id: pipeline-artifacts
+            Status: Enabled
+            Prefix: pipeline/
+            ExpirationInDays: !Ref ArtifactRetentionDays
+          - Id: noncurrent
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: !Ref ArtifactRetentionDays}
+          - Id: abort-incomplete-multipart
+            Status: Enabled
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 7}
+
+  ArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt ArtifactsBucket.Arn, !Sub "${ArtifactsBucket.Arn}/*"]
+            Condition: {Bool: {aws:SecureTransport: "false"}}
+
+  BillingBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${Project}-billing-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: {Status: Enabled}
+      OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # AWS Data Exports delivers to SSE-S3 buckets.
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]
+      LoggingConfiguration:
+        DestinationBucketName: !Ref AccessLogsBucket
+        LogFilePrefix: billing/
+
+  BillingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BillingBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DataExportsDelivery
+            Effect: Allow
+            Principal: {Service: [bcm-data-exports.amazonaws.com, billingreports.amazonaws.com]}
+            Action: [s3:PutObject, s3:GetBucketPolicy]
+            Resource: [!GetAtt BillingBucket.Arn, !Sub "${BillingBucket.Arn}/*"]
+            Condition:
+              StringLike:
+                aws:SourceAccount: !Ref AWS::AccountId
+                aws:SourceArn:
+                  - !Sub "arn:${AWS::Partition}:cur:us-east-1:${AWS::AccountId}:definition/*"
+                  - !Sub "arn:${AWS::Partition}:bcm-data-exports:us-east-1:${AWS::AccountId}:export/*"
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt BillingBucket.Arn, !Sub "${BillingBucket.Arn}/*"]
+            Condition: {Bool: {aws:SecureTransport: "false"}}
+
+  RuntimeRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub "${Project}-runtime"
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: {ScanOnPush: true}
+      EncryptionConfiguration: {EncryptionType: KMS, KmsKey: !GetAtt DataKey.Arn}
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {"rules": [
+            {"rulePriority": 1, "description": "untagged layers",
+             "selection": {"tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 7},
+             "action": {"type": "expire"}},
+            {"rulePriority": 2, "description": "commit images beyond the rollback window",
+             "selection": {"tagStatus": "tagged", "tagPrefixList": ["git-"], "countType": "imageCountMoreThan", "countNumber": ${ImagesToKeep}},
+             "action": {"type": "expire"}}]}
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CodeBuildCustomImagePull
+            Effect: Allow
+            Principal: {Service: codebuild.amazonaws.com}
+            Action: [ecr:BatchCheckLayerAvailability, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+            Condition:
+              StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}
+
+  MlRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub "${Project}-ml"
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: {ScanOnPush: true}
+      EncryptionConfiguration: {EncryptionType: KMS, KmsKey: !GetAtt DataKey.Arn}
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {"rules": [
+            {"rulePriority": 1, "description": "untagged layers",
+             "selection": {"tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 7},
+             "action": {"type": "expire"}},
+            {"rulePriority": 2, "description": "commit images beyond the rollback window",
+             "selection": {"tagStatus": "tagged", "tagPrefixList": ["git-"], "countType": "imageCountMoreThan", "countNumber": ${ImagesToKeep}},
+             "action": {"type": "expire"}}]}
+
+Outputs:
+  DataBucketName:
+    Value: !Ref DataBucket
+    Export: {Name: !Sub "${Project}-DataBucket"}
+  DataBucketArn:
+    Value: !GetAtt DataBucket.Arn
+    Export: {Name: !Sub "${Project}-DataBucketArn"}
+  ArtifactsBucketName:
+    Value: !Ref ArtifactsBucket
+    Export: {Name: !Sub "${Project}-ArtifactsBucket"}
+  ArtifactsBucketArn:
+    Value: !GetAtt ArtifactsBucket.Arn
+    Export: {Name: !Sub "${Project}-ArtifactsBucketArn"}
+  BillingBucketName:
+    Value: !Ref BillingBucket
+    Export: {Name: !Sub "${Project}-BillingBucket"}
+  BillingBucketArn:
+    Value: !GetAtt BillingBucket.Arn
+    Export: {Name: !Sub "${Project}-BillingBucketArn"}
+  DataKeyArn:
+    Value: !GetAtt DataKey.Arn
+    Export: {Name: !Sub "${Project}-DataKeyArn"}
+  RuntimeRepositoryUri:
+    Value: !GetAtt RuntimeRepository.RepositoryUri
+    Export: {Name: !Sub "${Project}-RuntimeRepositoryUri"}
+  RuntimeRepositoryArn:
+    Value: !GetAtt RuntimeRepository.Arn
+    Export: {Name: !Sub "${Project}-RuntimeRepositoryArn"}
+  MlRepositoryUri:
+    Value: !GetAtt MlRepository.RepositoryUri
+    Export: {Name: !Sub "${Project}-MlRepositoryUri"}
+  MlRepositoryArn:
+    Value: !GetAtt MlRepository.Arn
+    Export: {Name: !Sub "${Project}-MlRepositoryArn"}

@@ -1,0 +1,201 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Optional streaming module: one-shard Kinesis Data Stream for the event-prequential transport,
+  Data Firehose archive to S3 and a Managed Service for Apache Flink application for event-time
+  windows. CloudFormation creates the Flink application in READY state; it only bills KPUs
+  after `scripts/aws/flink.sh start` and stops with `scripts/aws/flink.sh stop`.
+
+Parameters:
+  Project:
+    Type: String
+  DataBucketArn:
+    Type: String
+  ArtifactsBucketArn:
+    Type: String
+  DataKeyArn:
+    Type: String
+  ShardCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 4
+  RetentionHours:
+    Type: Number
+    Default: 24
+    MinValue: 24
+    MaxValue: 168
+  FlinkCodeKey:
+    Type: String
+    Default: flink/event_time_windows.zip
+  FlinkParallelism:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 4
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+
+Resources:
+  EventStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub "${Project}-events"
+      StreamModeDetails: {StreamMode: PROVISIONED}
+      ShardCount: !Ref ShardCount
+      RetentionPeriodHours: !Ref RetentionHours
+      StreamEncryption: {EncryptionType: KMS, KeyId: !Ref DataKeyArn}
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: streaming}]
+
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-firehose"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: firehose.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: stream-to-archive
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [kinesis:DescribeStream, kinesis:DescribeStreamSummary, kinesis:GetShardIterator,
+                         kinesis:GetRecords, kinesis:ListShards]
+                Resource: !GetAtt EventStream.Arn
+              - Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload, s3:GetBucketLocation, s3:ListBucket]
+                Resource: [!Ref DataBucketArn, !Sub "${DataBucketArn}/archive/streams/*"]
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: !Ref DataKeyArn
+
+  ArchiveDeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Sub "${Project}-archive"
+      DeliveryStreamType: KinesisStreamAsSource
+      KinesisStreamSourceConfiguration:
+        KinesisStreamARN: !GetAtt EventStream.Arn
+        RoleARN: !GetAtt FirehoseRole.Arn
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !Ref DataBucketArn
+        RoleARN: !GetAtt FirehoseRole.Arn
+        Prefix: "archive/streams/events/!{timestamp:yyyy}/!{timestamp:MM}/!{timestamp:dd}/"
+        ErrorOutputPrefix: "archive/streams/errors/!{firehose:error-output-type}/!{timestamp:yyyy}/!{timestamp:MM}/"
+        BufferingHints: {IntervalInSeconds: 300, SizeInMBs: 64}
+        CompressionFormat: GZIP
+        EncryptionConfiguration: {KMSEncryptionConfig: {AWSKMSKeyARN: !Ref DataKeyArn}}
+
+  FlinkLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${Project}/flink"
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !Ref DataKeyArn
+
+  FlinkLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref FlinkLogGroup
+      LogStreamName: application
+
+  FlinkRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-flink"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: kinesisanalytics.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: windows
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [kinesis:DescribeStream, kinesis:DescribeStreamSummary, kinesis:GetShardIterator,
+                         kinesis:GetRecords, kinesis:ListShards, kinesis:SubscribeToShard, kinesis:DescribeStreamConsumer,
+                         kinesis:RegisterStreamConsumer]
+                Resource: [!GetAtt EventStream.Arn, !Sub "${EventStream.Arn}/consumer/*"]
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${ArtifactsBucketArn}/${FlinkCodeKey}"
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: !Sub "${DataBucketArn}/archive/windows/*"
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: !Ref DataKeyArn
+              - Effect: Allow
+                Action: [logs:PutLogEvents, logs:DescribeLogStreams, logs:DescribeLogGroups]
+                Resource: [!GetAtt FlinkLogGroup.Arn, !Sub "${FlinkLogGroup.Arn}:log-stream:*"]
+
+  WindowsApplication:
+    Type: AWS::KinesisAnalyticsV2::Application
+    Properties:
+      ApplicationName: !Sub "${Project}-event-time-windows"
+      RuntimeEnvironment: FLINK-1_20
+      ServiceExecutionRole: !GetAtt FlinkRole.Arn
+      ApplicationConfiguration:
+        ApplicationCodeConfiguration:
+          CodeContentType: ZIPFILE
+          CodeContent:
+            S3ContentLocation:
+              BucketARN: !Ref ArtifactsBucketArn
+              FileKey: !Ref FlinkCodeKey
+        FlinkApplicationConfiguration:
+          CheckpointConfiguration:
+            ConfigurationType: CUSTOM
+            CheckpointingEnabled: true
+            CheckpointInterval: 60000
+            MinPauseBetweenCheckpoints: 5000
+          ParallelismConfiguration:
+            ConfigurationType: CUSTOM
+            Parallelism: !Ref FlinkParallelism
+            ParallelismPerKPU: 1
+            AutoScalingEnabled: false
+          MonitoringConfiguration:
+            ConfigurationType: CUSTOM
+            LogLevel: INFO
+            MetricsLevel: APPLICATION
+        EnvironmentProperties:
+          PropertyGroups:
+            - PropertyGroupId: kinesis.analytics.flink.run.options
+              PropertyMap: {python: event_time_windows.py, jarfile: lib/flink-sql-connector-kinesis.jar}
+            - PropertyGroupId: windows
+              PropertyMap:
+                stream: !Ref EventStream
+                region: !Ref AWS::Region
+                window_ms: "3600000"
+                out_of_orderness_ms: "60000"
+                allowed_lateness_ms: "300000"
+                output_path: !Sub "s3://${Project}-data-${AWS::AccountId}-${AWS::Region}/archive/windows/"
+        ApplicationSnapshotConfiguration: {SnapshotsEnabled: true}
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: streaming}]
+
+  WindowsLogging:
+    Type: AWS::KinesisAnalyticsV2::ApplicationCloudWatchLoggingOption
+    Properties:
+      ApplicationName: !Ref WindowsApplication
+      CloudWatchLoggingOption:
+        LogStreamARN: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${FlinkLogGroup}:log-stream:${FlinkLogStream}"
+
+Outputs:
+  StreamName:
+    Value: !Ref EventStream
+  StreamArn:
+    Value: !GetAtt EventStream.Arn
+  DeliveryStreamName:
+    Value: !Ref ArchiveDeliveryStream
+  FlinkApplicationName:
+    Value: !Ref WindowsApplication

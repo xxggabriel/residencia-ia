@@ -1,0 +1,23 @@
+# Verify stage: tests, lint, CloudFormation and ASL validation, local smoke with fixtures.
+# No dataset download, no Fargate task, no campaign.
+version: 0.2
+env:
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    OMP_NUM_THREADS: "1"
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - python -m pip install --require-hashes -r requirements.lock
+      - python -m pip install --no-deps -e .
+      - python -m venv /tmp/cfn-lint && /tmp/cfn-lint/bin/pip install --require-hashes -r infra/ci-requirements.lock
+  build:
+    commands:
+      - ruff check src tests dags examples scripts
+      - python -m pytest -q
+      - CFN_LINT=/tmp/cfn-lint/bin/cfn-lint python scripts/aws/validate_templates.py
+      - python scripts/aws/validate_asl.py infra/statemachines/*.asl.json
+      - python scripts/aws/validate_asl.py --service infra/statemachines/*.asl.json
+      - continual-bench aws local-smoke --root /tmp/cb-local-smoke

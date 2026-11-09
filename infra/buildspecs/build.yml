@@ -1,0 +1,24 @@
+# Build stage: Linux x86_64 images from locked dependencies, published by immutable commit tag,
+# resolved to digests; control Lambda, Flink and Glue code keyed by commit; packaged templates.
+# Re-running the same commit reuses existing images and objects.
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+  build:
+    commands:
+      - test -n "$GIT_SHA"
+      - bash scripts/aws/build_images.sh "$GIT_SHA"
+      - python scripts/aws/build_control_lambda.py "$GIT_SHA" --bucket "$ARTIFACTS_BUCKET"
+      - bash scripts/aws/package_modules.sh "$GIT_SHA"
+      - >-
+        aws cloudformation package --template-file infra/cloudformation/root.yaml
+        --s3-bucket "$ARTIFACTS_BUCKET" --s3-prefix "templates/$GIT_SHA"
+        --output-template-file packaged-root.yaml
+      - python scripts/aws/runtime_parameters.py build-output.json > runtime-parameters.json
+artifacts:
+  files:
+    - packaged-root.yaml
+    - build-output.json
+    - runtime-parameters.json

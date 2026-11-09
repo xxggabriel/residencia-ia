@@ -1,0 +1,710 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Execution: AWS Batch on Fargate (private subnets, AssignPublicIp=DISABLED), benchmark and
+  preparation job definitions, the acquisition CodeBuild project (outside the VPC), the
+  versioned control Lambda and the two manual Standard state machines.
+
+Parameters:
+  Project:
+    Type: String
+  DataBucketName:
+    Type: String
+  DataBucketArn:
+    Type: String
+  ArtifactsBucketName:
+    Type: String
+  DataKeyArn:
+    Type: String
+  RuntimeRepositoryArn:
+    Type: String
+  PrivateSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+  WorkerSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  S3GatewayEndpointId:
+    Type: String
+  RuntimeImage:
+    Type: String
+    AllowedPattern: "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
+    Description: Runtime image pinned by digest (benchmark, preparation, acquisition).
+  MlImage:
+    Type: String
+    AllowedPattern: "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
+  GitSha:
+    Type: String
+    AllowedPattern: "^[0-9a-f]{40}$"
+  ControlCodeKey:
+    Type: String
+  ControlCodeSha256:
+    Type: String
+    Description: Base64 SHA-256 of the control Lambda zip; a change publishes a new version.
+  MaxVcpus:
+    Type: Number
+    Default: 8
+    MinValue: 1
+    MaxValue: 256
+  FargateCapacity:
+    Type: String
+    Default: FARGATE
+    AllowedValues: [FARGATE, FARGATE_SPOT]
+  BenchmarkVcpus:
+    Type: String
+    Default: "1"
+    AllowedValues: ["0.25", "0.5", "1", "2", "4", "8", "16"]
+  BenchmarkMemoryMiB:
+    Type: Number
+    Default: 2048
+  BenchmarkEphemeralGiB:
+    Type: Number
+    Default: 50
+    MinValue: 21
+    MaxValue: 200
+  BenchmarkTimeoutSeconds:
+    Type: Number
+    Default: 172800
+    MinValue: 900
+  PrepareVcpus:
+    Type: String
+    Default: "2"
+    AllowedValues: ["1", "2", "4", "8", "16"]
+  PrepareMemoryMiB:
+    Type: Number
+    Default: 8192
+  PrepareEphemeralGiB:
+    Type: Number
+    Default: 150
+    MinValue: 21
+    MaxValue: 200
+  PrepareTimeoutSeconds:
+    Type: Number
+    Default: 43200
+    MinValue: 900
+  QueueWaitTimeoutSeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 600
+    MaxValue: 86400
+  JobAttempts:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 10
+  LogRetentionDays:
+    Type: Number
+    Default: 90
+    AllowedValues: [7, 14, 30, 60, 90, 180, 365, 731]
+  AcquisitionComputeType:
+    Type: String
+    Default: BUILD_GENERAL1_LARGE
+    AllowedValues: [BUILD_GENERAL1_MEDIUM, BUILD_GENERAL1_LARGE, BUILD_GENERAL1_XLARGE]
+  AcquisitionTimeoutMinutes:
+    Type: Number
+    Default: 480
+    MinValue: 30
+    MaxValue: 2160
+  EnableModelRegistry:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+
+Conditions:
+  ModelRegistry: !Equals [!Ref EnableModelRegistry, "true"]
+  Spot: !Equals [!Ref FargateCapacity, FARGATE_SPOT]
+
+Resources:
+  JobLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub "/${Project}/batch"
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !Ref DataKeyArn
+
+  ControlLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${Project}/control"
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !Ref DataKeyArn
+
+  StatesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${Project}/states"
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !Ref DataKeyArn
+
+  AcquisitionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub "/${Project}/acquisition"
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !Ref DataKeyArn
+
+  # ---------------------------------------------------------------- roles (one per actor)
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-task-execution"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: pull-and-log
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: [!Ref RuntimeRepositoryArn]
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${JobLogGroup.Arn}:*"
+
+  BenchmarkJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-benchmark-job"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: read-snapshots-write-runs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadVerifiedSnapshotsAndUnits
+                Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource:
+                  - !Sub "${DataBucketArn}/datasets/*/manifests/*"
+                  - !Sub "${DataBucketArn}/datasets/*/prepared/*"
+                  - !Sub "${DataBucketArn}/campaigns/*/units/*"
+                  - !Sub "${DataBucketArn}/campaigns/*/runs/*"
+                Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
+              - Sid: WriteRunEvidence
+                Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload]
+                Resource:
+                  - !Sub "${DataBucketArn}/campaigns/*/runs/*"
+                  - !Sub "${DataBucketArn}/analytics/runs/*"
+                  - !Sub "${DataBucketArn}/analytics/metrics/*"
+                  - !Sub "${DataBucketArn}/analytics/windows/*"
+                  - !Sub "${DataBucketArn}/analytics/model_versions/*"
+                Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
+              - Sid: ListForAccurateNotFound
+                # Without ListBucket, HeadObject on an absent key answers 403 instead of 404, and
+                # the conditional-publication checks (final manifest, snapshot marker) need 404.
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Ref DataBucketArn
+                Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
+              - Sid: BucketKeyThroughS3
+                Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: !Ref DataKeyArn
+                Condition: {StringEquals: {kms:ViaService: !Sub "s3.${AWS::Region}.amazonaws.com"}}
+        - !If
+          - ModelRegistry
+          - PolicyName: register-candidates
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: [sagemaker:DescribeModelPackageGroup, sagemaker:CreateModelPackageGroup,
+                           sagemaker:ListModelPackages, sagemaker:AddTags]
+                  Resource: !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package-group/${Project}-*"
+                - Effect: Allow
+                  Action: [sagemaker:CreateModelPackage, sagemaker:DescribeModelPackage]
+                  Resource: !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package/${Project}-*"
+          - !Ref AWS::NoValue
+
+  PrepareJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-prepare-job"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: raw-to-prepared
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: [!Sub "${DataBucketArn}/datasets/*/raw/*", !Sub "${DataBucketArn}/datasets/*/prepared/*"]
+                Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
+              - Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload]
+                Resource: !Sub "${DataBucketArn}/datasets/*/prepared/*"
+                Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
+              - Sid: ListForAccurateNotFound
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Ref DataBucketArn
+                Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: !Ref DataKeyArn
+                Condition: {StringEquals: {kms:ViaService: !Sub "s3.${AWS::Region}.amazonaws.com"}}
+
+  AcquisitionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-acquisition"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: codebuild.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: raw-acquisition
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:AbortMultipartUpload]
+                Resource: !Sub "${DataBucketArn}/datasets/*/raw/*"
+              - Sid: ListForAccurateNotFound
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Ref DataBucketArn
+              - Sid: ImportFromApprovedPrefixesOnly
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${DataBucketArn}/imports/*"
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: !Ref DataKeyArn
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !Ref RuntimeRepositoryArn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${AcquisitionLogGroup.Arn}:*"
+
+  ControlRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-control"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: control-plane
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${ControlLogGroup.Arn}:*"
+              - Sid: ReadReleasesAndSnapshots
+                Effect: Allow
+                Action: [s3:GetObject]
+                Resource:
+                  - !Sub "${DataBucketArn}/releases/*"
+                  - !Sub "${DataBucketArn}/datasets/*"
+                  - !Sub "${DataBucketArn}/campaigns/*"
+              - Sid: WriteCampaignStateManifestsAndAnalytics
+                Effect: Allow
+                Action: [s3:PutObject]
+                Resource:
+                  - !Sub "${DataBucketArn}/campaigns/*"
+                  - !Sub "${DataBucketArn}/datasets/*/manifests/*"
+                  - !Sub "${DataBucketArn}/datasets/*/raw/_manifest.json"
+                  - !Sub "${DataBucketArn}/analytics/attempts/*"
+                  - !Sub "${DataBucketArn}/analytics/campaigns/*"
+                  - !Sub "${DataBucketArn}/analytics/cost_estimates/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Ref DataBucketArn
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: !Ref DataKeyArn
+              - Sid: ObserveBatch
+                Effect: Allow
+                Action: [batch:ListJobs, batch:DescribeJobs, batch:DescribeJobQueues, batch:DescribeComputeEnvironments]
+                Resource: "*"
+              - Sid: TerminateOnlyThisStacksJobs
+                Effect: Allow
+                Action: [batch:TerminateJob, batch:CancelJob]
+                Resource: !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*"
+                Condition: {StringEquals: {aws:ResourceTag/cb-stack: !Ref Project}}
+              - Effect: Allow
+                Action: ecs:DescribeTasks
+                Resource: !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/*"
+              - Effect: Allow
+                Action: [servicequotas:GetServiceQuota, servicequotas:GetAWSDefaultServiceQuota]
+                Resource: "*"
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Sub "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${Project}-alerts"
+
+  StatesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-states"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: states.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: orchestrate
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeAnyControlVersion
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: [!GetAtt ControlFunction.Arn, !Sub "${ControlFunction.Arn}:*"]
+              - Sid: SubmitToThisQueueOnly
+                Effect: Allow
+                Action: batch:SubmitJob
+                Resource:
+                  - !Ref JobQueue
+                  - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-benchmark:*"
+                  - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-prepare:*"
+              - Effect: Allow
+                Action: batch:TagResource
+                Resource: !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*"
+                Condition: {StringEquals: {aws:RequestTag/cb-stack: !Ref Project}}
+              - Effect: Allow
+                Action: batch:DescribeJobs
+                Resource: "*"
+              - Sid: SyncCancellationOfOwnJobs
+                Effect: Allow
+                Action: batch:TerminateJob
+                Resource: !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*"
+                Condition: {StringEquals: {aws:ResourceTag/cb-stack: !Ref Project}}
+              - Sid: ManagedSyncRules
+                Effect: Allow
+                Action: [events:PutTargets, events:PutRule, events:DescribeRule]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForBatchJobsRule"
+                  - !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventForCodeBuildStartBuildRule"
+                  - !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
+              - Effect: Allow
+                Action: [codebuild:StartBuild, codebuild:StopBuild, codebuild:BatchGetBuilds]
+                Resource: !GetAtt AcquisitionProject.Arn
+              - Sid: DistributedMapItemsAndResults
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:ListMultipartUploadParts, s3:AbortMultipartUpload]
+                Resource:
+                  - !Sub "${DataBucketArn}/campaigns/*/plan-items.json"
+                  - !Sub "${DataBucketArn}/campaigns/*/map-results/*"
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: !Ref DataKeyArn
+              - Sid: DistributedMapChildren
+                Effect: Allow
+                Action: [states:StartExecution]
+                Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${Project}-benchmark"
+              - Effect: Allow
+                Action: [states:DescribeExecution, states:StopExecution]
+                Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${Project}-benchmark/*"
+              - Sid: StatesLogDelivery
+                Effect: Allow
+                Action: [logs:CreateLogDelivery, logs:GetLogDelivery, logs:UpdateLogDelivery, logs:DeleteLogDelivery,
+                         logs:ListLogDeliveries, logs:PutResourcePolicy, logs:DescribeResourcePolicies,
+                         logs:DescribeLogGroups]
+                Resource: "*"
+
+  # ---------------------------------------------------------------- Batch on Fargate
+  ComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      Type: MANAGED
+      State: ENABLED
+      ComputeResources:
+        Type: !Ref FargateCapacity
+        MaxvCpus: !Ref MaxVcpus
+        Subnets: !Ref PrivateSubnets
+        SecurityGroupIds: [!Ref WorkerSecurityGroupId]
+      Tags: {cb-stack: !Ref Project, cb-component: batch}
+
+  JobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      JobQueueName: !Sub "${Project}-jobs"
+      Priority: 1
+      State: ENABLED
+      ComputeEnvironmentOrder: [{Order: 1, ComputeEnvironment: !Ref ComputeEnvironment}]
+      # Bounded queue wait: jobs stuck RUNNABLE for these reasons are cancelled by Batch.
+      JobStateTimeLimitActions:
+        - {Action: CANCEL, State: RUNNABLE, MaxTimeSeconds: !Ref QueueWaitTimeoutSeconds,
+           Reason: "MISCONFIGURATION:COMPUTE_ENVIRONMENT_MAX_RESOURCE"}
+        - {Action: CANCEL, State: RUNNABLE, MaxTimeSeconds: !Ref QueueWaitTimeoutSeconds,
+           Reason: "MISCONFIGURATION:JOB_RESOURCE_REQUIREMENT"}
+        - {Action: CANCEL, State: RUNNABLE, MaxTimeSeconds: !Ref QueueWaitTimeoutSeconds,
+           Reason: "CAPACITY:INSUFFICIENT_INSTANCE_CAPACITY"}
+      Tags: {cb-stack: !Ref Project}
+
+  BenchmarkJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Sub "${Project}-benchmark"
+      Type: container
+      PlatformCapabilities: [FARGATE]
+      PropagateTags: true
+      Tags: {cb-stack: !Ref Project, cb-component: benchmark}
+      Timeout: {AttemptDurationSeconds: !Ref BenchmarkTimeoutSeconds}
+      RetryStrategy:
+        Attempts: !Ref JobAttempts
+        EvaluateOnExit:
+          - {OnStatusReason: "ResourceInitializationError*", Action: RETRY}
+          - {OnStatusReason: "CannotPullContainerError*", Action: RETRY}
+          - {OnStatusReason: "Timeout waiting for network interface*", Action: RETRY}
+          - {OnReason: "*", Action: EXIT}
+      Parameters: {unit_uri: "s3://unset"}
+      ContainerProperties:
+        Image: !Ref RuntimeImage
+        User: "1000"
+        Command: [continual-bench, aws, run-unit, --unit-uri, "Ref::unit_uri", --workdir, /tmp/cb/run]
+        JobRoleArn: !GetAtt BenchmarkJobRole.Arn
+        ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+        ResourceRequirements:
+          - {Type: VCPU, Value: !Ref BenchmarkVcpus}
+          - {Type: MEMORY, Value: !Ref BenchmarkMemoryMiB}
+        EphemeralStorage: {SizeInGiB: !Ref BenchmarkEphemeralGiB}
+        NetworkConfiguration: {AssignPublicIp: DISABLED}
+        FargatePlatformConfiguration: {PlatformVersion: LATEST}
+        RuntimePlatform: {OperatingSystemFamily: LINUX, CpuArchitecture: X86_64}
+        ReadonlyRootFilesystem: false
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref JobLogGroup
+            awslogs-region: !Ref AWS::Region
+            awslogs-stream-prefix: benchmark
+        Environment:
+          - {Name: BENCH_BUCKET, Value: !Ref DataBucketName}
+          - {Name: BENCH_KMS_KEY_ID, Value: !Ref DataKeyArn}
+          - {Name: BENCH_GIT_REVISION, Value: !Ref GitSha}
+          - {Name: BENCH_IMAGE_DIGEST, Value: !Select [1, !Split ["@", !Ref RuntimeImage]]}
+          - {Name: BENCH_PROJECT_ROOT, Value: /app}
+          - {Name: BENCH_MODEL_REGISTRY, Value: !Ref EnableModelRegistry}
+          - {Name: BENCH_INFERENCE_IMAGE, Value: !Ref MlImage}
+          - {Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region}
+          - {Name: OMP_NUM_THREADS, Value: "1"}
+
+  PrepareJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Sub "${Project}-prepare"
+      Type: container
+      PlatformCapabilities: [FARGATE]
+      PropagateTags: true
+      Tags: {cb-stack: !Ref Project, cb-component: prepare}
+      Timeout: {AttemptDurationSeconds: !Ref PrepareTimeoutSeconds}
+      RetryStrategy:
+        Attempts: !Ref JobAttempts
+        EvaluateOnExit:
+          - {OnStatusReason: "ResourceInitializationError*", Action: RETRY}
+          - {OnStatusReason: "CannotPullContainerError*", Action: RETRY}
+          - {OnReason: "*", Action: EXIT}
+      Parameters: {dataset: social, scope: smoke}
+      ContainerProperties:
+        Image: !Ref RuntimeImage
+        User: "1000"
+        Command: [continual-bench, aws, prepare, --dataset, "Ref::dataset", --scope, "Ref::scope", --workdir, /tmp]
+        JobRoleArn: !GetAtt PrepareJobRole.Arn
+        ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+        ResourceRequirements:
+          - {Type: VCPU, Value: !Ref PrepareVcpus}
+          - {Type: MEMORY, Value: !Ref PrepareMemoryMiB}
+        EphemeralStorage: {SizeInGiB: !Ref PrepareEphemeralGiB}
+        NetworkConfiguration: {AssignPublicIp: DISABLED}
+        FargatePlatformConfiguration: {PlatformVersion: LATEST}
+        RuntimePlatform: {OperatingSystemFamily: LINUX, CpuArchitecture: X86_64}
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref JobLogGroup
+            awslogs-region: !Ref AWS::Region
+            awslogs-stream-prefix: prepare
+        Environment:
+          - {Name: BENCH_BUCKET, Value: !Ref DataBucketName}
+          - {Name: BENCH_KMS_KEY_ID, Value: !Ref DataKeyArn}
+          - {Name: BENCH_IMAGE_DIGEST, Value: !Select [1, !Split ["@", !Ref RuntimeImage]]}
+          - {Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region}
+
+  # ---------------------------------------------------------------- acquisition outside the VPC
+  AcquisitionProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${Project}-acquisition"
+      Description: Download pinned public sources over HTTPS (or import an S3 copy) into the raw prefix
+      ServiceRole: !GetAtt AcquisitionRole.Arn
+      EncryptionKey: !Ref DataKeyArn
+      TimeoutInMinutes: !Ref AcquisitionTimeoutMinutes
+      QueuedTimeoutInMinutes: 60
+      ConcurrentBuildLimit: 2
+      Artifacts: {Type: NO_ARTIFACTS}
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: !Ref AcquisitionComputeType
+        Image: !Ref RuntimeImage
+        ImagePullCredentialsType: SERVICE_ROLE
+        EnvironmentVariables:
+          - {Name: BENCH_BUCKET, Value: !Ref DataBucketName}
+          - {Name: BENCH_KMS_KEY_ID, Value: !Ref DataKeyArn}
+          - {Name: DATASET, Value: social}
+          - {Name: SCOPE, Value: smoke}
+          - {Name: MODE, Value: download}
+          - {Name: IMPORT_URI, Value: ""}
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - mkdir -p "$CODEBUILD_SRC_DIR/acquisition"
+                - |
+                  set -eu
+                  extra=""
+                  if [ "$MODE" = "import" ]; then extra="--import-uri $IMPORT_URI"; fi
+                  continual-bench aws acquire --dataset "$DATASET" --scope "$SCOPE" --mode "$MODE" \
+                    --workdir "$CODEBUILD_SRC_DIR/acquisition" $extra
+      LogsConfig:
+        CloudWatchLogs: {Status: ENABLED, GroupName: !Ref AcquisitionLogGroup}
+      Tags:
+        - {Key: cb-stack, Value: !Ref Project}
+        - {Key: cb-component, Value: acquisition}
+
+  # ---------------------------------------------------------------- control plane
+  ControlFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${Project}-control"
+      Description: Plan, reconcile, record and observe campaigns and dataset snapshots
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Handler: continual_bench.orchestration.aws_control.handler
+      Code: {S3Bucket: !Ref ArtifactsBucketName, S3Key: !Ref ControlCodeKey}
+      MemorySize: 1024
+      Timeout: 300
+      Role: !GetAtt ControlRole.Arn
+      LoggingConfig: {LogGroup: !Ref ControlLogGroup, LogFormat: JSON}
+      Environment:
+        Variables:
+          BENCH_BUCKET: !Ref DataBucketName
+          BENCH_KMS_KEY_ID: !Ref DataKeyArn
+          BENCH_JOB_QUEUE: !Ref JobQueue
+          BENCH_SNS_TOPIC: !Sub "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${Project}-alerts"
+          BENCH_BENCHMARK_VCPUS: !Ref BenchmarkVcpus
+          BENCH_FARGATE_SPOT: !If [Spot, "true", "false"]
+          BENCH_BENCHMARK_STATE_MACHINE_SUFFIX: !Sub ":${Project}-benchmark"
+      Tags:
+        - {Key: cb-stack, Value: !Ref Project}
+        - {Key: cb-component, Value: control}
+
+  ControlVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref ControlFunction
+      CodeSha256: !Ref ControlCodeSha256
+      Description: !Sub "git ${GitSha}"
+
+  BenchmarkStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${Project}-benchmark"
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StatesRole.Arn
+      DefinitionS3Location: ../../statemachines/benchmark.asl.json
+      DefinitionSubstitutions:
+        ControlFunction: !Ref ControlVersion
+        JobQueue: !Ref JobQueue
+        Project: !Ref Project
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations: [{CloudWatchLogsLogGroup: {LogGroupArn: !GetAtt StatesLogGroup.Arn}}]
+      Tags:
+        - {Key: cb-stack, Value: !Ref Project}
+
+  DatasetStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${Project}-dataset"
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StatesRole.Arn
+      DefinitionS3Location: ../../statemachines/dataset.asl.json
+      DefinitionSubstitutions:
+        ControlFunction: !Ref ControlVersion
+        JobQueue: !Ref JobQueue
+        AcquisitionProject: !Ref AcquisitionProject
+        Project: !Ref Project
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations: [{CloudWatchLogsLogGroup: {LogGroupArn: !GetAtt StatesLogGroup.Arn}}]
+      Tags:
+        - {Key: cb-stack, Value: !Ref Project}
+
+Outputs:
+  JobQueueArn:
+    Value: !Ref JobQueue
+  BenchmarkJobDefinitionArn:
+    Description: Revision-qualified ARN recorded in the release manifest
+    Value: !Ref BenchmarkJobDefinition
+  PrepareJobDefinitionArn:
+    Value: !Ref PrepareJobDefinition
+  ControlFunctionName:
+    Value: !Ref ControlFunction
+  ControlFunctionArn:
+    Value: !GetAtt ControlFunction.Arn
+  ControlFunctionVersionArn:
+    Value: !Ref ControlVersion
+  BenchmarkStateMachineArn:
+    Value: !Ref BenchmarkStateMachine
+  DatasetStateMachineArn:
+    Value: !Ref DatasetStateMachine
+  BenchmarkStateMachineName:
+    Value: !GetAtt BenchmarkStateMachine.Name
+  DatasetStateMachineName:
+    Value: !GetAtt DatasetStateMachine.Name
+  AcquisitionProjectName:
+    Value: !Ref AcquisitionProject
+  JobLogGroupName:
+    Value: !Ref JobLogGroup
+  ComputeEnvironmentArn:
+    Value: !Ref ComputeEnvironment
