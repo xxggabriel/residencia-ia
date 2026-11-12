@@ -11,16 +11,19 @@ from typing import ClassVar, Literal
 from .contracts import Decision, DecisionContext
 
 ACTIONS = frozenset({"reset_retrain", "learn_one"})
-SCENARIO_PARAMS = frozenset({"error_threshold", "target_error", "horizon",
-                             "error_cost", "fixed_train_cost", "sample_train_cost"})
+SCENARIO_PARAMS = frozenset({"error_threshold"})
 PERMITTED_PARAMS = SCENARIO_PARAMS | {"monitor_window"}
+# Cost-aware model-update policies (CARA, UPF) and the retrospective Oracle decide per *batch* from a
+# performance matrix; the per-sample Engine cannot host them. They live in `continual_bench.retraining`.
+BATCH_POLICY_KINDS = ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle")
 ZiaPolicy = Literal["frozen", "online", "drift", "drift_adwin", "drift_ddm",
-                    "incremental", "periodic", "cost_heuristic"]
+                    "incremental", "periodic", "cara", "cara_cumulative", "cara_periodic", "upf", "oracle"]
 
 
 class RetrainingPolicy:
     kind: ClassVar[str]
     accepts_scenario_params: ClassVar[bool] = False
+    requires_batches: ClassVar[bool] = False
 
     def __init__(self, every: int = 100, cooldown: int = 100, min_samples: int = 100, min_window: int = 50,
                  action: str = "reset_retrain", last_update: int = 0, params: dict | None = None):
@@ -42,16 +45,16 @@ class RetrainingPolicy:
                 raise ValueError(f"policy {key} must be finite numeric")
             if value < 0:
                 raise ValueError(f"policy {key} must be nonnegative")
-        for key in ("monitor_window", "horizon"):
-            if key in self.params and (self.params[key] < 1 or int(self.params[key]) != self.params[key]):
-                raise ValueError(f"policy {key} must be a positive integer")
-        for key in ("error_threshold", "target_error"):
-            if self.params.get(key, 0) > 1:
-                raise ValueError(f"policy {key} must be in [0,1]")
+        if "monitor_window" in self.params and (
+                self.params["monitor_window"] < 1
+                or int(self.params["monitor_window"]) != self.params["monitor_window"]):
+            raise ValueError("policy monitor_window must be a positive integer")
+        if self.params.get("error_threshold", 0) > 1:
+            raise ValueError("policy error_threshold must be in [0,1]")
         if self.params.get("monitor_window", 1) > 10000:
             raise ValueError("policy monitor_window exceeds 10000")
         if not self.accepts_scenario_params and self.params.keys() & SCENARIO_PARAMS:
-            raise ValueError("cost/performance params require a matching policy")
+            raise ValueError("performance params require a matching policy")
 
     def decide(self, context: DecisionContext) -> Decision:
         raise NotImplementedError
@@ -140,31 +143,17 @@ class PerformanceTriggeredRetraining(MonitoredPolicy):
         return context.recent_error >= self.params.get("error_threshold", 0.3)
 
 
-class CostHeuristicRetraining(MonitoredPolicy):
-    """Explicit scenario-cost heuristic, NOT CARA or UPF reproduction.
-
-    Assumes a retrain could recover target_error over the configured horizon.
-    """
-
-    kind = "cost_heuristic"
-
-    def triggered(self, context):
-        excess = max(0.0, context.recent_error - self.params.get("target_error", 0.1))
-        avoided = excess * self.params.get("horizon", 100) * self.params.get("error_cost", 1.0)
-        training = (self.params.get("fixed_train_cost", 1.0)
-                    + context.window_size * self.params.get("sample_train_cost", 0.0))
-        if not math.isfinite(avoided) or not math.isfinite(training):
-            raise ValueError("scenario cost arithmetic overflow")
-        return avoided > training
-
-
 POLICIES: dict[str, type[RetrainingPolicy]] = {
     cls.kind: cls for cls in (NoRetraining, OnlineUpdate, PeriodicRetraining, DriftTriggeredRetraining,
-                              PerformanceTriggeredRetraining, CostHeuristicRetraining)
+                              PerformanceTriggeredRetraining)
 }
 
 
 def PolicyStrategy(kind: str, **settings) -> RetrainingPolicy:  # noqa: N802 - historical public factory
+    if kind in BATCH_POLICY_KINDS:
+        from continual_bench.retraining.policies import BATCH_POLICIES  # numpy stays out of the core import
+
+        return BATCH_POLICIES[kind](**settings)
     try:
         policy = POLICIES[kind]
     except KeyError:

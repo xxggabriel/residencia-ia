@@ -1,6 +1,6 @@
 # Políticas detectores e promoção da Semana 09
 
-Foram preservados os controles sem atualização, periódico, por alarme e online. Foram acrescentados os gatilhos `performance` e `cost_heuristic`, com configuração declarativa em `policy.params`, e a promoção opcional por validação temporal. A implementação foi preparada para testes funcionais; não constitui campanha comparativa nem reprodução dos resultados dos artigos.
+Foram preservados os controles sem atualização, periódico, por alarme e online. Foi acrescentado o gatilho `performance`, com configuração declarativa em `policy.params`, e a promoção opcional por validação temporal. A implementação foi preparada para testes funcionais; não constitui campanha comparativa nem reprodução dos resultados dos artigos.
 
 ## Contratos e decisões
 
@@ -8,16 +8,15 @@ O engine recebeu exclusivamente erros binários de predições feitas antes da a
 
 A política `performance` acionou uma decisão quando a taxa da janela atingiu `error_threshold` (padrão 0,3) após completar `monitor_window` rótulos (ou `min_window` se não configurado). O limiar deve ser fixado antes da campanha, sem ajuste nos resultados de teste.
 
-A política `cost_heuristic` comparou `max(0, recent_error - target_error) * horizon * error_cost` com `fixed_train_cost + window_size * sample_train_cost`. A atualização exigiu benefício projetado estritamente maior. Os padrões foram erro alvo 0,1, horizonte 100, custo por erro 1, custo fixo de treino 1 e custo por exemplo 0. São unidades abstratas do cenário; não representam automaticamente dinheiro ou energia. O erro alvo representa uma hipótese de recuperação, não uma estimativa garantida do candidato.
 
 ## Relação com CARA e UPF
 
-| Fonte e versão | Relação implementada | Diferenças e estado |
+| Fonte e versão | Implementação | Diferenças e estado |
 | --- | --- | --- |
-| Mahadevan e Mathioudakis, CARA, Knowledge Based Systems 293, 111610, 2024; [paper original](https://ananthmahadevan.com/publication/cost-aware-retraining/cost-aware-retraining.pdf) | Referência para separar custo de obsolescência e custo de treino | `cost_heuristic` não implementou a ponderação de erros pela vizinhança das queries, matriz retrospectiva de custos ou otimização offline dos parâmetros de CARA T, CT ou P. Não é reprodução CARA. |
-| Regol et al., ICML 2025, PMLR 267, 51369 a 51404; [publicação original](https://proceedings.mlr.press/v267/regol25a.html) | Referência para explicitar o compromisso entre perda preditiva e atualização | A heurística não implementou previsão probabilística da evolução do desempenho com incerteza do UPF. Reprodução fiel e sua calibração permanecem pendentes. O endpoint do PDF indicado pela publicação respondeu ao leitor com MIME não suportado; o resumo original foi consultado. |
+| Mahadevan e Mathioudakis, CARA, Knowledge Based Systems 293, 111610, 2024; [paper original](https://ananthmahadevan.com/publication/cost-aware-retraining/cost-aware-retraining.pdf) | `cara`, `cara_cumulative`, `cara_periodic` e `oracle` (DP dos Algoritmos 2 e 3) | Retreino vale do lote seguinte; busca em grade no lugar de *dual annealing*; queries amostradas do próprio fluxo (CARA-D). |
+| Regol et al., ICML 2025, PMLR 267, 51369 a 51404; [publicação original](https://proceedings.mlr.press/v267/regol25a.html), arXiv 2505.14903 | `upf` (ElasticNetCV, Beta, quantil Monte Carlo) e `oracle` | Retreino vale do lote seguinte; o ramo futuro usa o ótimo por realização em vez da regra recursiva. |
 
-A implementação da heurística usa somente informação disponível no instante da decisão. Não consultou changepoints, rótulos futuros ou métricas do modelo treinado futuramente.
+As políticas só usam informação observável no instante da decisão (`MatrixView`); apenas o Oracle lê o futuro.
 
 ## Detectores
 

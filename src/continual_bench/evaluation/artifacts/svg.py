@@ -24,6 +24,7 @@ MARKER_STYLE = {
     "changepoint": ("#000000", "8 4"),
     "update": ("#009E73", "2 3"),
     "rejected": ("#999999", "2 3"),
+    "bound": ("#CC79A7", "6 3"),
 }
 WIDTH, HEIGHT = 960, 440
 LEFT, RIGHT, TOP, BOTTOM = 78, 270, 48, 58

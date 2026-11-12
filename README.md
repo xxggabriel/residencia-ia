@@ -114,7 +114,7 @@ métricas, sem dependências externas) → `config/` → `datasets/`, `models/`,
 |---|---|
 | Modelo | Regressão logística e linear, Hoeffding Tree, kNN (River) |
 | Detector | ADWIN, DDM, EDDM, HDDM-A/W, Page-Hinkley, KSWIN, nenhum |
-| Política | nenhuma, online, periódica, por drift, por desempenho, heurística de custo |
+| Política | nenhuma, online, periódica, por drift, por desempenho; em lotes (Zia): CARA-T/CT/P, UPF e Oracle ([docs](docs/cost-aware-retraining.md)) |
 | Persistência | Ponto de recuperação local atômico, S3/MinIO, MLflow |
 
 O detector **não** decide retreinamento: as políticas impõem `cooldown`, `min_samples`, `min_window` e

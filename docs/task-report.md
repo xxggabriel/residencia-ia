@@ -11,7 +11,7 @@ A continuidade de 4 de novembro implementou os loaders brutos e os testes de **1
 - Foram implementadas transformações Split, Permuted e por grupo/sessão temporal. Elas preservaram classes, splits e metadados; não substituíram loaders brutos de imagens ou protocolos oficiais ainda não configurados.
 - Foi implementado um avaliador tipado para regressão e multiclasse com River, predição antes da liberação/aprendizagem, atraso de rótulos, warm-up, orçamento e baselines none/online/periodic. Rótulos de validation/test não treinaram o modelo. Essa avaliação foi intercalada, não um holdout temporal congelado. Sua retomada reaproveitou runs completos; execuções tipadas interrompidas reiniciaram do zero.
 - Foram integrados EDDM, HDDMA, HDDMW, Page Hinkley e KSWIN, mantendo ADWIN/DDM. O sinal dos detectores no motor binário foi o erro preditivo dos rótulos liberados. Alarmes não foram interpretados isoladamente como mudanças em P(X) ou P(Y|X).
-- Foram implementadas políticas por desempenho e custo de cenário. `cost_heuristic` comparou uma hipótese explícita de redução de erro com custos fixo e por amostra; não implementou os algoritmos completos CARA ou UPF. Os desvios ficaram em [políticas](task_evaluation-policies.md).
+- Foi implementada a política por desempenho. A heurística de custo de cenário (`cost_heuristic`) foi **removida** e substituída por CARA, UPF e Oracle ([políticas cost-aware](cost-aware-retraining.md)).
 - Foi separada a decisão de treinar da promoção. O gate opcional treinou no prefixo da janela e validou no sufixo histórico disponível. Candidatos rejeitados consumiram orçamento/cooldown e foram incluídos em amostras e tempo de treinamento. O holdout do candidato não integrou seu treino; o incumbente pôde ter aprendido esses exemplos anteriormente. Esse gate não constituiu evidência independente de generalização.
 - Foi acrescentado o suplemento `semana09-metrics-v1`: validação de anotações de drift, resumo GEM, forgetting após aprendizado, retenção, recursos e near-future accuracy operacional com snapshots congelados. Ausência de anotações manteve F1 do detector indisponível. FWT de GEM sem baseline inicial permaneceu indisponível. As definições históricas da Semana 08 foram preservadas e distinguidas.
 - Foram acrescentados campanha declarativa limitada, journal, locks, falhas visíveis e retomada verificada, além de configuração de um cliente transitório de testes com serviços. Os parâmetros vazios novos foram omitidos das identidades históricas. Não foram atualizadas dependências ou lockfiles.
@@ -43,7 +43,7 @@ O projeto/stack ZenML isolado foi `semana09-20261103-2146` / `semana09-validatio
 | Serviços reais finais | PASS, 3 testes, 279,29 s | [services.txt](../reports/semana09/services.txt), IDs e hashes em smokes.json |
 | Downloads/homologação das bases reais novas | NOT RUN | Dependem de versão, licença, acesso e preparação |
 | Campanha comparativa, múltiplas seeds e escalabilidade | NOT RUN | Não houve ranking nem teste de superioridade |
-| Reprodução fiel CARA e UPF | NOT RUN | Heurística explicitamente distinta |
+| Algoritmos CARA, UPF e Oracle | IMPLEMENTED | Testes unitários e smoke; campanha de reprodução dos números dos artigos NOT RUN |
 
 O aviso preexistente do MLflow sobre ausência de input example em um teste de backfill permaneceu na suíte final. Não foi desativado para obter sucesso.
 

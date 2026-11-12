@@ -42,22 +42,39 @@ def test_performance_requires_released_monitoring_window_and_threshold():
     assert subject.decide(DecisionContext(10, 5, False, 0.5, 4)).action == "reset_retrain"
 
 
-def test_cost_heuristic_tradeoff_and_strict_break_even():
-    subject = policy("cost_heuristic", target_error=0.1, horizon=10,
-                     error_cost=2, fixed_train_cost=1, sample_train_cost=1)
-    # Expected avoided scenario cost = (0.6 - 0.1) * 10 * 2 = 10.
-    assert subject.decide(DecisionContext(100, 9, False, 0.6, 100)).action == "none"
-    assert subject.decide(DecisionContext(100, 8, False, 0.6, 100)).action == "reset_retrain"
-    assert subject.decide(DecisionContext(100, 8, False, 0.05, 100)).action == "none"
-
-
 @pytest.mark.parametrize("params", [
-    {"error_threshold": 2}, {"horizon": 0}, {"monitor_window": 1.5},
-    {"fixed_train_cost": -1}, {"error_cost": float("nan")}, {"unknown": 1},
+    {"error_threshold": 2}, {"monitor_window": 1.5}, {"monitor_window": 0},
+    {"error_threshold": float("nan")}, {"unknown": 1}, {"horizon": 10}, {"target_error": 0.1},
 ])
 def test_policy_rejects_invalid_configuration(params):
     with pytest.raises(ValueError):
-        policy("cost_heuristic", **params)
+        policy("performance", **params)
+
+
+def test_the_scenario_cost_heuristic_is_gone():
+    with pytest.raises(ValueError, match="unknown policy"):
+        policy("cost_heuristic")
+
+
+@pytest.mark.parametrize("kind", ["cara", "cara_cumulative", "cara_periodic", "upf", "oracle"])
+def test_batch_policies_are_not_per_sample_policies(kind):
+    subject = PolicyStrategy(kind, params={"alpha": 0.5})
+    assert subject.requires_batches and subject.alpha == 0.5
+    with pytest.raises(ValueError, match="batch policies"):
+        Engine(MajorityModel, NeverAlarm, subject, warmup=1, window=8, metric_window=2)
+    with pytest.raises(ValueError, match="before the online phase"):
+        subject.decide(DecisionContext(10, 5, False, batch=3))
+    with pytest.raises(ValueError):
+        Config.model_validate({"policy": {"name": kind}})
+
+
+@pytest.mark.parametrize("kind,params", [
+    ("upf", {"delta": 1.0}), ("upf", {"samples": 1}), ("cara", {"alpha": -1}), ("cara", {"bogus": 1}),
+    ("cara_periodic", {"period": 0}), ("cara", {"alpha": float("nan")}), ("oracle", {"tau": 1}),
+])
+def test_batch_policies_reject_invalid_params(kind, params):
+    with pytest.raises(ValueError):
+        PolicyStrategy(kind, params=params)
 
 
 def test_threshold_policy_obeys_label_availability_before_deciding():
@@ -235,9 +252,3 @@ def test_default_monitor_can_reach_minimum_when_metric_window_is_smaller():
         subject.observe_batch([event(i)])
     assert subject.recent_errors.maxlen == 3
     assert len(subject.updates) == 1
-
-
-def test_cost_heuristic_rejects_derived_nonfinite_scenario_costs():
-    subject = policy("cost_heuristic", error_cost=1e308, horizon=100)
-    with pytest.raises(ValueError, match="overflow"):
-        subject.decide(DecisionContext(10, 5, False, 1.0, 10))
