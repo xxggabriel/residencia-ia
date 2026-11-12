@@ -44,28 +44,28 @@ aws-dataset-smoke:
 	scripts/aws/start_dataset.sh infra/examples/dataset-social-smoke.json
 
 aws-dataset-full:
-	scripts/aws/start_dataset.sh infra/examples/dataset-social-full.json
+	scripts/aws/start_dataset.sh infra/examples/dataset-social-full.json $(SUFFIX)
 
 aws-dataset-fraud-full:
-	scripts/aws/start_dataset.sh infra/examples/dataset-fraud-full.json
+	scripts/aws/start_dataset.sh infra/examples/dataset-fraud-full.json $(SUFFIX)
 
 aws-dataset-ecommerce-full:
-	scripts/aws/start_dataset.sh infra/examples/dataset-ecommerce-full.json
+	scripts/aws/start_dataset.sh infra/examples/dataset-ecommerce-full.json $(SUFFIX)
 
 aws-campaign-smoke:
-	scripts/aws/start_campaign.sh infra/examples/campaign-social-smoke.json
+	scripts/aws/start_campaign.sh infra/examples/campaign-social-smoke.json $(SUFFIX)
 
 aws-campaign-full:
-	scripts/aws/start_campaign.sh infra/examples/campaign-social-full.json
+	scripts/aws/start_campaign.sh infra/examples/campaign-social-full.json $(SUFFIX)
 
 aws-campaign-fraud-full:
-	scripts/aws/start_campaign.sh infra/examples/campaign-fraud-full.json
+	scripts/aws/start_campaign.sh infra/examples/campaign-fraud-full.json $(SUFFIX)
 
 aws-campaign-ecommerce-full:
-	scripts/aws/start_campaign.sh infra/examples/campaign-ecommerce-full.json
+	scripts/aws/start_campaign.sh infra/examples/campaign-ecommerce-full.json $(SUFFIX)
 
 aws-campaign-full-cost-heuristic:
-	scripts/aws/start_campaign.sh infra/examples/campaign-social-full-cost-heuristic.json
+	scripts/aws/start_campaign.sh infra/examples/campaign-social-full-cost-heuristic.json $(SUFFIX)
 
 aws-campaign-matrix:
 	scripts/aws/start_campaign.sh infra/examples/campaign-binary-matrix.json
