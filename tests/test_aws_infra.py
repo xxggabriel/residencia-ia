@@ -302,7 +302,7 @@ def test_github_actions_role_trusts_only_the_production_environment():
     assert ":environment:${GitHubEnvironment}" in condition
     assert "job_workflow_ref" not in condition  # not an IAM-supported OIDC condition key
     assert "StringLike" not in trust["Condition"]
-    assert cicd["Parameters"]["BranchName"]["Default"] == "main"
+    assert "BranchName" not in cicd["Parameters"]
     resources = cicd["Resources"].values()
     assert not [r for r in resources if r["Type"].startswith(("AWS::CodePipeline", "AWS::CodeBuild"))]
     text = json.dumps(role)
