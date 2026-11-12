@@ -1,7 +1,7 @@
 .PHONY: test lint smoke compose-check aws-validate aws-smoke aws-images aws-lambda \
         aws-bootstrap aws-dataset-smoke aws-dataset-full \
         aws-campaign-smoke aws-campaign-full aws-campaign-full-cost-heuristic aws-campaign-matrix \
-        aws-mlflow-ui aws-cancel aws-teardown aws-teardown-all
+        aws-mlflow-ui aws-studio-ui aws-cancel aws-teardown aws-teardown-all
 
 REPOSITORY ?= xxggabriel/residencia-ia
 BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD)
@@ -58,6 +58,9 @@ aws-campaign-matrix:
 
 aws-mlflow-ui:
 	uv run continual-bench aws mlflow-url
+
+aws-studio-ui:
+	uv run continual-bench aws studio-url
 
 aws-cancel:
 	@if [ -z "$(CAMPAIGN)" ]; then echo "Uso: make aws-cancel CAMPAIGN=<id>"; exit 1; fi

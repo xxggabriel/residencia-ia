@@ -333,6 +333,65 @@ def mlflow_url(args):
     _emit(result)
 
 
+def studio_url(args):
+    """Generate URLs to access SageMaker AI Studio, Unified Studio portal, and MLflow UI."""
+    from continual_bench.infrastructure.aws.mlflow_tracking import presigned_mlflow_url
+    from continual_bench.infrastructure.aws.session import client as make_client
+
+    sm = make_client("sagemaker")
+    links: dict[str, str] = {}
+
+    # 1. SageMaker AI Studio / Classic Studio Presigned URL
+    try:
+        domains = sm.list_domains().get("Domains", [])
+        for d in domains:
+            d_id = d.get("DomainId")
+            ups = sm.list_user_profiles(DomainIdEquals=d_id).get("UserProfiles", [])
+            for u in ups:
+                if u.get("Status") == "InService":
+                    try:
+                        resp = sm.create_presigned_domain_url(
+                            DomainId=d_id,
+                            UserProfileName=u["UserProfileName"],
+                            SessionExpirationDurationInSeconds=args.session_duration,
+                        )
+                        links["sagemaker_studio_url"] = resp["AuthorizedUrl"]
+                        links["sagemaker_domain_id"] = d_id
+                        break
+                    except Exception:
+                        continue
+            if "sagemaker_studio_url" in links:
+                break
+    except Exception as err:
+        links["sagemaker_studio_error"] = str(err)
+
+    # 2. SageMaker Unified Studio Portal URL (via Amazon DataZone)
+    try:
+        dz = make_client("datazone")
+        dz_domains = dz.list_domains().get("items", [])
+        if dz_domains:
+            links["sagemaker_unified_studio_portal"] = dz_domains[0].get("portalUrl", "")
+            links["sagemaker_unified_studio_domain_id"] = dz_domains[0].get("id", "")
+    except Exception as err:
+        links["sagemaker_unified_studio_error"] = str(err)
+
+    # 3. SageMaker MLflow UI Presigned URL
+    try:
+        mf = presigned_mlflow_url(
+            args.arn,
+            project=args.project,
+            expires_in_seconds=args.expires,
+            session_duration_seconds=args.session_duration,
+            sagemaker_client=sm,
+        )
+        links["sagemaker_mlflow_url"] = mf.get("authorized_url", "")
+        links["sagemaker_mlflow_arn"] = mf.get("arn", "")
+    except Exception as err:
+        links["sagemaker_mlflow_error"] = str(err)
+
+    _emit(links)
+
+
 def configure(parser: argparse.ArgumentParser):
     sub = parser.add_subparsers(dest="aws_command", required=True)
 
@@ -429,6 +488,17 @@ def configure(parser: argparse.ArgumentParser):
     add(
         "mlflow-url",
         mlflow_url,
+        lambda c: (
+            c.add_argument("--arn", default=None),
+            c.add_argument("--project", default="continual-bench"),
+            c.add_argument("--expires", type=int, default=300),
+            c.add_argument("--session-duration", type=int, default=43200),
+        ),
+        store=False,
+    )
+    add(
+        "studio-url",
+        studio_url,
         lambda c: (
             c.add_argument("--arn", default=None),
             c.add_argument("--project", default="continual-bench"),
