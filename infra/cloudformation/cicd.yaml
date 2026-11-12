@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   continual-bench CI/CD for GitHub Actions: an OIDC identity provider and one deploy role that
-  only workflow runs from the main branch (environment "production") can assume, plus the
+  only workflow runs in the "production" environment (restricted to the main branch in GitHub) can assume, plus the
   CloudFormation execution role used to apply the runtime change set. Replaces the former
   CodePipeline/CodeBuild pipeline. Workflows never download datasets or start campaigns.
 
@@ -27,6 +27,12 @@ Parameters:
     Type: String
     Default: config/runtime-parameters.json
     Description: Optional operator overrides (activation flags, budget, email) in the artifacts bucket.
+  OidcSubjectPrefix:
+    Type: String
+    Default: ""
+    Description: >-
+      Prefix of the OIDC sub claim. Empty means "repo:<FullRepositoryId>"; repositories with immutable
+      subjects use "repo:<owner>@<owner-id>/<repo>@<repo-id>" (gh api repos/<repo>/actions/oidc/customization/sub).
   ExistingOidcProviderArn:
     Type: String
     Default: ""
@@ -34,6 +40,7 @@ Parameters:
 
 Conditions:
   CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
+  DefaultSubjectPrefix: !Equals [!Ref OidcSubjectPrefix, ""]
 
 Resources:
   GitHubOidcProvider:
@@ -60,8 +67,9 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub "repo:${FullRepositoryId}:environment:${GitHubEnvironment}"
-                token.actions.githubusercontent.com:job_workflow_ref: !Sub "${FullRepositoryId}/.github/workflows/deploy.yml@refs/heads/${BranchName}"
+                token.actions.githubusercontent.com:sub: !Sub
+                  - "${Prefix}:environment:${GitHubEnvironment}"
+                  - Prefix: !If [DefaultSubjectPrefix, !Sub "repo:${FullRepositoryId}", !Ref OidcSubjectPrefix]
       Policies:
         - PolicyName: build-deploy-release
           PolicyDocument:

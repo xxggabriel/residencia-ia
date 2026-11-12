@@ -28,10 +28,15 @@ for service in batch.amazonaws.com ecs.amazonaws.com; do
   aws iam create-service-linked-role --aws-service-name "$service" >/dev/null 2>&1 || true
 done
 
+# Repositories with immutable OIDC subjects (repo:owner@id/name@id) need the exact prefix in the trust policy.
+SUBJECT_PREFIX=""
+if command -v gh >/dev/null 2>&1; then
+  SUBJECT_PREFIX="$(gh api "repos/$REPOSITORY/actions/oidc/customization/sub" --jq 'if .use_immutable_subject then .sub_claim_prefix else "" end' 2>/dev/null || true)"
+fi
 aws cloudformation deploy --stack-name "$PROJECT-cicd" --template-file infra/cloudformation/cicd.yaml \
   --capabilities CAPABILITY_NAMED_IAM --tags cb-stack="$PROJECT" cb-component=cicd --no-fail-on-empty-changeset \
   --parameter-overrides Project="$PROJECT" FullRepositoryId="$REPOSITORY" \
-  ExistingOidcProviderArn="${OIDC_PROVIDER_ARN:-}" RuntimeStackName="$PROJECT-runtime"
+  OidcSubjectPrefix="$SUBJECT_PREFIX" ExistingOidcProviderArn="${OIDC_PROVIDER_ARN:-}" RuntimeStackName="$PROJECT-runtime"
 ROLE_ARN="$(aws cloudformation describe-stacks --stack-name "$PROJECT-cicd" \
   --query "Stacks[0].Outputs[?OutputKey=='GitHubActionsRoleArn'].OutputValue" --output text)"
 echo "GitHub Actions role $ROLE_ARN"
