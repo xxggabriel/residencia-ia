@@ -317,3 +317,66 @@ def test_aws_lock_excludes_service_stack():
         assert f"\n{package}==" not in lock
     for package in ("boto3", "duckdb", "pyarrow", "xgboost-cpu", "pandas", "scipy"):
         assert f"\n{package}==" in lock
+
+
+def test_sagemaker_experiments_iam_and_vpce_permissions():
+    required_actions = {
+        "sagemaker:CreateExperiment",
+        "sagemaker:DescribeExperiment",
+        "sagemaker:UpdateExperiment",
+        "sagemaker:CreateTrial",
+        "sagemaker:DescribeTrial",
+        "sagemaker:UpdateTrial",
+        "sagemaker:CreateTrialComponent",
+        "sagemaker:DescribeTrialComponent",
+        "sagemaker:UpdateTrialComponent",
+        "sagemaker:BatchPutMetrics",
+        "sagemaker:AddTags",
+    }
+    expected_resources = {
+        "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment/${Project}-*",
+        "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial/${Project}-*",
+        "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial-component/${Project}-*",
+    }
+    execution_role = template("modules/execution.yaml")["Resources"]["BenchmarkJobRole"]
+    ml_role = template("modules/ml.yaml")["Resources"]["SageMakerRole"]
+    for role in (execution_role, ml_role):
+        exp_stmts = [
+            s
+            for s in statements(role)
+            if isinstance(s.get("Action"), list) and "sagemaker:BatchPutMetrics" in s["Action"]
+        ]
+        assert exp_stmts, f"Missing SageMaker Experiments statement in {role['Properties']['RoleName']}"
+        stmt = exp_stmts[0]
+        assert required_actions <= set(stmt["Action"])
+        subs = {r["Fn::Sub"] for r in stmt["Resource"]}
+        assert subs == expected_resources
+
+    vpce_stmt = template("modules/network.yaml")["Resources"]["SageMakerApiEndpoint"]["Properties"][
+        "PolicyDocument"
+    ]["Statement"][0]
+    assert required_actions <= set(vpce_stmt["Action"])
+
+
+def test_timeouts_are_standardized_to_14400_seconds():
+    from continual_bench.application.cloud.contracts import CampaignRequest
+
+    execution_params = template("modules/execution.yaml")["Parameters"]
+    root_params = template("root.yaml")["Parameters"]
+    assert execution_params["BenchmarkTimeoutSeconds"]["Default"] == 14400
+    assert execution_params["PrepareTimeoutSeconds"]["Default"] == 14400
+    assert root_params["BenchmarkTimeoutSeconds"]["Default"] == 14400
+    assert root_params["PrepareTimeoutSeconds"]["Default"] == 14400
+    req = CampaignRequest(
+        campaign_id="c1",
+        matrix={"kind": "experiment_matrix", "path": "configs/matrices/binary-comparison.yaml"},
+    )
+    assert req.run_timeout_seconds == 14400
+
+    for profile_name in ("training", "tuning", "processing"):
+        profile = json.loads((ROOT / "infra" / "sagemaker" / "profiles" / f"{profile_name}.json").read_text())
+        assert profile["max_runtime_seconds"] == 14400
+
+    dataset_asl = json.loads((ROOT / "infra" / "statemachines" / "dataset.asl.json").read_text())
+    assert dataset_asl["States"]["Prepare"]["TimeoutSeconds"] == 14400
+

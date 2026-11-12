@@ -137,7 +137,7 @@ class CampaignRequest(Strict):
     max_parallel: int = Field(default=4, ge=1, le=256)
     max_attempts: int = Field(default=2, ge=1, le=5)
     queue_timeout_seconds: int = Field(default=3600, ge=600, le=86_400)
-    run_timeout_seconds: int = Field(default=2 * 24 * 3600, ge=900, le=14 * 24 * 3600)
+    run_timeout_seconds: int = Field(default=14400, ge=900, le=14 * 24 * 3600)
     tracking: str = Field(default="configs/base/tracking.yaml", pattern=r"^configs/[A-Za-z0-9_./-]+\.ya?ml$")
     notify: bool = True
 

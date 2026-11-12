@@ -24,11 +24,16 @@ from continual_bench.infrastructure.object_store import (
     sha256_path,
     split_uri,
 )
+from continual_bench.models.training.callbacks import GracefulTerminationHandler
 
 from . import layout
 from .contracts import RunUnit, SnapshotRef
 from .records import ROWS_FILE, ensure_rows, matrix_rows, zia_rows
 from .snapshots import SnapshotNotReady, materialize, verify_snapshot
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
 
 EXIT_OK, EXIT_FAILED, EXIT_CONTRACT, EXIT_SNAPSHOT = 0, 1, 2, 3
 SKIP_SUFFIXES = (".lock",)
@@ -185,7 +190,7 @@ def verify_native_loader(directory: Path, report: dict, data_root: Path, rows: i
     }
 
 
-def execute_zia(unit: RunUnit, store, workdir: Path, log) -> dict:
+def execute_zia(unit: RunUnit, store, workdir: Path, log, *, tracker=None) -> dict:
     import yaml
 
     from continual_bench.config import TrackingConfig
@@ -208,7 +213,15 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log) -> dict:
     data_root = materialize(store, manifest, workdir / "data")
     output = workdir / "run"
     log.info("evaluation starting", extra={"fields": {"rows": manifest["rows"], "policy": params["policy"]}})
-    report = run(data_root, params["dataset"], params["scope"], params["policy"], output, settings)
+    report = run(
+        data_root,
+        params["dataset"],
+        params["scope"],
+        params["policy"],
+        output,
+        settings,
+        tracker=tracker,
+    )
     evidence = prediction_manifest(output, report)
     adapted = tracking_report(report, evidence)
     write_zia_artifacts(output, report, adapted)
@@ -233,7 +246,56 @@ def execute_matrix_case(unit: RunUnit, workdir: Path, log) -> dict:
     return {"report": report, "headline": _headline(report), "output": output}
 
 
-def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=None, clock=time.time) -> int:
+def flush_partial_state(
+    store,
+    output: Path,
+    prefix: str,
+    status_key: str,
+    status: dict,
+    *,
+    started: float,
+    clock=time.time,
+) -> dict:
+    """Persist partial run artifacts and interrupted status to S3 on Fargate SIGTERM."""
+    partial_prefix = f"{prefix}/partial"
+    files, total = 0, 0
+    if output.exists():
+        for path in sorted(output.rglob("*")):
+            if not path.is_file() or path.name.endswith(SKIP_SUFFIXES):
+                continue
+            relative = path.relative_to(output)
+            key = f"{partial_prefix}/{relative.as_posix()}"
+            digest = sha256_path(path)
+            store.put_file(key, path, if_absent=False, sha256=digest)
+            files += 1
+            total += path.stat().st_size
+    payload = {
+        **status,
+        "state": "INTERRUPTED",
+        "finished_at": clock(),
+        "wall_seconds": time.monotonic() - started,
+        "partial_prefix": store.uri(partial_prefix),
+        "partial_files": files,
+        "partial_bytes": total,
+    }
+    put_json(store, status_key, payload)
+    return payload
+
+
+def run_unit(
+    store,
+    unit_ref: str,
+    workdir,
+    *,
+    env=None,
+    registry=None,
+    tracker=None,
+    emit=None,
+    clock=time.time,
+) -> int:
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
     env = os.environ if env is None else env
     workdir = Path(workdir)
     key = split_uri(unit_ref)[1] if "://" in unit_ref else unit_ref
@@ -280,16 +342,23 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
         return EXIT_OK
     put_json(store, status_key, {**status, "state": "RUNNING"})
     started = time.monotonic()
+    prefix = layout.attempt_prefix(unit.campaign_id, unit.run_id, attempt_key)
+    sigterm_handler = GracefulTerminationHandler(
+        on_terminate=lambda _sig: flush_partial_state(
+            store, workdir / "run", prefix, status_key, status, started=started, clock=clock
+        )
+    )
     try:
-        expected_image = unit.contract["release"]["runtime_image"]
-        if env.get("BENCH_IMAGE_DIGEST") and env["BENCH_IMAGE_DIGEST"] != expected_image:
-            raise ContractError("job runs an image other than the campaign release")
-        if unit.kind == "zia":
-            outcome = execute_zia(unit, store, workdir, log)
-        else:
-            outcome = execute_matrix_case(unit, workdir, log)
+        with sigterm_handler:
+            expected_image = unit.contract["release"]["runtime_image"]
+            if env.get("BENCH_IMAGE_DIGEST") and env["BENCH_IMAGE_DIGEST"] != expected_image:
+                raise ContractError("job runs an image other than the campaign release")
+            if unit.kind == "zia":
+                active_tracker = tracker(unit) if callable(tracker) else tracker
+                outcome = execute_zia(unit, store, workdir, log, tracker=active_tracker)
+            else:
+                outcome = execute_matrix_case(unit, workdir, log)
         evaluation_seconds = time.monotonic() - started
-        prefix = layout.attempt_prefix(unit.campaign_id, unit.run_id, attempt_key)
         outputs_uri = store.uri(prefix)
         final = {
             "version": "run-final-v1",

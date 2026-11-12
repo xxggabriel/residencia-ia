@@ -17,7 +17,7 @@ from continual_bench.infrastructure.storage import atomic_write
 
 DATA_ROOT = Path(os.environ.get("BENCH_ZIA_DATA", "/zia-data"))
 JOB_ROOT = Path(os.environ.get("BENCH_STATE", "/state/runs")).parent / "zia-runs"
-TIMEOUT = 2 * 24 * 3600
+TIMEOUT = 14400
 
 
 class Job(BaseModel):

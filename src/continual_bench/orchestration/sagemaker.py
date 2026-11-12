@@ -8,11 +8,16 @@
   `ZiaPredictor`, the same native loader the benchmark validates.
 """
 
+import gc
 import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
 
 PREFIX = Path(os.environ.get("SM_PREFIX", "/opt/ml"))
 HOLDOUT_FRACTION = 0.1
@@ -49,13 +54,15 @@ def _read(path, columns, start, stop):
     return x, table["label"].to_numpy().astype(np.uint8)
 
 
-def train(channel=None, model_dir=None, params=None) -> dict:
-
+def train(channel=None, model_dir=None, params=None, *, tracker=None) -> dict:
+    from continual_bench.config.iterative import IterativeTrainingConfig
     from continual_bench.datasets.zia import DATASETS
     from continual_bench.evaluation.zia_metrics import ClassificationMetrics
+    from continual_bench.models.training.loop import train_iterative
     from continual_bench.models.zia import FraudOrReturnBooster, MultinomialLogistic
 
     params = params if params is not None else hyperparameters()
+    iter_config = IterativeTrainingConfig.from_params(params)
     channel = Path(channel or PREFIX / "input" / "data" / "train")
     model_dir = Path(model_dir or PREFIX / "model")
     scope = str(params.get("scope", "smoke"))
@@ -65,23 +72,52 @@ def train(channel=None, model_dir=None, params=None) -> dict:
     classes = DATASETS[dataset]["classes"]
     (train_start, train_stop), (val_start, val_stop), holdout_start = chronological_splits(
         manifest["rows"],
-        float(params.get("validation_fraction", 0.1)),
+        iter_config.validation_fraction,
         int(params.get("max_train_rows", 2_000_000)),
     )
-    model = MultinomialLogistic(len(classes)) if dataset == "social" else FraudOrReturnBooster()
-    if dataset == "social":
-        model.params = {**model.params, "l2": float(params.get("l2", model.params["l2"]))}
-        model.initial_rounds = int(params.get("max_iterations", model.initial_rounds))
-    else:
-        model.params = {**model.params, **{k: params[k] for k in ("eta", "max_depth") if k in params}}
-        model.initial_rounds = int(params.get("rounds", model.initial_rounds))
+    model = (
+        MultinomialLogistic(len(classes), config=iter_config)
+        if dataset == "social"
+        else FraudOrReturnBooster(config=iter_config)
+    )
+    if dataset != "social" and "max_depth" in params:
+        model.params["max_depth"] = int(params["max_depth"])
+
+    if tracker is None and (
+        os.environ.get("SM_TRAINING_ENV") or os.environ.get("BENCH_SAGEMAKER_EXPERIMENTS") == "true"
+    ):
+        from continual_bench.infrastructure.aws.experiments import SageMakerExperimentsTracker
+
+        job_name = os.environ.get("TRAINING_JOB_NAME", f"cb-train-{dataset}-{scope}")
+        tracker = SageMakerExperimentsTracker(
+            dataset=dataset,
+            policy=str(params.get("policy", "frozen")),
+            model_name=model.name,
+            run_id=str(params.get("run_id", scope)),
+            job_name=job_name,
+            emit_stdout=False,
+        )
+        tracker.start(iter_config)
+
     x, y = _read(parquet, manifest["features"], train_start, train_stop)
-    model.fit(x, y, False)
-    del x, y
     vx, vy = _read(parquet, manifest["features"], val_start, val_stop)
+    loop_result = train_iterative(
+        model,
+        (x, y),
+        val_data=(vx, vy),
+        config=iter_config,
+        tracker=tracker,
+        emit_stdout=True,
+    )
+    del x, y
+    gc.collect()
     metrics = ClassificationMetrics(len(classes))
     metrics.add(vy, model.predict(vx))
+    del vx, vy
+    gc.collect()
     summary, _ = metrics.metrics()
+    if tracker is not None and hasattr(tracker, "finish"):
+        tracker.finish("Completed")
     payload, extension = model.payload()
     model_dir.mkdir(parents=True, exist_ok=True)
     import hashlib
@@ -90,6 +126,14 @@ def train(channel=None, model_dir=None, params=None) -> dict:
     metadata = {
         "model": model.name,
         "model_params": model.params,
+        "hyperparameters": iter_config.to_hyperparameters_dict(),
+        "training": {
+            "epochs_run": loop_result["epochs_run"],
+            "best_epoch": loop_result["best_epoch"],
+            "early_stopped": loop_result["early_stopped"],
+            "best_validation_loss": loop_result["best_validation_loss"],
+            "patience_consumed": loop_result["patience_consumed"],
+        },
         "features": manifest["features"],
         "classes": classes,
         "dataset_version": manifest["sha256"],
@@ -107,10 +151,13 @@ def train(channel=None, model_dir=None, params=None) -> dict:
     (model_dir / "model-metadata.json").write_text(json.dumps(metadata, indent=2))
     print(f"validation:log_loss={summary['log_loss']};", flush=True)
     print(f"validation:accuracy={summary['accuracy']};", flush=True)
+    print(f"validation:f1_macro={summary['f1_macro']};", flush=True)
     output = PREFIX / "output"
     if output.is_dir():
-        (output / "metrics.json").write_text(json.dumps({"validation": summary}, default=float))
-    return {"validation": summary, "metadata": metadata}
+        (output / "metrics.json").write_text(
+            json.dumps({"validation": summary, "training": metadata["training"]}, default=float)
+        )
+    return {"validation": summary, "metadata": metadata, "training": dict(loop_result)}
 
 
 def process(input_dir=None, output_dir=None) -> dict:
