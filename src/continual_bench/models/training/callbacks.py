@@ -34,8 +34,8 @@ class EarlyStoppingStrategy:
 
     def __init__(
         self,
-        patience: int = 10,
-        min_delta: float = 1e-4,
+        patience: int = 100,
+        min_delta: float = 0.0,
         *,
         mode: Literal["min", "max"] = "min",
         restore_best_weights: bool = True,

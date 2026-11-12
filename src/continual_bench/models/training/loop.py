@@ -22,11 +22,24 @@ from .callbacks import (
 )
 
 
-def enforce_single_thread_env() -> None:
-    """Enforce single-threaded BLAS/OpenMP to prevent CPU throttling in AWS Fargate."""
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
+def enforce_single_thread_env(vcpus: int | float | None = None) -> None:
+    """Enforce BLAS/OpenMP thread limits (supports 2 threads when vcpus >= 2)
+    to prevent CPU throttling in AWS Fargate.
+    """
+    if vcpus is None:
+        raw = os.environ.get("BENCH_BENCHMARK_VCPUS") or os.environ.get("BENCH_VCPUS")
+        if raw is not None:
+            try:
+                vcpus = float(raw)
+            except ValueError:
+                vcpus = None
+    if vcpus is not None:
+        threads = "2" if vcpus >= 2 else "1"
+    else:
+        threads = os.environ.get("OMP_NUM_THREADS", "2")
+    os.environ["OMP_NUM_THREADS"] = str(threads)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(threads)
+    os.environ["MKL_NUM_THREADS"] = str(threads)
 
 
 enforce_single_thread_env()
@@ -85,9 +98,14 @@ def emit_cloudwatch_metrics(metrics: dict[str, float | int]) -> None:
     keys = (
         "validation:log_loss",
         "validation:accuracy",
+        "validation:balanced_accuracy",
         "validation:f1_macro",
+        "validation:pr_auc",
         "train:log_loss",
         "train:accuracy",
+        "train:balanced_accuracy",
+        "train:f1_macro",
+        "train:pr_auc",
         "best_validation_loss",
         "epoch",
         "best_epoch",
@@ -225,6 +243,16 @@ class IterativeTrainingLoop:
                     "peak_rss_mb": float(rss_mb),
                     "best_validation_loss": float(self.strategy.best_loss),
                 }
+                if "balanced_accuracy" in train_metrics:
+                    epoch_metrics["train:balanced_accuracy"] = float(train_metrics["balanced_accuracy"])
+                if "pr_auc" in train_metrics:
+                    epoch_metrics["train:pr_auc"] = float(train_metrics["pr_auc"])
+                if "f1_macro" in train_metrics:
+                    epoch_metrics["train:f1_macro"] = float(train_metrics["f1_macro"])
+                if "balanced_accuracy" in val_metrics:
+                    epoch_metrics["validation:balanced_accuracy"] = float(val_metrics["balanced_accuracy"])
+                if "pr_auc" in val_metrics:
+                    epoch_metrics["validation:pr_auc"] = float(val_metrics["pr_auc"])
                 history.append(epoch_metrics)
 
                 if self.emit_stdout:

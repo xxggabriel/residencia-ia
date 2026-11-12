@@ -33,7 +33,7 @@ scripts/aws/wait_connection.sh "$(aws cloudformation describe-stacks --stack-nam
 O pipeline V2 tem um único gatilho, `push` filtrado para `main`. O push gerado pelo merge de
 um pull request também dispara. Não há regra do EventBridge, webhook ou polling para o mesmo
 repositório, então uma revisão não dispara duas execuções. A detecção nativa da ação de origem
-é substituída pelo filtro do gatilho. `ExecutionMode: QUEUED` aplica os merges em ordem. Exigir
+é substituída pelo filtro do gatilho. `ExecutionMode: SUPERSEDED` prioriza a execução mais recente e pula execuções intermediárias obsoletas em fila/andamento caso existam, otimizando o tempo de deploy. Exigir
 merge em vez de push direto é responsabilidade das regras do GitHub: ative branch protection ou
 ruleset em `main` com pull request obrigatório e checks exigidos.
 
@@ -153,7 +153,7 @@ e confira as contagens no manifesto antes de iniciar as campanhas.
 Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem sete jobs independentes
 por dataset. Fixe o mesmo SHA de release nos três arquivos. Para disparar as três campanhas
 em paralelo, confira se a fila, o compute environment e a quota regional permitem **21 jobs
-simultâneos**. Cada job usa 1 vCPU e 2 GiB de RAM (`BenchmarkVcpus=1` e
+simultâneos**. Cada job usa 2 vCPU e 2 GiB de RAM (`BenchmarkVcpus=2` e
 `BenchmarkMemoryMiB=2048`). Reserve pelo menos 21 vCPUs livres no ambiente compartilhado.
 Os exemplos pedem sete jobs simultâneos por campanha e uma tentativa por job.
 

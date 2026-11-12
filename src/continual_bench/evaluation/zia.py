@@ -9,9 +9,9 @@ from collections import deque
 from pathlib import Path
 from typing import get_args
 
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
 
 import numpy as np  # noqa: E402
 import pyarrow as pa  # noqa: E402
@@ -122,7 +122,7 @@ def run(
     spec = DATASETS[dataset]
     classes = len(spec["classes"])
     iter_config = IterativeTrainingConfig.from_params(iterative_config)
-    model = make_zia_model(spec["model"], classes, config=iter_config)
+    model = make_zia_model(spec["model"], classes, config=iter_config, dataset=dataset)
     monitoring = SystemMetricsSampler(output, interval=0.5 if scope == "smoke" else 5)
     replay = deque(maxlen=REPLAY_BLOCKS)
     recent_errors = deque(maxlen=REPLAY_BLOCKS)

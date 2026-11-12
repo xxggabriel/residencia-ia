@@ -37,6 +37,7 @@ _XGB_ALLOWED_PARAMS = {
     "seed",
     "eval_metric",
     "verbosity",
+    "scale_pos_weight",
 }
 
 
@@ -45,10 +46,18 @@ def compute_classification_metrics(
     probabilities: np.ndarray,
     classes: int,
 ) -> dict[str, float]:
-    """Compute log_loss, accuracy, and f1_macro without allocating large histograms."""
+    """Compute log_loss, accuracy, balanced_accuracy, pr_auc and f1_macro
+    without allocating large histograms.
+    """
     total = int(len(labels))
     if total == 0:
-        return {"log_loss": 0.0, "accuracy": 0.0, "f1_macro": 0.0}
+        return {
+            "log_loss": 0.0,
+            "accuracy": 0.0,
+            "balanced_accuracy": 0.0,
+            "f1_macro": 0.0,
+            "pr_auc": 0.0,
+        }
     labels_i32 = labels.astype(np.int32, copy=False)
     predicted = (
         (probabilities[:, 1] >= 0.5).astype(np.int32)
@@ -74,10 +83,30 @@ def compute_classification_metrics(
         if (pred_counts[i] + actual[i]) > 0
     ]
     f1_macro = float(sum(f1_values) / len(f1_values)) if f1_values else 0.0
+
+    recalls = [
+        float(diag[i] / actual[i])
+        for i in range(classes)
+        if actual[i] > 0
+    ]
+    balanced_accuracy = float(sum(recalls) / len(recalls)) if recalls else 0.0
+
+    pos_count = int(actual[1]) if classes == 2 else 0
+    if classes == 2 and 0 < pos_count < total:
+        scores = probabilities[:, 1]
+        order = np.argsort(-scores)
+        y_sorted = labels_i32[order]
+        precisions = np.cumsum(y_sorted == 1) / np.arange(1, total + 1)
+        pr_auc = float(np.sum(precisions * (y_sorted == 1)) / pos_count)
+    else:
+        pr_auc = 0.0
+
     return {
         "log_loss": log_loss,
         "accuracy": accuracy,
+        "balanced_accuracy": balanced_accuracy,
         "f1_macro": f1_macro,
+        "pr_auc": pr_auc,
     }
 
 
@@ -90,7 +119,7 @@ class FraudOrReturnBooster:
         "max_bin": 128,
         "eta": 0.01,
         "reg_lambda": 0.001,
-        "nthread": 1,
+        "nthread": 2,
         "seed": 42,
     }
     initial_rounds = 100
@@ -101,13 +130,19 @@ class FraudOrReturnBooster:
         "minibatch_rows": 8192,
     }
 
-    def __init__(self, config: IterativeTrainingConfig | dict[str, Any] | None = None):
+    def __init__(
+        self,
+        config: IterativeTrainingConfig | dict[str, Any] | None = None,
+        dataset: str | None = None,
+        classes: int | list[str] | None = None,
+    ):
         enforce_single_thread_env()
         import xgboost
 
         self.xgb = xgboost
         self.model = None
         self.params = dict(self.params)
+        self.dataset = dataset
         if config is not None:
             cfg = IterativeTrainingConfig.from_params(config)
             self.params["eta"] = cfg.learning_rate
@@ -115,7 +150,21 @@ class FraudOrReturnBooster:
             self.params["seed"] = cfg.seed
             self.initial_rounds = cfg.max_epochs
             self.continued_rounds = cfg.max_epochs
-        self.params["nthread"] = 1
+            if isinstance(config, dict):
+                if "nthread" in config:
+                    self.params["nthread"] = int(config["nthread"])
+                if "scale_pos_weight" in config:
+                    self.params["scale_pos_weight"] = float(config["scale_pos_weight"])
+                if "dataset" in config and not self.dataset:
+                    self.dataset = str(config["dataset"])
+
+        if "scale_pos_weight" not in self.params:
+            if self.dataset == "fraud":
+                self.params["scale_pos_weight"] = 39.0
+            elif self.dataset == "ecommerce":
+                self.params["scale_pos_weight"] = 10.0
+
+        self.params.setdefault("nthread", 2)
         self._cached_dmatrix = None
         self._cached_dmatrix_key: tuple[int, tuple[int, ...], int, tuple[int, ...]] | None = None
         self.last_training_result: TrainingResult | None = None
@@ -123,11 +172,18 @@ class FraudOrReturnBooster:
     def fit_online(self, x, y):
         """Update the leaves of the existing booster with River's logistic gradient."""
         loss = optim.losses.Log()
+        weight = float(self.params.get("scale_pos_weight", 1.0))
 
         def objective(margins, matrix):
-            gradient = loss.gradient(matrix.get_label(), margins.clip(-80, 80))
+            labels = matrix.get_label()
+            gradient = loss.gradient(labels, margins.clip(-80, 80))
             p = expit(margins)
-            return gradient, np.maximum(p * (1 - p), 1e-16)
+            hessian = np.maximum(p * (1 - p), 1e-16)
+            if weight != 1.0:
+                pos = labels == 1
+                gradient = np.where(pos, gradient * weight, gradient)
+                hessian = np.where(pos, hessian * weight, hessian)
+            return gradient, hessian
 
         params = {
             **self.params,
@@ -141,7 +197,8 @@ class FraudOrReturnBooster:
         steps = 0
         for start in range(0, len(y), size):
             stop = start + size
-            matrix = self.xgb.DMatrix(x[start:stop], label=y[start:stop], nthread=1)
+            nthread = int(self.params.get("nthread", 2))
+            matrix = self.xgb.DMatrix(x[start:stop], label=y[start:stop], nthread=nthread)
             self.model = self.xgb.train(
                 params,
                 matrix,
@@ -160,7 +217,7 @@ class FraudOrReturnBooster:
             clean["reg_lambda"] = float(self.params["l2_regularization"])
         elif "l2" in self.params and "reg_lambda" not in clean:
             clean["reg_lambda"] = float(self.params["l2"])
-        clean["nthread"] = 1
+        clean["nthread"] = int(self.params.get("nthread", 2))
         clean.setdefault("verbosity", 0)
         return clean
 
@@ -173,7 +230,7 @@ class FraudOrReturnBooster:
                 x,
                 label=y,
                 max_bin=int(self.params.get("max_bin", 128)),
-                nthread=1,
+                nthread=int(self.params.get("nthread", 2)),
             )
             self._cached_dmatrix_key = key
         return self._cached_dmatrix
@@ -226,8 +283,8 @@ class FraudOrReturnBooster:
         rounds = self.continued_rounds if continuation else self.initial_rounds
         merged_params = {
             "max_epochs": min(100, max(1, int(rounds))),
-            "patience": int(self.params.get("patience", 10)),
-            "min_delta": float(self.params.get("min_delta", 1e-4)),
+            "patience": int(self.params.get("patience", 100)),
+            "min_delta": float(self.params.get("min_delta", 0.0)),
             "learning_rate": float(self.params.get("eta", self.params.get("learning_rate", 0.01))),
             "l2_regularization": float(
                 self.params.get("reg_lambda", self.params.get("l2_regularization", 0.001))
@@ -238,6 +295,10 @@ class FraudOrReturnBooster:
         }
         if isinstance(config, dict):
             merged_params.update(config)
+            if "scale_pos_weight" in config:
+                self.params["scale_pos_weight"] = float(config["scale_pos_weight"])
+            if "dataset" in config and not self.dataset:
+                self.dataset = str(config["dataset"])
             iter_cfg = IterativeTrainingConfig.from_params(merged_params)
         elif isinstance(config, IterativeTrainingConfig):
             iter_cfg = config
@@ -247,7 +308,12 @@ class FraudOrReturnBooster:
         self.params["eta"] = iter_cfg.learning_rate
         self.params["reg_lambda"] = iter_cfg.l2_regularization
         self.params["seed"] = iter_cfg.seed
-        self.params["nthread"] = 1
+        self.params["nthread"] = int(self.params.get("nthread", 2))
+        if "scale_pos_weight" not in self.params:
+            if self.dataset == "fraud":
+                self.params["scale_pos_weight"] = 39.0
+            elif self.dataset == "ecommerce":
+                self.params["scale_pos_weight"] = 10.0
 
         result = train_iterative(
             self,
@@ -278,7 +344,7 @@ class FraudOrReturnBooster:
         return bytes(self.model.save_raw(raw_format="ubj")), "ubj"
 
     def load(self, payload: bytes) -> None:
-        self.model = self.xgb.Booster(params={"nthread": 1})
+        self.model = self.xgb.Booster(params={"nthread": int(self.params.get("nthread", 2))})
         self.model.load_model(bytearray(payload))
 
     def explanation(self, features: list[str]) -> dict[str, dict[str, float]]:
@@ -436,8 +502,8 @@ class MultinomialLogistic:
         rounds = self.continued_rounds if continuation else self.initial_rounds
         merged_params = {
             "max_epochs": min(100, max(1, int(rounds))),
-            "patience": int(self.params.get("patience", 10)),
-            "min_delta": float(self.params.get("min_delta", 1e-4)),
+            "patience": int(self.params.get("patience", 100)),
+            "min_delta": float(self.params.get("min_delta", 0.0)),
             "learning_rate": float(self.params.get("learning_rate", 0.01)),
             "l2_regularization": float(
                 self.params.get("l2", self.params.get("l2_regularization", 0.001))
@@ -498,13 +564,15 @@ class MultinomialLogistic:
 
 def make_zia_model(
     name: str,
-    classes: int,
+    classes: int | list[str],
     config: IterativeTrainingConfig | dict[str, Any] | None = None,
+    dataset: str | None = None,
 ):
+    num_classes = len(classes) if isinstance(classes, list) else int(classes)
     if name == "xgboost":
-        return FraudOrReturnBooster(config=config)
+        return FraudOrReturnBooster(config=config, dataset=dataset, classes=num_classes)
     if name == "multinomial_logistic":
-        return MultinomialLogistic(classes, config=config)
+        return MultinomialLogistic(num_classes, config=config)
     raise ValueError(f"unknown Zia model: {name}")
 
 
@@ -522,7 +590,9 @@ class ZiaPredictor:
         if hashlib.sha256(payload).hexdigest() != metadata["state_sha256"]:
             raise ValueError("Zia model checkpoint checksum mismatch")
         self.features = metadata["features"]
-        self.model = make_zia_model(metadata["model"], len(metadata["classes"]))
+        self.model = make_zia_model(
+            metadata["model"], len(metadata["classes"]), dataset=metadata.get("dataset")
+        )
         self.model.load(payload)
 
     def predict(self, data, params=None):

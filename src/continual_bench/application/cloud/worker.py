@@ -31,9 +31,9 @@ from .contracts import RunUnit, SnapshotRef
 from .records import ROWS_FILE, ensure_rows, matrix_rows, zia_rows
 from .snapshots import SnapshotNotReady, materialize, verify_snapshot
 
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
 
 EXIT_OK, EXIT_FAILED, EXIT_CONTRACT, EXIT_SNAPSHOT = 0, 1, 2, 3
 SKIP_SUFFIXES = (".lock",)
@@ -301,9 +301,9 @@ def run_unit(
     emit=None,
     clock=time.time,
 ) -> int:
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "2"
+    os.environ["OPENBLAS_NUM_THREADS"] = "2"
+    os.environ["MKL_NUM_THREADS"] = "2"
     env = os.environ if env is None else env
     workdir = Path(workdir)
     key = split_uri(unit_ref)[1] if "://" in unit_ref else unit_ref
@@ -524,12 +524,20 @@ def run_unit(
             },
         )
         if emit:
+            holdout_m = final.get("holdout", {})
+            stream_m = final.get("metrics", {})
             emit(
                 {
                     "RunSucceeded": 1,
                     "EvaluationSeconds": evaluation_seconds,
                     "PublishedBytes": final["published"]["bytes"],
-                    "HoldoutAccuracy": final.get("holdout", {}).get("accuracy"),
+                    "HoldoutAccuracy": holdout_m.get("accuracy"),
+                    "HoldoutBalancedAccuracy": holdout_m.get("balanced_accuracy"),
+                    "HoldoutPRAUC": holdout_m.get("pr_auc") or holdout_m.get("macro_pr_auc"),
+                    "HoldoutMacroF1": holdout_m.get("f1_macro"),
+                    "StreamBalancedAccuracy": stream_m.get("balanced_accuracy"),
+                    "StreamPRAUC": stream_m.get("pr_auc") or stream_m.get("macro_pr_auc"),
+                    "StreamMacroF1": stream_m.get("f1_macro"),
                 },
                 {
                     "Dataset": unit.labels.get("dataset", "matrix"),
@@ -539,7 +547,27 @@ def run_unit(
                 context,
                 units={"EvaluationSeconds": "Seconds", "PublishedBytes": "Bytes"},
             )
-        log.info("run published", extra={"fields": {"state": state, "final_uri": store.uri(final_key)}})
+        holdout_m = final.get("holdout", {})
+        stream_m = final.get("metrics", {})
+        log.info(
+            "run published",
+            extra={
+                "fields": {
+                    "state": state,
+                    "final_uri": store.uri(final_key),
+                    "dataset": unit.labels.get("dataset"),
+                    "policy": unit.labels.get("policy"),
+                    "scope": unit.labels.get("scope"),
+                    "holdout_accuracy": holdout_m.get("accuracy"),
+                    "holdout_balanced_accuracy": holdout_m.get("balanced_accuracy"),
+                    "holdout_pr_auc": holdout_m.get("pr_auc") or holdout_m.get("macro_pr_auc"),
+                    "holdout_macro_f1": holdout_m.get("f1_macro"),
+                    "stream_balanced_accuracy": stream_m.get("balanced_accuracy"),
+                    "stream_pr_auc": stream_m.get("pr_auc") or stream_m.get("macro_pr_auc"),
+                    "stream_macro_f1": stream_m.get("f1_macro"),
+                }
+            },
+        )
         return EXIT_OK
     except Exception as error:
         code = (

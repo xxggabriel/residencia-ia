@@ -290,13 +290,48 @@ class SageMakerMlflowTracker:
         return self._tracking_uri
 
     @property
+    def short_sha(self) -> str:
+        if getattr(self, "_cached_short_sha", None) is not None:
+            return self._cached_short_sha
+        sha = (self.git_sha or os.environ.get("BENCH_GIT_REVISION") or "").strip()
+        if sha and sha.lower() != "uncommitted":
+            cleaned = re.sub(r"[^0-9a-zA-Z]", "", sha)
+            if cleaned:
+                self._cached_short_sha = cleaned[:7]
+                return self._cached_short_sha
+        try:
+            import subprocess
+
+            out = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=2.0,
+            ).strip()
+            if out:
+                cleaned = re.sub(r"[^0-9a-zA-Z]", "", out)[:7]
+                if cleaned:
+                    self._cached_short_sha = cleaned
+                    if self.git_sha == "uncommitted":
+                        self.git_sha = cleaned
+                    return cleaned
+        except Exception:
+            pass
+        self._cached_short_sha = "uncommitted"
+        return "uncommitted"
+
+    @property
     def experiment_name(self) -> str:
-        return f"{self.project}-zia-experiments"
+        short = self.short_sha
+        prefix = f"{short}-" if short else ""
+        raw = f"{prefix}{self.project}-zia-experiments" if self.project else f"{prefix}zia-experiments"
+        return sanitize_mlflow_name(raw)
 
     @property
     def run_name(self) -> str:
         short_id = self.run_id[:8] if self.run_id else "run"
-        return f"{self.dataset}-{self.policy}-{self.scope}-{short_id}"
+        short = self.short_sha
+        return f"{self.dataset}-{self.policy}-{self.scope}-{short}-{short_id}"
 
     @property
     def mlflow_tags(self) -> list[dict[str, str]]:

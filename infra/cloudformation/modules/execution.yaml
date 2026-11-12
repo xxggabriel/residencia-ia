@@ -51,7 +51,7 @@ Parameters:
     AllowedValues: [FARGATE, FARGATE_SPOT]
   BenchmarkVcpus:
     Type: String
-    Default: "1"
+    Default: "2"
     AllowedValues: ["0.25", "0.5", "1", "2", "4", "8", "16"]
   BenchmarkMemoryMiB:
     Type: Number
@@ -600,7 +600,10 @@ Resources:
           - {Name: BENCH_INFERENCE_IMAGE, Value: !Ref MlImage}
           - {Name: MLFLOW_TRACKING_URI, Value: !If [ModelRegistry, !GetAtt MlflowApp.Arn, ""]}
           - {Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region}
-          - {Name: OMP_NUM_THREADS, Value: "1"}
+          - {Name: BENCH_BENCHMARK_VCPUS, Value: !Ref BenchmarkVcpus}
+          - {Name: OMP_NUM_THREADS, Value: "2"}
+          - {Name: OPENBLAS_NUM_THREADS, Value: "2"}
+          - {Name: MKL_NUM_THREADS, Value: "2"}
 
   # ---------------------------------------------------------------- SageMaker MLflow App (serverless, $0/hr fixed cost)
   MlflowAppRole:

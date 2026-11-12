@@ -11,8 +11,8 @@ class IterativeTrainingConfig(Strict):
     """Unified hyperparameter contract across Zia iterative learners."""
 
     max_epochs: int = Field(default=100, ge=1, le=100)
-    patience: int = Field(default=10, ge=1, le=100)
-    min_delta: float = Field(default=1e-4, ge=0.0, allow_inf_nan=False)
+    patience: int = Field(default=100, ge=1, le=100)
+    min_delta: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     eval_metric: str = Field(default="validation:log_loss", min_length=1)
     learning_rate: float = Field(default=0.01, gt=0.0, le=10.0, allow_inf_nan=False)
     l2_regularization: float = Field(default=0.001, ge=0.0, allow_inf_nan=False)
@@ -34,12 +34,12 @@ class IterativeTrainingConfig(Strict):
             "max_bin": 128,
             "eta": self.learning_rate,
             "reg_lambda": self.l2_regularization,
-            "nthread": 1,
+            "nthread": 2,
             "seed": self.seed,
         }
         if extra:
             base.update(extra)
-            base["nthread"] = 1
+            base["nthread"] = int(extra.get("nthread", 2))
         return base
 
     def to_logistic_params(self, extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -106,8 +106,8 @@ class IterativeTrainingConfig(Strict):
             mapped["restore_best_weights"] = (
                 val.strip().lower() in ("true", "1", "yes") if isinstance(val, str) else bool(val)
             )
-        if "max_epochs" in mapped and "patience" not in mapped and mapped["max_epochs"] < 10:
-            mapped["patience"] = min(10, mapped["max_epochs"])
+        if "max_epochs" in mapped and "patience" not in mapped and mapped["max_epochs"] < 100:
+            mapped["patience"] = min(100, mapped["max_epochs"])
         return cls(**mapped)
 
 

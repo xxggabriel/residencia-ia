@@ -113,9 +113,9 @@ def run_unit(args):
     from continual_bench.application.cloud.worker import sagemaker_registrar
     from continual_bench.infrastructure.aws.emf import emit
 
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "2"
+    os.environ["OPENBLAS_NUM_THREADS"] = "2"
+    os.environ["MKL_NUM_THREADS"] = "2"
     store = _store(args)
     registry = None
     tracker = None
@@ -221,9 +221,9 @@ def local_smoke(args):
                 **os.environ,
                 "AWS_BATCH_JOB_ID": f"local-{index}",
                 "AWS_BATCH_JOB_ATTEMPT": "1",
-                "OMP_NUM_THREADS": "1",
-                "OPENBLAS_NUM_THREADS": "1",
-                "MKL_NUM_THREADS": "1",
+                "OMP_NUM_THREADS": "2",
+                "OPENBLAS_NUM_THREADS": "2",
+                "MKL_NUM_THREADS": "2",
                 "BENCH_IMAGE_DIGEST": release.images["runtime"].digest,
             }
             running[index] = subprocess.Popen(

@@ -60,11 +60,16 @@ def test_job_definitions_match_the_reference_campaign():
     resources = template("modules/execution.yaml")["Resources"]
     root = template("root.yaml")["Parameters"]
     params = template("modules/execution.yaml")["Parameters"]
-    assert (params["BenchmarkVcpus"]["Default"], params["BenchmarkMemoryMiB"]["Default"]) == ("1", 2048)
-    assert (root["BenchmarkVcpus"]["Default"], root["BenchmarkMemoryMiB"]["Default"]) == ("1", 2048)
+    assert (params["BenchmarkVcpus"]["Default"], params["BenchmarkMemoryMiB"]["Default"]) == ("2", 2048)
+    assert (root["BenchmarkVcpus"]["Default"], root["BenchmarkMemoryMiB"]["Default"]) == ("2", 2048)
     benchmark = resources["BenchmarkJobDefinition"]["Properties"]["ContainerProperties"]
     assert benchmark["Command"][:4] == ["continual-bench", "aws", "run-unit", "--unit-uri"]
     assert benchmark["User"] == "1000" and benchmark["NetworkConfiguration"]["AssignPublicIp"] == "DISABLED"
+    benchmark_env = {item["Name"]: item["Value"] for item in benchmark["Environment"]}
+    assert benchmark_env["OMP_NUM_THREADS"] == "2"
+    assert benchmark_env["OPENBLAS_NUM_THREADS"] == "2"
+    assert benchmark_env["MKL_NUM_THREADS"] == "2"
+    assert benchmark_env["BENCH_BENCHMARK_VCPUS"] == {"Ref": "BenchmarkVcpus"}
     prepare = resources["PrepareJobDefinition"]["Properties"]["ContainerProperties"]
     assert prepare["ResourceRequirements"] != benchmark["ResourceRequirements"]
     queue = resources["JobQueue"]["Properties"]
@@ -295,6 +300,7 @@ def test_bucket_policy_admits_writers_outside_the_vpc():
 def test_pipeline_triggers_on_push_to_main_only():
     pipeline = template("cicd.yaml")["Resources"]["Pipeline"]["Properties"]
     assert pipeline["PipelineType"] == "V2"
+    assert pipeline["ExecutionMode"] == "SUPERSEDED"
     (trigger,) = pipeline["Triggers"]
     assert trigger["GitConfiguration"]["Push"] == [{"Branches": {"Includes": [{"Ref": "BranchName"}]}}]
     assert "PullRequest" not in trigger["GitConfiguration"]
@@ -669,4 +675,170 @@ def test_timeouts_are_standardized_to_14400_seconds():
 
     dataset_asl = json.loads((ROOT / "infra" / "statemachines" / "dataset.asl.json").read_text())
     assert dataset_asl["States"]["Prepare"]["TimeoutSeconds"] == 14400
+
+
+def test_deploy_change_set_skips_when_empty_changeset(tmp_path):
+    mock_aws = tmp_path / "aws"
+    log_file = tmp_path / "aws_calls.log"
+    mock_aws.write_text(f"""#!/usr/bin/env python3
+import sys
+
+args = sys.argv[1:]
+with open({repr(str(log_file))}, "a") as f:
+    f.write(" ".join(args) + "\\n")
+
+if "describe-stacks" in args:
+    print("UPDATE_COMPLETE")
+    sys.exit(0)
+if "create-change-set" in args:
+    sys.exit(0)
+if "wait" in args and "change-set-create-complete" in args:
+    sys.exit(255)
+if "describe-change-set" in args and "StatusReason" in args:
+    print("The submitted information didn't contain changes. "
+          "Submit different information to create a change set.")
+    sys.exit(0)
+if "delete-change-set" in args:
+    sys.exit(0)
+sys.exit(0)
+""")
+    mock_aws.chmod(0o755)
+
+    template_file = tmp_path / "root.yaml"
+    template_file.write_text("AWSTemplateFormatVersion: '2010-09-09'\\nResources: {}\\n")
+    params_file = tmp_path / "params.json"
+    params_file.write_text("[]")
+
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    proc = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "aws" / "deploy_change_set.sh"),
+            "my-stack",
+            str(template_file),
+            str(params_file),
+            "arn:aws:iam::123456789012:role/exec",
+            "a" * 40,
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 0
+    assert "no changes for" in proc.stdout
+    calls = log_file.read_text()
+    assert "delete-change-set" in calls
+    assert "execute-change-set" not in calls
+
+
+def test_deploy_change_set_executes_nested_stack_changes(tmp_path):
+    mock_aws = tmp_path / "aws"
+    log_file = tmp_path / "aws_calls.log"
+    mock_aws.write_text(f"""#!/usr/bin/env python3
+import sys
+
+args = sys.argv[1:]
+with open({repr(str(log_file))}, "a") as f:
+    f.write(" ".join(args) + "\\n")
+
+if "describe-stacks" in args:
+    print("UPDATE_COMPLETE")
+    sys.exit(0)
+if "create-change-set" in args:
+    sys.exit(0)
+if "wait" in args and "change-set-create-complete" in args:
+    sys.exit(0)
+if "describe-change-set" in args and "length(Changes)" in " ".join(args):
+    print("1")
+    sys.exit(0)
+if "describe-change-set" in args and "Changes[]." in " ".join(args):
+    print("----------------------\\n| DescribeChangeSet |\\n----------------------")
+    sys.exit(0)
+if "execute-change-set" in args:
+    sys.exit(0)
+if "wait" in args and "stack-update-complete" in args:
+    sys.exit(0)
+sys.exit(0)
+""")
+    mock_aws.chmod(0o755)
+
+    template_file = tmp_path / "root.yaml"
+    template_file.write_text("AWSTemplateFormatVersion: '2010-09-09'\\nResources: {}\\n")
+    params_file = tmp_path / "params.json"
+    params_file.write_text("[]")
+
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    proc = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "aws" / "deploy_change_set.sh"),
+            "my-stack",
+            str(template_file),
+            str(params_file),
+            "arn:aws:iam::123456789012:role/exec",
+            "a" * 40,
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 0
+    assert "deployed" in proc.stdout
+    calls = log_file.read_text()
+    assert "execute-change-set" in calls
+    assert "wait stack-update-complete" in calls
+
+
+def test_deploy_change_set_skips_when_num_changes_zero(tmp_path):
+    mock_aws = tmp_path / "aws"
+    log_file = tmp_path / "aws_calls.log"
+    mock_aws.write_text(f"""#!/usr/bin/env python3
+import sys
+
+args = sys.argv[1:]
+with open({repr(str(log_file))}, "a") as f:
+    f.write(" ".join(args) + "\\n")
+
+if "describe-stacks" in args:
+    print("UPDATE_COMPLETE")
+    sys.exit(0)
+if "create-change-set" in args:
+    sys.exit(0)
+if "wait" in args and "change-set-create-complete" in args:
+    sys.exit(0)
+if "describe-change-set" in args and "length(Changes)" in " ".join(args):
+    print("0")
+    sys.exit(0)
+if "delete-change-set" in args:
+    sys.exit(0)
+sys.exit(0)
+""")
+    mock_aws.chmod(0o755)
+
+    template_file = tmp_path / "root.yaml"
+    template_file.write_text("AWSTemplateFormatVersion: '2010-09-09'\\nResources: {}\\n")
+    params_file = tmp_path / "params.json"
+    params_file.write_text("[]")
+
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    proc = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "aws" / "deploy_change_set.sh"),
+            "my-stack",
+            str(template_file),
+            str(params_file),
+            "arn:aws:iam::123456789012:role/exec",
+            "a" * 40,
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 0
+    assert "skipping execution" in proc.stdout
+    calls = log_file.read_text()
+    assert "delete-change-set" in calls
+    assert "execute-change-set" not in calls
+
 

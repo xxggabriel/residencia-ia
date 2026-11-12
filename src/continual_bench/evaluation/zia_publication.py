@@ -67,7 +67,7 @@ def replay_predictions(directory, report, root):
     if local_manifest != manifest or sha256_file(path) != manifest["sha256"]:
         raise ValueError("cannot replay predictions on a different prepared dataset")
     classes = manifest["source"]["classes"]
-    model = make_zia_model(report["model"], len(classes))
+    model = make_zia_model(report["model"], len(classes), dataset=report.get("dataset"))
     versions = iter(report["model_versions"])
     active = next(versions)
     pending = next(versions, None)

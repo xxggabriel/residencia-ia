@@ -67,8 +67,8 @@ class SpyTracker:
 def test_iterative_config_defaults_and_mappings():
     config = IterativeTrainingConfig()
     assert config.max_epochs == 100
-    assert config.patience == 10
-    assert config.min_delta == pytest.approx(1e-4)
+    assert config.patience == 100
+    assert config.min_delta == pytest.approx(0.0)
     assert config.eval_metric == "validation:log_loss"
     assert config.learning_rate == pytest.approx(0.01)
     assert config.l2_regularization == pytest.approx(0.001)
@@ -82,7 +82,7 @@ def test_iterative_config_defaults_and_mappings():
     assert xgb_params["eta"] == 0.01
     assert xgb_params["reg_lambda"] == 0.001
     assert xgb_params["seed"] == 42
-    assert xgb_params["nthread"] == 1
+    assert xgb_params["nthread"] == 2
     log_params = config.to_logistic_params()
     assert log_params["learning_rate"] == 0.01
     assert log_params["l2"] == 0.001
