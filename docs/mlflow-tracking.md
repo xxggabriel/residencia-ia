@@ -88,3 +88,55 @@ artefatos de mesmo caminho são sobrescritos com o mesmo conteúdo. A marca
 O avaliador typed gera os mesmos artefatos e métricas de sistema localmente, mas ainda não tem um
 publicador MLflow. A matriz (`continual-bench matrix`) executa sem serviços: os artefatos ficam em
 cada diretório de caso.
+
+## Dashboards detalhados com `mlflow.log_figure()`
+
+Além dos SVGs acima, cada run publicado grava dashboards em matplotlib (PNG) com
+`mlflow.log_figure()`, em `plots/<grupo>/` — o visualizador de artefatos do MLflow os exibe direto.
+O código está em `infrastructure/mlflow_figures.py`; precisa do extra `plots` (já incluso em
+`services` e `aws-mlflow`). Sem matplotlib, os SVGs continuam sendo publicados e nada falha.
+
+| Artefato | O que mostra |
+|---|---|
+| `performance/dashboard.png` | acurácia, F1, precisão/recall/especificidade e MCC/kappa por janela, com média móvel e linhas de alarme, mudança de conceito e adaptação |
+| `performance/confusion_matrix.png`, `confusion_timeline.png` | matriz agregada (contagens e normalizada por classe real) e composição TP/TN/FP/FN por janela |
+| `performance/error_tradeoff.png` | trade-off FPR × FNR por janela, colorido pelo avanço do fluxo |
+| `probabilistic/dashboard.png` | Brier, log loss, ECE/MCE e ROC AUC/AP |
+| `drift/timeline.png`, `recovery_delay.png` | desempenho com faixa de eventos; atraso de recuperação por mudança |
+| `adaptation/updates.png` | treino acumulado × orçamento e portão de promoção (candidato × incumbente) |
+| `continual/accuracy_matrix.png`, `cl_metrics.png` | matriz de acurácia anotada e métricas de aprendizado contínuo |
+| `costs/breakdown.png` | componentes do custo e sensibilidade a alpha |
+| `summary/final_metrics.png` | métricas finais, prequential × holdout |
+| `performance/epochs.png` | métricas e tempo por época (execuções de épocas) |
+| `system/resources.png` | CPU, memória, rede, disco e threads |
+
+Cada gráfico só é gerado quando o relatório tem os dados correspondentes. As figuras são
+registradas em `publish_run_artifacts` (todos os fluxos locais) e no publicador SageMaker abaixo.
+
+## SageMaker MLflow com a biblioteca `sagemaker-mlflow`
+
+Nas execuções AWS, com `MLFLOW_TRACKING_URI` apontando para o ARN do MLflow App / Tracking Server,
+`SageMakerMlflowTracker.publish_run_report` usa as bibliotecas `mlflow` e `sagemaker-mlflow` quando
+instaladas (plugin `arn`, que assina as requisições com SigV4):
+
+- **Tracking:** experimento, run retomável por `zia_run_key`, params, tags, métricas por janela/holdout/sistema;
+- **Plots:** os dashboards acima, via `mlflow.log_figure()`;
+- **Datasets:** `mlflow.log_input` com digest sha256 da fonte, então cada revisão é um input distinto;
+- **Modelos:** modelo final como `pyfunc` (`model_pyfunc/`) e uma versão no Model Registry por checkpoint,
+  com aliases `initial`, `step-<seq>`, `final` e `current` (o MLflow reserva `latest`), mais o modelo
+  de família que compara políticas lado a lado;
+- **Artefatos:** diretório do run espelhado na raiz do run.
+
+A imagem AWS padrão **não** instala MLflow (o `selftest` e `test_aws_lock_excludes_service_stack`
+garantem isso). A biblioteca é opt-in:
+
+```bash
+pip install ".[aws-mlflow]"   # mlflow-skinny, sagemaker-mlflow, matplotlib
+```
+
+Sem o extra, ou se o publicador falhar, o tracker segue pelo cliente REST/SigV4 de antes (com os PNGs
+enviados junto aos artefatos) e registra o motivo em `api_errors`. Republicar o mesmo `run_id` retoma o
+run e não duplica versões do registry.
+
+> Validado com o file store local do MLflow no lugar do endpoint SageMaker; a chamada real ao
+> serviço (ARN, SigV4, registry gerenciado) não foi exercitada neste ambiente.

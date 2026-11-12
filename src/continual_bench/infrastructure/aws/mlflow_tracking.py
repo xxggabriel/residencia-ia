@@ -232,6 +232,80 @@ def upload_directory_to_mlflow_artifacts(
     return {"files": files_uploaded, "bytes": bytes_uploaded, "artifact_uri": artifact_uri}
 
 
+def report_params(tracker: "SageMakerMlflowTracker", report: dict[str, Any]) -> dict[str, str]:
+    """Sanitized run parameters shared by the REST and the `sagemaker-mlflow` publishers."""
+    contract = report.get("contract") or {}
+    inp = contract.get("input") or {}
+    source = inp.get("source") or {}
+    env = contract.get("environment") or {}
+    param_dict = {
+        "dataset": report.get("dataset", tracker.dataset),
+        "scope": report.get("scope", tracker.scope),
+        "policy": report.get("policy", tracker.policy),
+        "model": report.get("model", tracker.model_name),
+        "protocol": report.get("protocol", ""),
+        "dataset_source": f"ziadatalabs/{source.get('repo', '')}" if source.get("repo") else "",
+        "dataset_revision": source.get("revision", ""),
+        "dataset_sha256": inp.get("sha256", ""),
+        "samples": inp.get("rows", ""),
+        "holdout_start": contract.get("holdout_start", ""),
+        "block_rows": contract.get("block_rows", ""),
+        "code_sha256": env.get("code_sha256", ""),
+        "git_revision": env.get("git_revision", tracker.git_sha),
+    }
+    for mp_key, mp_val in (report.get("model_params") or {}).items():
+        param_dict[f"model_{mp_key}"] = mp_val
+    return {
+        sanitize_mlflow_name(k): str(v)[:500] for k, v in param_dict.items() if v is not None and v != ""
+    }
+
+
+def report_metric_items(report: dict[str, Any], now_ms: int) -> list[dict[str, Any]]:
+    """Finite metric points (key, value, timestamp, step) shared by both publishers."""
+    metric_items: list[dict[str, Any]] = []
+
+    def _add_metric(key: str, val: Any, step: int = 0, ts: int = now_ms) -> None:
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            return
+        fval = float(val)
+        if not math.isfinite(fval):
+            return
+        metric_items.append(
+            {"key": sanitize_mlflow_name(key), "value": fval, "timestamp": int(ts), "step": max(0, int(step))}
+        )
+
+    summary_metrics = report.get("metrics") or {}
+    holdout_metrics = report.get("holdout") or {}
+    for k, v in summary_metrics.items():
+        _add_metric(f"summary/{k}", v, 0)
+    for k, v in holdout_metrics.items():
+        _add_metric(f"holdout/{k}", v, 0)
+    for window in report.get("windows") or []:
+        w_scope = window.get("scope", "prequential")
+        end_seq = int(window.get("end_seq", 0))
+        for k, v in window.items():
+            if k not in {"scope", "end_seq", "start_time_ms", "end_time_ms"}:
+                _add_metric(f"{w_scope}/windows/{k}", v, end_seq)
+    for group in ("class_metrics", "holdout_class_metrics"):
+        for label, row in (report.get(group) or {}).items():
+            if isinstance(row, dict):
+                for k, v in row.items():
+                    _add_metric(f"{group}/{label}/{k}", v, 0)
+    for version in report.get("model_versions") or []:
+        v_step = int(version.get("end_seq", 0))
+        for k in ("train_samples", "train_seconds", "iterations", "bytes"):
+            if k in version:
+                _add_metric(f"training/{k}", version[k], v_step)
+    for idx, pair in enumerate(report.get("cost_sensitivity") or []):
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            _add_metric("cost_sensitivity/total_cost", pair[1], idx)
+    for step_idx, sample in enumerate((report.get("system_metrics") or {}).get("samples") or []):
+        sample_ts = int(sample.get("timestamp_ms", now_ms))
+        for k, v in (sample.get("values") or {}).items():
+            _add_metric(f"system/{k}", v, step_idx, sample_ts)
+    return metric_items
+
+
 class SageMakerMlflowTracker:
     """Fail-safe SigV4 client for logging parameters, metrics, and artifacts to SageMaker MLflow."""
 
@@ -795,7 +869,18 @@ class SageMakerMlflowTracker:
         outputs_uri: str | None = None,
         model_package_arn: str | None = None,
     ) -> dict[str, Any]:
-        """Publish full run parameters, window/holdout/system metrics, and S3 artifacts to MLflow."""
+        """Publish full run parameters, window/holdout/system metrics, and S3 artifacts to MLflow.
+
+        Uses the official `mlflow` + `sagemaker-mlflow` libraries when installed (opt-in
+        `aws-mlflow` extra) and falls back to the REST/SigV4 client below otherwise or on failure.
+        """
+        library = self._publish_with_library(
+            report, output_dir=output_dir, outputs_uri=outputs_uri, model_package_arn=model_package_arn
+        )
+        if library is not None:
+            return library
+        if output_dir is not None:  # PNG dashboards ride along with the REST artifact upload
+            self._save_figures(report, output_dir)
         run_id = self.ensure_run()
         if not run_id:
             return {"published": False, "errors": list(self.api_errors)}
@@ -804,30 +889,10 @@ class SageMakerMlflowTracker:
         contract = report.get("contract") or {}
         inp = contract.get("input") or {}
         source = inp.get("source") or {}
-        env = contract.get("environment") or {}
 
         # 1. Parameters
-        param_dict = {
-            "dataset": report.get("dataset", self.dataset),
-            "scope": report.get("scope", self.scope),
-            "policy": report.get("policy", self.policy),
-            "model": report.get("model", self.model_name),
-            "protocol": report.get("protocol", ""),
-            "dataset_source": f"ziadatalabs/{source.get('repo', '')}" if source.get("repo") else "",
-            "dataset_revision": source.get("revision", ""),
-            "dataset_sha256": inp.get("sha256", ""),
-            "samples": inp.get("rows", ""),
-            "holdout_start": contract.get("holdout_start", ""),
-            "block_rows": contract.get("block_rows", ""),
-            "code_sha256": env.get("code_sha256", ""),
-            "git_revision": env.get("git_revision", self.git_sha),
-        }
-        for mp_key, mp_val in (report.get("model_params") or {}).items():
-            param_dict[f"model_{mp_key}"] = mp_val
         params_payload = [
-            {"key": sanitize_mlflow_name(k), "value": str(v)[:500]}
-            for k, v in param_dict.items()
-            if v is not None and v != ""
+            {"key": key, "value": value} for key, value in report_params(self, report).items()
         ]
 
         # 2. Tags and rich Markdown note
@@ -904,50 +969,7 @@ class SageMakerMlflowTracker:
                 self._record_error("log_inputs", err)
 
         # 4. Collect all metric points (summary, holdout, windows, class_metrics, training versions, system)
-        metric_items: list[dict[str, Any]] = []
-
-        def _add_metric(key: str, val: Any, step: int = 0, ts: int = now_ms) -> None:
-            if isinstance(val, bool) or not isinstance(val, (int, float)):
-                return
-            fval = float(val)
-            if not math.isfinite(fval):
-                return
-            metric_items.append(
-                {
-                    "key": sanitize_mlflow_name(key),
-                    "value": fval,
-                    "timestamp": int(ts),
-                    "step": max(0, int(step)),
-                }
-            )
-
-        for k, v in summary_metrics.items():
-            _add_metric(f"summary/{k}", v, 0)
-        for k, v in holdout_metrics.items():
-            _add_metric(f"holdout/{k}", v, 0)
-        for window in report.get("windows") or []:
-            w_scope = window.get("scope", "prequential")
-            end_seq = int(window.get("end_seq", 0))
-            for k, v in window.items():
-                if k not in {"scope", "end_seq", "start_time_ms", "end_time_ms"}:
-                    _add_metric(f"{w_scope}/windows/{k}", v, end_seq)
-        for group in ("class_metrics", "holdout_class_metrics"):
-            for label, row in (report.get(group) or {}).items():
-                if isinstance(row, dict):
-                    for k, v in row.items():
-                        _add_metric(f"{group}/{label}/{k}", v, 0)
-        for version in report.get("model_versions") or []:
-            v_step = int(version.get("end_seq", 0))
-            for k in ("train_samples", "train_seconds", "iterations", "bytes"):
-                if k in version:
-                    _add_metric(f"training/{k}", version[k], v_step)
-        for idx, pair in enumerate(report.get("cost_sensitivity") or []):
-            if isinstance(pair, (list, tuple)) and len(pair) == 2:
-                _add_metric("cost_sensitivity/total_cost", pair[1], idx)
-        for step_idx, sample in enumerate((report.get("system_metrics") or {}).get("samples") or []):
-            sample_ts = int(sample.get("timestamp_ms", now_ms))
-            for k, v in (sample.get("values") or {}).items():
-                _add_metric(f"system/{k}", v, step_idx, sample_ts)
+        metric_items = report_metric_items(report, now_ms)
 
         self.log_batch(metrics=metric_items)
 
@@ -978,6 +1000,40 @@ class SageMakerMlflowTracker:
             "artifacts_uploaded": uploaded,
             **model_registry_info,
         }
+
+    def _publish_with_library(self, report, *, output_dir, outputs_uri, model_package_arn):
+        """Library publisher result, or None when unavailable/failed (REST path takes over)."""
+        try:
+            from .sagemaker_mlflow import (
+                LibraryPublishError,
+                is_sagemaker_arn,
+                library_available,
+                publish_with_library,
+            )
+
+            if not (is_sagemaker_arn(self.tracking_uri) and library_available()):
+                return None
+            try:
+                return publish_with_library(
+                    self,
+                    report,
+                    output_dir=output_dir,
+                    outputs_uri=outputs_uri,
+                    model_package_arn=model_package_arn,
+                )
+            except LibraryPublishError as error:
+                self._record_error("sagemaker_mlflow_library", error)
+        except Exception as error:  # discovery itself failed: stay on the REST path
+            self._record_error("sagemaker_mlflow_library", error)
+        return None
+
+    def _save_figures(self, report, output_dir) -> None:
+        try:
+            from continual_bench.infrastructure.mlflow_figures import save_report_figures
+
+            save_report_figures(report, Path(output_dir) / "artifacts")
+        except Exception as error:
+            self._record_error("save_figures", error)
 
     def _ensure_registered_model(
         self,
