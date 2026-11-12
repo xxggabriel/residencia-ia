@@ -75,7 +75,8 @@ def replay_predictions(directory, report, root):
     blocks = batches(path, contract["block_rows"], contract["holdout_start"])
     warmup, _, _, _ = next(blocks)
     start = len(warmup)
-    with PredictionArchive(directory, classes, manifest["sha256"], "replayed_from_checkpoints") as archive:
+    with PredictionArchive(directory, classes, manifest["sha256"], "replayed_from_checkpoints",
+                           threshold=contract.get("decision_threshold")) as archive:
         for (times, features, labels, holdout), window in zip(blocks, report["windows"], strict=True):
             while pending is not None and pending["end_seq"] <= start:
                 active, pending = pending, next(versions, None)

@@ -418,6 +418,10 @@ def run_unit(
                             "accuracy",
                             "balanced_accuracy",
                             "f1_macro",
+                            "roc_auc",
+                            "pr_auc",
+                            "macro_roc_auc",
+                            "macro_pr_auc",
                             "log_loss",
                             "brier",
                             "n",
@@ -431,8 +435,18 @@ def run_unit(
                     },
                     "holdout": {
                         k: report["holdout"].get(k)
-                        for k in ("accuracy", "balanced_accuracy", "log_loss", "n")
+                        for k in (
+                            "accuracy",
+                            "balanced_accuracy",
+                            "roc_auc",
+                            "pr_auc",
+                            "macro_roc_auc",
+                            "macro_pr_auc",
+                            "log_loss",
+                            "n",
+                        )
                     },
+                    "decision_threshold": report["contract"].get("decision_threshold"),
                     "links": links,
                     "published": published,
                 }

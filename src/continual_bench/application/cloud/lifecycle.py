@@ -191,6 +191,7 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
                     "final_uri": store.uri(final_key),
                     "metrics": final.get("metrics"),
                     "holdout": final.get("holdout"),
+                    "decision_threshold": final.get("decision_threshold"),
                     "attempt": final["attempt"],
                     "model_package_arn": (final.get("model") or {}).get("model_package_arn"),
                     "analytics": analytics,

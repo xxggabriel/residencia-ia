@@ -171,19 +171,61 @@ acrescentou `ecr:BatchGetImage` e `ecr:DescribeImages` apenas em `continual-benc
 A simulação da role efetiva autorizou as duas ações nesse repositório e retornou
 `implicitDeny` para ambas em `continual-bench-runtime`.
 
-O template local define a mesma política e importa o ARN da stack persistente. O
-deploy pelo pipeline ainda precisa incorporar a alteração ao estado gerenciado
-pelo CloudFormation. O registro ponta a ponta segue pendente de uma nova execução.
+O PR #13 incorporou a mesma política ao CloudFormation, com o ARN importado da
+stack persistente.
+
+### Release do PR #13 e campanha `social-smoke-v4`
+
+O pipeline `97b20860-260e-4634-a3a3-6f77ef202285` publicou a release
+`a43d95ffe3deb864f96b17d706aac4dd5d6d2f86`. As stacks de runtime e de execução
+ficaram em `UPDATE_COMPLETE`. A verificação de drift da role
+`BenchmarkJobRole` retornou `IN_SYNC` após o deploy.
+[PR #13](https://github.com/xxggabriel/residencia-ia/pull/13) · [Release no S3](https://s3.console.aws.amazon.com/s3/object/continual-bench-data-<ACCOUNT_ID>-us-east-1?region=us-east-1&prefix=releases/a43d95ffe3deb864f96b17d706aac4dd5d6d2f86/release.json)
+
+O Docker Hub devolveu HTTP 429 em duas tentativas do Build. A terceira usou
+temporariamente o espelho oficial do ECR Public com o mesmo digest da imagem
+base. Os testes de imagem e o Build passaram, e o projeto voltou a usar
+`infra/buildspecs/build.yml`. Os digests de runtime
+`sha256:f2f1c0258f023f92d78438e057d78fba19c999ddfcab97774edc8192cb711f66`
+e de inferência
+`sha256:cfae3c9dad69f7aea2841d33e07cdcc7d846706e359cad4e77a5b41b86c79927`
+foram confirmados no ECR.
+
+O Step Functions executou o smoke de 13:12:38.233 a 13:14:20.707 (BRT) com o
+snapshot social de 10.000 linhas. Terminou com `SUCCEEDED` e **4/4** unidades
+concluídas na primeira tentativa. O Batch reportou `SUCCEEDED` nos quatro
+jobs e o ECS reportou `STOPPED` com código 0 nas quatro tasks.
+[Execução](https://us-east-1.console.aws.amazon.com/states/home?region=us-east-1#/v2/executions/details/arn:aws:states:us-east-1:<ACCOUNT_ID>:execution:continual-bench-benchmark:social-smoke-v4) · [Resumo no S3](https://s3.console.aws.amazon.com/s3/object/continual-bench-data-<ACCOUNT_ID>-us-east-1?region=us-east-1&prefix=campaigns/social-smoke-v4/summary.json)
+
+| Política | Job AWS Batch | ARN da task ECS | Início–fim (BRT) | ENI verificada |
+|---|---|---|---|---|
+| `frozen` | `70f04396-5664-4c4b-9043-42fd1dcd211b` | `arn:aws:ecs:us-east-1:<ACCOUNT_ID>:task/AWSBatch-ComputeEnvironment-V2PitMOOOjI5yHz8-be081166-2d6a-3955-9cda-f2cfbdaccd53/568dbc24ef5b4f85b44305d18423ff20` | 13:13:17.037–13:13:51.847 | `eni-026d0c72a7dd3da1c` |
+| `drift` | `e83c508e-736a-42a6-8740-7ba1d4160b64` | `arn:aws:ecs:us-east-1:<ACCOUNT_ID>:task/AWSBatch-ComputeEnvironment-V2PitMOOOjI5yHz8-be081166-2d6a-3955-9cda-f2cfbdaccd53/eeb998d6055e40ac95e3d0c8d41aead9` | 13:13:15.318–13:13:52.288 | `eni-0e1730357b7687464` |
+| `incremental` | `ab0af3aa-eb00-4280-971b-0f4340026731` | `arn:aws:ecs:us-east-1:<ACCOUNT_ID>:task/AWSBatch-ComputeEnvironment-V2PitMOOOjI5yHz8-be081166-2d6a-3955-9cda-f2cfbdaccd53/2c737565f5934b8683f9ed3f85b9a8e0` | 13:13:40.802–13:14:17.044 | `eni-0f0901132a470d4ce` |
+| `periodic` | `4aeb1f3c-ce2a-48df-b071-b9f37791c6ae` | `arn:aws:ecs:us-east-1:<ACCOUNT_ID>:task/AWSBatch-ComputeEnvironment-V2PitMOOOjI5yHz8-be081166-2d6a-3955-9cda-f2cfbdaccd53/adeb56f8f05548ed920389f5e513ed76` | 13:13:14.275–13:13:48.207 | `eni-09f59e607fec2a62c` |
+
+- Os intervalos `startedAt`–`stoppedAt` das quatro tasks tiveram uma janela
+  comum de 13:13:40.802 a 13:13:48.207 (7,405 s).
+- As quatro ENIs foram observadas sem IP público na sub-rede
+  `subnet-0a3eef86260fb57e8`, em `us-east-1a`. A tabela de rotas
+  `rtb-05ed9a446d42b1b77` aponta ao gateway S3 `vpce-0935fe0a9f6cf1d92`,
+  exigido pela política da role para leitura e escrita dos artefatos do worker.
+- Foram lidos os quatro `final.json` e verificados no S3 os quatro arquivos de
+  modelo criptografados com KMS, as quatro linhas de tentativa e os 16 objetos
+  analíticos. O resumo não registrou erros de consolidação. O carregador
+  reproduziu 256 predições por modelo com diferença máxima de 0.
+- O SageMaker retornou `Completed` e `PendingManualApproval` para a versão
+  `1` de cada grupo `continual-bench-zia-social-{frozen,drift,incremental,periodic}-smoke`.
+- O relatório `reconciliation/20261109T161420Z.json` registrou `clean: true`,
+  sem jobs ativos ou tasks em execução. A validação do full segue pendente.
 
 ### Validações pendentes na AWS
 
-- Incorporar a correção de IAM ao deploy pelo pipeline e confirmar uma execução
-  smoke com quatro unidades em `SUCCEEDED` e os manifestos finais publicados.
 - Testar cancelamento com jobs ativos, snapshot sem marcador e retry manual com sufixo.
 - Preparar o snapshot full e confirmar memória, disco, quota e orçamento antes de
   iniciar a campanha full.
-- Validar consultas Glue/Athena com resultados de uma campanha concluída, publicação
-  de modelos no Model Registry, Kinesis/Firehose/Flink, Feature Store, perfis SageMaker,
+- Validar consultas Glue/Athena com resultados de uma campanha concluída,
+  Kinesis/Firehose/Flink, Feature Store, perfis SageMaker,
   Quick Sight e `refresh-prices` na Price List API.
 
 ## Ordem de validação recomendada numa conta autorizada

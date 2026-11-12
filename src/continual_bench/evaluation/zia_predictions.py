@@ -12,6 +12,7 @@ from scipy.signal import lfilter
 
 from continual_bench.datasets.zia import sha256_file
 from continual_bench.evaluation.environment import encoded
+from continual_bench.evaluation.zia_metrics import decide
 from continual_bench.infrastructure.storage import atomic_write
 
 INDEX = "predictions-manifest.json"
@@ -19,9 +20,10 @@ BLOCKS_PER_PART = 16
 
 
 class PredictionArchive:
-    def __init__(self, directory, classes, dataset_sha256, origin, fading_factor=0.99):
+    def __init__(self, directory, classes, dataset_sha256, origin, fading_factor=0.99, threshold=0.5):
         self.directory = Path(directory)
         self.classes = classes
+        self.threshold = 0.5 if threshold is None else threshold
         self.schema = pa.schema([
             ("seq", pa.uint32()), ("event_time_ms", pa.int64()), ("label", pa.uint8()),
             ("prediction", pa.uint8()), ("holdout", pa.bool_()), ("model_end_seq", pa.uint32()),
@@ -38,6 +40,8 @@ class PredictionArchive:
         self.staging = Path(self.temp.name)
         self.manifest = {"version": "zia-predictions-v1", "origin": origin, "classes": classes,
                          "dataset_sha256": dataset_sha256, "fading_factor": fading_factor}
+        if len(classes) == 2:
+            self.manifest["decision_threshold"] = self.threshold
 
     def __enter__(self):
         return self
@@ -56,8 +60,7 @@ class PredictionArchive:
             self.writer = pq.ParquetWriter(self.path, self.schema, compression="zstd")
             self.part_rows = 0
         n = len(labels)
-        predicted = (probabilities[:, 1] >= 0.5 if len(self.classes) == 2 else probabilities.argmax(axis=1))
-        predicted = predicted.astype(np.uint8)
+        predicted = decide(probabilities, self.threshold).astype(np.uint8)
         self.writer.write_batch(pa.RecordBatch.from_arrays([
             pa.array(np.arange(start, start + n, dtype=np.uint32)), pa.array(times), pa.array(labels),
             pa.array(predicted), pa.array(np.full(n, holdout)), pa.array(np.full(n, model_end, np.uint32)),

@@ -49,7 +49,8 @@ ranking e calibração. As fórmulas individuais estão no catálogo.
 | Probabilidades e ranking | `brier`, `log_loss`, `roc_auc`, `average_precision` |
 | Calibração | `ece`, `mce` |
 
-A classe positiva é `y=1`, com decisão em `p>=0.5`. F1 sem sufixo é o F1 positivo;
+A classe positiva é `y=1`, com decisão em `p>=0.5`. Os benchmarks Zia usam o limiar de custo
+descrito em `docs/zia-benchmarks.md`. F1 sem sufixo é o F1 positivo;
 macro F1 inclui as duas classes, e o ponderado usa seus suportes. AUROC considera
 meio crédito nos empates; AP é não interpolada, por grupos de escores iguais,
 e não a área trapezoidal de precision-recall. AUROC exige ambas as classes;

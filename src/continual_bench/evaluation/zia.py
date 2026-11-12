@@ -28,7 +28,13 @@ from continual_bench.evaluation.costs import account, aws_account, profile  # no
 from continual_bench.evaluation.environment import encoded, environment, peak_rss_bytes  # noqa: E402
 from continual_bench.evaluation.system_metrics import SystemMetricsSampler  # noqa: E402
 from continual_bench.evaluation.tracking import metric_catalog  # noqa: E402
-from continual_bench.evaluation.zia_metrics import SCORE_BINS, ClassificationMetrics, ratio  # noqa: E402
+from continual_bench.evaluation.zia_metrics import (  # noqa: E402
+    SCORE_BINS,
+    ClassificationMetrics,
+    decide,
+    decision_threshold,
+    ratio,
+)
 from continual_bench.evaluation.zia_predictions import (  # noqa: E402
     PredictionArchive,
     prediction_manifest,
@@ -82,11 +88,11 @@ def batches(path, size, split):
         offset += len(y)
 
 
-def drift_alarms(detector, policy, probabilities, labels, metrics):
+def drift_alarms(detector, policy, probabilities, labels, metrics, threshold=0.5):
     if policy == "drift":
         detector.update(1 - metrics["accuracy"])
         return int(detector.drift_detected)
-    decisions = probabilities[:, 1] >= 0.5 if probabilities.shape[1] == 2 else probabilities.argmax(axis=1)
+    decisions = decide(probabilities, threshold)
     alarms = 0
     for error in (decisions != labels).tolist():
         detector.update(int(error))
@@ -124,6 +130,7 @@ def run(
     policy_settings = {}
     block_rows = BLOCK_ROWS[scope]
     costs = profile(tracking_settings["costs"])
+    threshold = decision_threshold(costs) if classes == 2 else None
     cost_policy = None
     if policy == "online":
         policy_settings = model.online_params
@@ -142,7 +149,10 @@ def run(
         cost_policy = PolicyStrategy(policy, min_samples=REPLAY_BLOCKS, min_window=1,
                                      cooldown=REPLAY_BLOCKS, params=params)
         policy_settings = {**params, "monitor_blocks": REPLAY_BLOCKS, "cooldown_blocks": REPLAY_BLOCKS}
-    online, holdout = ClassificationMetrics(classes), ClassificationMetrics(classes)
+    def scores():
+        return ClassificationMetrics(classes, threshold)
+
+    online, holdout = scores(), scores()
     windows, versions = [], []
     class_counts = np.zeros(classes, dtype=np.int64)
     train_seconds = predict_seconds = 0.0
@@ -152,6 +162,7 @@ def run(
     split = manifest["rows"] - int(manifest["rows"] * HOLDOUT_FRACTION)
     with monitoring, PredictionArchive(
         output, spec["classes"], manifest["sha256"], "native", tracking_settings["fading_factor"],
+        threshold=threshold,
     ) as predictions:
         for step, (timestamps, x, y, is_holdout) in enumerate(batches(path, block_rows, split)):
             if ((last_timestamp is not None and timestamps[0] < last_timestamp)
@@ -168,7 +179,7 @@ def run(
                 probabilities = model.predict(x)
                 elapsed = time.monotonic() - timer
                 predict_seconds += elapsed
-                window = ClassificationMetrics(classes)
+                window = scores()
                 window.add(y, probabilities)
                 predictions.add(start, timestamps, y, probabilities, is_holdout, versions[-1]["end_seq"])
                 (holdout if is_holdout else online).merge(window)
@@ -184,7 +195,7 @@ def run(
                     if policy == "periodic" or detector is not None or cost_policy is not None:
                         replay.append((start, x, y))
                     block_alarms = (
-                        drift_alarms(detector, policy, probabilities, y, metrics)
+                        drift_alarms(detector, policy, probabilities, y, metrics, threshold)
                         if detector is not None else 0
                     )
                     alarms += block_alarms
@@ -302,6 +313,8 @@ def run(
         for name in metric_catalog()[0]["definitions"]
         if summary.get(name) is None
     }
+    decision_rule = (f"binary: p>={threshold:.6g} (c_FP/(c_FP+c_FN))" if classes == 2
+                     else "multiclass: argmax, ties favor lower class ID")
     env = environment()
     if model.name == "xgboost":
         env["packages"]["xgboost"] = model.xgb.__version__
@@ -313,7 +326,7 @@ def run(
         "contract": {"input": manifest, "environment": env, "block_rows": block_rows,
                      "holdout_start": rows - final["n"], "replay_blocks": REPLAY_BLOCKS,
                      "adwin_delta": ADWIN_DELTA, "score_bins": SCORE_BINS, "policy_settings": policy_settings,
-                     "decision_rule": "binary: p>=0.5; multiclass: argmax, ties favor lower class ID"},
+                     "decision_threshold": threshold, "decision_rule": decision_rule},
         "class_counts": class_counts.tolist(),
         "metrics": summary, "holdout": final, "windows": windows,
         "prequential_confusion": online.confusion.tolist(), "holdout_confusion": holdout.confusion.tolist(),
