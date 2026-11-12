@@ -150,11 +150,7 @@ def test_roles_are_separate_and_passrole_is_scoped():
                     "Principal"
                 ]
     assert {
-        "PipelineRole",
-        "TestRole",
-        "BuildRole",
-        "DeployRole",
-        "ReleaseRole",
+        "GitHubActionsRole",
         "CloudFormationExecutionRole",
         "StatesRole",
         "TaskExecutionRole",
@@ -163,7 +159,7 @@ def test_roles_are_separate_and_passrole_is_scoped():
         "AcquisitionRole",
         "ControlRole",
     } <= set(principals)
-    deploy_pass = [s for s in statements(cicd["DeployRole"]) if s["Action"] == "iam:PassRole"]
+    deploy_pass = [s for s in statements(cicd["GitHubActionsRole"]) if s["Action"] == "iam:PassRole"]
     assert deploy_pass[0]["Resource"] == {"Fn::GetAtt": "CloudFormationExecutionRole.Arn"}
     cfn_pass = next(
         s for s in statements(cicd["CloudFormationExecutionRole"]) if s["Action"] == "iam:PassRole"
@@ -234,35 +230,20 @@ def test_bucket_policy_admits_writers_outside_the_vpc():
     assert "bcm-data-exports.amazonaws.com" in json.dumps(billing)
 
 
-def test_pipeline_triggers_on_push_to_main_only():
-    pipeline = template("cicd.yaml")["Resources"]["Pipeline"]["Properties"]
-    assert pipeline["PipelineType"] == "V2"
-    (trigger,) = pipeline["Triggers"]
-    assert trigger["GitConfiguration"]["Push"] == [{"Branches": {"Includes": [{"Ref": "BranchName"}]}}]
-    assert "PullRequest" not in trigger["GitConfiguration"]
-    assert template("cicd.yaml")["Parameters"]["BranchName"]["Default"] == "main"
-    assert not [r for r in template("cicd.yaml")["Resources"].values() if r["Type"] == "AWS::Events::Rule"]
-    stages = [s["Name"] for s in pipeline["Stages"]]
-    assert stages == ["Source", "Verify", "Build", "Deploy"]
-    text = json.dumps(pipeline)
-    assert "startExecution" not in text and "dataset" not in text.lower()
-
-
-def test_pipeline_artifact_prefix_matches_codepipeline_key_layout():
-    """CodePipeline writes artifacts under the first 20 characters of the pipeline name."""
+def test_github_actions_role_trusts_only_the_main_deploy_workflow():
     cicd = template("cicd.yaml")
-    persistent = template("persistent.yaml")
-    pipeline_name = cicd["Parameters"]["Project"]["Default"] + "-release"
-    prefix = cicd["Parameters"]["PipelineArtifactPrefix"]["Default"]
-    assert prefix == pipeline_name[:20]
-    assert persistent["Parameters"]["PipelineArtifactPrefix"]["Default"] == prefix
-    rules = persistent["Resources"]["ArtifactsBucket"]["Properties"]["LifecycleConfiguration"]["Rules"]
-    (expiry,) = [r for r in rules if r["Id"] == "pipeline-artifacts"]
-    assert expiry["Prefix"] == {"Fn::Sub": "${PipelineArtifactPrefix}/"}
-    text = json.dumps(cicd["Resources"])
-    assert "/pipeline/*" not in text
-    for name in ("PipelineRole", "TestRole", "BuildRole", "DeployRole", "ReleaseRole"):
-        assert "${Arn}/${PipelineArtifactPrefix}/*" in json.dumps(cicd["Resources"][name]), name
+    role = cicd["Resources"]["GitHubActionsRole"]["Properties"]
+    (trust,) = role["AssumeRolePolicyDocument"]["Statement"]
+    assert trust["Action"] == "sts:AssumeRoleWithWebIdentity"
+    condition = json.dumps(trust["Condition"])
+    assert "environment:${GitHubEnvironment}" in condition
+    assert "deploy.yml@refs/heads/${BranchName}" in condition
+    assert "StringLike" not in trust["Condition"]
+    assert cicd["Parameters"]["BranchName"]["Default"] == "main"
+    resources = cicd["Resources"].values()
+    assert not [r for r in resources if r["Type"].startswith(("AWS::CodePipeline", "AWS::CodeBuild"))]
+    text = json.dumps(role)
+    assert "startExecution" not in text and "batch:SubmitJob" not in text
 
 
 def _pass_role_statements(role):
@@ -319,9 +300,14 @@ def test_cfn_execution_role_can_lookup_and_clean_up_runtime_roles_without_iam_pa
     assert {resource["Fn::Sub"] for resource in fallback["Resource"]} == expected
 
 
-def test_buildspecs_never_acquire_data_or_start_campaigns():
-    for path in (ROOT / "infra" / "buildspecs").glob("*.yml"):
+def test_workflows_deploy_from_main_and_never_acquire_data_or_start_campaigns():
+    workflows = ROOT / ".github" / "workflows"
+    deploy = (workflows / "deploy.yml").read_text()
+    assert "branches: [main]" in deploy and "id-token: write" in deploy
+    assert "build_images.sh" in deploy and "deploy_change_set.sh" in deploy
+    for path in workflows.glob("*.yml"):
         text = path.read_text()
+        assert "AWS_SECRET_ACCESS_KEY" not in text, path.name
         for forbidden in ("start-execution", "start_campaign", "start_dataset", "aws acquire", "submit-job"):
             assert forbidden not in text, (path.name, forbidden)
 
