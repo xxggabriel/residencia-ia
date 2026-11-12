@@ -1,18 +1,14 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  continual-bench CI/CD: CodePipeline V2 triggered only by pushes (including merge pushes) to
-  the main branch through AWS CodeConnections. Stages: test and lint, validate templates and
-  ASL, build and publish images by digest, apply the runtime change set, write the release
-  manifest. The pipeline never downloads datasets or starts campaigns.
+  continual-bench CI/CD for GitHub Actions: an OIDC identity provider and one deploy role that
+  only workflow runs from the main branch (environment "production") can assume, plus the
+  CloudFormation execution role used to apply the runtime change set. Replaces the former
+  CodePipeline/CodeBuild pipeline. Workflows never download datasets or start campaigns.
 
 Parameters:
   Project:
     Type: String
     Default: continual-bench
-  ConnectionArn:
-    Type: String
-    Default: ""
-    Description: Existing AVAILABLE CodeConnections ARN; empty creates a PENDING connection to authorize.
   FullRepositoryId:
     Type: String
     Description: GitHub owner/repository
@@ -20,6 +16,10 @@ Parameters:
   BranchName:
     Type: String
     Default: main
+  GitHubEnvironment:
+    Type: String
+    Default: production
+    Description: GitHub environment name the deploy jobs run in (part of the OIDC subject).
   RuntimeStackName:
     Type: String
     Default: continual-bench-runtime
@@ -27,129 +27,46 @@ Parameters:
     Type: String
     Default: config/runtime-parameters.json
     Description: Optional operator overrides (activation flags, budget, email) in the artifacts bucket.
-  PipelineArtifactPrefix:
+  ExistingOidcProviderArn:
     Type: String
-    Default: continual-bench-rele
-    AllowedPattern: "^[A-Za-z0-9_.-]{1,20}$"
-    Description: >-
-      Key prefix CodePipeline uses in the artifact store: the first 20 characters of the pipeline
-      name (Project + "-release"). Must match persistent.yaml so IAM and lifecycle cover the artifacts.
-  BuildComputeType:
-    Type: String
-    Default: BUILD_GENERAL1_MEDIUM
-    AllowedValues: [BUILD_GENERAL1_SMALL, BUILD_GENERAL1_MEDIUM, BUILD_GENERAL1_LARGE]
-  LogRetentionDays:
-    Type: Number
-    Default: 14
+    Default: ""
+    Description: Existing token.actions.githubusercontent.com OIDC provider ARN; empty creates one (one per account).
 
 Conditions:
-  CreateConnection: !Equals [!Ref ConnectionArn, ""]
+  CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
 
 Resources:
-  GitHubConnection:
-    Type: AWS::CodeConnections::Connection
-    Condition: CreateConnection
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
     Properties:
-      ConnectionName: !Sub "${Project}-github"
-      ProviderType: GitHub
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
       Tags: [{Key: cb-stack, Value: !Ref Project}]
 
-  BuildLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/${Project}/codebuild"
-      RetentionInDays: !Ref LogRetentionDays
-      KmsKeyId: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
-
-  # ------------------------------------------------------------ roles, one per stage actor
-  PipelineRole:
+  GitHubActionsRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Project}-pipeline"
+      RoleName: !Sub "${Project}-gha-deploy"
       Path: !Sub "/${Project}/"
+      MaxSessionDuration: 14400
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal: {Service: codepipeline.amazonaws.com}
-            Action: sts:AssumeRole
-            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+            Principal:
+              Federated: !If [CreateOidcProvider, !Ref GitHubOidcProvider, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub "repo:${FullRepositoryId}:environment:${GitHubEnvironment}"
+                token.actions.githubusercontent.com:job_workflow_ref: !Sub "${FullRepositoryId}/.github/workflows/deploy.yml@refs/heads/${BranchName}"
       Policies:
-        - PolicyName: pipeline
+        - PolicyName: build-deploy-release
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Effect: Allow
-                Action: [codeconnections:UseConnection, codestar-connections:UseConnection]
-                Resource: !If [CreateConnection, !Ref GitHubConnection, !Ref ConnectionArn]
-              - Effect: Allow
-                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:GetBucketVersioning]
-                Resource:
-                  - {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
-                  - !Sub
-                    - "${Arn}/${PipelineArtifactPrefix}/*"
-                    - Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
-              - Effect: Allow
-                Action: [kms:Decrypt, kms:GenerateDataKey]
-                Resource: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
-              - Effect: Allow
-                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds]
-                Resource: [!GetAtt TestProject.Arn, !GetAtt BuildProject.Arn, !GetAtt DeployProject.Arn,
-                           !GetAtt ReleaseProject.Arn]
-
-  TestRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${Project}-ci-test"
-      Path: !Sub "/${Project}/"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: {Service: codebuild.amazonaws.com}
-            Action: sts:AssumeRole
-            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
-      Policies:
-        - PolicyName: test
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [logs:CreateLogStream, logs:PutLogEvents]
-                Resource: !Sub "${BuildLogGroup.Arn}:*"
-              - Effect: Allow
-                Action: [s3:GetObject, s3:PutObject]
-                Resource: !Sub
-                  - "${Arn}/${PipelineArtifactPrefix}/*"
-                  - Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
-              - Effect: Allow
-                Action: [kms:Decrypt, kms:GenerateDataKey]
-                Resource: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
-              - Sid: ServiceSideValidation
-                Effect: Allow
-                Action: [states:ValidateStateMachineDefinition, cloudformation:ValidateTemplate]
-                Resource: "*"
-
-  BuildRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${Project}-ci-build"
-      Path: !Sub "/${Project}/"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: {Service: codebuild.amazonaws.com}
-            Action: sts:AssumeRole
-            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
-      Policies:
-        - PolicyName: build-and-publish
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [logs:CreateLogStream, logs:PutLogEvents]
-                Resource: !Sub "${BuildLogGroup.Arn}:*"
               - Effect: Allow
                 Action: ecr:GetAuthorizationToken
                 Resource: "*"
@@ -163,17 +80,43 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
                 Resource:
-                  - !Sub ["${Arn}/${PipelineArtifactPrefix}/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
                   - !Sub ["${Arn}/lambda/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
                   - !Sub ["${Arn}/templates/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
                   - !Sub ["${Arn}/flink/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
                   - !Sub ["${Arn}/glue/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
               - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub ["${Arn}/${RuntimeConfigKey}", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
+              - Effect: Allow
                 Action: s3:ListBucket
                 Resource: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
               - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub ["${Arn}/releases/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-DataBucketArn"}}]
+              - Effect: Allow
                 Action: [kms:Decrypt, kms:GenerateDataKey]
                 Resource: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
+              - Sid: ServiceSideValidation
+                Effect: Allow
+                Action: [states:ValidateStateMachineDefinition, cloudformation:ValidateTemplate]
+                Resource: "*"
+              - Sid: ResolveProjectExports
+                Effect: Allow
+                Action: cloudformation:ListExports
+                Resource: "*"
+              - Effect: Allow
+                Action: [cloudformation:CreateChangeSet, cloudformation:DescribeChangeSet,
+                         cloudformation:ExecuteChangeSet, cloudformation:DeleteChangeSet,
+                         cloudformation:DescribeStacks, cloudformation:DescribeStackEvents,
+                         cloudformation:GetTemplateSummary, cloudformation:DeleteStack]
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${RuntimeStackName}/*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationExecutionRole.Arn
+                Condition: {StringEquals: {iam:PassedToService: cloudformation.amazonaws.com}}
+              - Effect: Allow
+                Action: [batch:DescribeJobDefinitions]
+                Resource: "*"
 
   CloudFormationExecutionRole:
     Type: AWS::IAM::Role
@@ -259,248 +202,9 @@ Resources:
                   - {"Fn::ImportValue": !Sub "${Project}-DataBucketArn"}
                   - {"Fn::ImportValue": !Sub "${Project}-BillingBucketArn"}
 
-  DeployRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${Project}-ci-deploy"
-      Path: !Sub "/${Project}/"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: {Service: codebuild.amazonaws.com}
-            Action: sts:AssumeRole
-            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
-      Policies:
-        - PolicyName: change-sets
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [logs:CreateLogStream, logs:PutLogEvents]
-                Resource: !Sub "${BuildLogGroup.Arn}:*"
-              - Effect: Allow
-                Action: [cloudformation:CreateChangeSet, cloudformation:DescribeChangeSet,
-                         cloudformation:ExecuteChangeSet, cloudformation:DeleteChangeSet,
-                         cloudformation:DescribeStacks, cloudformation:DescribeStackEvents,
-                         cloudformation:GetTemplateSummary, cloudformation:DeleteStack]
-                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${RuntimeStackName}/*"
-              - Effect: Allow
-                Action: iam:PassRole
-                Resource: !GetAtt CloudFormationExecutionRole.Arn
-                Condition: {StringEquals: {iam:PassedToService: cloudformation.amazonaws.com}}
-              - Effect: Allow
-                Action: [s3:GetObject, s3:PutObject]
-                Resource:
-                  - !Sub ["${Arn}/${PipelineArtifactPrefix}/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
-                  - !Sub ["${Arn}/templates/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
-                  - !Sub ["${Arn}/${RuntimeConfigKey}", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
-              - Effect: Allow
-                Action: [kms:Decrypt, kms:GenerateDataKey]
-                Resource: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
-
-  ReleaseRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${Project}-ci-release"
-      Path: !Sub "/${Project}/"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: {Service: codebuild.amazonaws.com}
-            Action: sts:AssumeRole
-            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
-      Policies:
-        - PolicyName: release-manifest
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [logs:CreateLogStream, logs:PutLogEvents]
-                Resource: !Sub "${BuildLogGroup.Arn}:*"
-              - Effect: Allow
-                Action: cloudformation:DescribeStacks
-                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${RuntimeStackName}/*"
-              - Effect: Allow
-                Action: [ecr:DescribeImages]
-                Resource:
-                  - {"Fn::ImportValue": !Sub "${Project}-RuntimeRepositoryArn"}
-                  - {"Fn::ImportValue": !Sub "${Project}-MlRepositoryArn"}
-              - Effect: Allow
-                Action: [batch:DescribeJobDefinitions]
-                Resource: "*"
-              - Effect: Allow
-                Action: [s3:GetObject, s3:PutObject]
-                Resource:
-                  - !Sub ["${Arn}/releases/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-DataBucketArn"}}]
-              - Effect: Allow
-                Action: [s3:GetObject]
-                Resource:
-                  - !Sub ["${Arn}/${PipelineArtifactPrefix}/*", {Arn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}}]
-              - Effect: Allow
-                Action: [kms:Decrypt, kms:GenerateDataKey]
-                Resource: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
-
-  # ------------------------------------------------------------ CodeBuild projects
-  TestProject:
-    Type: AWS::CodeBuild::Project
-    Properties:
-      Name: !Sub "${Project}-ci-test"
-      ServiceRole: !GetAtt TestRole.Arn
-      EncryptionKey: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
-      TimeoutInMinutes: 60
-      Artifacts: {Type: CODEPIPELINE}
-      Source: {Type: CODEPIPELINE, BuildSpec: infra/buildspecs/test.yml}
-      Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: !Ref BuildComputeType
-        Image: aws/codebuild/standard:7.0
-      Cache:
-        Type: LOCAL
-        Modes:
-          - LOCAL_CUSTOM_CACHE
-      LogsConfig: {CloudWatchLogs: {Status: ENABLED, GroupName: !Ref BuildLogGroup, StreamName: test}}
-
-  BuildProject:
-    Type: AWS::CodeBuild::Project
-    Properties:
-      Name: !Sub "${Project}-ci-build"
-      ServiceRole: !GetAtt BuildRole.Arn
-      EncryptionKey: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
-      TimeoutInMinutes: 90
-      Artifacts: {Type: CODEPIPELINE}
-      Source: {Type: CODEPIPELINE, BuildSpec: infra/buildspecs/build.yml}
-      Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: !Ref BuildComputeType
-        Image: aws/codebuild/standard:7.0
-        PrivilegedMode: true
-        EnvironmentVariables:
-          - {Name: RUNTIME_REPOSITORY, Value: {"Fn::ImportValue": !Sub "${Project}-RuntimeRepositoryUri"}}
-          - {Name: ML_REPOSITORY, Value: {"Fn::ImportValue": !Sub "${Project}-MlRepositoryUri"}}
-          - {Name: ARTIFACTS_BUCKET, Value: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucket"}}
-      Cache:
-        Type: LOCAL
-        Modes:
-          - LOCAL_DOCKER_LAYER_CACHE
-          - LOCAL_CUSTOM_CACHE
-      LogsConfig: {CloudWatchLogs: {Status: ENABLED, GroupName: !Ref BuildLogGroup, StreamName: build}}
-
-  DeployProject:
-    Type: AWS::CodeBuild::Project
-    Properties:
-      Name: !Sub "${Project}-ci-deploy"
-      ServiceRole: !GetAtt DeployRole.Arn
-      EncryptionKey: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
-      TimeoutInMinutes: 120
-      Artifacts: {Type: CODEPIPELINE}
-      Source: {Type: CODEPIPELINE, BuildSpec: infra/buildspecs/deploy.yml}
-      Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/standard:7.0
-        EnvironmentVariables:
-          - {Name: RUNTIME_STACK, Value: !Ref RuntimeStackName}
-          - {Name: CFN_EXECUTION_ROLE, Value: !GetAtt CloudFormationExecutionRole.Arn}
-          - {Name: ARTIFACTS_BUCKET, Value: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucket"}}
-          - {Name: RUNTIME_CONFIG_KEY, Value: !Ref RuntimeConfigKey}
-      LogsConfig: {CloudWatchLogs: {Status: ENABLED, GroupName: !Ref BuildLogGroup, StreamName: deploy}}
-
-  ReleaseProject:
-    Type: AWS::CodeBuild::Project
-    Properties:
-      Name: !Sub "${Project}-ci-release"
-      ServiceRole: !GetAtt ReleaseRole.Arn
-      EncryptionKey: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}
-      TimeoutInMinutes: 15
-      Artifacts: {Type: CODEPIPELINE}
-      Source: {Type: CODEPIPELINE, BuildSpec: infra/buildspecs/release.yml}
-      Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/standard:7.0
-        EnvironmentVariables:
-          - {Name: RUNTIME_STACK, Value: !Ref RuntimeStackName}
-          - {Name: DATA_BUCKET, Value: {"Fn::ImportValue": !Sub "${Project}-DataBucket"}}
-      LogsConfig: {CloudWatchLogs: {Status: ENABLED, GroupName: !Ref BuildLogGroup, StreamName: release}}
-
-  # ------------------------------------------------------------ pipeline (V2, push to main only)
-  Pipeline:
-    Type: AWS::CodePipeline::Pipeline
-    Properties:
-      Name: !Sub "${Project}-release"
-      PipelineType: V2
-      ExecutionMode: SUPERSEDED
-      RoleArn: !GetAtt PipelineRole.Arn
-      ArtifactStore:
-        Type: S3
-        Location: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucket"}
-        EncryptionKey: {Type: KMS, Id: {"Fn::ImportValue": !Sub "${Project}-DataKeyArn"}}
-      # A single detection mechanism: the connection's push trigger filtered to the branch.
-      # No EventBridge rule, webhook or polling is configured for the same repository.
-      Triggers:
-        - ProviderType: CodeStarSourceConnection
-          GitConfiguration:
-            SourceActionName: GitHub
-            Push:
-              - Branches: {Includes: [!Ref BranchName]}
-      Variables:
-        - {Name: RUNTIME_STACK, DefaultValue: !Ref RuntimeStackName}
-      Stages:
-        - Name: Source
-          Actions:
-            - Name: GitHub
-              ActionTypeId: {Category: Source, Owner: AWS, Provider: CodeStarSourceConnection, Version: "1"}
-              Namespace: SourceVariables
-              Configuration:
-                ConnectionArn: !If [CreateConnection, !Ref GitHubConnection, !Ref ConnectionArn]
-                FullRepositoryId: !Ref FullRepositoryId
-                BranchName: !Ref BranchName
-                OutputArtifactFormat: CODE_ZIP
-              OutputArtifacts: [{Name: Source}]
-        - Name: Verify
-          Actions:
-            - Name: TestLintValidate
-              ActionTypeId: {Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1"}
-              Configuration:
-                ProjectName: !Ref TestProject
-                EnvironmentVariables: '[{"name":"GIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]'
-              InputArtifacts: [{Name: Source}]
-        - Name: Build
-          Actions:
-            - Name: ImagesByDigest
-              ActionTypeId: {Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1"}
-              Namespace: BuildVariables
-              Configuration:
-                ProjectName: !Ref BuildProject
-                EnvironmentVariables: '[{"name":"GIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]'
-              InputArtifacts: [{Name: Source}]
-              OutputArtifacts: [{Name: BuildOutput}]
-        - Name: Deploy
-          Actions:
-            - Name: ApplyChangeSet
-              ActionTypeId: {Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1"}
-              Configuration:
-                ProjectName: !Ref DeployProject
-                PrimarySource: Source
-                EnvironmentVariables: '[{"name":"GIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]'
-              InputArtifacts: [{Name: Source}, {Name: BuildOutput}]
-              RunOrder: 1
-            - Name: WriteRelease
-              ActionTypeId: {Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1"}
-              Configuration:
-                ProjectName: !Ref ReleaseProject
-                PrimarySource: Source
-                EnvironmentVariables: '[{"name":"GIT_SHA","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"},{"name":"PIPELINE_EXECUTION_ID","value":"#{codepipeline.PipelineExecutionId}","type":"PLAINTEXT"}]'
-              InputArtifacts: [{Name: Source}, {Name: BuildOutput}]
-              RunOrder: 2
-
 Outputs:
-  ConnectionArn:
-    Description: Authorize this connection in the console (Developer Tools > Connections) until AVAILABLE
-    Value: !If [CreateConnection, !Ref GitHubConnection, !Ref ConnectionArn]
-  PipelineName:
-    Value: !Ref Pipeline
+  GitHubActionsRoleArn:
+    Description: Value of the AWS_ROLE_ARN repository variable
+    Value: !GetAtt GitHubActionsRole.Arn
   CloudFormationExecutionRoleArn:
     Value: !GetAtt CloudFormationExecutionRole.Arn

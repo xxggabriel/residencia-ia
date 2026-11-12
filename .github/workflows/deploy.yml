@@ -1,0 +1,143 @@
+name: Build and deploy
+
+# Push (including merges) to main: verify -> build images and push to ECR by digest ->
+# apply the runtime CloudFormation change set -> write the release manifest.
+# Never downloads datasets or starts campaigns.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false   # never interrupt a running deploy
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+  PROJECT: ${{ vars.PROJECT }}
+  RUNTIME_STACK: ${{ vars.RUNTIME_STACK }}
+  RUNTIME_CONFIG_KEY: ${{ vars.RUNTIME_CONFIG_KEY }}
+  GIT_SHA: ${{ github.sha }}
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build images and packages
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-build-${{ github.run_id }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Resolve project exports
+        run: |
+          exp() { aws cloudformation list-exports --query "Exports[?Name=='$PROJECT-$1'].Value" --output text; }
+          {
+            echo "RUNTIME_REPOSITORY=$(exp RuntimeRepositoryUri)"
+            echo "ML_REPOSITORY=$(exp MlRepositoryUri)"
+            echo "ARTIFACTS_BUCKET=$(exp ArtifactsBucket)"
+          } >> "$GITHUB_ENV"
+      - name: Service-side validation of state machines
+        run: python scripts/aws/validate_asl.py --service infra/statemachines/*.asl.json
+      - name: Build, validate and push images (ECR)
+        run: bash scripts/aws/build_images.sh "$GIT_SHA"
+      - name: Package control Lambda and module code
+        run: |
+          python scripts/aws/build_control_lambda.py "$GIT_SHA" --bucket "$ARTIFACTS_BUCKET"
+          bash scripts/aws/package_modules.sh "$GIT_SHA"
+      - name: Package templates and runtime parameters
+        run: |
+          aws cloudformation package --template-file infra/cloudformation/root.yaml \
+            --s3-bucket "$ARTIFACTS_BUCKET" --s3-prefix templates \
+            --output-template-file packaged-root.yaml
+          python scripts/aws/runtime_parameters.py build-output.json > runtime-parameters.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            packaged-root.yaml
+            build-output.json
+            runtime-parameters.json
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy:
+    name: Deploy runtime stack
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: build-output
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-deploy-${{ github.run_id }}
+      - name: Apply change set
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          export ARTIFACTS_BUCKET="$(aws cloudformation list-exports --query "Exports[?Name=='$PROJECT-ArtifactsBucket'].Value" --output text)"
+          export BUILD_OUTPUT="$PWD/build-output/build-output.json"
+          bash scripts/aws/deploy_change_set.sh "$RUNTIME_STACK" \
+            "$PWD/build-output/packaged-root.yaml" "$PWD/build-output/runtime-parameters.json" \
+            "arn:aws:iam::${ACCOUNT_ID}:role/${PROJECT}/${PROJECT}-cfn-execution" "$GIT_SHA"
+
+  release:
+    name: Write release manifest
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: build-output
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-release-${{ github.run_id }}
+      - name: Write release.json
+        run: |
+          DATA_BUCKET="$(aws cloudformation list-exports --query "Exports[?Name=='$PROJECT-DataBucket'].Value" --output text)"
+          python scripts/aws/write_release.py --stack "$RUNTIME_STACK" --bucket "$DATA_BUCKET" \
+            --git-sha "$GIT_SHA" --build-output build-output/build-output.json \
+            --pipeline-execution-id "gha-${{ github.run_id }}-${{ github.run_attempt }}"
