@@ -13,9 +13,10 @@ set -euo pipefail
 export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1
 PROJECT="${PROJECT:-continual-bench}"
 REPOSITORY="${REPOSITORY:?owner/repo of the GitHub source}"
+BRANCH="${BRANCH:-main}"
 cd "$(dirname "$0")/../.."
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-echo "account $ACCOUNT region $AWS_REGION project $PROJECT"
+echo "account $ACCOUNT region $AWS_REGION project $PROJECT branch $BRANCH"
 
 aws cloudformation deploy --stack-name "$PROJECT-persistent" --template-file infra/cloudformation/persistent.yaml \
   --parameter-overrides Project="$PROJECT" --tags cb-stack="$PROJECT" cb-component=persistent \
@@ -30,7 +31,7 @@ done
 
 aws cloudformation deploy --stack-name "$PROJECT-cicd" --template-file infra/cloudformation/cicd.yaml \
   --capabilities CAPABILITY_NAMED_IAM --tags cb-stack="$PROJECT" cb-component=cicd --no-fail-on-empty-changeset \
-  --parameter-overrides Project="$PROJECT" FullRepositoryId="$REPOSITORY" ConnectionArn="${CONNECTION_ARN:-}" \
+  --parameter-overrides Project="$PROJECT" FullRepositoryId="$REPOSITORY" BranchName="$BRANCH" ConnectionArn="${CONNECTION_ARN:-}" \
   RuntimeStackName="$PROJECT-runtime"
 CONNECTION="$(aws cloudformation describe-stacks --stack-name "$PROJECT-cicd" \
   --query "Stacks[0].Outputs[?OutputKey=='ConnectionArn'].OutputValue" --output text)"
