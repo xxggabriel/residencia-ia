@@ -53,6 +53,26 @@ e agregações macro. Métricas do catálogo que dependem de drift anotado,
 contrafactuais, medições de CI ou custos de negócio têm disponibilidade
 explícita no relatório.
 
+### Limiar de decisão
+
+Nas tarefas binárias, a classe positiva é prevista quando `p >= c_FP / (c_FP + c_FN)`,
+com `false_positive` e `false_negative` do perfil de tracking da campanha. Essa é a regra
+de Bayes para probabilidades calibradas e minimiza o custo de cenário que o relatório já
+contabiliza. O mesmo limiar vale para a matriz de confusão, as métricas derivadas dela, o
+sinal de erro dos detectores ADWIN e DDM e a coluna `prediction` do arquivo de predições.
+O perfil base usa custos 1 e 1, o que mantém `p >= 0,5`. O relatório grava o valor em
+`contract.decision_threshold`, e o `final.json` e o `summary.json` o repetem por unidade.
+
+Acurácia, acurácia balanceada, F1 e kappa dependem desse limiar. Com prevalência baixa e
+custos iguais, um modelo calibrado raramente passa de 0,5 e essas métricas empatam entre
+políticas mesmo quando os modelos diferem. Compare as políticas também por métricas que
+não dependem do limiar: `macro_roc_auc`, `pr_auc` (classe positiva) e `log_loss`. O
+`final.json`, o `summary.json` e `infra/athena/compare_policies.sql` trazem essas três.
+Na rede social, a decisão continua sendo o argmax, e `pr_auc` fica nulo.
+
+Para usar outros custos, crie um perfil em `configs/` e informe-o no campo `tracking` da
+campanha. Fixe os custos antes da execução, sem ajustá-los pelos resultados do holdout.
+
 Cada run também publica o índice de gráficos, SVGs e seus dados em `plots/`
 e `data/`, definições e métricas versionadas em `tracking/`, configuração,
 ambiente, catálogo e linhagem das versões. O modelo final é carregável em

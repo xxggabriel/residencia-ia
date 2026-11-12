@@ -19,6 +19,8 @@ reexecute o pipeline. A etapa de deploy aplica as flags no change set.
   janelas por tempo do evento, watermark com atraso tolerado, eventos atrasados numa tabela
   separada e checkpoints a cada 60 s. A semântica é especificada e testada em
   `application.cloud.streaming.WindowState`, incluindo a restauração do estado.
+  As duas saídas do Flink ficam em `archive/windows/` no bucket de artefatos com SSE-KMS.
+  Os eventos brutos do Firehose continuam no bucket de dados.
   O CloudFormation cria a aplicação parada. Os comandos são:
 
 ```bash
@@ -32,7 +34,8 @@ A campanha Zia de referência continua lendo o Parquet temporal preparado.
 ## Feature Store (`EnableFeatureStore=true`, online com `EnableOnlineStore=true`)
 
 - Feature group offline `continual-bench-zia-social-edges` (Iceberg, KMS), com as features
-  que o `prepare()` calcula apenas com datas anteriores.
+  que o `prepare()` calcula apenas com datas anteriores. No Feature Store, `event_time`
+  é enviado como texto ISO 8601 em UTC. O Parquet preserva o timestamp numérico.
 - Glue ETL `continual-bench-materialize-features` materializa o snapshot de treino
   point-in-time como Parquet versionado e imutável em
   `features/materialized/<versão>/<job run>/`. O job falha se houver feature posterior ao

@@ -54,7 +54,8 @@ class DatasetAccessError(RuntimeError):
 class RangeReader(io.RawIOBase):
     """Seekable HTTP file with immutable range cache and a cumulative byte budget."""
 
-    def __init__(self, url, cache, *, max_bytes=64 * 1024**2, opener=None):
+    def __init__(self, url, cache, *, max_bytes=64 * 1024**2, opener=None, max_requests=2048,
+                 max_blocks=None):
         super().__init__()
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
@@ -62,6 +63,7 @@ class RangeReader(io.RawIOBase):
         self.url, self.cache = url, Path(cache) / _sha(url.encode())
         self.cache.mkdir(parents=True, exist_ok=True)
         self.max_bytes, self.transferred, self.position = max_bytes, 0, 0
+        self.max_requests, self.max_blocks = max_requests, max_blocks
         self.opener = opener or urllib.request.urlopen
         self.validator = None
         self.ledger = []
@@ -88,7 +90,7 @@ class RangeReader(io.RawIOBase):
         return position
 
     def _range(self, start, count):
-        if len(self.ledger) >= 2048:
+        if len(self.ledger) >= self.max_requests:
             raise ValueError("ZIP sampling request budget exceeded")
         if count > self.max_bytes or self.transferred + count > self.max_bytes:
             raise ValueError("ZIP sampling transfer budget exceeded")
@@ -150,6 +152,8 @@ class RangeReader(io.RawIOBase):
             block_size = min(65536, self.size - start)
             if self.position + count <= start + block_size:
                 if start not in self.blocks:
+                    if self.max_blocks is not None and len(self.blocks) >= self.max_blocks:
+                        self.blocks.clear()  # bound resident memory on very large samplings
                     self.blocks[start] = self._range(start, block_size)
                 offset = self.position - start
                 payload = self.blocks[start][offset:offset + count]
@@ -168,8 +172,8 @@ class RangeReader(io.RawIOBase):
 
 
 class _Archive:
-    def __init__(self, url, cache, *, local_path=None):
-        self.remote = None if local_path else RangeReader(url, cache)
+    def __init__(self, url, cache, *, local_path=None, **reader_options):
+        self.remote = None if local_path else RangeReader(url, cache, **reader_options)
         self.zip = zipfile.ZipFile(local_path or self.remote)
         names = self.zip.namelist()
         if len(names) != len(set(names)):
@@ -355,6 +359,73 @@ def prepare_temporal_dataset(name, cache, limit=100, seed=42, *, download=False,
         manifest = json.loads(_json(manifest))
         atomic_write(receipt_path, _json({"samples": raw, "manifest": manifest}))
         return TemporalVisionSource(samples, manifest)
+    finally:
+        train.close()
+        if test is not None:
+            test.close()
+
+
+def _pixel_bytes(payload):
+    from PIL import Image
+
+    with Image.open(io.BytesIO(payload)) as original:
+        if original.width * original.height > 20_000_000:
+            raise ValueError("selected image exceeds decoded pixel budget")
+        return original.convert("RGB").resize((16, 16), Image.Resampling.BILINEAR).tobytes()
+
+
+def prepare_temporal_arrays(name, cache, limit, *, download=False):
+    """Memory-lean variant for large budgets: uint8 array (limit x 768) plus labels/tasks.
+
+    Same deterministic selection as `prepare_temporal_dataset` but no per-sample dicts, JSON
+    payloads or provenance copies; the result is cached as a compressed NPZ.
+    """
+    import numpy as np
+
+    if name not in SOURCES or type(limit) is not int or not 10 <= limit <= 10_000:
+        raise ValueError("unsupported temporal dataset or limit outside 10..10000")
+    spec = SOURCES[name]
+    root = Path(cache) / name
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f"arrays-{limit}.npz"
+    if target.exists():
+        with np.load(target, allow_pickle=False) as saved:
+            return {key: saved[key] for key in saved.files}
+    if not download:
+        raise DatasetAccessError("temporal dataset cache is absent; explicit acquisition is required")
+    options = {"max_bytes": 16 * 1024**3, "max_requests": 200_000, "max_blocks": 32}
+    train = _Archive(spec["train_url"], root / "ranges", **options)
+    test = None
+    try:
+        train_count = limit * 4 // 5
+        if name == "core50":
+            all_rows = _core_rows(train)
+            streams = {split: (train, [r for r in all_rows if r["split"] == split])
+                       for split in ("train", "test")}
+        else:
+            test = _Archive(spec["test_url"], root / "ranges", **options)
+            streams = {"train": (train, _clear_rows(train, "train", train_count)),
+                       "test": (test, _clear_rows(test, "test", limit - train_count))}
+        pixels = np.empty((limit, 768), dtype=np.uint8)
+        labels, tasks, splits = [], [], []
+        for split, count in (("train", train_count), ("test", limit - train_count)):
+            archive, rows = streams[split]
+            for index in _indices(len(rows), count):
+                row = rows[index]
+                payload = archive.member(row["path"], max_bytes=8 * 1024**2)
+                archive.members.clear()
+                pixels[len(labels)] = np.frombuffer(_pixel_bytes(payload), dtype=np.uint8)
+                labels.append(row["label"])
+                tasks.append(row["task"])
+                splits.append(split)
+        order = sorted(range(limit), key=lambda i: (tasks[i], splits[i] != "train", i))
+        result = {"x": pixels[order], "y": np.array([labels[i] for i in order]),
+                  "task": np.array([tasks[i] for i in order], dtype=np.int64),
+                  "split": np.array([splits[i] for i in order])}
+        tmp = target.with_name(target.name + ".tmp.npz")
+        np.savez_compressed(tmp, **result)
+        tmp.replace(target)
+        return result
     finally:
         train.close()
         if test is not None:

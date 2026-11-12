@@ -22,10 +22,8 @@ Parameters:
     AllowedValues: ["true", "false"]
   MlImage:
     Type: String
-    Default: ""
   EndpointModelDataUrl:
     Type: String
-    Default: ""
     Description: model.tar.gz of an approved Model Registry candidate (required when EnableEndpoint=true).
   EndpointMemoryMiB:
     Type: Number
@@ -69,9 +67,12 @@ Resources:
                   - !Sub "${DataBucketArn}/features/materialized/*"
                   - !Sub "${DataBucketArn}/campaigns/*/runs/*/model/*"
                   - !Sub "${DataBucketArn}/sagemaker/*"
+                  - !Sub "${DataBucketArn}/mlflow/*"
               - Effect: Allow
                 Action: [s3:PutObject, s3:AbortMultipartUpload]
-                Resource: !Sub "${DataBucketArn}/sagemaker/*"
+                Resource:
+                  - !Sub "${DataBucketArn}/sagemaker/*"
+                  - !Sub "${DataBucketArn}/mlflow/*"
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: !Ref DataBucketArn
@@ -91,6 +92,39 @@ Resources:
                 Action: cloudwatch:PutMetricData
                 Resource: "*"
                 Condition: {StringLike: {cloudwatch:namespace: "/aws/sagemaker/*"}}
+              - Effect: Allow
+                Action:
+                  - sagemaker:CreateExperiment
+                  - sagemaker:DescribeExperiment
+                  - sagemaker:UpdateExperiment
+                  - sagemaker:CreateTrial
+                  - sagemaker:DescribeTrial
+                  - sagemaker:UpdateTrial
+                  - sagemaker:CreateTrialComponent
+                  - sagemaker:DescribeTrialComponent
+                  - sagemaker:UpdateTrialComponent
+                  - sagemaker:AssociateTrialComponent
+                  - sagemaker:BatchPutMetrics
+                  - sagemaker:AddTags
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment/${Project}-*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial/${Project}-*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial-component/${Project}-*"
+              - Sid: TrackSageMakerMlflow
+                Effect: Allow
+                Action:
+                  - sagemaker:CallMlflowAppApi
+                  - sagemaker:DescribeMlflowApp
+                  - sagemaker:ListMlflowApps
+                  - sagemaker:CreatePresignedMlflowAppUrl
+                  - sagemaker:DescribeMlflowTrackingServer
+                  - sagemaker:ListMlflowTrackingServers
+                  - sagemaker:CreatePresignedMlflowTrackingServerUrl
+                  - sagemaker-mlflow:*
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:mlflow-app/*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:mlflow-tracking-server/*"
+                  - "*"
 
   InferenceModel:
     Type: AWS::SageMaker::Model
@@ -100,7 +134,7 @@ Resources:
       PrimaryContainer:
         Image: !Ref MlImage
         ModelDataUrl: !Ref EndpointModelDataUrl
-        Environment: {OMP_NUM_THREADS: "1"}
+        Environment: {OMP_NUM_THREADS: "1", OPENBLAS_NUM_THREADS: "1", MKL_NUM_THREADS: "1"}
       Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: inference}]
 
   InferenceEndpointConfig:

@@ -2,11 +2,13 @@
 
 import hashlib
 import json
+import re
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
 from continual_bench.config import Strict
+from continual_bench.core.policies import ZiaPolicy
 from continual_bench.datasets.zia import DATASETS, FORMAT, SCOPES
 
 CAMPAIGN_ID = r"^[a-z0-9][a-z0-9-]{0,39}$"
@@ -110,7 +112,7 @@ class ReleaseManifest(Strict):
 
 class ZiaMatrix(Strict):
     kind: Literal["zia"] = "zia"
-    policies: tuple[Literal["frozen", "drift", "incremental", "periodic"], ...] = ZIA_POLICIES
+    policies: tuple[ZiaPolicy, ...] = ZIA_POLICIES
 
     @field_validator("policies")
     @classmethod
@@ -127,17 +129,29 @@ class ExperimentMatrixRef(Strict):
     path: str = Field(pattern=r"^configs/matrices/[A-Za-z0-9_.-]+\.ya?ml$")
 
 
+class ProjectSuite(Strict):
+    kind: Literal["project_suite"] = "project_suite"
+    samples: int = Field(default=3000, ge=300, le=100_000)
+    dataset_examples: int = Field(default=100, ge=100, le=1000)
+    epochs: int = Field(default=2, ge=1, le=20)
+    label_delay: int = Field(default=3, ge=0, le=100)
+    seed: int = Field(default=42, ge=0, le=2**31 - 1)
+
+
 class CampaignRequest(Strict):
     campaign_id: str = Field(pattern=CAMPAIGN_ID)
     dataset: Literal["fraud", "social", "ecommerce"] | None = None
     scope: Literal["smoke", "full"] | None = None
     snapshot: SnapshotRef | None = None
     release: str = Field(default="latest", pattern=r"^(latest|[0-9a-f]{40})$")
-    matrix: ZiaMatrix | ExperimentMatrixRef = Field(default_factory=ZiaMatrix, discriminator="kind")
+    matrix: ZiaMatrix | ExperimentMatrixRef | ProjectSuite = Field(
+        default_factory=ZiaMatrix, discriminator="kind"
+    )
+    source_digests: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
     max_parallel: int = Field(default=4, ge=1, le=256)
     max_attempts: int = Field(default=2, ge=1, le=5)
     queue_timeout_seconds: int = Field(default=3600, ge=600, le=86_400)
-    run_timeout_seconds: int = Field(default=2 * 24 * 3600, ge=900, le=14 * 24 * 3600)
+    run_timeout_seconds: int = Field(default=14400, ge=900, le=14 * 24 * 3600)
     tracking: str = Field(default="configs/base/tracking.yaml", pattern=r"^configs/[A-Za-z0-9_./-]+\.ya?ml$")
     notify: bool = True
 
@@ -152,13 +166,20 @@ class CampaignRequest(Strict):
 
     @model_validator(mode="after")
     def consistent(self):
+        if any(
+            not re.fullmatch(r"[a-z][a-z0-9_]*", dataset) or not re.fullmatch(r"[0-9a-f]{64}", sha)
+            for dataset, sha in self.source_digests.items()
+        ):
+            raise ValueError("source_digests requires dataset names and SHA-256 hex digests")
         if self.matrix.kind == "zia":
+            if self.source_digests:
+                raise ValueError("Zia campaigns take their data from the prepared snapshot")
             if self.snapshot is None:
                 raise ValueError("Zia campaigns require a prepared snapshot")
             if (self.dataset, self.scope) != (self.snapshot.dataset, self.snapshot.scope):
                 raise ValueError("dataset/scope differ from the snapshot")
         elif self.snapshot is not None:
-            raise ValueError("experiment matrices materialize their own synthetic sources")
+            raise ValueError("matrix campaigns use source_digests for external data")
         return self
 
 

@@ -1,33 +1,54 @@
 """Batch-prequential benchmarks on the full, ordered Zia streams."""
 
 import argparse
+import gc
 import json
+import os
 import time
 from collections import deque
 from pathlib import Path
+from typing import get_args
 
-import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
-import yaml
-from river.drift import ADWIN
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
 
-from continual_bench.config import TrackingConfig
-from continual_bench.datasets.zia import DATASETS, SCOPES, load_manifest, sha256_file
-from continual_bench.evaluation.costs import account, aws_account, profile
-from continual_bench.evaluation.environment import encoded, environment, peak_rss_bytes
-from continual_bench.evaluation.system_metrics import SystemMetricsSampler
-from continual_bench.evaluation.tracking import metric_catalog
-from continual_bench.evaluation.zia_metrics import SCORE_BINS, ClassificationMetrics, ratio
-from continual_bench.evaluation.zia_predictions import PredictionArchive, prediction_manifest
-from continual_bench.infrastructure.storage import atomic_write
-from continual_bench.models.zia import FraudOrReturnBooster, MultinomialLogistic
+import numpy as np  # noqa: E402
+import pyarrow as pa  # noqa: E402
+import pyarrow.parquet as pq  # noqa: E402
+import yaml  # noqa: E402
+from river.drift import ADWIN  # noqa: E402
+from river.drift.binary import DDM  # noqa: E402
 
-POLICIES = ("frozen", "periodic", "drift", "incremental")
+from continual_bench.config import IterativeTrainingConfig, TrackingConfig  # noqa: E402
+from continual_bench.core.contracts import DecisionContext  # noqa: E402
+from continual_bench.core.policies import PolicyStrategy, ZiaPolicy  # noqa: E402
+from continual_bench.datasets.zia import DATASETS, SCOPES, load_manifest, sha256_file  # noqa: E402
+from continual_bench.evaluation.costs import account, aws_account, profile  # noqa: E402
+from continual_bench.evaluation.environment import encoded, environment, peak_rss_bytes  # noqa: E402
+from continual_bench.evaluation.system_metrics import SystemMetricsSampler  # noqa: E402
+from continual_bench.evaluation.tracking import metric_catalog  # noqa: E402
+from continual_bench.evaluation.zia_metrics import (  # noqa: E402
+    SCORE_BINS,
+    ClassificationMetrics,
+    decide,
+    decision_threshold,
+    ratio,
+)
+from continual_bench.evaluation.zia_predictions import (  # noqa: E402
+    PredictionArchive,
+    prediction_manifest,
+)
+from continual_bench.infrastructure.storage import atomic_write  # noqa: E402
+from continual_bench.models.zia import make_zia_model  # noqa: E402
+
+POLICIES = get_args(ZiaPolicy)
 BLOCK_ROWS = {"smoke": 1000, "full": 250_000}
 REPLAY_BLOCKS = 4
 HOLDOUT_FRACTION = 0.1
 ADWIN_DELTA = 0.002
+ADWIN_CLOCK = 32
+DDM_PARAMS = {"warm_start": 30, "warning_threshold": 2.0, "drift_threshold": 3.0}
 
 
 def chronological_blocks(path, size):
@@ -67,7 +88,31 @@ def batches(path, size, split):
         offset += len(y)
 
 
-def run(root, dataset, scope, policy, output, tracking_settings):
+def drift_alarms(detector, policy, probabilities, labels, metrics, threshold=0.5):
+    if policy == "drift":
+        detector.update(1 - metrics["accuracy"])
+        return int(detector.drift_detected)
+    decisions = decide(probabilities, threshold)
+    alarms = 0
+    for error in (decisions != labels).tolist():
+        detector.update(int(error))
+        alarms += int(detector.drift_detected)
+    return alarms
+
+
+def run(
+    root,
+    dataset,
+    scope,
+    policy,
+    output,
+    tracking_settings,
+    *,
+    tracker=None,
+    iterative_config=None,
+):
+    if policy not in POLICIES:
+        raise ValueError(f"unknown Zia policy: {policy}")
     started = time.monotonic()
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -76,21 +121,48 @@ def run(root, dataset, scope, policy, output, tracking_settings):
         raise ValueError("prepared dataset checksum differs from its manifest")
     spec = DATASETS[dataset]
     classes = len(spec["classes"])
-    model = MultinomialLogistic(classes) if dataset == "social" else FraudOrReturnBooster()
+    iter_config = IterativeTrainingConfig.from_params(iterative_config)
+    model = make_zia_model(spec["model"], classes, config=iter_config, dataset=dataset)
     monitoring = SystemMetricsSampler(output, interval=0.5 if scope == "smoke" else 5)
     replay = deque(maxlen=REPLAY_BLOCKS)
-    detector = ADWIN(delta=ADWIN_DELTA, clock=1) if policy == "drift" else None
-    online, holdout = ClassificationMetrics(classes), ClassificationMetrics(classes)
+    recent_errors = deque(maxlen=REPLAY_BLOCKS)
+    detector = None
+    policy_settings = {}
+    block_rows = BLOCK_ROWS[scope]
+    costs = profile(tracking_settings["costs"])
+    threshold = decision_threshold(costs) if classes == 2 else None
+    cost_policy = None
+    if policy == "online":
+        policy_settings = model.online_params
+    elif policy in ("drift", "drift_adwin"):
+        params = {"delta": ADWIN_DELTA, "clock": 1 if policy == "drift" else ADWIN_CLOCK}
+        detector = ADWIN(**params)
+        policy_settings = {"detector": "adwin", "params": params,
+                           "signal": "block_error_rate" if policy == "drift" else "binary_error_per_example"}
+    elif policy == "drift_ddm":
+        detector = DDM(**DDM_PARAMS)
+        policy_settings = {"detector": "ddm", "params": DDM_PARAMS, "signal": "binary_error_per_example"}
+    elif policy == "cost_heuristic":
+        params = {"target_error": 0.1, "horizon": REPLAY_BLOCKS * block_rows,
+                  "error_cost": costs["classification_error"], "fixed_train_cost": costs["update"],
+                  "sample_train_cost": costs["train_sample"]}
+        cost_policy = PolicyStrategy(policy, min_samples=REPLAY_BLOCKS, min_window=1,
+                                     cooldown=REPLAY_BLOCKS, params=params)
+        policy_settings = {**params, "monitor_blocks": REPLAY_BLOCKS, "cooldown_blocks": REPLAY_BLOCKS}
+    def scores():
+        return ClassificationMetrics(classes, threshold)
+
+    online, holdout = scores(), scores()
     windows, versions = [], []
     class_counts = np.zeros(classes, dtype=np.int64)
     train_seconds = predict_seconds = 0.0
     presentations = unique = resets = alarms = rows = stream_blocks = 0
     last_training_end = last_timestamp = None
-    block_rows = BLOCK_ROWS[scope]
     warmup = 0
     split = manifest["rows"] - int(manifest["rows"] * HOLDOUT_FRACTION)
     with monitoring, PredictionArchive(
         output, spec["classes"], manifest["sha256"], "native", tracking_settings["fading_factor"],
+        threshold=threshold,
     ) as predictions:
         for step, (timestamps, x, y, is_holdout) in enumerate(batches(path, block_rows, split)):
             if ((last_timestamp is not None and timestamps[0] < last_timestamp)
@@ -107,7 +179,7 @@ def run(root, dataset, scope, policy, output, tracking_settings):
                 probabilities = model.predict(x)
                 elapsed = time.monotonic() - timer
                 predict_seconds += elapsed
-                window = ClassificationMetrics(classes)
+                window = scores()
                 window.add(y, probabilities)
                 predictions.add(start, timestamps, y, probabilities, is_holdout, versions[-1]["end_seq"])
                 (holdout if is_holdout else online).merge(window)
@@ -120,16 +192,29 @@ def run(root, dataset, scope, policy, output, tracking_settings):
                 })
                 if not is_holdout:
                     stream_blocks += 1
-                    if policy in ("periodic", "drift"):
+                    if policy == "periodic" or detector is not None or cost_policy is not None:
                         replay.append((start, x, y))
-                    if detector:
-                        detector.update(1 - metrics["accuracy"])
-                        alarms += int(detector.drift_detected)
-                    if policy == "incremental":
+                    block_alarms = (
+                        drift_alarms(detector, policy, probabilities, y, metrics, threshold)
+                        if detector is not None else 0
+                    )
+                    alarms += block_alarms
+                    if policy == "online":
+                        action = "online"
+                    elif policy == "incremental":
                         action = "continue"
-                    elif ((policy == "periodic" and stream_blocks % REPLAY_BLOCKS == 0)
-                          or (detector and detector.drift_detected)):
+                    elif (policy == "periodic" and stream_blocks % REPLAY_BLOCKS == 0) or block_alarms:
                         action = "reset_retrain"
+                    elif cost_policy is not None:
+                        recent_errors.append(metrics["errors"])
+                        count = sum(len(block[2]) for block in replay)
+                        decision = cost_policy.decide(DecisionContext(
+                            labeled=stream_blocks, window_size=count, drift=False,
+                            recent_error=sum(recent_errors) / count, monitored=count,
+                        ))
+                        if decision.action == "reset_retrain":
+                            action = decision.action
+                            cost_policy.updated(stream_blocks)
             if action:
                 timer = time.monotonic()
                 if action == "reset_retrain":
@@ -139,7 +224,12 @@ def run(root, dataset, scope, policy, output, tracking_settings):
                     resets += 1
                 else:
                     train_start, fit_x, fit_y = start, x, y
-                iterations = model.fit(fit_x, fit_y, action == "continue")
+                if action == "online":
+                    iterations = model.fit_online(fit_x, fit_y)
+                else:
+                    iterations = model.fit(
+                        fit_x, fit_y, action == "continue", config=iter_config, tracker=tracker,
+                    )
                 elapsed = time.monotonic() - timer
                 train_seconds += elapsed
                 presentations += len(fit_y)
@@ -153,6 +243,9 @@ def run(root, dataset, scope, policy, output, tracking_settings):
                     "sha256": sha256_file(output / filename), "bytes": len(payload),
                     "train_samples": len(fit_y), "train_seconds": elapsed, "iterations": iterations,
                 })
+                if action == "reset_retrain":
+                    del fit_x, fit_y
+                    gc.collect()
             if step % 10 == 0:
                 atomic_write(output / "progress.json", encoded({
                     "rows": rows, "total_rows": manifest["rows"], "model_versions_count": len(versions),
@@ -165,7 +258,6 @@ def run(root, dataset, scope, policy, output, tracking_settings):
     errors = int(online.confusion.sum() - online.confusion.trace())
     updates = len(versions) - 1
     model_bytes = sum(v["bytes"] for v in versions)
-    costs = profile(tracking_settings["costs"])
     error_units = (summary["fp"] * costs["false_positive"] + summary["fn"] * costs["false_negative"]
                    if classes == 2 else errors * costs["classification_error"])
     cost_report = account(costs, errors=error_units, presentations=presentations, updates=updates,
@@ -209,7 +301,9 @@ def run(root, dataset, scope, policy, output, tracking_settings):
     )
     error_sum = sum(w["error_rate"] for w in windows if w["scope"] == "prequential")
     alpha = tracking_settings["upf_alpha"]
-    summary["upf_total_cost"] = alpha * resets + error_sum if policy != "incremental" else None
+    summary["upf_total_cost"] = (
+        alpha * resets + error_sum if policy not in ("incremental", "online") else None
+    )
     summary["posthoc_update_event_cost"] = alpha * updates + error_sum
     sensitivity = [[a, a * updates + error_sum] for a in tracking_settings["upf_alphas"]]
     summary["cost_sensitivity_auc"] = sum((b - a) * (v + w) / 2
@@ -219,6 +313,8 @@ def run(root, dataset, scope, policy, output, tracking_settings):
         for name in metric_catalog()[0]["definitions"]
         if summary.get(name) is None
     }
+    decision_rule = (f"binary: p>={threshold:.6g} (c_FP/(c_FP+c_FN))" if classes == 2
+                     else "multiclass: argmax, ties favor lower class ID")
     env = environment()
     if model.name == "xgboost":
         env["packages"]["xgboost"] = model.xgb.__version__
@@ -229,8 +325,8 @@ def run(root, dataset, scope, policy, output, tracking_settings):
                          "continued_rounds": model.continued_rounds},
         "contract": {"input": manifest, "environment": env, "block_rows": block_rows,
                      "holdout_start": rows - final["n"], "replay_blocks": REPLAY_BLOCKS,
-                     "adwin_delta": ADWIN_DELTA, "score_bins": SCORE_BINS,
-                     "decision_rule": "binary: p>=0.5; multiclass: argmax, ties favor lower class ID"},
+                     "adwin_delta": ADWIN_DELTA, "score_bins": SCORE_BINS, "policy_settings": policy_settings,
+                     "decision_threshold": threshold, "decision_rule": decision_rule},
         "class_counts": class_counts.tolist(),
         "metrics": summary, "holdout": final, "windows": windows,
         "prequential_confusion": online.confusion.tolist(), "holdout_confusion": holdout.confusion.tolist(),

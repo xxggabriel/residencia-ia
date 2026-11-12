@@ -3,6 +3,7 @@
 import copy
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -59,11 +60,16 @@ def test_job_definitions_match_the_reference_campaign():
     resources = template("modules/execution.yaml")["Resources"]
     root = template("root.yaml")["Parameters"]
     params = template("modules/execution.yaml")["Parameters"]
-    assert (params["BenchmarkVcpus"]["Default"], params["BenchmarkMemoryMiB"]["Default"]) == ("1", 2048)
-    assert (root["BenchmarkVcpus"]["Default"], root["BenchmarkMemoryMiB"]["Default"]) == ("1", 2048)
+    assert (params["BenchmarkVcpus"]["Default"], params["BenchmarkMemoryMiB"]["Default"]) == ("2", 2048)
+    assert (root["BenchmarkVcpus"]["Default"], root["BenchmarkMemoryMiB"]["Default"]) == ("2", 2048)
     benchmark = resources["BenchmarkJobDefinition"]["Properties"]["ContainerProperties"]
     assert benchmark["Command"][:4] == ["continual-bench", "aws", "run-unit", "--unit-uri"]
     assert benchmark["User"] == "1000" and benchmark["NetworkConfiguration"]["AssignPublicIp"] == "DISABLED"
+    benchmark_env = {item["Name"]: item["Value"] for item in benchmark["Environment"]}
+    assert benchmark_env["OMP_NUM_THREADS"] == "2"
+    assert benchmark_env["OPENBLAS_NUM_THREADS"] == "2"
+    assert benchmark_env["MKL_NUM_THREADS"] == "2"
+    assert benchmark_env["BENCH_BENCHMARK_VCPUS"] == {"Ref": "BenchmarkVcpus"}
     prepare = resources["PrepareJobDefinition"]["Properties"]["ContainerProperties"]
     assert prepare["ResourceRequirements"] != benchmark["ResourceRequirements"]
     queue = resources["JobQueue"]["Properties"]
@@ -74,12 +80,50 @@ def test_job_definitions_match_the_reference_campaign():
     assert "AWS::ECS::Service" not in {r["Type"] for r in resources.values()}
 
 
+def test_release_revisions_survive_runtime_updates():
+    resources = template("modules/execution.yaml")["Resources"]
+    for name in ("BenchmarkJobDefinition", "PrepareJobDefinition"):
+        assert resources[name]["Properties"]["ResourceRetentionPolicy"]["SkipDeregisterOnUpdate"] is True
+    assert resources["ControlVersion"]["UpdateReplacePolicy"] == "Retain"
+
+
+def test_distributed_map_writes_to_the_encrypted_artifacts_bucket():
+    resources = template("modules/execution.yaml")["Resources"]
+    substitutions = resources["BenchmarkStateMachine"]["Properties"]["DefinitionSubstitutions"]
+    assert substitutions["MapResultsBucket"] == {"Ref": "ArtifactsBucketName"}
+    definition = json.loads((ROOT / "infra" / "statemachines" / "benchmark.asl.json").read_text())
+    writer = definition["States"]["DistributedRuns"]["ResultWriter"]["Parameters"]
+    assert writer["Bucket"] == "${MapResultsBucket}" and "map-results/" in writer["Prefix.$"]
+    role = list(statements(resources["StatesRole"]))
+    write = next(s for s in role if s.get("Sid") == "WriteDistributedMapResults")
+    assert write["Resource"]["Fn::Sub"].endswith("${ArtifactsBucketName}/map-results/*")
+
+
+def test_dataset_launcher_builds_the_execution_name(tmp_path, monkeypatch):
+    aws = tmp_path / "aws"
+    aws.write_text('#!/usr/bin/env bash\ncase "$1" in\ncloudformation) echo arn:dataset;;\n'
+                   'stepfunctions) printf "%s\\n" "$@";;\nesac\n')
+    aws.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', os.defpath)}")
+    output = subprocess.check_output(
+        ["bash", "scripts/aws/start_dataset.sh", "infra/examples/dataset-social-smoke.json", "retry1"],
+        cwd=ROOT, text=True,
+    )
+    assert "social-smoke-download--retry1" in output.splitlines()
+
+
 def test_worker_roles_reach_s3_only_through_the_gateway_endpoint():
     resources = template("modules/execution.yaml")["Resources"]
     for name in ("BenchmarkJobRole", "PrepareJobRole"):
         for statement in statements(resources[name]):
             actions = statement["Action"] if isinstance(statement["Action"], list) else [statement["Action"]]
-            if any(a.startswith("s3:") for a in actions):
+            if statement.get("Sid") == "ReadModelArchiveForRegistration":
+                assert name == "BenchmarkJobRole" and actions == ["s3:GetObject"]
+                assert statement["Condition"] == {
+                    "StringEquals": {"aws:CalledViaFirst": "sagemaker.amazonaws.com"}
+                }
+                assert statement["Resource"]["Fn::Sub"].endswith("/attempts/*/model/model.tar.gz")
+            elif any(a.startswith("s3:") for a in actions):
                 assert statement["Condition"]["StringEquals"]["aws:SourceVpce"] == {
                     "Ref": "S3GatewayEndpointId"
                 }
@@ -137,6 +181,25 @@ def test_control_can_read_back_write_once_analytics_rows():
     write = next(s for s in statements(role) if s.get("Sid") == "WriteCampaignStateManifestsAndAnalytics")
     assert {"Fn::Sub": "${DataBucketArn}/analytics/*"} in read["Resource"]
     assert {"Fn::Sub": "${DataBucketArn}/analytics/*"} in write["Resource"]
+
+
+def test_model_registration_reads_only_the_project_inference_repository():
+    execution = template("modules/execution.yaml")
+    role = execution["Resources"]["BenchmarkJobRole"]
+    registry = next(
+        policy["Fn::If"] for policy in role["Properties"]["Policies"] if "Fn::If" in policy
+    )
+    assert registry[0] == "ModelRegistry"
+    image = next(
+        statement for statement in registry[1]["PolicyDocument"]["Statement"]
+        if statement.get("Sid") == "ReadInferenceImageForRegistration"
+    )
+    assert set(image["Action"]) == {"ecr:BatchGetImage", "ecr:DescribeImages"}
+    assert image["Resource"] == {"Ref": "MlRepositoryArn"}
+    root = template("root.yaml")["Resources"]["Execution"]
+    assert root["Properties"]["Parameters"]["MlRepositoryArn"] == {
+        "Fn::ImportValue": {"Fn::Sub": "${Project}-MlRepositoryArn"}
+    }
 
 
 def test_roles_are_separate_and_passrole_is_scoped():
@@ -502,3 +565,265 @@ def test_aws_lock_excludes_service_stack():
         assert f"\n{package}==" not in lock
     for package in ("boto3", "duckdb", "pyarrow", "xgboost-cpu", "pandas", "scipy"):
         assert f"\n{package}==" in lock
+
+
+def test_sagemaker_experiments_iam_and_vpce_permissions():
+    required_actions = {
+        "sagemaker:CreateExperiment",
+        "sagemaker:DescribeExperiment",
+        "sagemaker:UpdateExperiment",
+        "sagemaker:CreateTrial",
+        "sagemaker:DescribeTrial",
+        "sagemaker:UpdateTrial",
+        "sagemaker:CreateTrialComponent",
+        "sagemaker:DescribeTrialComponent",
+        "sagemaker:UpdateTrialComponent",
+        "sagemaker:AssociateTrialComponent",
+        "sagemaker:BatchPutMetrics",
+        "sagemaker:AddTags",
+    }
+    expected_resources = {
+        "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment/${Project}-*",
+        "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial/${Project}-*",
+        "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial-component/${Project}-*",
+    }
+    execution_role = template("modules/execution.yaml")["Resources"]["BenchmarkJobRole"]
+    ml_role = template("modules/ml.yaml")["Resources"]["SageMakerRole"]
+    for role in (execution_role, ml_role):
+        exp_stmts = [
+            s
+            for s in statements(role)
+            if isinstance(s.get("Action"), list) and "sagemaker:BatchPutMetrics" in s["Action"]
+        ]
+        assert exp_stmts, f"Missing SageMaker Experiments statement in {role['Properties']['RoleName']}"
+        stmt = exp_stmts[0]
+        assert required_actions <= set(stmt["Action"])
+        subs = {r["Fn::Sub"] for r in stmt["Resource"]}
+        assert subs == expected_resources
+
+    vpce_stmt = template("modules/network.yaml")["Resources"]["SageMakerApiEndpoint"]["Properties"][
+        "PolicyDocument"
+    ]["Statement"][0]
+    assert required_actions <= set(vpce_stmt["Action"])
+
+
+def test_sagemaker_mlflow_app_is_serverless_and_wired_into_vpc_and_batch():
+    execution = template("modules/execution.yaml")
+    network = template("modules/network.yaml")
+    root = template("root.yaml")
+
+    app = execution["Resources"]["MlflowApp"]
+    assert app["Type"] == "AWS::SageMaker::MlflowApp"
+    assert app["Condition"] == "ModelRegistry"
+    assert app["Properties"]["ArtifactStoreUri"] == {"Fn::Sub": "s3://${DataBucketName}/mlflow"}
+    assert app["Properties"]["ModelRegistrationMode"] == "AutoModelRegistrationDisabled"
+
+    role = execution["Resources"]["MlflowAppRole"]
+    assert role["Condition"] == "ModelRegistry"
+    assert role["Properties"]["RoleName"] == {"Fn::Sub": "${Project}-mlflow"}
+
+    env = {
+        item["Name"]: item["Value"]
+        for item in execution["Resources"]["BenchmarkJobDefinition"]["Properties"]["ContainerProperties"][
+            "Environment"
+        ]
+    }
+    assert env["MLFLOW_TRACKING_URI"] == {
+        "Fn::If": ["ModelRegistry", {"Fn::GetAtt": "MlflowApp.Arn"}, ""]
+    }
+    assert root["Outputs"]["MlflowAppArn"]["Value"] == {"Fn::GetAtt": "Execution.Outputs.MlflowAppArn"}
+
+    mlflow_vpce = network["Resources"]["SageMakerMlflowEndpoint"]
+    assert mlflow_vpce["Condition"] == "ModelRegistry"
+    assert mlflow_vpce["Properties"]["ServiceName"] == {"Fn::Sub": "aws.sagemaker.${AWS::Region}.mlflow"}
+    assert mlflow_vpce["Properties"]["PrivateDnsEnabled"] is True
+
+
+def test_timeouts_are_standardized_to_14400_seconds():
+    from continual_bench.application.cloud.contracts import CampaignRequest
+
+    execution_params = template("modules/execution.yaml")["Parameters"]
+    root_params = template("root.yaml")["Parameters"]
+    assert execution_params["BenchmarkTimeoutSeconds"]["Default"] == 14400
+    assert execution_params["PrepareTimeoutSeconds"]["Default"] == 14400
+    assert root_params["BenchmarkTimeoutSeconds"]["Default"] == 14400
+    assert root_params["PrepareTimeoutSeconds"]["Default"] == 14400
+    req = CampaignRequest(
+        campaign_id="c1",
+        matrix={"kind": "experiment_matrix", "path": "configs/matrices/binary-comparison.yaml"},
+    )
+    assert req.run_timeout_seconds == 14400
+
+    for profile_name in ("training", "tuning", "processing"):
+        profile = json.loads((ROOT / "infra" / "sagemaker" / "profiles" / f"{profile_name}.json").read_text())
+        assert profile["max_runtime_seconds"] == 14400
+
+    dataset_asl = json.loads((ROOT / "infra" / "statemachines" / "dataset.asl.json").read_text())
+    assert dataset_asl["States"]["Prepare"]["TimeoutSeconds"] == 14400
+
+
+def test_deploy_change_set_skips_when_empty_changeset(tmp_path):
+    mock_aws = tmp_path / "aws"
+    log_file = tmp_path / "aws_calls.log"
+    mock_aws.write_text(f"""#!/usr/bin/env python3
+import sys
+
+args = sys.argv[1:]
+with open({repr(str(log_file))}, "a") as f:
+    f.write(" ".join(args) + "\\n")
+
+if "describe-stacks" in args:
+    print("UPDATE_COMPLETE")
+    sys.exit(0)
+if "create-change-set" in args:
+    sys.exit(0)
+if "wait" in args and "change-set-create-complete" in args:
+    sys.exit(255)
+if "describe-change-set" in args and "StatusReason" in args:
+    print("The submitted information didn't contain changes. "
+          "Submit different information to create a change set.")
+    sys.exit(0)
+if "delete-change-set" in args:
+    sys.exit(0)
+sys.exit(0)
+""")
+    mock_aws.chmod(0o755)
+
+    template_file = tmp_path / "root.yaml"
+    template_file.write_text("AWSTemplateFormatVersion: '2010-09-09'\\nResources: {}\\n")
+    params_file = tmp_path / "params.json"
+    params_file.write_text("[]")
+
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    proc = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "aws" / "deploy_change_set.sh"),
+            "my-stack",
+            str(template_file),
+            str(params_file),
+            "arn:aws:iam::123456789012:role/exec",
+            "a" * 40,
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 0
+    assert "no changes for" in proc.stdout
+    calls = log_file.read_text()
+    assert "delete-change-set" in calls
+    assert "execute-change-set" not in calls
+
+
+def test_deploy_change_set_executes_nested_stack_changes(tmp_path):
+    mock_aws = tmp_path / "aws"
+    log_file = tmp_path / "aws_calls.log"
+    mock_aws.write_text(f"""#!/usr/bin/env python3
+import sys
+
+args = sys.argv[1:]
+with open({repr(str(log_file))}, "a") as f:
+    f.write(" ".join(args) + "\\n")
+
+if "describe-stacks" in args:
+    print("UPDATE_COMPLETE")
+    sys.exit(0)
+if "create-change-set" in args:
+    sys.exit(0)
+if "wait" in args and "change-set-create-complete" in args:
+    sys.exit(0)
+if "describe-change-set" in args and "length(Changes)" in " ".join(args):
+    print("1")
+    sys.exit(0)
+if "describe-change-set" in args and "Changes[]." in " ".join(args):
+    print("----------------------\\n| DescribeChangeSet |\\n----------------------")
+    sys.exit(0)
+if "execute-change-set" in args:
+    sys.exit(0)
+if "wait" in args and "stack-update-complete" in args:
+    sys.exit(0)
+sys.exit(0)
+""")
+    mock_aws.chmod(0o755)
+
+    template_file = tmp_path / "root.yaml"
+    template_file.write_text("AWSTemplateFormatVersion: '2010-09-09'\\nResources: {}\\n")
+    params_file = tmp_path / "params.json"
+    params_file.write_text("[]")
+
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    proc = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "aws" / "deploy_change_set.sh"),
+            "my-stack",
+            str(template_file),
+            str(params_file),
+            "arn:aws:iam::123456789012:role/exec",
+            "a" * 40,
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 0
+    assert "deployed" in proc.stdout
+    calls = log_file.read_text()
+    assert "execute-change-set" in calls
+    assert "wait stack-update-complete" in calls
+
+
+def test_deploy_change_set_skips_when_num_changes_zero(tmp_path):
+    mock_aws = tmp_path / "aws"
+    log_file = tmp_path / "aws_calls.log"
+    mock_aws.write_text(f"""#!/usr/bin/env python3
+import sys
+
+args = sys.argv[1:]
+with open({repr(str(log_file))}, "a") as f:
+    f.write(" ".join(args) + "\\n")
+
+if "describe-stacks" in args:
+    print("UPDATE_COMPLETE")
+    sys.exit(0)
+if "create-change-set" in args:
+    sys.exit(0)
+if "wait" in args and "change-set-create-complete" in args:
+    sys.exit(0)
+if "describe-change-set" in args and "length(Changes)" in " ".join(args):
+    print("0")
+    sys.exit(0)
+if "delete-change-set" in args:
+    sys.exit(0)
+sys.exit(0)
+""")
+    mock_aws.chmod(0o755)
+
+    template_file = tmp_path / "root.yaml"
+    template_file.write_text("AWSTemplateFormatVersion: '2010-09-09'\\nResources: {}\\n")
+    params_file = tmp_path / "params.json"
+    params_file.write_text("[]")
+
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    proc = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts" / "aws" / "deploy_change_set.sh"),
+            "my-stack",
+            str(template_file),
+            str(params_file),
+            "arn:aws:iam::123456789012:role/exec",
+            "a" * 40,
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 0
+    assert "skipping execution" in proc.stdout
+    calls = log_file.read_text()
+    assert "delete-change-set" in calls
+    assert "execute-change-set" not in calls
+
+

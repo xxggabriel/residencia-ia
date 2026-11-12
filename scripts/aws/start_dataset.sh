@@ -5,5 +5,5 @@
 set -euo pipefail
 INPUT="${1:?input json}"; SUFFIX="${2:-}"
 ARN="$(bash "$(dirname "$0")/outputs.sh" DatasetStateMachineArn)"
-NAME="$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["request"]; print(f"{r[\"dataset\"]}-{r[\"scope\"]}-{r.get(\"mode\",\"download\")}")' "$INPUT")${SUFFIX:+--$SUFFIX}"
+NAME="$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["request"]; print("-".join((r["dataset"], r["scope"], r.get("mode", "download"))))' "$INPUT")${SUFFIX:+--$SUFFIX}"
 aws stepfunctions start-execution --state-machine-arn "$ARN" --name "$NAME" --input "file://$INPUT"

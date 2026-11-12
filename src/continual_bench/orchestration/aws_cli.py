@@ -63,11 +63,15 @@ def acquire(args):
 def prepare(args):
     from continual_bench.application.cloud.contracts import DatasetRequest
     from continual_bench.application.cloud.snapshots import prepare_snapshot
+    from continual_bench.evaluation.system_metrics import SystemMetricsSampler
 
     snapshot = DatasetRequest(
         dataset=args.dataset, scope=args.scope, revision=args.revision, mode="prepare"
     ).snapshot()
-    with tempfile.TemporaryDirectory(dir=args.workdir) as workdir:
+    with (
+        tempfile.TemporaryDirectory(dir=args.workdir) as workdir,
+        SystemMetricsSampler(workdir, 5) as sampler,
+    ):
         result = prepare_snapshot(
             _store(args), snapshot, workdir, image_digest=os.environ.get("BENCH_IMAGE_DIGEST")
         )
@@ -76,6 +80,7 @@ def prepare(args):
             "reused": result["reused"],
             "rows": result["prepared"]["rows"],
             "sha256": result["prepared"]["sha256"],
+            "resources": sampler.report()["summary"],
         }
     )
 
@@ -91,20 +96,61 @@ def publish_snapshot(args):
     _emit({k: result[k] for k in ("manifest_uri", "marker_uri", "created", "snapshot_id")})
 
 
+def publish_matrix_source(args):
+    from continual_bench.application.cloud.matrix_sources import publish_source
+
+    if not args.local_root and not os.environ.get("BENCH_KMS_KEY_ID"):
+        raise SystemExit("BENCH_KMS_KEY_ID must contain the data bucket KMS key ARN")
+    with tempfile.TemporaryDirectory() as workdir:
+        _emit(publish_source(
+            _store(args), args.dataset, cache=args.cache, workdir=workdir, examples=args.examples,
+            seed=args.seed, real_directory=args.real_directory, download=args.download,
+        ))
+
+
 def run_unit(args):
     from continual_bench.application.cloud.worker import run_unit as execute
     from continual_bench.application.cloud.worker import sagemaker_registrar
     from continual_bench.infrastructure.aws.emf import emit
 
+    os.environ["OMP_NUM_THREADS"] = "2"
+    os.environ["OPENBLAS_NUM_THREADS"] = "2"
+    os.environ["MKL_NUM_THREADS"] = "2"
     store = _store(args)
     registry = None
+    tracker = None
     if os.environ.get("BENCH_MODEL_REGISTRY", "false") == "true" and not args.local_root:
+        from continual_bench.infrastructure.aws.experiments import SageMakerExperimentsTracker
         from continual_bench.infrastructure.aws.model_registry import SageMakerModelRegistry
 
         registry = sagemaker_registrar(SageMakerModelRegistry(), os.environ["BENCH_INFERENCE_IMAGE"])
+        model_names = {
+            "social": "multinomial-logistic",
+            "fraud": "fraud-booster",
+            "ecommerce": "return-booster",
+        }
+
+        def tracker(unit):
+            dataset = unit.params.get("dataset", "social")
+            policy = unit.params.get("policy", "frozen")
+            scope = unit.params.get("scope", "smoke")
+            return SageMakerExperimentsTracker(
+                project=os.environ.get("BENCH_STACK", "continual-bench"),
+                dataset=dataset,
+                policy=policy,
+                scope=scope,
+                campaign_id=unit.campaign_id,
+                model_name=model_names.get(dataset, "zia-model"),
+                run_id=unit.run_id,
+                job_name=unit.job_name,
+                git_sha=os.environ.get("BENCH_GIT_REVISION", unit.contract["release"]["git_sha"]),
+                stack=os.environ.get("BENCH_STACK", "continual-bench"),
+                mlflow_tracking_uri=os.environ.get("MLFLOW_TRACKING_URI"),
+            )
+
     workdir = Path(args.workdir or tempfile.mkdtemp(prefix="cb-run-"))
     workdir.mkdir(parents=True, exist_ok=True)
-    code = execute(store, args.unit_uri, workdir, registry=registry, emit=emit)
+    code = execute(store, args.unit_uri, workdir, registry=registry, tracker=tracker, emit=emit)
     sys.exit(code)
 
 
@@ -119,6 +165,9 @@ def selftest(args):
             "continual_bench.evaluation.zia",
             "continual_bench.application.cloud.worker",
             "continual_bench.infrastructure.aws.s3",
+            "continual_bench.infrastructure.aws.experiments",
+            "continual_bench.infrastructure.aws.mlflow_tracking",
+            "continual_bench.models.training.loop",
             "duckdb",
             "pyarrow",
             "xgboost",
@@ -126,7 +175,10 @@ def selftest(args):
         ],
         "ml": [
             "continual_bench.orchestration.sagemaker",
+            "continual_bench.infrastructure.aws.experiments",
+            "continual_bench.infrastructure.aws.mlflow_tracking",
             "continual_bench.models.zia",
+            "continual_bench.models.training.loop",
             "pandas",
             "xgboost",
             "scipy",
@@ -152,7 +204,7 @@ def local_smoke(args):
 
     root = Path(args.root).resolve()
     store = LocalObjectStore(root / "store")
-    snapshot = publish_fixture_snapshot(store, root)
+    snapshot = publish_fixture_snapshot(store, root, args.dataset)
     release = publish_fixture_release(store)
     request = CampaignRequest(
         campaign_id=args.campaign, snapshot=snapshot.model_dump(), max_parallel=args.parallel
@@ -169,7 +221,9 @@ def local_smoke(args):
                 **os.environ,
                 "AWS_BATCH_JOB_ID": f"local-{index}",
                 "AWS_BATCH_JOB_ATTEMPT": "1",
-                "OMP_NUM_THREADS": "1",
+                "OMP_NUM_THREADS": "2",
+                "OPENBLAS_NUM_THREADS": "2",
+                "MKL_NUM_THREADS": "2",
                 "BENCH_IMAGE_DIGEST": release.images["runtime"].digest,
             }
             running[index] = subprocess.Popen(
@@ -267,6 +321,77 @@ def cancel(args):
     reconcile(args)
 
 
+def mlflow_url(args):
+    from continual_bench.infrastructure.aws.mlflow_tracking import presigned_mlflow_url
+
+    result = presigned_mlflow_url(
+        args.arn,
+        project=args.project,
+        expires_in_seconds=args.expires,
+        session_duration_seconds=args.session_duration,
+    )
+    _emit(result)
+
+
+def studio_url(args):
+    """Generate URLs to access SageMaker AI Studio, Unified Studio portal, and MLflow UI."""
+    from continual_bench.infrastructure.aws.mlflow_tracking import presigned_mlflow_url
+    from continual_bench.infrastructure.aws.session import client as make_client
+
+    sm = make_client("sagemaker")
+    links: dict[str, str] = {}
+
+    # 1. SageMaker AI Studio / Classic Studio Presigned URL
+    try:
+        domains = sm.list_domains().get("Domains", [])
+        for d in domains:
+            d_id = d.get("DomainId")
+            ups = sm.list_user_profiles(DomainIdEquals=d_id).get("UserProfiles", [])
+            for u in ups:
+                if u.get("Status") == "InService":
+                    try:
+                        resp = sm.create_presigned_domain_url(
+                            DomainId=d_id,
+                            UserProfileName=u["UserProfileName"],
+                            SessionExpirationDurationInSeconds=args.session_duration,
+                        )
+                        links["sagemaker_studio_url"] = resp["AuthorizedUrl"]
+                        links["sagemaker_domain_id"] = d_id
+                        break
+                    except Exception:
+                        continue
+            if "sagemaker_studio_url" in links:
+                break
+    except Exception as err:
+        links["sagemaker_studio_error"] = str(err)
+
+    # 2. SageMaker Unified Studio Portal URL (via Amazon DataZone)
+    try:
+        dz = make_client("datazone")
+        dz_domains = dz.list_domains().get("items", [])
+        if dz_domains:
+            links["sagemaker_unified_studio_portal"] = dz_domains[0].get("portalUrl", "")
+            links["sagemaker_unified_studio_domain_id"] = dz_domains[0].get("id", "")
+    except Exception as err:
+        links["sagemaker_unified_studio_error"] = str(err)
+
+    # 3. SageMaker MLflow UI Presigned URL
+    try:
+        mf = presigned_mlflow_url(
+            args.arn,
+            project=args.project,
+            expires_in_seconds=args.expires,
+            session_duration_seconds=args.session_duration,
+            sagemaker_client=sm,
+        )
+        links["sagemaker_mlflow_url"] = mf.get("authorized_url", "")
+        links["sagemaker_mlflow_arn"] = mf.get("arn", "")
+    except Exception as err:
+        links["sagemaker_mlflow_error"] = str(err)
+
+    _emit(links)
+
+
 def configure(parser: argparse.ArgumentParser):
     sub = parser.add_subparsers(dest="aws_command", required=True)
 
@@ -297,6 +422,13 @@ def configure(parser: argparse.ArgumentParser):
     )
     add("prepare", prepare, dataset)
     add("publish-snapshot", publish_snapshot, dataset)
+    matrix_source = add("publish-matrix-source", publish_matrix_source)
+    matrix_source.add_argument("--dataset", required=True)
+    matrix_source.add_argument("--cache", default="state/datasets")
+    matrix_source.add_argument("--real-directory")
+    matrix_source.add_argument("--examples", type=int, default=100)
+    matrix_source.add_argument("--seed", type=int, default=42)
+    matrix_source.add_argument("--download", action="store_true")
     add(
         "run-unit",
         run_unit,
@@ -317,6 +449,7 @@ def configure(parser: argparse.ArgumentParser):
         lambda c: (
             c.add_argument("--root", default="state/aws-local-smoke"),
             c.add_argument("--campaign", default="local-smoke"),
+            c.add_argument("--dataset", choices=["fraud", "social", "ecommerce"], default="social"),
             c.add_argument("--parallel", type=int, default=4),
             c.add_argument("--timeout", type=int, default=900),
         ),
@@ -352,6 +485,28 @@ def configure(parser: argparse.ArgumentParser):
 
     add("reconcile", reconcile, stop, lambda c: c.add_argument("--reason", default="operator reconciliation"))
     add("cancel", cancel, stop, lambda c: c.add_argument("--execution-arn", required=True))
+    add(
+        "mlflow-url",
+        mlflow_url,
+        lambda c: (
+            c.add_argument("--arn", default=None),
+            c.add_argument("--project", default="continual-bench"),
+            c.add_argument("--expires", type=int, default=300),
+            c.add_argument("--session-duration", type=int, default=43200),
+        ),
+        store=False,
+    )
+    add(
+        "studio-url",
+        studio_url,
+        lambda c: (
+            c.add_argument("--arn", default=None),
+            c.add_argument("--project", default="continual-bench"),
+            c.add_argument("--expires", type=int, default=300),
+            c.add_argument("--session-duration", type=int, default=43200),
+        ),
+        store=False,
+    )
 
 
 def handle(args):

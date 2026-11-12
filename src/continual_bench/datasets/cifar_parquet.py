@@ -66,7 +66,8 @@ def _pixels(encoded):
     return {f"pixel_{i:04d}": raw[(i % 1024) * 3 + i // 1024] / 255 for i in range(3072)}
 
 
-def _parquet_prefix(reader, specification, count, label_name, classes):
+def _parquet_prefix(reader, specification, count, label_name, classes, decode=None):
+    decode = decode or _pixels
     import pyarrow.parquet as pq
 
     if reader.size != specification["bytes"]:
@@ -93,7 +94,7 @@ def _parquet_prefix(reader, specification, count, label_name, classes):
                         raise ValueError(
                             "CIFAR Parquet requires embedded images; external paths are not fetched"
                         )
-                    yield emitted, _pixels(image["bytes"]), str(label), _sha(image["bytes"])
+                    yield emitted, decode(image["bytes"]), str(label), _sha(image["bytes"])
                     emitted += 1
                     if emitted == count:
                         return
@@ -196,3 +197,59 @@ def prepare_cifar_parquet(name, cache, limit=100, seed=42, *, download=False):
         atomic_write(directory / "samples.jsonl", payload)
         atomic_write(directory / "manifest.json", _json(manifest))
         return PreparedImageSource(samples, manifest)
+
+
+def _planar_bytes(encoded):
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(io.BytesIO(encoded)) as image:
+        if image.size != (32, 32) or image.mode != "RGB":
+            raise ValueError("CIFAR Parquet image must be RGB 32x32")
+        raw = np.frombuffer(image.tobytes(), dtype=np.uint8)
+    return raw.reshape(1024, 3).T.reshape(3072)  # channel-planar, as the dict loader
+
+
+def prepare_cifar_arrays(name, cache, limit, *, download=False):
+    """Memory-lean variant: uint8 array (limit x 3072) with labels/tasks, cached as NPZ."""
+    import numpy as np
+
+    if name not in SOURCES or type(limit) is not int or not 10 <= limit <= 10_000:
+        raise ValueError("unknown CIFAR dataset or budget outside 10..10000")
+    source = SOURCES[name]
+    root = Path(cache) / "cifar-parquet"
+    target = root / "arrays" / f"{name}-{limit}.npz"
+    with run_lock(root / "locks", f"arrays-{name}-{limit}"):
+        if target.exists():
+            with np.load(target, allow_pickle=False) as saved:
+                return {key: saved[key] for key in saved.files}
+        if not download:
+            raise FileNotFoundError("CIFAR array cache absent; explicit download=True required")
+        counts = {"train": limit * 4 // 5, "test": limit - limit * 4 // 5}
+        pixels = np.empty((limit, 3072), dtype=np.uint8)
+        labels, tasks, splits, indexes, filled = [], [], [], [], 0
+        for split, count in counts.items():
+            spec = source["splits"][split]
+            url = f"https://huggingface.co/datasets/{source['repo']}/resolve/{source['revision']}/{spec['path']}"
+            reader = RangeReader(url, root / "ranges", max_bytes=1024**3, max_requests=100_000,
+                                 max_blocks=32)
+            try:
+                for index, raw, label, _ in _parquet_prefix(reader, spec, count, source["label"],
+                                                            source["classes"], _planar_bytes):
+                    pixels[filled] = raw
+                    labels.append(label)
+                    tasks.append(int(label) // source["classes_per_task"])
+                    splits.append(split)
+                    indexes.append(index)
+                    filled += 1
+            finally:
+                reader.close()
+        order = sorted(range(limit), key=lambda i: (tasks[i], splits[i] != "train", indexes[i]))
+        result = {"x": pixels[order], "y": np.array([labels[i] for i in order]),
+                  "task": np.array([tasks[i] for i in order], dtype=np.int64),
+                  "split": np.array([splits[i] for i in order])}
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp.npz")
+        np.savez_compressed(tmp, **result)
+        tmp.replace(target)
+        return result

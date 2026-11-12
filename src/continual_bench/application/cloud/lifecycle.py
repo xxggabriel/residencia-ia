@@ -16,7 +16,6 @@ from .costs import attempt_estimate
 from .records import ensure_rows, put_row_once
 
 ACTIVE = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING")
-STOPPED_TASK_STATES = ("STOPPED", "DEPROVISIONING")
 
 
 def _stamp(clock=time.time) -> str:
@@ -192,6 +191,7 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
                     "final_uri": store.uri(final_key),
                     "metrics": final.get("metrics"),
                     "holdout": final.get("holdout"),
+                    "decision_threshold": final.get("decision_threshold"),
                     "attempt": final["attempt"],
                     "model_package_arn": (final.get("model") or {}).get("model_package_arn"),
                     "analytics": analytics,
@@ -258,7 +258,7 @@ def reconcile_campaign(store, jobs, campaign_id: str, reason: str, *, clock=time
     running_tasks = [
         arn
         for arn, state in tasks.items()
-        if state not in STOPPED_TASK_STATES and not state.startswith("MISSING")
+        if state != "STOPPED" and not state.startswith("MISSING")
     ]
     report = {
         "campaign_id": campaign_id,

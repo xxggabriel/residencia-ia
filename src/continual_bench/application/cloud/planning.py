@@ -91,30 +91,51 @@ def _zia_units(request, release, snapshot_manifest, tracking_sha256):
         )
 
 
-def _matrix_units(request, project_root):
+def _matrix_units(request, release, project_root):
     from continual_bench.application.matrix import ExperimentMatrix, case_key, describe
     from continual_bench.config import Config, EpochConfig, TypedConfig, load_model
     from continual_bench.datasets.catalog import CATALOG
 
-    matrix = load_model(ExperimentMatrix, str(Path(project_root) / request.matrix.path))
-    plan = matrix.plan()
-    for config in plan["cases"]:
+    if request.matrix.kind == "project_suite":
+        from continual_bench.application.project_suite import project_configurations
+
+        matrix = request.matrix.model_dump(exclude={"kind", "seed"})
+        matrix["seeds"] = [request.matrix.seed]
+        cases = project_configurations(matrix, release.git_sha)
+        configs = [
+            (Config if case["kind"] == "binary" else EpochConfig).model_validate(case["config"])
+            for case in cases
+        ]
+        matrix_id = "project-suite-v1"
+    else:
+        plan = load_model(ExperimentMatrix, str(Path(project_root) / request.matrix.path)).plan()
+        configs, matrix_id = plan["cases"], plan["matrix"]
+    missing = {
+        describe(config)["dataset"] for config in configs
+        if CATALOG.get(describe(config)["dataset"]).family not in OFFLINE_MATRIX_FAMILIES
+    } - request.source_digests.keys()
+    if missing:
+        raise ValueError(f"matrix needs published source_digests for: {', '.join(sorted(missing))}")
+    for config in configs:
         coordinates = describe(config)
         family = CATALOG.get(coordinates["dataset"]).family
-        if family not in OFFLINE_MATRIX_FAMILIES:
+        if family == "openml" and not isinstance(config, EpochConfig) and config.dataset.params:
+            raise ValueError("OpenML matrix inputs are resolved exclusively by their published digest")
+        if family not in (*OFFLINE_MATRIX_FAMILIES, "openml") and not isinstance(config, EpochConfig):
             raise ValueError(
-                f"dataset {coordinates['dataset']} needs network acquisition; private workers "
-                f"accept only offline families {OFFLINE_MATRIX_FAMILIES}"
+                f"prepared source {coordinates['dataset']} requires the epochs evaluator"
             )
         evaluator = {Config: "binary", TypedConfig: "typed", EpochConfig: "epochs"}[type(config)]
         params = {
             "evaluator": evaluator,
             "config": config.model_dump(mode="json"),
             "case_key": case_key(config),
-            "matrix": plan["matrix"],
+            "matrix": matrix_id,
         }
+        if family not in OFFLINE_MATRIX_FAMILIES:
+            params["source_sha256"] = request.source_digests[coordinates["dataset"]]
         labels = {k: str(v) for k, v in coordinates.items() if v is not None}
-        yield "matrix_case", params, labels, {"matrix": plan["matrix"]}
+        yield "matrix_case", params, labels, {"matrix": matrix_id}
 
 
 def build_plan(
@@ -124,7 +145,7 @@ def build_plan(
     if request.matrix.kind == "zia":
         expansions = _zia_units(request, release, snapshot_manifest, tracking_sha256)
     else:
-        expansions = _matrix_units(request, project_root)
+        expansions = _matrix_units(request, release, project_root)
     units = []
     for kind, params, labels, extra in expansions:
         contract = {

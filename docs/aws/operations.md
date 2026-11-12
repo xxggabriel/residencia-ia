@@ -33,7 +33,7 @@ scripts/aws/wait_connection.sh "$(aws cloudformation describe-stacks --stack-nam
 O pipeline V2 tem um único gatilho, `push` filtrado para `main`. O push gerado pelo merge de
 um pull request também dispara. Não há regra do EventBridge, webhook ou polling para o mesmo
 repositório, então uma revisão não dispara duas execuções. A detecção nativa da ação de origem
-é substituída pelo filtro do gatilho. `ExecutionMode: QUEUED` aplica os merges em ordem. Exigir
+é substituída pelo filtro do gatilho. `ExecutionMode: SUPERSEDED` prioriza a execução mais recente e pula execuções intermediárias obsoletas em fila/andamento caso existam, otimizando o tempo de deploy. Exigir
 merge em vez de push direto é responsabilidade das regras do GitHub: ative branch protection ou
 ruleset em `main` com pull request obrigatório e checks exigidos.
 
@@ -79,8 +79,12 @@ O runtime passa a usar esses grupos existentes, e a retenção deles é gerencia
 scripts/aws/rollback.sh <sha-de-uma-release-anterior>
 ```
 
-O rollback reaplica templates, imagens e Lambda daquela release, sem rebuild, e move
-`releases/latest.json`. Campanhas em andamento continuam com a própria release.
+O rollback reaplica os templates e os artefatos da release sem rebuild, preservando os
+parâmetros ativos do runtime. O script exige as revisões Batch ativas, a versão da Lambda
+disponível e os digests no ECR antes de aplicar o change set. Ele repete a verificação
+antes de mover `releases/latest.json` e recusa sobrescrever um ponteiro alterado
+durante a operação. Releases que já perderam essas referências exigem uma nova publicação.
+Faça rollback em uma janela sem deploy concorrente.
 
 ## 3. Datasets (manual)
 
@@ -139,6 +143,61 @@ Timeouts: `jobStateTimeLimitActions` da fila cancela jobs presos em `RUNNABLE` (
 `AttemptDurationSeconds` limita a execução. `TimeoutSecondsPath` do `.sync` limita espera mais
 execução por item. Códigos de saída: 0 sucesso ou reaproveitamento, 1 falha de execução,
 2 contrato (imagem ou perfil divergente do plano), 3 snapshot.
+
+### Campanha integral dos três datasets Zia
+
+Os exemplos `dataset-{fraud,social,ecommerce}-full.json` preparam 50, 100 e 50 milhões
+de eventos, respectivamente. Aguarde os três marcadores `_SUCCESS.json` no escopo `full`
+e confira as contagens no manifesto antes de iniciar as campanhas.
+
+Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem sete jobs independentes
+por dataset. Fixe o mesmo SHA de release nos três arquivos. Para disparar as três campanhas
+em paralelo, confira se a fila, o compute environment e a quota regional permitem **21 jobs
+simultâneos**. Cada job usa 2 vCPU e 2 GiB de RAM (`BenchmarkVcpus=2` e
+`BenchmarkMemoryMiB=2048`). Reserve pelo menos 21 vCPUs livres no ambiente compartilhado.
+Os exemplos pedem sete jobs simultâneos por campanha e uma tentativa por job.
+
+As variantes são `frozen`, `online`, `drift_adwin`, `drift_ddm`, `incremental`,
+`periodic` e `cost_heuristic`. Todas usam o mesmo modelo por dataset, o mesmo warm-up e
+as mesmas fronteiras temporais. O modo `online` atualiza em minibatches após a predição
+do bloco. Em Social, River SGD atualiza os coeficientes da regressão logística multinomial.
+Em Fraud e E-commerce, a perda logística do River fornece os gradientes e o XGBoost
+atualiza os pesos das folhas das árvores existentes. O holdout usa o último checkpoint.
+
+Os dois detectores recebem o mesmo sinal binário de erro de cada predição e podem acionar
+um retreino por bloco. A heurística compara o custo de retreinar com a redução projetada
+no erro, usando os quatro últimos blocos e os custos do perfil de tracking em unidades de
+cenário. O relatório registra os parâmetros de decisão e o método de atualização.
+
+### Suíte de todos os datasets
+
+`matrix.kind=project_suite` usa o mesmo gerador de casos da DAG `benchmark_task_suite`.
+O padrão tem 548 unidades e usa 3.000 eventos nos casos binários, 100 exemplos e duas
+épocas nos casos por épocas, atraso de três e seed 42. `matrix` aceita os campos
+`samples`, `dataset_examples`, `epochs`, `label_delay` e `seed`.
+
+Publique os inputs numa máquina com acesso às fontes. Prepare primeiro os arquivos ARFF
+de Electricity e Airlines com `scripts/prepare_real_sources.py` e informe o diretório
+via `--real-directory`. Para as outras nove fontes, use o cache existente ou acrescente
+`--download` para aquisição explícita. Exemplo para INSECTS:
+
+```bash
+continual-bench aws publish-matrix-source --dataset insects --cache state/datasets \
+  --examples 100 --seed 42 --bucket "$BUCKET"
+```
+
+Defina `BENCH_KMS_KEY_ID` com o ARN da chave do bucket de dados. Guarde o `dataset` e o
+`sha256` retornados por cada publicação no objeto `request.source_digests`, mapeado por
+nome de dataset. A mesma publicação OpenML atende aos modos binário, tipado e por épocas.
+Os bundles das outras fontes atendem ao avaliador por épocas e precisam corresponder à
+contagem e à seed da campanha. Fixe o SHA em `request.release` e use um novo `campaign_id`
+ao alterar dados ou release.
+
+O planejador valida os objetos antes de publicar o plano. Cada worker confere o SHA-256
+do conteúdo ao baixar pelo gateway do S3. O Distributed Map lê o plano do bucket de dados
+e exporta o resultado da orquestração para `map-results/<campanha>/` no bucket de
+artefatos com SSE-KMS por padrão. Manifestos e métricas das unidades continuam no bucket
+de dados.
 
 ## 5. Cancelamento e reconciliação
 

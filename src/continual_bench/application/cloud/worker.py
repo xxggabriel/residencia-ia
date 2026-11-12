@@ -24,11 +24,16 @@ from continual_bench.infrastructure.object_store import (
     sha256_path,
     split_uri,
 )
+from continual_bench.models.training.callbacks import GracefulTerminationHandler
 
 from . import layout
 from .contracts import RunUnit, SnapshotRef
 from .records import ROWS_FILE, ensure_rows, matrix_rows, zia_rows
 from .snapshots import SnapshotNotReady, materialize, verify_snapshot
+
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
 
 EXIT_OK, EXIT_FAILED, EXIT_CONTRACT, EXIT_SNAPSHOT = 0, 1, 2, 3
 SKIP_SUFFIXES = (".lock",)
@@ -185,7 +190,7 @@ def verify_native_loader(directory: Path, report: dict, data_root: Path, rows: i
     }
 
 
-def execute_zia(unit: RunUnit, store, workdir: Path, log) -> dict:
+def execute_zia(unit: RunUnit, store, workdir: Path, log, *, tracker=None) -> dict:
     import yaml
 
     from continual_bench.config import TrackingConfig
@@ -208,7 +213,15 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log) -> dict:
     data_root = materialize(store, manifest, workdir / "data")
     output = workdir / "run"
     log.info("evaluation starting", extra={"fields": {"rows": manifest["rows"], "policy": params["policy"]}})
-    report = run(data_root, params["dataset"], params["scope"], params["policy"], output, settings)
+    report = run(
+        data_root,
+        params["dataset"],
+        params["scope"],
+        params["policy"],
+        output,
+        settings,
+        tracker=tracker,
+    )
     evidence = prediction_manifest(output, report)
     adapted = tracking_report(report, evidence)
     write_zia_artifacts(output, report, adapted)
@@ -222,18 +235,75 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log) -> dict:
     }
 
 
-def execute_matrix_case(unit: RunUnit, workdir: Path, log) -> dict:
+def execute_matrix_case(store, unit: RunUnit, workdir: Path) -> dict:
     from continual_bench.application.matrix import _execute_case, _headline
     from continual_bench.config import Config, EpochConfig, TypedConfig
 
-    schema = {"binary": Config, "typed": TypedConfig, "epochs": EpochConfig}[unit.params["evaluator"]]
+    evaluator = unit.params["evaluator"]
+    schema = {"binary": Config, "typed": TypedConfig, "epochs": EpochConfig}[evaluator]
     config = schema.model_validate(unit.params["config"])
     output = workdir / "run"
-    report = _execute_case(config, output, str(workdir / "cache"), None)
+    source = None
+    if "source_sha256" in unit.params:
+        from .matrix_sources import materialize_source
+
+        source = materialize_source(
+            store, unit.labels["dataset"], unit.params["source_sha256"], workdir / "source", config, evaluator
+        )
+    report = _execute_case(config, output, str(workdir / "cache"), None, source=source)
     return {"report": report, "headline": _headline(report), "output": output}
 
 
-def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=None, clock=time.time) -> int:
+def flush_partial_state(
+    store,
+    output: Path,
+    prefix: str,
+    status_key: str,
+    status: dict,
+    *,
+    started: float,
+    clock=time.time,
+) -> dict:
+    """Persist partial run artifacts and interrupted status to S3 on Fargate SIGTERM."""
+    partial_prefix = f"{prefix}/partial"
+    files, total = 0, 0
+    if output.exists():
+        for path in sorted(output.rglob("*")):
+            if not path.is_file() or path.name.endswith(SKIP_SUFFIXES):
+                continue
+            relative = path.relative_to(output)
+            key = f"{partial_prefix}/{relative.as_posix()}"
+            digest = sha256_path(path)
+            store.put_file(key, path, if_absent=False, sha256=digest)
+            files += 1
+            total += path.stat().st_size
+    payload = {
+        **status,
+        "state": "INTERRUPTED",
+        "finished_at": clock(),
+        "wall_seconds": time.monotonic() - started,
+        "partial_prefix": store.uri(partial_prefix),
+        "partial_files": files,
+        "partial_bytes": total,
+    }
+    put_json(store, status_key, payload)
+    return payload
+
+
+def run_unit(
+    store,
+    unit_ref: str,
+    workdir,
+    *,
+    env=None,
+    registry=None,
+    tracker=None,
+    emit=None,
+    clock=time.time,
+) -> int:
+    os.environ["OMP_NUM_THREADS"] = "2"
+    os.environ["OPENBLAS_NUM_THREADS"] = "2"
+    os.environ["MKL_NUM_THREADS"] = "2"
     env = os.environ if env is None else env
     workdir = Path(workdir)
     key = split_uri(unit_ref)[1] if "://" in unit_ref else unit_ref
@@ -280,16 +350,24 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
         return EXIT_OK
     put_json(store, status_key, {**status, "state": "RUNNING"})
     started = time.monotonic()
+    prefix = layout.attempt_prefix(unit.campaign_id, unit.run_id, attempt_key)
+    sigterm_handler = GracefulTerminationHandler(
+        on_terminate=lambda _sig: flush_partial_state(
+            store, workdir / "run", prefix, status_key, status, started=started, clock=clock
+        )
+    )
+    active_tracker = None
     try:
-        expected_image = unit.contract["release"]["runtime_image"]
-        if env.get("BENCH_IMAGE_DIGEST") and env["BENCH_IMAGE_DIGEST"] != expected_image:
-            raise ContractError("job runs an image other than the campaign release")
-        if unit.kind == "zia":
-            outcome = execute_zia(unit, store, workdir, log)
-        else:
-            outcome = execute_matrix_case(unit, workdir, log)
+        with sigterm_handler:
+            expected_image = unit.contract["release"]["runtime_image"]
+            if env.get("BENCH_IMAGE_DIGEST") and env["BENCH_IMAGE_DIGEST"] != expected_image:
+                raise ContractError("job runs an image other than the campaign release")
+            if unit.kind == "zia":
+                active_tracker = tracker(unit) if callable(tracker) else tracker
+                outcome = execute_zia(unit, store, workdir, log, tracker=active_tracker)
+            else:
+                outcome = execute_matrix_case(store, unit, workdir)
         evaluation_seconds = time.monotonic() - started
-        prefix = layout.attempt_prefix(unit.campaign_id, unit.run_id, attempt_key)
         outputs_uri = store.uri(prefix)
         final = {
             "version": "run-final-v1",
@@ -321,6 +399,30 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
                 model_package = registry(
                     unit, report, metadata, f"{outputs_uri}/model/model.tar.gz", outcome["snapshot"]
                 )
+            if active_tracker is not None and hasattr(active_tracker, "publish_run_report"):
+                try:
+                    mlflow_info = active_tracker.publish_run_report(
+                        report,
+                        adapted=outcome["adapted"],
+                        output_dir=output,
+                        store=store,
+                        outputs_uri=outputs_uri,
+                        model_package_arn=(model_package or {}).get("model_package_arn"),
+                    )
+                    if isinstance(mlflow_info, dict) and mlflow_info.get("mlflow_run_id"):
+                        links["mlflow_run_id"] = mlflow_info["mlflow_run_id"]
+                        links["mlflow_experiment_id"] = mlflow_info.get("mlflow_experiment_id")
+                        links["mlflow_artifact_uri"] = mlflow_info.get("artifact_uri")
+                        if mlflow_info.get("registered_model"):
+                            links["registered_model"] = mlflow_info["registered_model"]
+                            links["registered_model_version"] = mlflow_info.get("registered_model_version")
+                            links["registered_family_model"] = mlflow_info.get("registered_family_model")
+                            links["registered_family_version"] = mlflow_info.get("registered_family_version")
+                except Exception:
+                    log.warning(
+                        "mlflow report publication failed; run evidence in S3 is unaffected",
+                        exc_info=True,
+                    )
             final.update(
                 {
                     "snapshot": unit.contract["snapshot"],
@@ -341,6 +443,10 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
                             "accuracy",
                             "balanced_accuracy",
                             "f1_macro",
+                            "roc_auc",
+                            "pr_auc",
+                            "macro_roc_auc",
+                            "macro_pr_auc",
                             "log_loss",
                             "brier",
                             "n",
@@ -354,15 +460,32 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
                     },
                     "holdout": {
                         k: report["holdout"].get(k)
-                        for k in ("accuracy", "balanced_accuracy", "log_loss", "n")
+                        for k in (
+                            "accuracy",
+                            "balanced_accuracy",
+                            "roc_auc",
+                            "pr_auc",
+                            "macro_roc_auc",
+                            "macro_pr_auc",
+                            "log_loss",
+                            "n",
+                        )
                     },
+                    "decision_threshold": report["contract"].get("decision_threshold"),
                     "links": links,
                     "published": published,
                 }
             )
         else:
+            from continual_bench.models import default_model
+
+            dimensions = ("model", "mode", "detector", "seed")
+            coordinates = {k: unit.labels[k] for k in dimensions if k in unit.labels}
+            if "model" not in coordinates and unit.params["evaluator"] == "epochs":
+                coordinates["model"] = default_model(outcome["report"]["contract"]["source"]["task"])
+            coordinates["seed"] = int(coordinates["seed"])
             rows = matrix_rows(
-                _base(unit, attempt_key),
+                {**_base(unit, attempt_key), **coordinates},
                 outcome["headline"],
                 outcome["report"],
                 store.uri(final_key),
@@ -373,6 +496,7 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
             final.update(
                 {
                     "metrics": outcome["headline"],
+                    "matrix_coordinates": coordinates,
                     "published": published,
                     "run_key": outcome["report"].get("run_key"),
                 }
@@ -400,12 +524,20 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
             },
         )
         if emit:
+            holdout_m = final.get("holdout", {})
+            stream_m = final.get("metrics", {})
             emit(
                 {
                     "RunSucceeded": 1,
                     "EvaluationSeconds": evaluation_seconds,
                     "PublishedBytes": final["published"]["bytes"],
-                    "HoldoutAccuracy": final.get("holdout", {}).get("accuracy"),
+                    "HoldoutAccuracy": holdout_m.get("accuracy"),
+                    "HoldoutBalancedAccuracy": holdout_m.get("balanced_accuracy"),
+                    "HoldoutPRAUC": holdout_m.get("pr_auc") or holdout_m.get("macro_pr_auc"),
+                    "HoldoutMacroF1": holdout_m.get("f1_macro"),
+                    "StreamBalancedAccuracy": stream_m.get("balanced_accuracy"),
+                    "StreamPRAUC": stream_m.get("pr_auc") or stream_m.get("macro_pr_auc"),
+                    "StreamMacroF1": stream_m.get("f1_macro"),
                 },
                 {
                     "Dataset": unit.labels.get("dataset", "matrix"),
@@ -415,7 +547,27 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
                 context,
                 units={"EvaluationSeconds": "Seconds", "PublishedBytes": "Bytes"},
             )
-        log.info("run published", extra={"fields": {"state": state, "final_uri": store.uri(final_key)}})
+        holdout_m = final.get("holdout", {})
+        stream_m = final.get("metrics", {})
+        log.info(
+            "run published",
+            extra={
+                "fields": {
+                    "state": state,
+                    "final_uri": store.uri(final_key),
+                    "dataset": unit.labels.get("dataset"),
+                    "policy": unit.labels.get("policy"),
+                    "scope": unit.labels.get("scope"),
+                    "holdout_accuracy": holdout_m.get("accuracy"),
+                    "holdout_balanced_accuracy": holdout_m.get("balanced_accuracy"),
+                    "holdout_pr_auc": holdout_m.get("pr_auc") or holdout_m.get("macro_pr_auc"),
+                    "holdout_macro_f1": holdout_m.get("f1_macro"),
+                    "stream_balanced_accuracy": stream_m.get("balanced_accuracy"),
+                    "stream_pr_auc": stream_m.get("pr_auc") or stream_m.get("macro_pr_auc"),
+                    "stream_macro_f1": stream_m.get("f1_macro"),
+                }
+            },
+        )
         return EXIT_OK
     except Exception as error:
         code = (
@@ -432,6 +584,11 @@ def run_unit(store, unit_ref: str, workdir, *, env=None, registry=None, emit=Non
             "exit_code": code,
         }
         log.error("run failed", exc_info=True, extra={"fields": {"exit_code": code}})
+        if active_tracker is not None and hasattr(active_tracker, "mark_failed"):
+            try:
+                active_tracker.mark_failed(str(error)[:1000])
+            except Exception:
+                pass
         put_json(
             store,
             status_key,
@@ -473,7 +630,8 @@ def sagemaker_registrar(model_registry, inference_image: str):
     """Adapter from a finished Zia run to a pending Model Registry candidate."""
 
     def register(unit, report, metadata, archive_uri, snapshot):
-        group = f"continual-bench-zia-{report['dataset']}-{report['policy']}" + (
+        policy_slug = report["policy"].replace("_", "-")
+        group = f"continual-bench-zia-{report['dataset']}-{policy_slug}" + (
             "-smoke" if report["scope"] == "smoke" else ""
         )
         model_registry.ensure_group(
