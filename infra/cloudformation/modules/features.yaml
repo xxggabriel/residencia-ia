@@ -76,7 +76,7 @@ Resources:
       RoleArn: !GetAtt FeatureStoreRole.Arn
       FeatureDefinitions:
         - {FeatureName: event_id, FeatureType: String}
-        - {FeatureName: event_time, FeatureType: Fractional}
+        - {FeatureName: event_time, FeatureType: String}
         - {FeatureName: label, FeatureType: Integral}
         - {FeatureName: same_region, FeatureType: Fractional}
         - {FeatureName: source_age, FeatureType: Fractional}
@@ -176,6 +176,15 @@ Resources:
                 Action: [kms:Decrypt, kms:GenerateDataKey]
                 Resource: !Ref DataKeyArn
 
+  MaterializeSecurityConfiguration:
+    Type: AWS::Glue::SecurityConfiguration
+    Properties:
+      Name: !Sub "${Project}-materialize-features"
+      EncryptionConfiguration:
+        S3Encryptions:
+          - S3EncryptionMode: SSE-KMS
+            KmsKeyArn: !Ref DataKeyArn
+
   MaterializeJob:
     Type: AWS::Glue::Job
     Properties:
@@ -183,6 +192,7 @@ Resources:
       Description: Point-in-time materialization of the training snapshot from the prepared Parquet
       Role: !GetAtt GlueRole.Arn
       GlueVersion: "5.0"
+      SecurityConfiguration: !Ref MaterializeSecurityConfiguration
       WorkerType: G.1X
       NumberOfWorkers: 2
       Timeout: 120

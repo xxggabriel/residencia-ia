@@ -157,21 +157,22 @@ def describe(config) -> dict:
             "policy": None}
 
 
-def _execute_case(config, root: Path, cache: str, real_directory: str | None):
+def _execute_case(config, root: Path, cache: str, real_directory: str | None, *, source=None):
     if isinstance(config, Config):
         from .runner import run
 
-        return run(config, str(root / "binary"))
+        return run(config, str(root / "binary"), source=source)
     if isinstance(config, TypedConfig):
         from continual_bench.evaluation.typed import run_typed
 
         from .components import default_registry, make_source
 
-        source = make_source(default_registry(), config.dataset)
+        if source is None:
+            source = make_source(default_registry(), config.dataset)
         return run_typed(source, str(root / "typed"), **config.model_dump(exclude={"dataset"}))
     from continual_bench.evaluation.epochs import run_epochs
 
-    return run_epochs(config, str(root / "epochs"), cache, real_directory=real_directory)
+    return run_epochs(config, str(root / "epochs"), cache, real_directory=real_directory, source=source)
 
 
 def _headline(report) -> dict:

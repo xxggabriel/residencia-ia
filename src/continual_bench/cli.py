@@ -176,6 +176,66 @@ def epoch_job_command(args):
     emit(result)
 
 
+def _iterative_options(parser):
+    parser.add_argument("--dataset", action="append", help="repeat; default: all catalog datasets")
+    parser.add_argument("--cache", required=True)
+    parser.add_argument("--real-directory", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--max-epochs", type=int, default=100)
+    parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--worker", default="worker")
+    parser.add_argument("--campaign", default="local")
+
+
+@command("iterative-worker", _iterative_options)
+def iterative_worker_command(args):
+    """Claim datasets through atomic mkdir and train each with up to N epochs per update."""
+    import json
+    import os
+    import traceback
+    from pathlib import Path
+
+    from .datasets.arrays import load_iterative
+    from .datasets.catalog import DATASETS
+    from .evaluation.iterative import run_iterative
+
+    out = Path(args.out)
+    (out / "claims").mkdir(parents=True, exist_ok=True)
+    for name in args.dataset or DATASETS:
+        try:
+            (out / "claims" / name).mkdir()
+        except FileExistsError:
+            continue
+        target = out / "results" / name
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "worker.txt").write_text(args.worker)
+        try:
+            data = load_iterative(name, args.cache, real_directory=args.real_directory)
+            tracker = None
+            if os.environ.get("MLFLOW_TRACKING_URI"):
+                from .evaluation.iterative import make_model
+                from .infrastructure.iterative_tracking import IterativeMlflowTracker
+
+                family = make_model(name, data.task)[1]["family"]
+                tracker = IterativeMlflowTracker(os.environ["MLFLOW_TRACKING_URI"], dataset=name,
+                                                 task=data.task, model=family, campaign=args.campaign,
+                                                 git_sha=os.environ.get("BENCH_GIT_REVISION", "uncommitted"))
+                tracker.start({"max_epochs": args.max_epochs, "patience": args.patience, "min_delta": 0.0,
+                               "eval_metric": "validation:mae" if data.task == "regression"
+                               else "validation:log_loss", "validation_fraction": 0.1, "seed": 42,
+                               "restore_best_weights": True, "epochs_per_update": args.max_epochs},
+                              len(data))
+            run_iterative(data, target, max_epochs=args.max_epochs, patience=args.patience, tracker=tracker,
+                          log=lambda line: print(f"{args.worker} {line}", flush=True))
+        except BaseException as error:  # noqa: BLE001 - recorded per dataset, other datasets continue
+            (target / "failed.json").write_text(json.dumps(
+                {"dataset": name, "error": type(error).__name__, "message": str(error)[:2000],
+                 "trace": traceback.format_exc()[-4000:]}))
+            print(f"{args.worker} [{name}] FAILED {type(error).__name__}: {error}", flush=True)
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+
+
 @command("components", lambda p: p.add_argument("--plugin", action="append", default=[]))
 def components_command(args):
     from .application.components import default_registry

@@ -14,7 +14,7 @@ phases:
       - bash scripts/aws/package_modules.sh "$GIT_SHA"
       - >-
         aws cloudformation package --template-file infra/cloudformation/root.yaml
-        --s3-bucket "$ARTIFACTS_BUCKET" --s3-prefix "templates/$GIT_SHA"
+        --s3-bucket "$ARTIFACTS_BUCKET" --s3-prefix "templates"
         --output-template-file packaged-root.yaml
       - python scripts/aws/runtime_parameters.py build-output.json > runtime-parameters.json
 artifacts:
@@ -22,3 +22,7 @@ artifacts:
     - packaged-root.yaml
     - build-output.json
     - runtime-parameters.json
+cache:
+  paths:
+    - '/root/.cache/pip/**/*'
+

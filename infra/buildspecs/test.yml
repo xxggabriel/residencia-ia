@@ -5,14 +5,19 @@ env:
   variables:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
     OMP_NUM_THREADS: "1"
+    UV_SYSTEM_PYTHON: "1"
 phases:
   install:
     runtime-versions:
       python: 3.12
     commands:
-      - python -m pip install --require-hashes -r requirements.lock
-      - python -m pip install --no-deps -e .
-      - python -m venv /tmp/cfn-lint && /tmp/cfn-lint/bin/pip install --require-hashes -r infra/ci-requirements.lock
+      - python -m pip install uv
+      - uv pip install --system --require-hashes -r requirements.lock
+      - uv pip install --system --no-deps -e .
+      - pyenv rehash
+      - rm -rf /tmp/cfn-lint
+      - uv venv /tmp/cfn-lint
+      - uv pip install --python /tmp/cfn-lint/bin/python --require-hashes -r infra/ci-requirements.lock
   build:
     commands:
       - ruff check src tests dags examples scripts
@@ -21,3 +26,10 @@ phases:
       - python scripts/aws/validate_asl.py infra/statemachines/*.asl.json
       - python scripts/aws/validate_asl.py --service infra/statemachines/*.asl.json
       - continual-bench aws local-smoke --root /tmp/cb-local-smoke
+      - continual-bench aws local-smoke --dataset fraud --root /tmp/cb-local-fraud
+      - continual-bench aws local-smoke --dataset ecommerce --root /tmp/cb-local-ecommerce
+cache:
+  paths:
+    - '/root/.cache/pip/**/*'
+    - '/root/.cache/uv/**/*'
+

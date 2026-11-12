@@ -9,9 +9,24 @@ def ratio(a, b):
     return float(a / b) if b else None
 
 
+def decision_threshold(costs):
+    """Bayes threshold for calibrated binary scores: predict positive when p >= c_FP / (c_FP + c_FN)."""
+    false_positive, false_negative = float(costs["false_positive"]), float(costs["false_negative"])
+    total = false_positive + false_negative
+    return false_positive / total if total else 0.5
+
+
+def decide(probabilities, threshold=0.5):
+    """Binary: p_1 >= threshold. Multiclass: argmax, ties favor the lower class ID."""
+    if probabilities.shape[1] == 2:
+        return (probabilities[:, 1] >= threshold).astype(np.int32)
+    return probabilities.argmax(axis=1)
+
+
 class ClassificationMetrics:
-    def __init__(self, classes):
+    def __init__(self, classes, threshold=0.5):
         self.classes = classes
+        self.threshold = threshold
         self.confusion = np.zeros((classes, classes), dtype=np.int64)
         self.positive = np.zeros((classes, SCORE_BINS), dtype=np.int64)
         self.negative = np.zeros_like(self.positive)
@@ -23,9 +38,7 @@ class ClassificationMetrics:
                 or not np.isfinite(probabilities).all()
                 or np.any((probabilities < 0) | (probabilities > 1))):
             raise ValueError("invalid classification probabilities")
-        predicted = (probabilities[:, 1] >= 0.5).astype(np.int32) if self.classes == 2 else (
-            probabilities.argmax(axis=1)
-        )
+        predicted = decide(probabilities, self.threshold)
         self.confusion += np.bincount(
             self.classes * labels.astype(np.int32) + predicted, minlength=self.classes**2
         ).reshape(self.confusion.shape)
@@ -45,6 +58,8 @@ class ClassificationMetrics:
             self.calibration[i, 2] += np.bincount(calibration_bin, weights=mask, minlength=10)
 
     def merge(self, other):
+        if other.threshold != self.threshold:
+            raise ValueError("cannot merge metrics computed with different decision thresholds")
         self.confusion += other.confusion
         self.positive += other.positive
         self.negative += other.negative

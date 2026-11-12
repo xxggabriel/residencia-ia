@@ -40,7 +40,7 @@ Parameters:
     AllowedValues: [BUILD_GENERAL1_SMALL, BUILD_GENERAL1_MEDIUM, BUILD_GENERAL1_LARGE]
   LogRetentionDays:
     Type: Number
-    Default: 90
+    Default: 14
 
 Conditions:
   CreateConnection: !Equals [!Ref ConnectionArn, ""]
@@ -212,6 +212,7 @@ Resources:
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-firehose"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-flink"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-glue"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-mlflow"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-prepare-job"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-sagemaker"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-states"
@@ -282,7 +283,7 @@ Resources:
                 Action: [cloudformation:CreateChangeSet, cloudformation:DescribeChangeSet,
                          cloudformation:ExecuteChangeSet, cloudformation:DeleteChangeSet,
                          cloudformation:DescribeStacks, cloudformation:DescribeStackEvents,
-                         cloudformation:GetTemplateSummary]
+                         cloudformation:GetTemplateSummary, cloudformation:DeleteStack]
                 Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${RuntimeStackName}/*"
               - Effect: Allow
                 Action: iam:PassRole
@@ -355,6 +356,10 @@ Resources:
         Type: LINUX_CONTAINER
         ComputeType: !Ref BuildComputeType
         Image: aws/codebuild/standard:7.0
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_CUSTOM_CACHE
       LogsConfig: {CloudWatchLogs: {Status: ENABLED, GroupName: !Ref BuildLogGroup, StreamName: test}}
 
   BuildProject:
@@ -375,6 +380,11 @@ Resources:
           - {Name: RUNTIME_REPOSITORY, Value: {"Fn::ImportValue": !Sub "${Project}-RuntimeRepositoryUri"}}
           - {Name: ML_REPOSITORY, Value: {"Fn::ImportValue": !Sub "${Project}-MlRepositoryUri"}}
           - {Name: ARTIFACTS_BUCKET, Value: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucket"}}
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+          - LOCAL_CUSTOM_CACHE
       LogsConfig: {CloudWatchLogs: {Status: ENABLED, GroupName: !Ref BuildLogGroup, StreamName: build}}
 
   DeployProject:
@@ -421,7 +431,7 @@ Resources:
     Properties:
       Name: !Sub "${Project}-release"
       PipelineType: V2
-      ExecutionMode: QUEUED
+      ExecutionMode: SUPERSEDED
       RoleArn: !GetAtt PipelineRole.Arn
       ArtifactStore:
         Type: S3

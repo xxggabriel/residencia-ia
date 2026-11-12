@@ -231,7 +231,33 @@ Resources:
             Principal: "*"
             Action: [sagemaker:DescribeModelPackageGroup, sagemaker:CreateModelPackageGroup,
                      sagemaker:ListModelPackages, sagemaker:DescribeModelPackage, sagemaker:CreateModelPackage,
-                     sagemaker:AddTags]
+                     sagemaker:CreateExperiment, sagemaker:DescribeExperiment, sagemaker:UpdateExperiment,
+                     sagemaker:CreateTrial, sagemaker:DescribeTrial, sagemaker:UpdateTrial,
+                     sagemaker:CreateTrialComponent, sagemaker:DescribeTrialComponent, sagemaker:UpdateTrialComponent,
+                     sagemaker:AssociateTrialComponent, sagemaker:BatchPutMetrics, sagemaker:AddTags,
+                     sagemaker:CallMlflowAppApi, sagemaker:DescribeMlflowApp, sagemaker:ListMlflowApps,
+                     sagemaker:CreatePresignedMlflowAppUrl, sagemaker:DescribeMlflowTrackingServer,
+                     sagemaker:ListMlflowTrackingServers]
+            Resource: "*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  SageMakerMlflowEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: ModelRegistry
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "aws.sagemaker.${AWS::Region}.mlflow"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [sagemaker:CallMlflowAppApi, sagemaker:DescribeMlflowApp, sagemaker:ListMlflowApps,
+                     sagemaker:CreatePresignedMlflowAppUrl, sagemaker-mlflow:*]
             Resource: "*"
             Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
 

@@ -13,12 +13,18 @@ if [[ -n "${ARTIFACTS_BUCKET:-}" && -n "${RUNTIME_CONFIG_KEY:-}" ]] && \
 fi
 TYPE=UPDATE
 STATUS="$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE)"
-[[ "$STATUS" == NONE || "$STATUS" == REVIEW_IN_PROGRESS ]] && TYPE=CREATE
+if [[ "$STATUS" == ROLLBACK_COMPLETE ]]; then
+  echo "Stack $STACK is in ROLLBACK_COMPLETE state; deleting before recreating..."
+  aws cloudformation delete-stack --stack-name "$STACK"
+  aws cloudformation wait stack-delete-complete --stack-name "$STACK"
+  STATUS=NONE
+fi
+[[ "$STATUS" == NONE || "$STATUS" == REVIEW_IN_PROGRESS || "$STATUS" == DELETE_COMPLETE ]] && TYPE=CREATE
 NAME="deploy-${GIT_SHA:0:12}-$(date -u +%Y%m%d%H%M%S)"
 aws cloudformation create-change-set --stack-name "$STACK" --change-set-name "$NAME" \
   --change-set-type "$TYPE" --template-body "file://$TEMPLATE" --parameters "file://$PARAMETERS" \
   --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND --role-arn "$ROLE" \
-  --include-nested-stacks --tags Key=cb-stack,Value=continual-bench Key=cb-git-sha,Value="$GIT_SHA" >/dev/null
+  --include-nested-stacks --tags Key=cb-stack,Value=continual-bench >/dev/null
 if ! aws cloudformation wait change-set-create-complete --stack-name "$STACK" --change-set-name "$NAME"; then
   REASON="$(aws cloudformation describe-change-set --stack-name "$STACK" --change-set-name "$NAME" --query StatusReason --output text)"
   if [[ "$REASON" == *"didn't contain changes"* || "$REASON" == *"No updates are to be performed"* ]]; then
@@ -28,6 +34,14 @@ if ! aws cloudformation wait change-set-create-complete --stack-name "$STACK" --
   fi
   echo "change set failed: $REASON" >&2
   exit 1
+fi
+# Inspect if the change set contains 0 changes
+NUM_CHANGES="$(aws cloudformation describe-change-set --stack-name "$STACK" --change-set-name "$NAME" \
+  --query 'length(Changes)' --output text 2>/dev/null || echo 0)"
+if [[ "$NUM_CHANGES" == "0" || "$NUM_CHANGES" == "None" ]]; then
+  aws cloudformation delete-change-set --stack-name "$STACK" --change-set-name "$NAME"
+  echo "change set has 0 resource changes; skipping execution for $GIT_SHA (runtime stack already matches)"
+  exit 0
 fi
 aws cloudformation describe-change-set --stack-name "$STACK" --change-set-name "$NAME" \
   --query 'Changes[].ResourceChange.{action:Action,resource:LogicalResourceId,type:ResourceType,replacement:Replacement}' --output table
