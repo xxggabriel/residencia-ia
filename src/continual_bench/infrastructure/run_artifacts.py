@@ -43,7 +43,19 @@ def publish_run_artifacts(client, run_id, directory, report) -> dict:
         if (root / folder).is_dir():
             client.log_artifacts(run_id, str(root / folder), artifact_path=folder)
             uploaded += sum(1 for path in (root / folder).rglob("*") if path.is_file())
+    figures = log_detailed_figures(report, run_id)
     system = report.get("system_metrics") or {}
+    client.set_tag(run_id, "detailed_figures", str(len(figures)))
     client.set_tag(run_id, "system_metrics_collector", system.get("collector", "absent"))
     client.set_tag(run_id, "run_artifacts", f"{uploaded} files; plots/ and data/")
-    return {"system_metric_points": len(points), "artifact_files": uploaded}
+    return {"system_metric_points": len(points), "artifact_files": uploaded, "detailed_figures": len(figures)}
+
+
+def log_detailed_figures(report, run_id) -> list[str]:
+    """Matplotlib dashboards via `mlflow.log_figure`; a plotting failure never fails publication."""
+    try:
+        from continual_bench.infrastructure.mlflow_figures import log_report_figures
+
+        return log_report_figures(report, run_id=run_id)
+    except Exception:  # matplotlib missing, or MLflow rejected a figure: SVG artifacts still ship
+        return []
