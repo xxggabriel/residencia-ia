@@ -38,7 +38,7 @@ aws-lambda:
 	uv run python scripts/aws/build_control_lambda.py local --output build/control.zip --build-output build/build-output.json
 
 aws-bootstrap:
-	REPOSITORY=$(REPOSITORY) BRANCH=$(BRANCH) OVERRIDES=$(OVERRIDES) scripts/aws/bootstrap.sh
+	REPOSITORY=$(REPOSITORY) OVERRIDES=$(OVERRIDES) scripts/aws/bootstrap.sh
 
 aws-dataset-smoke:
 	scripts/aws/start_dataset.sh infra/examples/dataset-social-smoke.json
