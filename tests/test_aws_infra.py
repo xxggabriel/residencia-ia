@@ -299,7 +299,7 @@ def test_github_actions_role_trusts_only_the_production_environment():
     (trust,) = role["AssumeRolePolicyDocument"]["Statement"]
     assert trust["Action"] == "sts:AssumeRoleWithWebIdentity"
     condition = json.dumps(trust["Condition"])
-    assert "environment:${GitHubEnvironment}" in condition
+    assert ":environment:${GitHubEnvironment}" in condition
     assert "job_workflow_ref" not in condition  # not an IAM-supported OIDC condition key
     assert "StringLike" not in trust["Condition"]
     assert cicd["Parameters"]["BranchName"]["Default"] == "main"
