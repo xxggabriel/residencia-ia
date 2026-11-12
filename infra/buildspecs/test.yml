@@ -5,17 +5,19 @@ env:
   variables:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
     OMP_NUM_THREADS: "1"
+    UV_SYSTEM_PYTHON: "1"
 phases:
   install:
     runtime-versions:
       python: 3.12
     commands:
-      - python -m pip install --require-hashes -r requirements.lock
-      - python -m pip install --no-deps -e .
-      - >-
-        if [ ! -x /tmp/cfn-lint/bin/cfn-lint ]; then
-          python -m venv /tmp/cfn-lint && /tmp/cfn-lint/bin/pip install --require-hashes -r infra/ci-requirements.lock
-        fi
+      - python -m pip install uv
+      - uv pip install --system --require-hashes -r requirements.lock
+      - uv pip install --system --no-deps -e .
+      - pyenv rehash
+      - rm -rf /tmp/cfn-lint
+      - uv venv /tmp/cfn-lint
+      - uv pip install --python /tmp/cfn-lint/bin/python --require-hashes -r infra/ci-requirements.lock
   build:
     commands:
       - ruff check src tests dags examples scripts
@@ -29,5 +31,5 @@ phases:
 cache:
   paths:
     - '/root/.cache/pip/**/*'
-    - '/tmp/cfn-lint/**/*'
+    - '/root/.cache/uv/**/*'
 
