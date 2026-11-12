@@ -56,6 +56,8 @@ jobs:
             echo "ML_REPOSITORY=$(exp MlRepositoryUri)"
             echo "ARTIFACTS_BUCKET=$(exp ArtifactsBucket)"
           } >> "$GITHUB_ENV"
+      - name: Install build dependencies
+        run: python -m pip install boto3 pyyaml
       - name: Service-side validation of state machines
         run: python scripts/aws/validate_asl.py --service infra/statemachines/*.asl.json
       - name: Build, validate and push images (ECR)
