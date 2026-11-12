@@ -41,6 +41,9 @@ class EncodedEstimator:
     def predict_one(self, x: dict):
         return self.estimator.predict_one(self._encode(x, learn=False))
 
+    def predict_proba_one(self, x: dict):
+        return self.estimator.predict_proba_one(self._encode(x, learn=False))
+
     def learn_one(self, x: dict, y) -> None:
         self.estimator.learn_one(self._encode(x, learn=True), y)
 
@@ -53,6 +56,9 @@ class NativeEstimator:
 
     def predict_one(self, x: dict):
         return self.estimator.predict_one(x)
+
+    def predict_proba_one(self, x: dict):
+        return self.estimator.predict_proba_one(x)
 
     def learn_one(self, x: dict, y) -> None:
         self.estimator.learn_one(x, y)
