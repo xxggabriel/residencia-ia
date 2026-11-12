@@ -6,10 +6,12 @@ import logging
 import math
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from continual_bench.config.iterative import IterativeTrainingConfig
 
+from .mlflow_tracking import SageMakerMlflowTracker
 from .session import client as make_client
 from .session import error_code
 
@@ -82,18 +84,24 @@ class SageMakerExperimentsTracker:
         policy: str,
         model_name: str,
         run_id: str,
+        scope: str = "smoke",
+        campaign_id: str | None = None,
         job_name: str | None = None,
         project: str = "continual-bench",
         stack: str | None = None,
         git_sha: str | None = None,
         client: Any | None = None,
         metrics_client: Any | None = None,
+        mlflow_tracking_uri: str | None = None,
+        mlflow_tracker: SageMakerMlflowTracker | None = None,
         logger: logging.Logger | None = None,
         emit_stdout: bool = True,
     ):
         self.project = project
         self.dataset = dataset
         self.policy = policy
+        self.scope = scope
+        self.campaign_id = campaign_id
         self.model_name = model_name
         self.run_id = run_id
         self.job_name = job_name or f"cb-{dataset}-{policy}-{run_id}"
@@ -101,6 +109,7 @@ class SageMakerExperimentsTracker:
         self.git_sha = git_sha or os.environ.get("BENCH_GIT_REVISION", "uncommitted")
         self._client = client
         self._metrics_client = metrics_client
+        self._lazy_start_on_epoch = client is None and metrics_client is None
         self.logger = logger or logging.getLogger("continual_bench.aws.experiments")
         self.emit_stdout = emit_stdout
         self.recorded_epochs: list[dict[str, Any]] = []
@@ -108,6 +117,25 @@ class SageMakerExperimentsTracker:
         self.experiment_arn: str | None = None
         self.trial_arn: str | None = None
         self.trial_component_arn: str | None = None
+        if mlflow_tracker is not None:
+            self.mlflow_tracker: SageMakerMlflowTracker | None = mlflow_tracker
+        elif mlflow_tracking_uri is not None or (client is None and metrics_client is None):
+            self.mlflow_tracker = SageMakerMlflowTracker(
+                tracking_uri=mlflow_tracking_uri,
+                dataset=dataset,
+                policy=policy,
+                scope=scope,
+                campaign_id=campaign_id,
+                model_name=model_name,
+                run_id=run_id,
+                job_name=self.job_name,
+                project=project,
+                stack=self.stack,
+                git_sha=self.git_sha,
+                logger=self.logger,
+            )
+        else:
+            self.mlflow_tracker = None
 
     @property
     def experiment_name(self) -> str:
@@ -279,6 +307,8 @@ class SageMakerExperimentsTracker:
             except Exception as error:
                 if error_code(error) not in {"ValidationException", "ConflictException", "ResourceInUse"}:
                     self._record_error("associate_trial_component", error)
+        if self.mlflow_tracker is not None:
+            self.mlflow_tracker.start(hyperparameters)
         return {
             "experiment_name": self.experiment_name,
             "experiment_arn": exp_arn,
@@ -304,6 +334,8 @@ class SageMakerExperimentsTracker:
         hyperparameters: dict[str, Any] | IterativeTrainingConfig,
     ) -> bool:
         """Update TrialComponent parameters in a fail-safe manner."""
+        if self.mlflow_tracker is not None:
+            self.mlflow_tracker.log_hyperparameters(hyperparameters)
         parameters = format_trial_parameters(hyperparameters)
         try:
             self.client.update_trial_component(
@@ -331,7 +363,7 @@ class SageMakerExperimentsTracker:
         step: int | None = None,
         timestamp: int | float | None = None,
     ) -> bool:
-        """Emit epoch metrics to CloudWatch stdout and BatchPutMetrics (fail-safe)."""
+        """Emit epoch metrics to CloudWatch stdout, MLflow, and BatchPutMetrics (fail-safe)."""
         epoch_step = int(step if step is not None else metrics.get("epoch", len(self.recorded_epochs) + 1))
         ts = int(timestamp if timestamp is not None else time.time())
         record = {"epoch": epoch_step, **metrics}
@@ -342,12 +374,19 @@ class SageMakerExperimentsTracker:
             if line:
                 print(line, flush=True)
 
+        mlflow_ok = False
+        if self.mlflow_tracker is not None:
+            mlflow_ok = self.mlflow_tracker.log_epoch_metrics(metrics, step=epoch_step, timestamp=ts)
+
+        if self._lazy_start_on_epoch and self.trial_component_arn is None and not self.api_errors:
+            self.start()
+
         if self.trial_component_arn is None and self.api_errors:
-            return False
+            return mlflow_ok
 
         m_client = self.metrics_client
         if m_client is None:
-            return False
+            return mlflow_ok
 
         metric_items = []
         for name in REQUIRED_EPOCH_METRICS:
@@ -393,7 +432,7 @@ class SageMakerExperimentsTracker:
                 success = False
                 self._record_error("batch_put_metrics", error)
                 break
-        return success
+        return success or mlflow_ok
 
     log_epoch = log_epoch_metrics
 
@@ -422,10 +461,40 @@ class SageMakerExperimentsTracker:
             self._record_error("finish_trial_component", error)
             return False
 
-    def finalize(self, summary: dict[str, Any] | None = None) -> bool:
-        params = format_trial_parameters(summary) if summary else None
-        msg = f"Completed: {summary}" if summary else "Completed"
+    def finalize(self, summary: dict[str, Any] | None = None, **kwargs: Any) -> bool:
+        merged = {**(summary or {}), **kwargs} if (summary or kwargs) else None
+        if self.mlflow_tracker is not None:
+            self.mlflow_tracker.finalize(merged)
+        params = format_trial_parameters(merged) if merged else None
+        msg = f"Completed: {merged}" if merged else "Completed"
         return self.finish("Completed", message=msg, parameters=params)
+
+    def publish_run_report(
+        self,
+        report: dict[str, Any],
+        *,
+        adapted: dict[str, Any] | None = None,
+        output_dir: Path | None = None,
+        store: Any | None = None,
+        outputs_uri: str | None = None,
+        model_package_arn: str | None = None,
+    ) -> dict[str, Any] | None:
+        if self.mlflow_tracker is None:
+            return None
+        return self.mlflow_tracker.publish_run_report(
+            report,
+            adapted=adapted,
+            output_dir=output_dir,
+            store=store,
+            outputs_uri=outputs_uri,
+            model_package_arn=model_package_arn,
+        )
+
+    def mark_failed(self, error_message: str | None = None) -> bool:
+        self.finish("Failed", message=error_message)
+        if self.mlflow_tracker is not None:
+            return self.mlflow_tracker.mark_failed(error_message)
+        return False
 
 
 __all__ = [

@@ -133,15 +133,19 @@ def run_unit(args):
         def tracker(unit):
             dataset = unit.params.get("dataset", "social")
             policy = unit.params.get("policy", "frozen")
+            scope = unit.params.get("scope", "smoke")
             return SageMakerExperimentsTracker(
                 project=os.environ.get("BENCH_STACK", "continual-bench"),
                 dataset=dataset,
                 policy=policy,
+                scope=scope,
+                campaign_id=unit.campaign_id,
                 model_name=model_names.get(dataset, "zia-model"),
                 run_id=unit.run_id,
                 job_name=unit.job_name,
                 git_sha=os.environ.get("BENCH_GIT_REVISION", unit.contract["release"]["git_sha"]),
                 stack=os.environ.get("BENCH_STACK", "continual-bench"),
+                mlflow_tracking_uri=os.environ.get("MLFLOW_TRACKING_URI"),
             )
 
     workdir = Path(args.workdir or tempfile.mkdtemp(prefix="cb-run-"))
@@ -162,6 +166,7 @@ def selftest(args):
             "continual_bench.application.cloud.worker",
             "continual_bench.infrastructure.aws.s3",
             "continual_bench.infrastructure.aws.experiments",
+            "continual_bench.infrastructure.aws.mlflow_tracking",
             "continual_bench.models.training.loop",
             "duckdb",
             "pyarrow",
@@ -171,6 +176,7 @@ def selftest(args):
         "ml": [
             "continual_bench.orchestration.sagemaker",
             "continual_bench.infrastructure.aws.experiments",
+            "continual_bench.infrastructure.aws.mlflow_tracking",
             "continual_bench.models.zia",
             "continual_bench.models.training.loop",
             "pandas",
@@ -315,6 +321,18 @@ def cancel(args):
     reconcile(args)
 
 
+def mlflow_url(args):
+    from continual_bench.infrastructure.aws.mlflow_tracking import presigned_mlflow_url
+
+    result = presigned_mlflow_url(
+        args.arn,
+        project=args.project,
+        expires_in_seconds=args.expires,
+        session_duration_seconds=args.session_duration,
+    )
+    _emit(result)
+
+
 def configure(parser: argparse.ArgumentParser):
     sub = parser.add_subparsers(dest="aws_command", required=True)
 
@@ -408,6 +426,17 @@ def configure(parser: argparse.ArgumentParser):
 
     add("reconcile", reconcile, stop, lambda c: c.add_argument("--reason", default="operator reconciliation"))
     add("cancel", cancel, stop, lambda c: c.add_argument("--execution-arn", required=True))
+    add(
+        "mlflow-url",
+        mlflow_url,
+        lambda c: (
+            c.add_argument("--arn", default=None),
+            c.add_argument("--project", default="continual-bench"),
+            c.add_argument("--expires", type=int, default=300),
+            c.add_argument("--session-duration", type=int, default=43200),
+        ),
+        store=False,
+    )
 
 
 def handle(args):

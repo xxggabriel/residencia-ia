@@ -356,6 +356,7 @@ def run_unit(
             store, workdir / "run", prefix, status_key, status, started=started, clock=clock
         )
     )
+    active_tracker = None
     try:
         with sigterm_handler:
             expected_image = unit.contract["release"]["runtime_image"]
@@ -398,6 +399,25 @@ def run_unit(
                 model_package = registry(
                     unit, report, metadata, f"{outputs_uri}/model/model.tar.gz", outcome["snapshot"]
                 )
+            if active_tracker is not None and hasattr(active_tracker, "publish_run_report"):
+                try:
+                    mlflow_info = active_tracker.publish_run_report(
+                        report,
+                        adapted=outcome["adapted"],
+                        output_dir=output,
+                        store=store,
+                        outputs_uri=outputs_uri,
+                        model_package_arn=(model_package or {}).get("model_package_arn"),
+                    )
+                    if isinstance(mlflow_info, dict) and mlflow_info.get("mlflow_run_id"):
+                        links["mlflow_run_id"] = mlflow_info["mlflow_run_id"]
+                        links["mlflow_experiment_id"] = mlflow_info.get("mlflow_experiment_id")
+                        links["mlflow_artifact_uri"] = mlflow_info.get("artifact_uri")
+                except Exception:
+                    log.warning(
+                        "mlflow report publication failed; run evidence in S3 is unaffected",
+                        exc_info=True,
+                    )
             final.update(
                 {
                     "snapshot": unit.contract["snapshot"],
@@ -531,6 +551,11 @@ def run_unit(
             "exit_code": code,
         }
         log.error("run failed", exc_info=True, extra={"fields": {"exit_code": code}})
+        if active_tracker is not None and hasattr(active_tracker, "mark_failed"):
+            try:
+                active_tracker.mark_failed(str(error)[:1000])
+            except Exception:
+                pass
         put_json(
             store,
             status_key,

@@ -587,6 +587,7 @@ def test_sagemaker_experiments_iam_and_vpce_permissions():
         "sagemaker:CreateTrialComponent",
         "sagemaker:DescribeTrialComponent",
         "sagemaker:UpdateTrialComponent",
+        "sagemaker:AssociateTrialComponent",
         "sagemaker:BatchPutMetrics",
         "sagemaker:AddTags",
     }
@@ -613,6 +614,38 @@ def test_sagemaker_experiments_iam_and_vpce_permissions():
         "PolicyDocument"
     ]["Statement"][0]
     assert required_actions <= set(vpce_stmt["Action"])
+
+
+def test_sagemaker_mlflow_app_is_serverless_and_wired_into_vpc_and_batch():
+    execution = template("modules/execution.yaml")
+    network = template("modules/network.yaml")
+    root = template("root.yaml")
+
+    app = execution["Resources"]["MlflowApp"]
+    assert app["Type"] == "AWS::SageMaker::MlflowApp"
+    assert app["Condition"] == "ModelRegistry"
+    assert app["Properties"]["ArtifactStoreUri"] == {"Fn::Sub": "s3://${DataBucketName}/mlflow"}
+    assert app["Properties"]["ModelRegistrationMode"] == "AutoModelRegistrationDisabled"
+
+    role = execution["Resources"]["MlflowAppRole"]
+    assert role["Condition"] == "ModelRegistry"
+    assert role["Properties"]["RoleName"] == {"Fn::Sub": "${Project}-mlflow"}
+
+    env = {
+        item["Name"]: item["Value"]
+        for item in execution["Resources"]["BenchmarkJobDefinition"]["Properties"]["ContainerProperties"][
+            "Environment"
+        ]
+    }
+    assert env["MLFLOW_TRACKING_URI"] == {
+        "Fn::If": ["ModelRegistry", {"Fn::GetAtt": "MlflowApp.Arn"}, ""]
+    }
+    assert root["Outputs"]["MlflowAppArn"]["Value"] == {"Fn::GetAtt": "Execution.Outputs.MlflowAppArn"}
+
+    mlflow_vpce = network["Resources"]["SageMakerMlflowEndpoint"]
+    assert mlflow_vpce["Condition"] == "ModelRegistry"
+    assert mlflow_vpce["Properties"]["ServiceName"] == {"Fn::Sub": "aws.sagemaker.${AWS::Region}.mlflow"}
+    assert mlflow_vpce["Properties"]["PrivateDnsEnabled"] is True
 
 
 def test_timeouts_are_standardized_to_14400_seconds():

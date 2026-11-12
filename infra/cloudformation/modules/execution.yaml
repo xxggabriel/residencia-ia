@@ -207,6 +207,7 @@ Resources:
                   - !Sub "${DataBucketArn}/datasets/matrix/*"
                   - !Sub "${DataBucketArn}/campaigns/*/units/*"
                   - !Sub "${DataBucketArn}/campaigns/*/runs/*"
+                  - !Sub "${DataBucketArn}/mlflow/*"
                 Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
               - Sid: WriteRunEvidence
                 Effect: Allow
@@ -217,6 +218,7 @@ Resources:
                   - !Sub "${DataBucketArn}/analytics/metrics/*"
                   - !Sub "${DataBucketArn}/analytics/windows/*"
                   - !Sub "${DataBucketArn}/analytics/model_versions/*"
+                  - !Sub "${DataBucketArn}/mlflow/*"
                 Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
               - Sid: ListForAccurateNotFound
                 # Without ListBucket, HeadObject on an absent key answers 403 instead of 404, and
@@ -246,12 +248,26 @@ Resources:
                   - sagemaker:CreateTrialComponent
                   - sagemaker:DescribeTrialComponent
                   - sagemaker:UpdateTrialComponent
+                  - sagemaker:AssociateTrialComponent
                   - sagemaker:BatchPutMetrics
                   - sagemaker:AddTags
                 Resource:
                   - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment/${Project}-*"
                   - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial/${Project}-*"
                   - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial-component/${Project}-*"
+              - Sid: TrackSageMakerMlflow
+                Effect: Allow
+                Action:
+                  - sagemaker:CallMlflowAppApi
+                  - sagemaker:DescribeMlflowApp
+                  - sagemaker:ListMlflowApps
+                  - sagemaker:CreatePresignedMlflowAppUrl
+                  - sagemaker:DescribeMlflowTrackingServer
+                  - sagemaker:ListMlflowTrackingServers
+                  - sagemaker-mlflow:*
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:mlflow-app/*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:mlflow-tracking-server/*"
         - !If
           - ModelRegistry
           - PolicyName: register-candidates
@@ -582,8 +598,50 @@ Resources:
           - {Name: BENCH_PROJECT_ROOT, Value: /app}
           - {Name: BENCH_MODEL_REGISTRY, Value: !Ref EnableModelRegistry}
           - {Name: BENCH_INFERENCE_IMAGE, Value: !Ref MlImage}
+          - {Name: MLFLOW_TRACKING_URI, Value: !If [ModelRegistry, !GetAtt MlflowApp.Arn, ""]}
           - {Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region}
           - {Name: OMP_NUM_THREADS, Value: "1"}
+
+  # ---------------------------------------------------------------- SageMaker MLflow App (serverless, $0/hr fixed cost)
+  MlflowAppRole:
+    Type: AWS::IAM::Role
+    Condition: ModelRegistry
+    Properties:
+      RoleName: !Sub "${Project}-mlflow"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: sagemaker.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: mlflow-artifact-store
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:AbortMultipartUpload]
+                Resource: !Sub "${DataBucketArn}/mlflow/*"
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !Ref DataBucketArn
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey, kms:DescribeKey]
+                Resource: !Ref DataKeyArn
+
+  MlflowApp:
+    Type: AWS::SageMaker::MlflowApp
+    Condition: ModelRegistry
+    Properties:
+      Name: !Sub "${Project}-mlflow"
+      ArtifactStoreUri: !Sub "s3://${DataBucketName}/mlflow"
+      RoleArn: !GetAtt MlflowAppRole.Arn
+      ModelRegistrationMode: AutoModelRegistrationDisabled
+      Tags:
+        - {Key: cb-stack, Value: !Ref Project}
+        - {Key: cb-component, Value: mlflow}
 
   PrepareJobDefinition:
     Type: AWS::Batch::JobDefinition
@@ -780,3 +838,5 @@ Outputs:
     Value: !If [CreateRuntimeLogGroups, !Ref JobLogGroup, !Sub "/${Project}/batch"]
   ComputeEnvironmentArn:
     Value: !Ref ComputeEnvironment
+  MlflowAppArn:
+    Value: !If [ModelRegistry, !GetAtt MlflowApp.Arn, ""]
