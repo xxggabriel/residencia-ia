@@ -44,6 +44,13 @@ fi
 
 if [[ -n "${OVERRIDES:-}" ]]; then
   BUCKET="$(aws cloudformation list-exports --query "Exports[?Name=='$PROJECT-ArtifactsBucket'].Value" --output text)"
-  aws s3 cp "$OVERRIDES" "s3://$BUCKET/config/runtime-parameters.json"
+  MONITOR_ARN="${EXISTING_SERVICE_ANOMALY_MONITOR_ARN:-$(aws ce get-anomaly-monitors --query "AnomalyMonitors[?MonitorType=='DIMENSIONAL'&&MonitorDimension=='SERVICE'].MonitorArn | [0]" --output text 2>/dev/null || true)}"
+  if [[ -n "$MONITOR_ARN" && "$MONITOR_ARN" != "None" ]]; then
+    python3 -c "import json, sys; d = json.load(open('$OVERRIDES')); d.setdefault('ExistingServiceAnomalyMonitorArn', '$MONITOR_ARN'); print(json.dumps(d, indent=2))" > /tmp/runtime-parameters-bootstrap.json
+    aws s3 cp /tmp/runtime-parameters-bootstrap.json "s3://$BUCKET/config/runtime-parameters.json"
+    rm -f /tmp/runtime-parameters-bootstrap.json
+  else
+    aws s3 cp "$OVERRIDES" "s3://$BUCKET/config/runtime-parameters.json"
+  fi
 fi
 echo "bootstrap complete; merge to main (or: aws codepipeline start-pipeline-execution --name $PROJECT-release)"
