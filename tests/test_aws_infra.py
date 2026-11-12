@@ -293,14 +293,14 @@ def test_bucket_policy_admits_writers_outside_the_vpc():
     assert "bcm-data-exports.amazonaws.com" in json.dumps(billing)
 
 
-def test_github_actions_role_trusts_only_the_main_deploy_workflow():
+def test_github_actions_role_trusts_only_the_production_environment():
     cicd = template("cicd.yaml")
     role = cicd["Resources"]["GitHubActionsRole"]["Properties"]
     (trust,) = role["AssumeRolePolicyDocument"]["Statement"]
     assert trust["Action"] == "sts:AssumeRoleWithWebIdentity"
     condition = json.dumps(trust["Condition"])
     assert "environment:${GitHubEnvironment}" in condition
-    assert "deploy.yml@refs/heads/${BranchName}" in condition
+    assert "job_workflow_ref" not in condition  # not an IAM-supported OIDC condition key
     assert "StringLike" not in trust["Condition"]
     assert cicd["Parameters"]["BranchName"]["Default"] == "main"
     resources = cicd["Resources"].values()
