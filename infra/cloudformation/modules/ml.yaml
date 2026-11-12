@@ -91,6 +91,23 @@ Resources:
                 Action: cloudwatch:PutMetricData
                 Resource: "*"
                 Condition: {StringLike: {cloudwatch:namespace: "/aws/sagemaker/*"}}
+              - Effect: Allow
+                Action:
+                  - sagemaker:CreateExperiment
+                  - sagemaker:DescribeExperiment
+                  - sagemaker:UpdateExperiment
+                  - sagemaker:CreateTrial
+                  - sagemaker:DescribeTrial
+                  - sagemaker:UpdateTrial
+                  - sagemaker:CreateTrialComponent
+                  - sagemaker:DescribeTrialComponent
+                  - sagemaker:UpdateTrialComponent
+                  - sagemaker:BatchPutMetrics
+                  - sagemaker:AddTags
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment/${Project}-*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial/${Project}-*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial-component/${Project}-*"
 
   InferenceModel:
     Type: AWS::SageMaker::Model
@@ -100,7 +117,7 @@ Resources:
       PrimaryContainer:
         Image: !Ref MlImage
         ModelDataUrl: !Ref EndpointModelDataUrl
-        Environment: {OMP_NUM_THREADS: "1"}
+        Environment: {OMP_NUM_THREADS: "1", OPENBLAS_NUM_THREADS: "1", MKL_NUM_THREADS: "1"}
       Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: inference}]
 
   InferenceEndpointConfig:

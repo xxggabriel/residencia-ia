@@ -96,15 +96,40 @@ def run_unit(args):
     from continual_bench.application.cloud.worker import sagemaker_registrar
     from continual_bench.infrastructure.aws.emf import emit
 
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
     store = _store(args)
     registry = None
+    tracker = None
     if os.environ.get("BENCH_MODEL_REGISTRY", "false") == "true" and not args.local_root:
+        from continual_bench.infrastructure.aws.experiments import SageMakerExperimentsTracker
         from continual_bench.infrastructure.aws.model_registry import SageMakerModelRegistry
 
         registry = sagemaker_registrar(SageMakerModelRegistry(), os.environ["BENCH_INFERENCE_IMAGE"])
+        model_names = {
+            "social": "multinomial-logistic",
+            "fraud": "fraud-booster",
+            "ecommerce": "return-booster",
+        }
+
+        def tracker(unit):
+            dataset = unit.params.get("dataset", "social")
+            policy = unit.params.get("policy", "frozen")
+            return SageMakerExperimentsTracker(
+                project=os.environ.get("BENCH_STACK", "continual-bench"),
+                dataset=dataset,
+                policy=policy,
+                model_name=model_names.get(dataset, "zia-model"),
+                run_id=unit.run_id,
+                job_name=unit.job_name,
+                git_sha=os.environ.get("BENCH_GIT_REVISION", unit.contract["release"]["git_sha"]),
+                stack=os.environ.get("BENCH_STACK", "continual-bench"),
+            )
+
     workdir = Path(args.workdir or tempfile.mkdtemp(prefix="cb-run-"))
     workdir.mkdir(parents=True, exist_ok=True)
-    code = execute(store, args.unit_uri, workdir, registry=registry, emit=emit)
+    code = execute(store, args.unit_uri, workdir, registry=registry, tracker=tracker, emit=emit)
     sys.exit(code)
 
 
@@ -119,6 +144,8 @@ def selftest(args):
             "continual_bench.evaluation.zia",
             "continual_bench.application.cloud.worker",
             "continual_bench.infrastructure.aws.s3",
+            "continual_bench.infrastructure.aws.experiments",
+            "continual_bench.models.training.loop",
             "duckdb",
             "pyarrow",
             "xgboost",
@@ -126,7 +153,9 @@ def selftest(args):
         ],
         "ml": [
             "continual_bench.orchestration.sagemaker",
+            "continual_bench.infrastructure.aws.experiments",
             "continual_bench.models.zia",
+            "continual_bench.models.training.loop",
             "pandas",
             "xgboost",
             "scipy",
@@ -170,6 +199,8 @@ def local_smoke(args):
                 "AWS_BATCH_JOB_ID": f"local-{index}",
                 "AWS_BATCH_JOB_ATTEMPT": "1",
                 "OMP_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
                 "BENCH_IMAGE_DIGEST": release.images["runtime"].digest,
             }
             running[index] = subprocess.Popen(

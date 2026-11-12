@@ -1,27 +1,36 @@
 """Batch-prequential benchmarks on the full, ordered Zia streams."""
 
 import argparse
+import gc
 import json
+import os
 import time
 from collections import deque
 from pathlib import Path
 
-import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
-import yaml
-from river.drift import ADWIN
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
 
-from continual_bench.config import TrackingConfig
-from continual_bench.datasets.zia import DATASETS, SCOPES, load_manifest, sha256_file
-from continual_bench.evaluation.costs import account, aws_account, profile
-from continual_bench.evaluation.environment import encoded, environment, peak_rss_bytes
-from continual_bench.evaluation.system_metrics import SystemMetricsSampler
-from continual_bench.evaluation.tracking import metric_catalog
-from continual_bench.evaluation.zia_metrics import SCORE_BINS, ClassificationMetrics, ratio
-from continual_bench.evaluation.zia_predictions import PredictionArchive, prediction_manifest
-from continual_bench.infrastructure.storage import atomic_write
-from continual_bench.models.zia import FraudOrReturnBooster, MultinomialLogistic
+import numpy as np  # noqa: E402
+import pyarrow as pa  # noqa: E402
+import pyarrow.parquet as pq  # noqa: E402
+import yaml  # noqa: E402
+from river.drift import ADWIN  # noqa: E402
+
+from continual_bench.config import IterativeTrainingConfig, TrackingConfig  # noqa: E402
+from continual_bench.datasets.zia import DATASETS, SCOPES, load_manifest, sha256_file  # noqa: E402
+from continual_bench.evaluation.costs import account, aws_account, profile  # noqa: E402
+from continual_bench.evaluation.environment import encoded, environment, peak_rss_bytes  # noqa: E402
+from continual_bench.evaluation.system_metrics import SystemMetricsSampler  # noqa: E402
+from continual_bench.evaluation.tracking import metric_catalog  # noqa: E402
+from continual_bench.evaluation.zia_metrics import SCORE_BINS, ClassificationMetrics, ratio  # noqa: E402
+from continual_bench.evaluation.zia_predictions import (  # noqa: E402
+    PredictionArchive,
+    prediction_manifest,
+)
+from continual_bench.infrastructure.storage import atomic_write  # noqa: E402
+from continual_bench.models.zia import FraudOrReturnBooster, MultinomialLogistic  # noqa: E402
 
 POLICIES = ("frozen", "periodic", "drift", "incremental")
 BLOCK_ROWS = {"smoke": 1000, "full": 250_000}
@@ -67,7 +76,7 @@ def batches(path, size, split):
         offset += len(y)
 
 
-def run(root, dataset, scope, policy, output, tracking_settings):
+def run(root, dataset, scope, policy, output, tracking_settings, *, tracker=None, iterative_config=None):
     started = time.monotonic()
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -76,7 +85,12 @@ def run(root, dataset, scope, policy, output, tracking_settings):
         raise ValueError("prepared dataset checksum differs from its manifest")
     spec = DATASETS[dataset]
     classes = len(spec["classes"])
-    model = MultinomialLogistic(classes) if dataset == "social" else FraudOrReturnBooster()
+    iter_config = IterativeTrainingConfig.from_params(iterative_config)
+    model = (
+        MultinomialLogistic(classes, config=iter_config)
+        if dataset == "social"
+        else FraudOrReturnBooster(config=iter_config)
+    )
     monitoring = SystemMetricsSampler(output, interval=0.5 if scope == "smoke" else 5)
     replay = deque(maxlen=REPLAY_BLOCKS)
     detector = ADWIN(delta=ADWIN_DELTA, clock=1) if policy == "drift" else None
@@ -139,7 +153,9 @@ def run(root, dataset, scope, policy, output, tracking_settings):
                     resets += 1
                 else:
                     train_start, fit_x, fit_y = start, x, y
-                iterations = model.fit(fit_x, fit_y, action == "continue")
+                iterations = model.fit(
+                    fit_x, fit_y, action == "continue", config=iter_config, tracker=tracker,
+                )
                 elapsed = time.monotonic() - timer
                 train_seconds += elapsed
                 presentations += len(fit_y)
@@ -153,6 +169,9 @@ def run(root, dataset, scope, policy, output, tracking_settings):
                     "sha256": sha256_file(output / filename), "bytes": len(payload),
                     "train_samples": len(fit_y), "train_seconds": elapsed, "iterations": iterations,
                 })
+                if action == "reset_retrain":
+                    del fit_x, fit_y
+                    gc.collect()
             if step % 10 == 0:
                 atomic_write(output / "progress.json", encoded({
                     "rows": rows, "total_rows": manifest["rows"], "model_versions_count": len(versions),

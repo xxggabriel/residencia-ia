@@ -65,7 +65,7 @@ def processing_request(spec, *, bucket, role, image, git_sha, name=None):
             ]
         },
         "StoppingCondition": {"MaxRuntimeInSeconds": spec["max_runtime_seconds"]},
-        "Environment": {"OMP_NUM_THREADS": "1"},
+        "Environment": {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"},
         "Tags": [{"Key": "cb-stack", "Value": "continual-bench"}, {"Key": "cb-git-sha", "Value": git_sha}],
     }
 
@@ -100,6 +100,7 @@ def training_request(spec, *, bucket, role, image, git_sha, name=None, hyperpara
             "VolumeSizeInGB": spec["volume_gb"],
         },
         "StoppingCondition": {"MaxRuntimeInSeconds": spec["max_runtime_seconds"]},
+        "Environment": {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"},
         "Tags": [{"Key": "cb-stack", "Value": "continual-bench"}, {"Key": "cb-git-sha", "Value": git_sha}],
     }
 
@@ -122,8 +123,11 @@ def tuning_request(spec, training, *, bucket, role, image, git_sha):
             "OutputDataConfig",
             "ResourceConfig",
             "StoppingCondition",
+            "Environment",
         )
     }
+    if "max_runtime_seconds" in spec:
+        definition["StoppingCondition"] = {"MaxRuntimeInSeconds": spec["max_runtime_seconds"]}
     definition["StaticHyperParameters"] = base["HyperParameters"]
     return {
         "HyperParameterTuningJobName": f"cb-tune-{git_sha[:8]}-{time.strftime('%m%d%H%M%S', time.gmtime())}",
