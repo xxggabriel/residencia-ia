@@ -1,5 +1,6 @@
 .PHONY: test lint smoke compose-check aws-validate aws-smoke aws-images aws-lambda \
         aws-bootstrap aws-dataset-smoke aws-dataset-full \
+        aws-dataset-fraud-full aws-dataset-ecommerce-full \
         aws-campaign-smoke aws-campaign-full aws-campaign-full-cost-heuristic aws-campaign-matrix \
         aws-mlflow-ui aws-studio-ui aws-cancel aws-teardown aws-teardown-all
 
@@ -43,6 +44,12 @@ aws-dataset-smoke:
 
 aws-dataset-full:
 	scripts/aws/start_dataset.sh infra/examples/dataset-social-full.json
+
+aws-dataset-fraud-full:
+	scripts/aws/start_dataset.sh infra/examples/dataset-fraud-full.json
+
+aws-dataset-ecommerce-full:
+	scripts/aws/start_dataset.sh infra/examples/dataset-ecommerce-full.json
 
 aws-campaign-smoke:
 	scripts/aws/start_campaign.sh infra/examples/campaign-social-smoke.json
