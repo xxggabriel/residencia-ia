@@ -355,6 +355,10 @@ Resources:
         Type: LINUX_CONTAINER
         ComputeType: !Ref BuildComputeType
         Image: aws/codebuild/standard:7.0
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_CUSTOM_CACHE
       LogsConfig: {CloudWatchLogs: {Status: ENABLED, GroupName: !Ref BuildLogGroup, StreamName: test}}
 
   BuildProject:
@@ -375,6 +379,11 @@ Resources:
           - {Name: RUNTIME_REPOSITORY, Value: {"Fn::ImportValue": !Sub "${Project}-RuntimeRepositoryUri"}}
           - {Name: ML_REPOSITORY, Value: {"Fn::ImportValue": !Sub "${Project}-MlRepositoryUri"}}
           - {Name: ARTIFACTS_BUCKET, Value: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucket"}}
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+          - LOCAL_CUSTOM_CACHE
       LogsConfig: {CloudWatchLogs: {Status: ENABLED, GroupName: !Ref BuildLogGroup, StreamName: build}}
 
   DeployProject:

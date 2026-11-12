@@ -12,7 +12,10 @@ phases:
     commands:
       - python -m pip install --require-hashes -r requirements.lock
       - python -m pip install --no-deps -e .
-      - python -m venv /tmp/cfn-lint && /tmp/cfn-lint/bin/pip install --require-hashes -r infra/ci-requirements.lock
+      - >-
+        if [ ! -x /tmp/cfn-lint/bin/cfn-lint ]; then
+          python -m venv /tmp/cfn-lint && /tmp/cfn-lint/bin/pip install --require-hashes -r infra/ci-requirements.lock
+        fi
   build:
     commands:
       - ruff check src tests dags examples scripts
@@ -23,3 +26,8 @@ phases:
       - continual-bench aws local-smoke --root /tmp/cb-local-smoke
       - continual-bench aws local-smoke --dataset fraud --root /tmp/cb-local-fraud
       - continual-bench aws local-smoke --dataset ecommerce --root /tmp/cb-local-ecommerce
+cache:
+  paths:
+    - '/root/.cache/pip/**/*'
+    - '/tmp/cfn-lint/**/*'
+

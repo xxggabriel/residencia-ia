@@ -20,13 +20,28 @@ digest_of() {  # repository-uri tag -> digest or empty
     --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true
 }
 
+latest_tag_of() {  # repository-uri -> tag or empty
+  local name="${1#*/}"
+  aws ecr describe-images --repository-name "$name" \
+    --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' --output text 2>/dev/null || true
+}
+
 publish() {  # target repository-uri
   local target="$1" repo="$2" digest
   digest="$(digest_of "$repo" "$TAG")"
   if [[ -n "$digest" && "$digest" != "None" ]]; then
     echo "reuse $repo:$TAG ($digest)" >&2
   else
+    local cache_args=()
+    local prev_tag
+    prev_tag="$(latest_tag_of "$repo")"
+    if [[ -n "$prev_tag" && "$prev_tag" != "None" && "$prev_tag" != "$TAG" ]]; then
+      echo "caching from $repo:$prev_tag" >&2
+      cache_args=(--cache-from "$repo:$prev_tag")
+    fi
     docker buildx build --platform linux/amd64 -f docker/aws/Dockerfile --target "$target" \
+      "${cache_args[@]}" \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
       --build-arg GIT_SHA="$GIT_SHA" --provenance=false -t "$repo:$TAG" --load . >&2
     if [[ "$target" == runtime ]]; then
       docker run --rm --platform linux/amd64 "$repo:$TAG" continual-bench aws selftest --role runtime --require-x86-64 >&2
