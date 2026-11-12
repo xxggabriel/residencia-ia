@@ -258,6 +258,18 @@ def test_sagemaker_mlflow_tracker_logs_epochs_report_and_uploads_artifacts(tmp_p
                     }
                 }
             )
+        if "/registered-models/get" in req.full_url:
+            err_bytes = json.dumps(
+                {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "not found"}
+            ).encode("utf-8")
+            raise urllib.error.HTTPError(
+                req.full_url, 404, "Not Found", {}, io.BytesIO(err_bytes)
+            )
+        if req.full_url.endswith("/model-versions/create"):
+            created_count = sum(1 for c in requests_seen if c[1].endswith("/model-versions/create"))
+            return FakeHttpResponse(
+                {"model_version": {"name": body["name"], "version": str(created_count)}}
+            )
         return FakeHttpResponse({})
 
     uploaded: list[tuple[str, Path]] = []
@@ -332,7 +344,22 @@ def test_sagemaker_mlflow_tracker_logs_epochs_report_and_uploads_artifacts(tmp_p
             {"scope": "prequential", "end_seq": 200, "accuracy": 0.86, "f1_macro": 0.83},
         ],
         "class_metrics": {"0": {"f1": 0.85, "precision": 0.84, "recall": 0.86}},
-        "model_versions": [{"end_seq": 100, "train_samples": 100, "train_seconds": 0.42}],
+        "model_versions": [
+            {
+                "action": "initial",
+                "file": "models/0000.npy",
+                "end_seq": 100,
+                "train_samples": 100,
+                "train_seconds": 0.42,
+            },
+            {
+                "action": "drift_retrain",
+                "file": "models/0001.npy",
+                "end_seq": 200,
+                "train_samples": 100,
+                "train_seconds": 0.38,
+            },
+        ],
         "system_metrics": {"samples": [{"timestamp_ms": 1700000000000, "values": {"rss_mb": 140.0}}]},
     }
 
@@ -341,11 +368,17 @@ def test_sagemaker_mlflow_tracker_logs_epochs_report_and_uploads_artifacts(tmp_p
         output_dir=tmp_path,
         store=FakeStore(),
         outputs_uri="s3://bench-bucket/campaigns/camp-01/runs/a1b2c3d4e5",
+        model_package_arn="arn:aws:sagemaker:us-east-1:123456789012:model-package/cb-social-drift/1",
     )
     assert res["published"] is True
     assert res["mlflow_run_id"] == "run-xyz-123"
     assert res["mlflow_experiment_id"] == "7"
     assert res["artifact_uri"] == "s3://bench-bucket/mlflow/7/run-xyz-123/artifacts"
+    assert res["registered_model"] == "continual-bench-zia-social-drift-smoke"
+    assert res["registered_model_versions"] == ["1", "2"]
+    assert res["registered_model_version"] == "2"
+    assert res["registered_family_model"] == "continual-bench-zia-social-smoke"
+    assert res["registered_family_version"] == "3"
 
     uploaded_keys = {key for key, _ in uploaded}
     assert "mlflow/7/run-xyz-123/artifacts/plots/accuracy.svg" in uploaded_keys

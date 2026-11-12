@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -923,6 +924,16 @@ class SageMakerMlflowTracker:
             except Exception as err:
                 self._record_error("upload_artifacts", err)
 
+        # 6. Register and version models in MLflow Model Registry
+        model_registry_info: dict[str, Any] = {}
+        try:
+            model_registry_info = self.register_run_models(
+                report=report,
+                model_package_arn=model_package_arn,
+            )
+        except Exception as err:
+            self._record_error("register_run_models", err)
+
         self.finish("FINISHED")
         return {
             "published": True,
@@ -930,6 +941,314 @@ class SageMakerMlflowTracker:
             "mlflow_run_id": self.mlflow_run_id,
             "artifact_uri": self.artifact_uri,
             "artifacts_uploaded": uploaded,
+            **model_registry_info,
+        }
+
+    def _ensure_registered_model(
+        self,
+        name: str,
+        description: str,
+        tags: list[dict[str, str]],
+    ) -> bool:
+        try:
+            self._request(
+                "GET",
+                "/api/2.0/mlflow/registered-models/get",
+                params={"name": name},
+            )
+            return True
+        except MlflowRestError as err:
+            if err.error_code != "RESOURCE_DOES_NOT_EXIST" and err.status_code != 404:
+                self._record_error("get_registered_model", err)
+                return False
+        except Exception as err:
+            self._record_error("get_registered_model", err)
+            return False
+
+        try:
+            self._request(
+                "POST",
+                "/api/2.0/mlflow/registered-models/create",
+                payload={"name": name, "description": description[:1000], "tags": tags},
+            )
+            return True
+        except MlflowRestError as err:
+            if err.error_code == "RESOURCE_ALREADY_EXISTS":
+                return True
+            self._record_error("create_registered_model", err)
+            return False
+        except Exception as err:
+            self._record_error("create_registered_model", err)
+            return False
+
+    def _existing_model_versions(self, name: str, run_id: str) -> dict[str, dict[str, Any]]:
+        """Map existing MLflow model versions for (name, run_id) keyed by ordinal or source."""
+        found: dict[str, dict[str, Any]] = {}
+        try:
+            resp = self._request(
+                "GET",
+                "/api/2.0/mlflow/model-versions/search",
+                params={"filter": f"name='{name}'", "max_results": "200"},
+            )
+            for mv in resp.get("model_versions") or []:
+                if mv.get("run_id") != run_id:
+                    continue
+                mv_tags = {t["key"]: t["value"] for t in (mv.get("tags") or []) if "key" in t}
+                ordinal = mv_tags.get("ordinal", "final")
+                found[ordinal] = mv
+        except Exception:
+            pass
+        return found
+
+    def _set_model_alias(self, name: str, alias: str, version: str) -> None:
+        clean_alias = re.sub(r"[^a-zA-Z0-9_\-]", "-", alias).strip("-")[:64]
+        if not clean_alias:
+            return
+        try:
+            self._request(
+                "POST",
+                "/api/2.0/mlflow/registered-models/alias",
+                payload={"name": name, "alias": clean_alias, "version": str(version)},
+            )
+        except Exception:
+            pass
+
+    def register_run_models(
+        self,
+        *,
+        report: dict[str, Any],
+        model_package_arn: str | None = None,
+    ) -> dict[str, Any]:
+        """Log and version all continual-learning checkpoints and final candidate in MLflow Model Registry."""
+        run_id = self.ensure_run()
+        if not run_id:
+            return {}
+
+        dataset = str(report.get("dataset") or self.dataset)
+        scope = str(report.get("scope") or self.scope)
+        policy = str(report.get("policy") or self.policy)
+        model_raw = str(report.get("model") or self.model_name)
+        policy_slug = re.sub(r"[^a-zA-Z0-9]+", "-", policy).strip("-")
+        dataset_slug = re.sub(r"[^a-zA-Z0-9]+", "-", dataset).strip("-")
+        scope_suffix = "-smoke" if scope == "smoke" else ""
+
+        policy_model_name = f"{self.project}-zia-{dataset_slug}-{policy_slug}{scope_suffix}"[:57].rstrip("-")
+        family_model_name = f"{self.project}-zia-{dataset_slug}{scope_suffix}"[:57].rstrip("-")
+
+        contract = report.get("contract") or {}
+        inp = contract.get("input") or {}
+        env = contract.get("environment") or {}
+        summary_metrics = report.get("metrics") or {}
+        holdout_metrics = report.get("holdout") or {}
+        raw_versions = list(report.get("model_versions") or [])
+        if not raw_versions:
+            raw_versions = [
+                {
+                    "action": "final",
+                    "start_seq": 0,
+                    "end_seq": int(inp.get("rows") or 0),
+                    "file": "model/model.tar.gz",
+                    "sha256": "",
+                    "train_samples": int(inp.get("rows") or 0),
+                    "train_seconds": 0.0,
+                    "iterations": 0,
+                    "bytes": 0,
+                }
+            ]
+
+        # 1. Log model on the Run so the Experiments table "Models" column shows the logged model
+        try:
+            model_json = {
+                "artifact_path": "model",
+                "flavors": {
+                    "python_function": {
+                        "loader_module": "continual_bench.models.zia",
+                        "data": "model/model.tar.gz",
+                        "env": {"conda": "conda.yaml", "virtualenv": "python_env.yaml"},
+                        "python_version": "3.12",
+                    }
+                },
+                "run_id": run_id,
+                "model_uuid": str(uuid.uuid4()),
+                "utc_time_created": time.strftime("%Y-%m-%d %H:%M:%S.000000", time.gmtime()),
+                "mlflow_version": "2.16.0",
+            }
+            self._request(
+                "POST",
+                "/api/2.0/mlflow/runs/log-model",
+                payload={"run_id": run_id, "model_json": json.dumps(model_json)},
+            )
+        except Exception as err:
+            self._record_error("log_model", err)
+
+        base_uri = (self.artifact_uri or f"runs:/{run_id}").rstrip("/")
+        common_rm_tags = [
+            {"key": "dataset", "value": dataset},
+            {"key": "scope", "value": scope},
+            {"key": "model", "value": model_raw},
+            {"key": "project", "value": self.project},
+        ]
+
+        # 2. Ensure per-policy Registered Model and register every continual-learning checkpoint version
+        self._ensure_registered_model(
+            policy_model_name,
+            (
+                f"Continual-Bench ZIA model versions for dataset={dataset}, "
+                f"model={model_raw}, policy={policy} ({scope})"
+            ),
+            [*common_rm_tags, {"key": "policy", "value": policy}],
+        )
+        existing_policy_versions = self._existing_model_versions(policy_model_name, run_id)
+        created_versions: list[str] = []
+
+        for idx, ver in enumerate(raw_versions):
+            ord_key = str(idx)
+            is_final = idx == len(raw_versions) - 1
+            if ord_key in existing_policy_versions:
+                v_num = str(existing_policy_versions[ord_key].get("version", ""))
+                if v_num:
+                    created_versions.append(v_num)
+                continue
+
+            rel_file = str(ver.get("file") or "model/model.tar.gz").lstrip("/")
+            source_uri = f"{base_uri}/{rel_file}"
+            action = str(ver.get("action") or ("initial" if idx == 0 else "update"))
+            start_seq = int(ver.get("start_seq", 0))
+            end_seq = int(ver.get("end_seq", 0))
+            train_samples = int(ver.get("train_samples", 0))
+            sha_short = str(ver.get("sha256", ""))[:12]
+
+            desc = (
+                f"Checkpoint {idx} ({action}): seq=[{start_seq}..{end_seq}], "
+                f"train_samples={train_samples}, sha256={sha_short or 'n/a'}"
+            )
+            if is_final:
+                desc += (
+                    f" |FINAL| preq_acc={summary_metrics.get('accuracy', 'n/a')}, "
+                    f"holdout_acc={holdout_metrics.get('accuracy', 'n/a')}"
+                )
+
+            mv_tags = [
+                {"key": "ordinal", "value": ord_key},
+                {"key": "action", "value": action},
+                {"key": "start_seq", "value": str(start_seq)},
+                {"key": "end_seq", "value": str(end_seq)},
+                {"key": "train_samples", "value": str(train_samples)},
+                {"key": "train_seconds", "value": str(round(float(ver.get("train_seconds", 0.0)), 4))},
+                {"key": "iterations", "value": str(ver.get("iterations", 0))},
+                {"key": "bytes", "value": str(ver.get("bytes", 0))},
+                {"key": "model_sha256", "value": str(ver.get("sha256", ""))},
+                {"key": "dataset_version", "value": str(inp.get("sha256", ""))},
+                {"key": "code_sha256", "value": str(env.get("code_sha256", ""))},
+                {"key": "dataset", "value": dataset},
+                {"key": "policy", "value": policy},
+                {"key": "scope", "value": scope},
+                {"key": "model", "value": model_raw},
+                {"key": "is_final", "value": "true" if is_final else "false"},
+                {"key": "prequential_accuracy", "value": str(summary_metrics.get("accuracy", ""))},
+                {"key": "holdout_accuracy", "value": str(holdout_metrics.get("accuracy", ""))},
+            ]
+            if is_final and model_package_arn:
+                mv_tags.append({"key": "sagemaker_model_package_arn", "value": str(model_package_arn)})
+
+            try:
+                mv_resp = self._request(
+                    "POST",
+                    "/api/2.0/mlflow/model-versions/create",
+                    payload={
+                        "name": policy_model_name,
+                        "source": source_uri,
+                        "run_id": run_id,
+                        "description": desc[:1000],
+                        "tags": [t for t in mv_tags if t["value"] != ""],
+                    },
+                )
+                v_num = str((mv_resp.get("model_version") or {}).get("version", ""))
+                if v_num:
+                    created_versions.append(v_num)
+                    if idx == 0:
+                        self._set_model_alias(policy_model_name, "initial", v_num)
+                    self._set_model_alias(policy_model_name, f"step-{end_seq}", v_num)
+                    if is_final:
+                        self._set_model_alias(policy_model_name, "final", v_num)
+                        self._set_model_alias(policy_model_name, "latest", v_num)
+            except Exception as err:
+                self._record_error("create_model_version", err)
+
+        # 3. Also register the final model in the cross-policy family registry for side-by-side comparison
+        family_version = ""
+        self._ensure_registered_model(
+            family_model_name,
+            (
+                f"Unified Continual-Bench ZIA model registry comparing policies "
+                f"for dataset={dataset}, model={model_raw} ({scope})"
+            ),
+            common_rm_tags,
+        )
+        existing_family = self._existing_model_versions(family_model_name, run_id)
+        if existing_family:
+            first_existing = next(iter(existing_family.values()))
+            family_version = str(first_existing.get("version", ""))
+        else:
+            final_ver = raw_versions[-1]
+            rel_file = str(final_ver.get("file") or "model/model.tar.gz").lstrip("/")
+            family_desc = (
+                f"Policy={policy} ({len(raw_versions)} checkpoints, "
+                f"final end_seq={final_ver.get('end_seq', 0)}): "
+                f"preq_acc={summary_metrics.get('accuracy', 'n/a')}, "
+                f"holdout_acc={holdout_metrics.get('accuracy', 'n/a')}"
+            )
+            family_tags = [
+                {"key": "ordinal", "value": "final"},
+                {"key": "policy", "value": policy},
+                {"key": "dataset", "value": dataset},
+                {"key": "scope", "value": scope},
+                {"key": "model", "value": model_raw},
+                {"key": "checkpoints_count", "value": str(len(raw_versions))},
+                {"key": "model_sha256", "value": str(final_ver.get("sha256", ""))},
+                {"key": "dataset_version", "value": str(inp.get("sha256", ""))},
+                {"key": "prequential_accuracy", "value": str(summary_metrics.get("accuracy", ""))},
+                {"key": "holdout_accuracy", "value": str(holdout_metrics.get("accuracy", ""))},
+            ]
+            if model_package_arn:
+                family_tags.append({"key": "sagemaker_model_package_arn", "value": str(model_package_arn)})
+            try:
+                fam_resp = self._request(
+                    "POST",
+                    "/api/2.0/mlflow/model-versions/create",
+                    payload={
+                        "name": family_model_name,
+                        "source": f"{base_uri}/{rel_file}",
+                        "run_id": run_id,
+                        "description": family_desc[:1000],
+                        "tags": [t for t in family_tags if t["value"] != ""],
+                    },
+                )
+                family_version = str((fam_resp.get("model_version") or {}).get("version", ""))
+                if family_version:
+                    self._set_model_alias(family_model_name, policy_slug, family_version)
+                    self._set_model_alias(family_model_name, "latest", family_version)
+            except Exception as err:
+                self._record_error("create_family_model_version", err)
+
+        final_version = created_versions[-1] if created_versions else ""
+        run_tags = [
+            {"key": "registered_model", "value": policy_model_name},
+            {"key": "registered_model_versions_count", "value": str(len(created_versions))},
+            {"key": "registered_family_model", "value": family_model_name},
+        ]
+        if final_version:
+            run_tags.append({"key": "registered_model_version", "value": final_version})
+        if family_version:
+            run_tags.append({"key": "registered_family_version", "value": family_version})
+        self.log_batch(tags=run_tags)
+
+        return {
+            "registered_model": policy_model_name,
+            "registered_model_version": final_version,
+            "registered_model_versions": created_versions,
+            "registered_family_model": family_model_name,
+            "registered_family_version": family_version,
         }
 
 

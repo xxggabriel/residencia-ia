@@ -413,6 +413,11 @@ def run_unit(
                         links["mlflow_run_id"] = mlflow_info["mlflow_run_id"]
                         links["mlflow_experiment_id"] = mlflow_info.get("mlflow_experiment_id")
                         links["mlflow_artifact_uri"] = mlflow_info.get("artifact_uri")
+                        if mlflow_info.get("registered_model"):
+                            links["registered_model"] = mlflow_info["registered_model"]
+                            links["registered_model_version"] = mlflow_info.get("registered_model_version")
+                            links["registered_family_model"] = mlflow_info.get("registered_family_model")
+                            links["registered_family_version"] = mlflow_info.get("registered_family_version")
                 except Exception:
                     log.warning(
                         "mlflow report publication failed; run evidence in S3 is unaffected",
