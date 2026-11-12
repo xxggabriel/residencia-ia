@@ -61,7 +61,7 @@ Parameters:
     MaxValue: 200
   BenchmarkTimeoutSeconds:
     Type: Number
-    Default: 172800
+    Default: 14400
     MinValue: 900
   PrepareVcpus:
     Type: String
@@ -77,7 +77,7 @@ Parameters:
     MaxValue: 200
   PrepareTimeoutSeconds:
     Type: Number
-    Default: 43200
+    Default: 14400
     MinValue: 900
   QueueWaitTimeoutSeconds:
     Type: Number
@@ -220,6 +220,28 @@ Resources:
                 Action: [kms:Decrypt, kms:GenerateDataKey]
                 Resource: !Ref DataKeyArn
                 Condition: {StringEquals: {kms:ViaService: !Sub "s3.${AWS::Region}.amazonaws.com"}}
+        - PolicyName: sagemaker-experiments
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: TrackSageMakerExperiments
+                Effect: Allow
+                Action:
+                  - sagemaker:CreateExperiment
+                  - sagemaker:DescribeExperiment
+                  - sagemaker:UpdateExperiment
+                  - sagemaker:CreateTrial
+                  - sagemaker:DescribeTrial
+                  - sagemaker:UpdateTrial
+                  - sagemaker:CreateTrialComponent
+                  - sagemaker:DescribeTrialComponent
+                  - sagemaker:UpdateTrialComponent
+                  - sagemaker:BatchPutMetrics
+                  - sagemaker:AddTags
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment/${Project}-*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial/${Project}-*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial-component/${Project}-*"
         - !If
           - ModelRegistry
           - PolicyName: register-candidates
