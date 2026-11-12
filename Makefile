@@ -1,6 +1,6 @@
 .PHONY: test lint smoke compose-check aws-validate aws-smoke aws-images aws-lambda \
         aws-bootstrap aws-dataset-smoke aws-dataset-full \
-        aws-campaign-smoke aws-campaign-full aws-campaign-matrix \
+        aws-campaign-smoke aws-campaign-full aws-campaign-full-cost-heuristic aws-campaign-matrix \
         aws-mlflow-ui aws-cancel aws-teardown aws-teardown-all
 
 REPOSITORY ?= xxggabriel/residencia-ia
@@ -49,6 +49,9 @@ aws-campaign-smoke:
 
 aws-campaign-full:
 	scripts/aws/start_campaign.sh infra/examples/campaign-social-full.json
+
+aws-campaign-full-cost-heuristic:
+	scripts/aws/start_campaign.sh infra/examples/campaign-social-full-cost-heuristic.json
 
 aws-campaign-matrix:
 	scripts/aws/start_campaign.sh infra/examples/campaign-binary-matrix.json
