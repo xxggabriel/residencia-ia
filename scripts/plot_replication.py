@@ -8,7 +8,7 @@ import argparse
 import json
 from pathlib import Path
 
-from continual_bench.evaluation.replication_plots import cara_figures, upf_figures
+from continual_bench.evaluation.replication_plots import cara_figures, schedule_figure, upf_figures
 
 
 def main():
@@ -16,12 +16,15 @@ def main():
     parser.add_argument("results", nargs="+", type=Path)
     parser.add_argument("--output", type=Path, default=Path("docs/results/plots"))
     args = parser.parse_args()
-    upf, cara = {}, {}
+    upf, cara, schedules = {}, {}, []
     for path in args.results:
         for entry in json.loads(path.read_text()):
-            (upf if "trials" in entry else cara)[entry["dataset"]] = entry
+            if "accuracy_mean" in entry:
+                schedules.append(entry)
+            else:
+                (upf if "trials" in entry else cara)[entry["dataset"]] = entry
     args.output.mkdir(parents=True, exist_ok=True)
-    figures = []
+    figures = [schedule_figure(entry) for entry in schedules]
     if upf:
         figures += upf_figures(list(upf.values()))
     if cara:

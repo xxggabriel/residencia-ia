@@ -16,8 +16,8 @@ from pathlib import Path
 import numpy as np
 
 from continual_bench.datasets import retraining_benchmarks as data
-from continual_bench.retraining import build_matrix
-from continual_bench.retraining.analysis import analyze
+from continual_bench.retraining import alpha_max, build_matrix, simulate
+from continual_bench.retraining.analysis import analyze, make_rule
 
 BATCHES, OFFLINE = 100, 25
 RULES = ("cara", "cara_cumulative", "cara_periodic", "markov", "frozen", "oracle_staleness")
@@ -132,3 +132,45 @@ def replicate(name, seeds=5, **options):
     kappa = [alpha * runs[0][1] for alpha in runs[0][0]["alphas"]]
     return {"dataset": name, "seeds": seeds, "kappa_max": KAPPA_MAX.get(name), "summary": summary,
             "kappa": kappa, "curves": curves}
+
+
+def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fraction=0.25, rule="cara",
+                      **options):
+    """Data of the CARA Fig. 1 plot: accuracy of every model on every later batch, and the schedule.
+
+    ``batches`` consecutive batches (the paper draws 11, ``D0..D10``); the retraining cost is
+    ``fraction`` of the largest alpha at which the error Oracle still retrains. Accuracy is ``1 - err``
+    averaged over seeds, with the spread across seeds; the schedule line is the accuracy of the model
+    deployed at each online batch, and a batch is marked when at least half the seeds retrain for it.
+    """
+    base, _, _ = name.partition("-")
+    accuracy, deployed, changes, alphas = [], [], [], []
+    for seed in range(seeds):
+        if base in ("gauss", "circle", "covcon"):
+            stream = getattr(data, f"cara_{base}")(batches, 1000, seed)
+            queries, n_points, n_queries = None, 1000, 100
+        else:
+            stream, queries, n_points, n_queries = batches_for(name, seed, **options)
+            stream = stream[:batches]
+        matrix, _ = build_matrix(iter(stream), ForestLearner(seed), offline=offline, seed=seed,
+                                 n_points=n_points, n_queries=n_queries, query_stream=queries,
+                                 workers=os.cpu_count() or 1)
+        first, last = matrix.offline, matrix.batches - 1
+        alpha = fraction * alpha_max(matrix.err, matrix.initial, first, last)
+        result = simulate(make_rule(rule, seed=seed), matrix, alpha)
+        alphas.append(alpha)
+        accuracy.append(1.0 - matrix.err)
+        models = list(result.deployed)
+        deployed.append([1.0 - matrix.err[m, j] for j, m in zip(range(first, matrix.batches), models,
+                                                                strict=True)])
+        changes.append({j for (j, m), previous in zip(zip(range(first, matrix.batches), models),
+                                                      [matrix.initial, *models]) if m != previous})
+    stack = np.asarray(accuracy)
+    online = np.asarray(deployed)
+    marked = sorted(j for j in range(batches) if sum(j in c for c in changes) * 2 >= seeds and j > 0)
+    return {"dataset": name, "rule": rule, "seeds": seeds, "batches": batches, "offline": offline,
+            "alpha": float(np.mean(alphas)),
+            "accuracy_mean": np.nan_to_num(np.mean(stack, axis=0), nan=0.0).tolist(),
+            "accuracy_std": np.nan_to_num(np.std(stack, axis=0), nan=0.0).tolist(),
+            "schedule_mean": online.mean(axis=0).tolist(), "schedule_std": online.std(axis=0).tolist(),
+            "retrain_batches": marked}

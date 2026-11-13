@@ -73,3 +73,18 @@ def test_cara_static_queries_use_the_batch_concept():
     queries = data.cara_static_queries("covcon", n_batches=3, n_queries=50, seed=0)
     x, y = queries[0]
     assert x.shape == (50, 2) and abs(x.mean() - 0.5) < 0.02 and set(np.unique(y)) <= {0, 1}
+
+
+def test_schedule_figure_draws_models_and_retrain_marks():
+    from continual_bench.evaluation.replication_plots import schedule_figure
+
+    size = 6
+    mean = [[0.9 - 0.02 * abs(i - j) for j in range(size)] for i in range(size)]
+    showcase = {"dataset": "toy", "rule": "cara", "seeds": 2, "batches": size, "offline": 2, "alpha": 0.1,
+                "accuracy_mean": mean, "accuracy_std": [[0.01] * size for _ in range(size)],
+                "schedule_mean": [0.8, 0.85, 0.8, 0.82], "schedule_std": [0.0] * 4, "retrain_batches": [4]}
+    name, figure = schedule_figure(showcase)
+    assert name == "cara_schedule_toy.png"
+    axis = figure.axes[0]
+    assert len(axis.lines) == size  # size - 1 models + the schedule
+    assert any(text.get_text() == "retrain" for text in axis.texts)

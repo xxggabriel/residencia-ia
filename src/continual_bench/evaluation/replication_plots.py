@@ -108,3 +108,41 @@ def cara_figures(results):
         fig.tight_layout()
         out.append((f"cara_curves_{result['dataset']}.png", fig))
     return out
+
+
+def schedule_figure(showcase):
+    """CARA Fig. 1: accuracy of the model trained on each batch against the batch it is evaluated on."""
+    import numpy as np
+
+    plt = _plt()
+    mean = np.asarray(showcase["accuracy_mean"], dtype=float)
+    std = np.asarray(showcase["accuracy_std"], dtype=float)
+    size, offline = showcase["batches"], showcase["offline"]
+    fig, ax = plt.subplots(figsize=(11, 3.8))
+    colors = plt.cm.turbo(np.linspace(0.05, 0.95, size - 1))
+    for model in range(size - 1):
+        xs = list(range(model + 1, size))
+        centre, spread = mean[model, model + 1:], std[model, model + 1:]
+        label = f"$\\mathcal{{D}}_{{{model}}}$"
+        ax.plot(xs, centre, marker="o", markersize=3, color=colors[model], label=label)
+        ax.fill_between(xs, centre - spread, centre + spread, color=colors[model], alpha=0.18)
+    online = list(range(offline, size))
+    schedule = np.asarray(showcase["schedule_mean"], dtype=float)
+    ax.plot(online, schedule, color="black", linestyle="-.", linewidth=2.2, marker="o", markersize=3,
+            label="retraining schedule", zorder=5)
+    top = float(np.nanmax(mean + std))
+    for batch in showcase["retrain_batches"]:
+        ax.annotate("retrain", (batch, schedule[batch - offline]), xytext=(batch, top + 0.012),
+                    ha="center", color="#c0392b", fontsize=9,
+                    bbox={"boxstyle": "round", "fc": "white", "ec": "#c0392b"},
+                    arrowprops={"arrowstyle": "-", "color": "#c0392b", "alpha": 0.5})
+    ax.set_xticks(range(size), [f"$\\mathcal{{D}}_{{{j}}}$" for j in range(size)])
+    ax.set_xlabel("Evaluated on dataset")
+    ax.set_ylabel("Accuracy")
+    ax.grid(alpha=0.4)
+    ax.legend(title="model $f$ trained on dataset:", ncol=1, fontsize=7, loc="center left",
+              bbox_to_anchor=(1.01, 0.5))
+    ax.set_title(f"CARA Fig. 1 — {showcase['dataset']} ({showcase['rule']}, {showcase['seeds']} seeds)",
+                 fontweight="bold")
+    fig.tight_layout()
+    return f"cara_schedule_{showcase['dataset']}.png", fig
