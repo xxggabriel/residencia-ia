@@ -245,6 +245,16 @@
       "kind": "executable_source",
       "path": "src/continual_bench/evaluation/costs.py",
       "locator": "aws_account"
+    },
+    "cara_executable": {
+      "kind": "executable_source",
+      "path": "src/continual_bench/retraining/rules.py",
+      "locator": "CaraT, CaraCT, CaraP e Oracle; custo de obsolescência em retraining/matrix.py"
+    },
+    "upf_executable": {
+      "kind": "executable_source",
+      "path": "src/continual_bench/retraining/rules.py",
+      "locator": "UPF (previsor ElasticNetCV, Beta, quantil Monte Carlo) e analysis.py (AUC, SCPE, robustez a alpha)"
     }
   },
   "families": {
@@ -2424,11 +2434,14 @@
         "missing_forecast_targets"
       ],
       "sources": [
+        "upf_executable",
         "upf_notes",
         "upf_primary"
       ],
       "status": "conditional_definition",
-      "interpretation_limits": []
+      "interpretation_limits": [
+        "definido apenas para o UPF; compara a média prevista com o erro realizado depois (todos os lotes futuros de cada decisão)"
+      ]
     },
     "performance_forecast_bias": {
       "family": "regression",
@@ -2448,11 +2461,14 @@
         "missing_forecast_targets"
       ],
       "sources": [
+        "upf_executable",
         "upf_notes",
         "upf_primary"
       ],
       "status": "conditional_definition",
-      "interpretation_limits": []
+      "interpretation_limits": [
+        "definido apenas para o UPF; compara a média prevista com o erro realizado depois (todos os lotes futuros de cada decisão)"
+      ]
     },
     "pipeline_elapsed_seconds": {
       "family": "mlops",
@@ -3309,20 +3325,22 @@
         "zero_oracle_cost"
       ],
       "sources": [
+        "cara_executable",
         "cara_notes",
         "cara_primary",
         "tracking_source"
       ],
       "status": "conditional_definition",
       "interpretation_limits": [
-        "oráculo de custo não garante maior acurácia; não estimar Oracle pela melhor configuração observada"
+        "oráculo de custo não garante maior acurácia; não estimar Oracle pela melhor configuração observada",
+        "em políticas em lotes o Oracle é o DP sobre a matriz completa no mesmo alpha"
       ],
       "canonical_name": "scpe"
     },
     "upf_paper_auc": {
       "family": "adaptation",
       "study_status": "studied",
-      "formula": "integral_0^alpha_max C_hat(alpha;policy_run_at_alpha) d(alpha)",
+      "formula": "integral_0^alpha_max C_hat(alpha; política simulada sobre a matriz de desempenho) d(alpha); 10 pontos, regra do trapézio",
       "direction": "minimize",
       "unit": "normalized_cost*alpha",
       "scopes": [
@@ -3332,10 +3350,10 @@
         "scenario_grid"
       ],
       "prerequisites": [
-        "política executada por alpha",
-        "grade comum documentada",
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz completa de desempenho",
         "protocolo Oracle que define alpha_max",
-        "dados e horizonte equivalentes"
+        "grade comum de alpha"
       ],
       "na_reasons": [
         "missing_alpha_campaign",
@@ -3343,13 +3361,14 @@
         "incompatible_alpha_grid"
       ],
       "sources": [
+        "tracking_source",
+        "upf_executable",
         "upf_notes",
-        "upf_primary",
-        "tracking_source"
+        "upf_primary"
       ],
       "status": "conditional_definition",
       "interpretation_limits": [
-        "artigo avalia 10 pontos; integração numérica e faixa precisam constar do artefato"
+        "a política é reexecutada sobre a matriz para cada alpha da grade (como no artigo), sem retreinar; retreino vale a partir do lote seguinte"
       ],
       "canonical_name": "upf_paper_cost_auc"
     },
@@ -5395,6 +5414,391 @@
         "Duração do aprendiz exclui startup, ociosidade e infraestrutura de avaliação/publicação.",
         "Retenção e duração do mês configuradas como cenário; não é RAM observada."
       ]
+    },
+    "retraining_alpha": {
+      "family": "adaptation",
+      "study_status": "operationalization",
+      "formula": "alpha = custo de retreino / custo de errar um lote inteiro (eN = 1); kappa por query do CARA",
+      "direction": "descriptive",
+      "unit": "ratio",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "retraining_c_hat": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "C_hat_alpha(theta) = alpha * #retreinos_online + sum_t erro_0-1(modelo_implantado(t), lote t), fase online",
+      "direction": "minimize",
+      "unit": "normalized_cost",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "retreino após o lote t vale a partir de t+1 (test-then-train); os artigos avaliam o modelo retreinado no próprio lote t"
+      ]
+    },
+    "retraining_online_retrains": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "contagem de decisões Retrain na fase online (exclui o aquecimento offline)",
+      "direction": "descriptive",
+      "unit": "retrains",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "retraining_average_accuracy": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "1 - media_t erro_0-1(modelo_implantado(t), lote t), fase online",
+      "direction": "maximize",
+      "unit": "fraction",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "retraining_oracle_c_hat": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "min_theta C_hat_alpha(theta) por programação dinâmica sobre a matriz completa",
+      "direction": "minimize",
+      "unit": "normalized_cost",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "limite inferior retrospectivo; usa lotes futuros e não é uma política implantável"
+      ]
+    },
+    "retraining_oracle_retrains": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "número de retreinos da solução ótima do Oracle no mesmo alpha",
+      "direction": "descriptive",
+      "unit": "retrains",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "retraining_alpha_max": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "menor alpha em que o Oracle não retreina: max_r (E_0 - E_r) / r",
+      "direction": "descriptive",
+      "unit": "ratio",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "define a faixa [0, alpha_max] da AUC"
+      ]
+    },
+    "retraining_lipschitz_L": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "L = max |pe[i,j] - pe[i+1,j]| observado nos pares online",
+      "direction": "descriptive",
+      "unit": "error_rate",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "estimativa empírica; não é um limite verdadeiro"
+      ]
+    },
+    "retraining_retrain_upper_bound": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "r* <= T - sqrt(alpha / L) (Proposição 3.1 do UPF) com L empírico",
+      "direction": "descriptive",
+      "unit": "retrains",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "com L empírico a cota é indicativa, não uma garantia"
+      ]
+    },
+    "retraining_mean_scpe": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "média sobre a grade de alpha de 100*(C_hat - C_hat_oracle)/C_hat_oracle",
+      "direction": "minimize",
+      "unit": "percent",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "pontos com Oracle de custo zero são omitidos"
+      ]
+    },
+    "retraining_offline_seconds": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "tempo médio da fase offline (ajuste de parâmetros / DP do Oracle) por alpha da grade",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "tempo de simulação sobre a matriz; não inclui o treino dos modelos da matriz"
+      ]
+    },
+    "retraining_online_decision_seconds": {
+      "family": "adaptation",
+      "study_status": "studied",
+      "formula": "tempo médio de uma decisão online da política sobre a matriz",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "adaptation",
+        "run",
+        "scenario_grid"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "retraining_matrix_fit_seconds": {
+      "family": "adaptation",
+      "study_status": "operationalization",
+      "formula": "soma dos tempos de treino dos modelos candidatos de cada lote (matriz de desempenho)",
+      "direction": "minimize",
+      "unit": "seconds",
+      "scopes": [
+        "run"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": [
+        "custo de medição da matriz; o run implantado cobra apenas os modelos adotados"
+      ]
+    },
+    "retraining_offline_batches": {
+      "family": "adaptation",
+      "study_status": "operationalization",
+      "formula": "lotes da fase offline (w)",
+      "direction": "descriptive",
+      "unit": "batches",
+      "scopes": [
+        "run"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
+    },
+    "retraining_online_batches": {
+      "family": "adaptation",
+      "study_status": "operationalization",
+      "formula": "lotes da fase online (T)",
+      "direction": "descriptive",
+      "unit": "batches",
+      "scopes": [
+        "run"
+      ],
+      "prerequisites": [
+        "política cost-aware em lotes (CARA, UPF ou Oracle)",
+        "matriz de desempenho dos lotes"
+      ],
+      "na_reasons": [
+        "not_a_batch_cost_aware_policy"
+      ],
+      "sources": [
+        "cara_executable",
+        "upf_executable"
+      ],
+      "status": "conditional_definition",
+      "interpretation_limits": []
     }
   },
   "evidence_limits": [

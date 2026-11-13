@@ -86,7 +86,7 @@ def test_versioned_runs_keep_their_identities(name, identity):
 
 def test_versioned_campaign_typed_and_matrix_configs_validate():
     campaign = load_model(Campaign, CONFIGS / "campaigns/task-smoke.yaml")
-    assert campaign.identity() == "056808872404983207e64a7b"
+    assert campaign.identity() == "45622477fbedbbd6148d9f00"
     assert load_model(TypedConfig, CONFIGS / "typed/friedman-smoke.yaml").dataset.name == "friedman_drift"
     assert load_model(ExperimentMatrix, CONFIGS / "matrices/binary-comparison.yaml").identity() == (
         "380356c50d6234d3b4e3c41f")

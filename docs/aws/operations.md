@@ -150,29 +150,33 @@ Os exemplos `dataset-{fraud,social,ecommerce}-full.json` preparam 50, 100 e 50 m
 de eventos, respectivamente. Aguarde os três marcadores `_SUCCESS.json` no escopo `full`
 e confira as contagens no manifesto antes de iniciar as campanhas.
 
-Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem sete jobs independentes
+Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem seis jobs independentes
 por dataset. Fixe o mesmo SHA de release nos três arquivos. Para disparar as três campanhas
-em paralelo, confira se a fila, o compute environment e a quota regional permitem **21 jobs
+em paralelo, confira se a fila, o compute environment e a quota regional permitem **18 jobs
 simultâneos**. Cada job usa 2 vCPU e 2 GiB de RAM (`BenchmarkVcpus=2` e
-`BenchmarkMemoryMiB=2048`). Reserve pelo menos 21 vCPUs livres no ambiente compartilhado.
-Os exemplos pedem sete jobs simultâneos por campanha e uma tentativa por job.
+`BenchmarkMemoryMiB=2048`). Reserve pelo menos 18 vCPUs livres no ambiente compartilhado.
+Os exemplos pedem seis jobs simultâneos por campanha e uma tentativa por job.
 
-As variantes são `frozen`, `online`, `drift_adwin`, `drift_ddm`, `incremental`,
-`periodic` e `cost_heuristic`. Todas usam o mesmo modelo por dataset, o mesmo warm-up e
+As variantes são `frozen`, `online`, `drift_adwin`, `drift_ddm`, `incremental` e
+`periodic`. Todas usam o mesmo modelo por dataset, o mesmo warm-up e
 as mesmas fronteiras temporais. O modo `online` atualiza em minibatches após a predição
 do bloco. Em Social, River SGD atualiza os coeficientes da regressão logística multinomial.
 Em Fraud e E-commerce, a perda logística do River fornece os gradientes e o XGBoost
 atualiza os pesos das folhas das árvores existentes. O holdout usa o último checkpoint.
 
 Os dois detectores recebem o mesmo sinal binário de erro de cada predição e podem acionar
-um retreino por bloco. A heurística compara o custo de retreinar com a redução projetada
-no erro, usando os quatro últimos blocos e os custos do perfil de tracking em unidades de
-cenário. O relatório registra os parâmetros de decisão e o método de atualização.
+um retreino por bloco. O relatório registra os parâmetros de decisão e o método de atualização.
+
+As políticas com custo (`cara`, `cara_cumulative`, `cara_periodic`, `upf` e `oracle`, veja
+[cost-aware-retraining.md](../cost-aware-retraining.md)) têm campanha própria,
+`campaign-social-full-cost-aware.json` (`make aws-campaign-full-cost-aware`, cinco jobs). Cada
+job mede a matriz de desempenho (um ajuste por bloco e O(B²) predições), então dimensione o
+`run_timeout_seconds` para esse custo adicional.
 
 ### Suíte de todos os datasets
 
 `matrix.kind=project_suite` usa o mesmo gerador de casos da DAG `benchmark_task_suite`.
-O padrão tem 548 unidades e usa 3.000 eventos nos casos binários, 100 exemplos e duas
+O padrão tem 518 unidades e usa 3.000 eventos nos casos binários, 100 exemplos e duas
 épocas nos casos por épocas, atraso de três e seed 42. `matrix` aceita os campos
 `samples`, `dataset_examples`, `epochs`, `label_delay` e `seed`.
 

@@ -13,10 +13,11 @@ from pathlib import Path
 
 from continual_bench.infrastructure.storage import atomic_write
 
-from .figures import Figure, binary_figures, epoch_figures, system_figures, typed_figures
+from .figures import Figure, binary_figures, epoch_figures, retraining_figures, system_figures, typed_figures
 
 ROOT = "artifacts"
-__all__ = ["Figure", "binary_figures", "epoch_figures", "system_figures", "typed_figures", "write_artifacts"]
+__all__ = ["Figure", "binary_figures", "epoch_figures", "retraining_figures", "system_figures",
+           "typed_figures", "write_artifacts"]
 
 
 def _dump(value) -> bytes:

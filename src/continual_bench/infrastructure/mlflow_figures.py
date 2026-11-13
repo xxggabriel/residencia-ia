@@ -15,6 +15,8 @@ import math
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
+from .retraining_figures import RETRAINING_BUILDERS
+
 MARKER_STYLE = {
     "alarm": ("#d62728", "--", "Alarme do detector"),
     "changepoint": ("#7f7f7f", ":", "Mudança de conceito"),
@@ -549,6 +551,7 @@ BUILDERS: tuple[Callable, ...] = (
     _summary,
     _epochs,
     _system,
+    *RETRAINING_BUILDERS,
 )
 
 

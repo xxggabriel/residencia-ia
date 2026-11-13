@@ -29,7 +29,7 @@ def test_complete_plan_covers_catalog_models_modes_and_policy_extensions():
     assert {c.dataset for c in epochs} == set(DATASETS) and len(epochs) == 17
     assert {c.model.name for c in binary} == {'logistic', 'hoeffding_tree', 'knn'}
     assert {c.mode for c in binary} == {'streaming', 'incremental', 'offline'}
-    assert {'performance', 'cost_heuristic', 'drift', 'online', 'none', 'periodic'} <= {
+    assert {'performance', 'drift', 'online', 'none', 'periodic'} <= {
         c.policy.name for c in binary}
     assert {'adwin', 'ddm', 'eddm', 'hddm_a', 'hddm_w', 'kswin', 'page_hinkley'} <= {
         c.detector.name for c in binary}

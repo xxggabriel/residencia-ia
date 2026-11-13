@@ -17,7 +17,7 @@ ou da camada de aplicação.
 | BWT e FWT de GEM | [Lopez-Paz e Ranzato, arXiv 1706.08840v6, equações 3 e 4](https://arxiv.org/html/1706.08840v6) | Novo resumo de matriz; FWT exigiu baseline anterior ao aprendizado | Testes com matrizes calculáveis, células ausentes e transferência positiva |
 | Near-future accuracy | [Hammoud et al., arXiv 2305.09275v1, seção 3.5](https://arxiv.org/html/2305.09275v1) | Adaptação operacional binária com gap e horizonte declarados; sem reprodução do benchmark visual | Testes de snapshot, atraso, replay, falha, retomada e limites |
 | Separação temporal | Contrato local `validate_temporal_holdout` | Novo validador de disponibilidade e IDs nas partições | Testes de leakage por ID e por rótulos tardios |
-| Objetivo de retreinamento UPF | [Regol et al., ICML 2025](https://proceedings.mlr.press/v267/regol25a.html), [arXiv 2505.14903v1, seção 5](https://arxiv.org/html/2505.14903v1) | Mantida distinção entre custo de cenário, sensibilidade pós-hoc e campanha UPF | Nenhuma alegação de reprodução ou AUC UPF |
+| Objetivo de retreinamento UPF | [Regol et al., ICML 2025](https://proceedings.mlr.press/v267/regol25a.html), [arXiv 2505.14903v1, seção 5](https://arxiv.org/html/2505.14903v1) | Mantida distinção entre custo de cenário, sensibilidade pós-hoc e campanha UPF; AUC UPF só nos runs das políticas cost-aware ([métricas](cost-aware-retraining.md#métricas-rastreadas)) | Sem alegação de reprodução dos números do artigo |
 
 Os resultados pass/fail dependem da execução no homelab e foram registrados no
 relatório principal; a presença dos testes nesta tabela descreveu sua cobertura.
@@ -81,7 +81,7 @@ reduzir correlação de rótulos. O valor adequado de gap dependeu do dataset e 
 ser fixado com dados de desenvolvimento. `gap=0` serviu como controle imediato;
 nem esse caso nem um gap arbitrário garantiram remoção de correlações. A
 implementação não reproduziu as arquiteturas, datasets e orçamento do paper.
-Também não implementou o previsor probabilístico ou a decisão UPF.
+O previsor e a decisão UPF vivem em `retraining/` (ver [cost-aware-retraining.md](cost-aware-retraining.md)); este módulo de épocas não os usa.
 
 ## Integração e limites
 

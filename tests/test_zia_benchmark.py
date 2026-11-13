@@ -1,3 +1,4 @@
+import json
 from functools import partial
 from pathlib import Path
 from shutil import copytree
@@ -122,7 +123,28 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
     online_warmup = reports["online"]["model_versions"][0]
     assert online_warmup["sha256"] == reports["frozen"]["model_versions"][0]["sha256"]
     assert {v["action"] for v in reports["online"]["model_versions"]} == {"initial", "online"}
-    assert reports["cost_heuristic"]["metrics"]["retrain_count"] == 0
+    for name in ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle"):
+        metrics, retraining = reports[name]["metrics"], reports[name]["retraining"]
+        assert retraining["setup"]["offline_batches"] >= 2
+        assert metrics["retraining_online_retrains"] == len(retraining["deployed"]["retrain_points"])
+        assert metrics["retrain_count"] == metrics["retraining_online_retrains"] + 1  # + offline warm start
+        assert metrics["retraining_c_hat"] >= metrics["retraining_oracle_c_hat"] - 1e-9
+        assert metrics["upf_paper_auc"] is not None
+        assert metrics["cost_scpe"] is None  # toy stream learned perfectly: Oracle cost 0, SCPE undefined
+    assert reports["upf"]["metrics"]["performance_forecast_mae"] is not None
+    assert reports["cara"]["metrics"]["performance_forecast_mae"] is None
+    assert "upf_paper_auc" not in reports["frozen"]["metrics"] and "retraining" not in reports["frozen"]
+    adapted = tracking_report(reports["upf"], prediction_manifest(tmp_path / "upf", reports["upf"]))
+    series = adapted["tracking"]["series"]
+    assert {"retraining/cost_vs_alpha/upf", "retraining/retrains_vs_alpha/oracle",
+            "retraining/cumulative_strategy_cost/cara"} <= set(series)
+    assert adapted["tracking"]["metrics"]["upf_paper_auc"] == reports["upf"]["metrics"]["upf_paper_auc"]
+    assert adapted["tracking"]["availability"]["upf_paper_auc"]["status"] == "available"
+    write_zia_artifacts(tmp_path / "upf", reports["upf"], adapted)
+    index = json.loads((tmp_path / "upf/artifacts/data/index.json").read_text())
+    names = {figure["name"] for figure in index["figures"] if figure["group"] == "retraining"}
+    assert {"cost_vs_alpha", "wrong_alpha_upf", "staleness_matrix", "retrain_bound"} <= names
+    assert (tmp_path / "upf/artifacts/data/retraining/analysis.json").is_file()
     for policy in ("incremental", "online"):
         report = reports[policy]
         native = tmp_path / policy
