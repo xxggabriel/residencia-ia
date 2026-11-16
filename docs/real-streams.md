@@ -1,6 +1,6 @@
-# Aquisição e loaders INSECTS e Gas da Semana 09
+# Aquisição de INSECTS e Gas Sensor Array Drift
 
-Foram implementados loaders dos dados originais, com aquisição explícita e limitada por bytes, prazo e cardinalidade. `prepare_real_stream(name, cache, limit=100, seed=42, download=False)` retornou uma fonte com `samples_iter()` de `TaskSample` e `manifest()`. `download=False` exigiu um cache já admitido; uma ausência não disparou download implícito.
+O [loader de fluxos reais](../src/continual_bench/datasets/real_streams.py) oferece `prepare_real_stream(name, cache, limit=100, seed=42, *, download=False)` para `insects` e `gas`, com aquisição limitada por bytes, prazo e cardinalidade. A fonte expõe `samples_iter()` de `TaskSample` e `manifest()`. A aquisição remota exige `download=True`. Na avaliação prequential a configuração usa `LocalManifestSource` para fontes locais já preparadas.
 
 ## Fontes e versões
 
@@ -11,7 +11,7 @@ Foram implementados loaders dos dados originais, com aquisição explícita e li
 
 Os URLs públicos, limites e requisitos ficaram em `configs/contracts/real-streams.lock.json`. O download de Gas publicado pela UCI foi anunciado como aproximadamente 9,5 MB. A aquisição armazenou somente as duas fontes selecionadas; não baixou o ZIP geral do repositório USP.
 
-O repositório USP declarou CC BY 4.0 e ressalvou direitos de fontes externas. A licença atual no catálogo UCI também declarou CC BY 4.0, enquanto o texto descritivo histórico manteve a restrição a pesquisa. Esse contraste foi preservado no manifesto; a finalidade desta execução foi pesquisa da Residência IA. Não foi implementado aceite de termos, autenticação, confirmação de páginas HTML, cookies ou evasão de negação HTTP.
+Na consulta feita para a Semana 09, o repositório USP declarou CC BY 4.0 e ressalvou direitos de fontes externas. O catálogo UCI listou CC BY 4.0 e preservou, no texto descritivo histórico, uma restrição a pesquisa. O manifesto registra ambas as referências. A validação inicial teve finalidade de pesquisa na Residência em IA.
 
 ## Integridade e cache
 
@@ -21,10 +21,10 @@ O cache foi admitido por renomeação atômica de um diretório temporário comp
 
 O loader Gas leu diretamente os membros conhecidos do ZIP, sem extrair arquivos arbitrários. Exigiu os dez membros únicos `batch1.dat` a `batch10.dat`, todos os 128 índices de atributos por linha, valores finitos e rótulos originais de 1 a 6. O parser INSECTS exigiu 34 colunas por linha e não inventou cabeçalho ou descartou uma linha como cabeçalho.
 
-## Seleção e avaliação inicial
+## Seleção e avaliação
 
 O limite de 100 selecionou exatamente o prefixo publicado, sem embaralhamento nem transformação de rótulos para booleano. IDs derivaram do SHA-256 bruto e do offset original. A seed foi registrada como ignorada nessas fontes determinísticas. O stream retornou `split=train`; a reserva do holdout e o controle de épocas ficaram sob responsabilidade do avaliador coordenador, sem o loader modificar os dados.
 
 Gas preservou a ordem dos dez lotes e registrou `task_id`/grupo por lote, além das cardinalidades e classes do arquivo completo. Um prefixo de 100 pôde abranger apenas parte do primeiro lote e das classes; ele não foi descrito como avaliação de todas as mudanças do dataset. INSECTS preservou a ordem do CSV `abrupt_balanced`. Nenhum loader inventou pontos de drift verdadeiros: `changepoints=None`. O relógio de replay foi ordinal simulado e não substituiu o calendário original de cada observação.
 
-Os testes acrescentados cobriram os parsers com fixtures pequenas, ordem de lotes, preservação multiclasse, integridade/cache/replay, corrupção, falhas de aquisição e retry explícito, limites e rejeição de respostas HTML. Todos os testes iniciais e aquisições reais devem ser executados exclusivamente no homelab autorizado; este documento não atribuiu a presença dos testes a resultados já executados.
+Os testes de contrato cobrem parsers, ordem de lotes, classes, integridade, corrupção, retry explícito, limites e rejeição de respostas HTML. INSECTS e Gas passaram no smoke do homelab com 100 exemplos reais por fonte e duas épocas. [Relatório de execução](task-dataset-execution.md)

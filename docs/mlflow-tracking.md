@@ -1,8 +1,9 @@
 # Rastreamento no MLflow: métricas, métricas de sistema, gráficos e dados
 
-Toda execução coleta **todas as métricas por padrão**. Ao final de cada avaliação, gera localmente
-gráficos segmentados por tema e os JSON com os dados de cada gráfico. Quando a execução é publicada
-no MLflow, esses arquivos e as métricas de sistema vão para o run.
+Os avaliadores geram métricas, gráficos e dados conforme o protocolo e as entradas disponíveis.
+No homelab, os publicadores registram no MLflow as métricas e os artefatos produzidos.
+No perfil AWS, o MLflow gerenciado recebe as campanhas Zia, as matrizes e os jobs
+nativos do SageMaker.
 
 ## Métricas coletadas por padrão
 
@@ -85,9 +86,9 @@ A publicação é idempotente: pontos `system/*` já existentes são conferidos 
 artefatos de mesmo caminho são sobrescritos com o mesmo conteúdo. A marca
 `tracking_v1_status=complete` continua sendo a última escrita antes de encerrar o run.
 
-O avaliador typed gera os mesmos artefatos e métricas de sistema localmente, mas ainda não tem um
-publicador MLflow. A matriz (`continual-bench matrix`) executa sem serviços: os artefatos ficam em
-cada diretório de caso.
+A CLI local de avaliação typed e de matriz grava os resultados em diretórios de estado.
+O tracking AWS de matrizes é configurado no worker do Batch e aceita casos binários, typed e
+de épocas.
 
 ## Dashboards detalhados com `mlflow.log_figure()`
 
@@ -113,11 +114,32 @@ O código está em `infrastructure/mlflow_figures.py`; precisa do extra `plots` 
 Cada gráfico só é gerado quando o relatório tem os dados correspondentes. As figuras são
 registradas em `publish_run_artifacts` (todos os fluxos locais) e no publicador SageMaker abaixo.
 
-## SageMaker MLflow com a biblioteca `sagemaker-mlflow`
+## MLflow no SageMaker Studio
 
-Nas execuções AWS, com `MLFLOW_TRACKING_URI` apontando para o ARN do MLflow App / Tracking Server,
-`SageMakerMlflowTracker.publish_run_report` usa as bibliotecas `mlflow` e `sagemaker-mlflow` quando
-instaladas (plugin `arn`, que assina as requisições com SigV4):
+Abra **Applications → MLflow → continual-bench-mlflow → Open MLflow → default →
+Experiments** ou obtenha uma URL de acesso com `make aws-mlflow-ui`. O item **Experiments**
+do menu principal do Studio depende de um MLflow Tracking Server. O runtime publica no
+**MLflow App** serverless.
+
+| Execução | Experimento | Filtro e conteúdo |
+|---|---|---|
+| Campanhas Zia no Batch | `<sha-curto>-continual-bench-zia-experiments` | `cb-campaign-id`. Relatório final, janelas, holdout e métricas de sistema. |
+| Matriz no Batch | `continual-bench-matrix` | `cb-campaign-id`. Uma run por tentativa, com `cb-unit-id`, `cb-batch-job-id`, séries `progress/*` e resumo `final/*`. |
+| Processing, Training e trials de Tuning | `continual-bench-native` | `cb-pipeline-execution-id`. Uma run por job ou trial, com progresso da preparação ou métricas de validação por época. |
+
+Os pipelines mostram etapas e estado da execução no Studio. Os detalhes de orquestração e
+cancelamento ficam em [operação na AWS](aws/operations.md#campanhas-no-sagemaker-studio).
+O catálogo tabular do SageMaker Unified Studio vincula os snapshots Social, Fraud
+e E-commerce aos runs Batch Zia que têm manifesto final compatível. No MLflow,
+`cb-catalog-asset-url` aponta para o ativo e `cb-catalog-snapshot-sha256` identifica
+o manifesto. Veja [publicação automática](aws/operations.md#publicação-automática-no-catálogo).
+
+### Publicação Zia via SDK opcional
+
+O publicador padrão usa HTTP REST com autenticação SigV4. Para Zia, com
+`MLFLOW_TRACKING_URI` apontando para um ARN do SageMaker, o método
+`SageMakerMlflowTracker.publish_run_report` também pode usar o plugin `sagemaker-mlflow`
+quando instalado. Esse caminho do SDK suporta:
 
 - **Tracking:** experimento, run retomável por `zia_run_key`, params, tags, métricas por janela/holdout/sistema;
 - **Plots:** os dashboards acima, via `mlflow.log_figure()`;
@@ -127,16 +149,16 @@ instaladas (plugin `arn`, que assina as requisições com SigV4):
   de família que compara políticas lado a lado;
 - **Artefatos:** diretório do run espelhado na raiz do run.
 
-A imagem AWS padrão **não** instala MLflow (o `selftest` e `test_aws_lock_excludes_service_stack`
-garantem isso). A biblioteca é opt-in:
+A imagem AWS padrão inclui o cliente REST/SigV4. O SDK é um extra:
 
 ```bash
 pip install ".[aws-mlflow]"   # mlflow-skinny, sagemaker-mlflow, matplotlib
 ```
 
-Sem o extra, ou se o publicador falhar, o tracker segue pelo cliente REST/SigV4 de antes (com os PNGs
-enviados junto aos artefatos) e registra o motivo em `api_errors`. Republicar o mesmo `run_id` retoma o
-run e não duplica versões do registry.
+Se o SDK falhar, o tracker registra o motivo em `api_errors` e continua pelo cliente REST/SigV4.
+Republicar o mesmo `run_id` usa a identidade do run e das versões registradas para retomada.
+Os dashboards em PNG dependem de matplotlib no ambiente publicador.
 
-> Validado com o file store local do MLflow no lugar do endpoint SageMaker; a chamada real ao
-> serviço (ARN, SigV4, registry gerenciado) não foi exercitada neste ambiente.
+O caminho REST/SigV4 foi usado na validação das integrações com o app AWS.
+O caminho opcional do SDK foi exercitado com o file store local. Consulte o escopo
+em [validação na AWS](aws/validation.md).

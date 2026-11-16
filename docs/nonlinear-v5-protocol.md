@@ -1,22 +1,22 @@
-# Campanha nonlinear-v5 — contrato anterior à execução
+# Campanha nonlinear-v5 — protocolo histórico e recuperação
 
-Objetivo: comparar regressão logística, Hoeffding Tree e kNN nos mesmos dados/protocolos/orçamentos
-verificados na v4, com atenção a Agrawal e Airlines. Não há busca de hiperparâmetros nem ajuste
-das configurações a partir dos resultados de teste. O ranking posterior de políticas no relatório
-é descritivo e não representa seleção validada em dados independentes.
+A campanha comparou regressão logística, Hoeffding Tree e kNN com os dados, protocolos e orçamentos
+verificados na v4, com atenção a Agrawal e Airlines. As configurações foram fixadas antes dos testes.
+O ranking posterior descreveu o desempenho nos recortes utilizados. A evidência da campanha está
+no histórico Git e pode ser consultada com `git show f835ee8:reports/nonlinear-v5.md`.
 
 ## Matriz
 
-`benchmark_nonlinear` executa 867 configurações: 289 por modelo, intercaladas por caso.
-O manifesto `configs/history/campaign-nonlinear-v5.json` fixa cada configuração e o SHA da implementação.
+A campanha `benchmark_nonlinear` reuniu 867 configurações, com 289 por modelo, intercaladas por caso.
+O [manifesto congelado](../configs/history/campaign-nonlinear-v5.json) fixa as configurações e o SHA da implementação.
 
 - Cinco datasets; SEA/Agrawal/STAGGER com sementes 42–46; Electricity/Airlines com um prefixo cada.
 - 3000 exemplos, aquecimento100, atraso simulado3, lote incremental32, janela de replay256.
 - Streaming/Kafka e incremental: congelado, online, periódico, ADWIN e DDM.
 - Tetos pós-warmup2900 e5800 para periódico/ADWIN/DDM; online2900 e congelado0.
 - Offline: prefixo de treino1797 com rótulos disponíveis;1200 exemplos finais para teste congelado.
-- Oito `evaluate_and_publish` em paralelo, oito subprocessos do worker, sem mudar quotas de CPU/RAM.
-- Todos os289 controles logísticos são executados novamente; a comparação também verifica a v4 congelada.
+- Oito `evaluate_and_publish` em paralelo e oito subprocessos no worker usado naquela campanha.
+- A campanha repetiu os 289 controles logísticos e comparou com a v4 congelada.
 
 Os três modelos são deterministas em sua construção; não usam um estimador aleatório sem semente.
 `PYTHONHASHSEED=0` é registrado e protegido no contrato de retomada. Isso não implica determinismo
@@ -71,17 +71,18 @@ em streaming; o auditor também verifica cada estado sem carregar o diário inte
 
 ## Comparação e limites
 
-Comparações pareiam dataset, versão, semente, protocolo, política e orçamento. Serão reportados
-acurácia/F1, Brier/log loss, consumo efetivo, alarmes, atualizações e dispersão entre cinco sementes.
-Offline é separado. Diferenças da logística em relação à v4 serão registradas, não ocultadas.
+As comparações parearam dataset, versão, semente, protocolo, política e orçamento. O relatório
+registrou acurácia/F1, Brier/log loss, consumo efetivo, alarmes, atualizações e dispersão entre
+cinco sementes para as fontes sintéticas. As comparações offline e as diferenças da logística
+em relação à v4 foram registradas separadamente.
 
 O teto de apresentações não iguala CPU, tempo, tamanho do estado ou custo de persistência entre modelos.
 Online continua aprendendo; periódico/drift reiniciam na janela256. Representação, capacidade e histórico
 retido também diferem entre modelos. Os reais continuam com um único prefixo e relógio/atraso simulados;
 Electricity conserva a incerteza sobre normalização/imputação anterior à aquisição.
 
-Ferramentas: `scripts/verify_versioned_campaign.py --manifest /app/configs/history/campaign-nonlinear-v5.json`
-e `scripts/compare_nonlinear_campaign.py`. Asserções e testes precedem a execução completa.
+Os scripts `scripts/verify_versioned_campaign.py --manifest configs/history/campaign-nonlinear-v5.json`
+e `scripts/compare_nonlinear_campaign.py` verificam as execuções retidas e a comparação histórica.
 
 ## Recuperação registrada durante a execução
 

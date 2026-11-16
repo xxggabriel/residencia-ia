@@ -2,9 +2,12 @@
 
 Data: 09/11/2026. Região: us-east-1. Branch de entrega: `main` (desenvolvimento em `Semana-09`).
 
+Registro histórico da proposta inicial. A arquitetura implementada e a operação
+estão no [guia da plataforma](README.md) e no [guia operacional](operations.md).
+As execuções posteriores estão em [Evidências de validação](validation.md).
+
 ## Estado inspecionado
 
-- Não há `AGENTS.md` no repositório nem acima dele; a árvore Git estava limpa.
 - Baseline: `pytest -q` com 585 testes aprovados.
 - O protocolo Zia vive em `evaluation/zia.py` (`run`), com preparação em `datasets/zia.py`
   (`prepare`, `load_manifest`), predições em `evaluation/zia_predictions.py`, artefatos em
@@ -12,7 +15,8 @@ Data: 09/11/2026. Região: us-east-1. Branch de entrega: `main` (desenvolvimento
 - A "matriz" Zia é dataset × `POLICIES` (DAG `benchmark_zia`); a matriz genérica é
   `application.matrix.ExperimentMatrix.plan()`.
 - O avaliador Zia e o planejador não importam MLflow, ZenML, Kafka nem boto3.
-- Não há AWS CLI nem credenciais nesta máquina: implantação real fica fora desta entrega.
+- Na elaboração do plano, a máquina estava sem AWS CLI e credenciais. A implantação
+  foi validada depois na conta AWS.
 
 ## Fronteiras dos módulos
 

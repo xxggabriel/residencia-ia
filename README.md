@@ -52,6 +52,7 @@ uv sync --frozen --extra dev --extra services --extra datasets
 | `datasets` | Pillow, pyarrow (loaders nativos de imagens e Parquet) |
 | `large-datasets` | DuckDB, XGBoost |
 | `aws` | boto3, pandas (perfil gerenciado, lock próprio `requirements-aws.lock`) |
+| `aws-mlflow` | SDK opcional para o MLflow gerenciado, com `sagemaker-mlflow` e matplotlib |
 
 O Airflow usa um ambiente Python separado.
 
@@ -149,8 +150,9 @@ As credenciais vêm do arquivo de ambiente do serviço e nunca são impressas.
 
 ## Conjuntos de dados
 
-O catálogo (`continual-bench components`, [docs/dataset-catalog.md](docs/dataset-catalog.md)) lista 17 candidatos
-e se declara incompleto; não há download automático, e fontes reais exigem manifesto local revisado.
+O [catálogo de aquisição e experimentos](docs/dataset-catalog.md) descreve as 17 fontes da suíte da residência.
+`continual-bench components` lista as fontes registradas no catálogo executável. A preparação e a admissão
+são explícitas e seguem os locks ou manifestos de cada fonte.
 
 | Tipo | Fontes |
 |---|---|
@@ -159,12 +161,13 @@ e se declara incompleto; não há download automático, e fontes reais exigem ma
 | Manifestos locais (licença, hashes e anotações exigidos) | Insects, Gas Sensor Array Drift |
 | Imagens | Split MNIST, Permuted MNIST, Split CIFAR-10/100, CORe50, CLEAR-10/100 |
 
-Os [benchmarks Zia Data Labs](docs/zia-benchmarks.md) (fraude, rede social, devoluções) usam fluxos Parquet
-temporais próprios e rodam no homelab e na AWS.
+Os [benchmarks Zia Data Labs](docs/zia-benchmarks.md) (rede social, fraude e e-commerce) usam fluxos
+Parquet temporais próprios e rodam no homelab e na AWS. Na AWS, o catálogo do SageMaker Unified Studio
+publica os snapshots e reúne os links para os runs Zia correspondentes no MLflow.
 
 Cada execução registra fonte, versão, semente, SHA-256 do JSONL, limites dos conceitos e tipo de timestamp.
 Nos datasets reais não há pontos de mudança nem probes inventados; licenças seguem o rótulo do publicador
-([fontes fixadas](configs/contracts/real-sources.lock.json)). Nada é baixado ou ordenado silenciosamente.
+([fontes fixadas](configs/contracts/real-sources.lock.json)). Consulte a regra de aquisição e ordenação de cada fonte nos guias abaixo.
 Veja [docs/image-datasets.md](docs/image-datasets.md), [docs/real-streams.md](docs/real-streams.md),
 [docs/temporal-vision.md](docs/temporal-vision.md) e
 [aquisição e execução](docs/task-dataset-execution.md).
@@ -193,22 +196,30 @@ docker compose -f compose.yaml -f compose.homelab.yaml --env-file /caminho/priva
   exec worker-1 pytest -q -m services tests/test_services.py
 ```
 
-DAGs do Airflow (todas manuais): `benchmark_smoke`, `benchmark_streaming`, `benchmark_incremental`,
-`benchmark_offline`, `benchmark_strategies`, `benchmark_full`, `benchmark_controlled`,
-`benchmark_versioned`, `benchmark_task_suite` e `benchmark_zia_<dataset>`. A `benchmark_task_suite` exige
+As DAGs do Airflow são manuais. Elas incluem `benchmark_smoke`, a [família de campanhas binárias](docs/benchmark-operations.md#executar-no-airflow),
+`benchmark_task_suite` e `benchmark_zia_<dataset>`. A `benchmark_task_suite` exige
 que todas as fontes tenham sido aprovadas no mesmo contrato de código, dependências e locks.
 
 Operação completa, ZenML/MinIO e evidências: [docs/benchmark-operations.md](docs/benchmark-operations.md),
-[docs/zenml-observability.md](docs/zenml-observability.md), [docs/mlflow-tracking.md](docs/mlflow-tracking.md)
-e [reports/validation.md](reports/validation.md).
+[docs/zenml-observability.md](docs/zenml-observability.md) e [docs/mlflow-tracking.md](docs/mlflow-tracking.md).
 
 > O MinIO comunitário está arquivado. O laboratório fixa a versão de segurança de outubro de 2025, compila
 > do código-fonte e mantém a licença AGPL. Não equivale a um serviço mantido para produção.
 
 ## Perfil AWS
 
-Perfil gerenciado com CodePipeline, Batch sobre Fargate, Step Functions, S3, Athena, SageMaker e CUR 2.0,
-sem MLflow, ZenML ou Kafka. Smoke local com fixtures:
+O deploy usa GitHub Actions com OIDC. Na AWS, o Step Functions coordena aquisição, preparação
+e campanhas Batch sobre Fargate. S3, Glue e Athena preservam e consultam os resultados, e o CUR
+2.0 fornece dados de faturamento. O runtime do Batch mantém as duas sub-redes privadas. O endpoint
+gateway do S3 atende ambas, e `InterfaceEndpointAzMode` controla a distribuição dos endpoints de
+interface entre zonas de disponibilidade.
+
+No SageMaker Studio, `continual-bench-campaign` acompanha a preparação, o workflow Batch e a
+verificação do resultado. `continual-bench-native` acompanha jobs de Processing, Training e Tuning.
+O app serverless `continual-bench-mlflow` exibe as métricas das campanhas Zia, das matrizes e dos
+jobs nativos. O catálogo tabular fica em **SageMaker Unified Studio**. Veja o [guia de operação na AWS](docs/aws/operations.md#campanhas-no-sagemaker-studio).
+
+Smoke local com fixtures:
 
 ```bash
 uv run continual-bench aws local-smoke
@@ -228,7 +239,7 @@ dags/                  DAGs do Airflow
 scripts/               campanhas, validações, análise e execução no homelab
 infra/ cfn-project/    CloudFormation, buildspecs, Athena, Flink
 docker/ compose*.yaml  imagens e conjuntos de serviços
-docs/ reports/         documentação e evidências de validação
+docs/                  documentação e evidências de validação versionadas
 examples/              plugins de referência
 tests/                 testes unitários e de integração
 ```
@@ -242,7 +253,7 @@ make lint    # ruff
 
 - `pytest` padrão não usa serviços nem campanhas completas (`-m 'not services and not benchmark'`).
 - `-m services` é integração com serviços reais; `-m benchmark` são experimentos completos, executados à parte.
-- Não considere a configuração implantada com base só em testes locais; confira a evidência em `reports/`.
+- Para o escopo e as evidências de implantação, veja [validação na AWS](docs/aws/validation.md).
 
 ## Documentação
 

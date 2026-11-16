@@ -1,9 +1,9 @@
 # Métricas e contratos da Semana 09
 
-Foi acrescentado o suplemento `semana09-metrics-v1`, preservando as definições e
-identidades da Semana 08. O módulo `core/evaluation_metrics.py` acrescentou avaliação de horizontes futuros
-com snapshots, validação temporal e um resumo de matrizes de tarefas. A montagem
-do relatório e a validação do matcher existente ficaram em
+O suplemento `semana09-metrics-v1` preserva as definições e identidades da
+Semana 08. O módulo `core/evaluation_metrics.py` reúne a avaliação de horizontes futuros
+com snapshots, a validação temporal e o resumo de matrizes de tarefas. A montagem
+do relatório e a validação do matcher ficam em
 `evaluation/reporting.py`, preservando o domínio sem dependências de I/O
 ou da camada de aplicação.
 
@@ -19,8 +19,7 @@ ou da camada de aplicação.
 | Separação temporal | Contrato local `validate_temporal_holdout` | Novo validador de disponibilidade e IDs nas partições | Testes de leakage por ID e por rótulos tardios |
 | Objetivo de retreinamento UPF | [Regol et al., ICML 2025](https://proceedings.mlr.press/v267/regol25a.html), [arXiv 2505.14903v1, seção 5](https://arxiv.org/html/2505.14903v1) | Mantida distinção entre custo de cenário, sensibilidade pós-hoc e campanha UPF; AUC UPF só nos runs das políticas cost-aware ([métricas](cost-aware-retraining.md#métricas-rastreadas)) | Sem alegação de reprodução dos números do artigo |
 
-Os resultados pass/fail dependem da execução no homelab e foram registrados no
-relatório principal; a presença dos testes nesta tabela descreveu sua cobertura.
+O [relatório da Semana 09](task-report.md) registra a execução histórica dos testes no homelab.
 
 ## Detecção e ausência de anotações
 
@@ -91,7 +90,8 @@ model, evaluated)` ao liberar os rótulos. A quantidade de rótulos treinados n�
 pôde ultrapassar o offset da previsão. A garantia de que o modelo fornecido foi
 treinado apenas nesse prefixo permaneceu responsabilidade do engine.
 
-`application.evaluation_reporting.supplemental_report(report, directory,
+Com `tracking.task_evaluation` configurado, o runner chama
+`evaluation.reporting.supplemental_report(report, directory,
 near_future=collector)` gerou
 `task_evaluation-metrics.json` com escrita atômica. Sem o coletor, a acurácia futura
 permaneceu indisponível: um ledger prequential comum não reconstruiu modelos

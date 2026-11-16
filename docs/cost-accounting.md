@@ -1,6 +1,6 @@
 # Contabilização de custos
 
-Os três fluxos passaram a registrar custos independentemente da política. O perfil padrão das novas execuções usa `scenario_unit`, erro de classificação com peso 1, erro absoluto de regressão com peso 1 e escala 1, apresentação de treino com custo 0.001 e atualização com custo 0.05. Os preços por segundo são zero. Esses pesos continuam sendo estimativas de cenário. Novas execuções também registram uma estimativa independente de infraestrutura AWS em USD, descrita abaixo.
+Os fluxos principal, tipado e por épocas registram custos independentemente da política. O perfil padrão usa `scenario_unit`, erro de classificação com peso 1, erro absoluto de regressão com peso 1 e escala 1, apresentação de treino com custo 0.001 e atualização com custo 0.05. Os preços por segundo são zero. Os três fluxos também registram uma estimativa independente de infraestrutura AWS em USD. O [guia Zia](zia-benchmarks.md#telemetria) descreve a contabilização do avaliador tabular por blocos.
 
 No fluxo principal, configurar `tracking.costs`. No fluxo tipado (`TypedConfig` ou `run_typed`) e por épocas (`EpochConfig`), configurar `costs`. Os coeficientes aceitam valores finitos não negativos; `regression_scale` deve ser positiva. Um perfil explícito preserva os padrões anteriores de preço zero para treino e atualização quando esses campos são omitidos; declare todos os coeficientes para comparações controladas.
 
@@ -26,7 +26,7 @@ O relatório guarda coeficientes, versão, unidade e consumo observado em `costs
 
 Tempos necessários ausentes produzem custo indisponível, não zero. Custos de aquisição, publicação e referências de avaliação ficam fora do total do aprendiz. Execuções concluídas são idempotentes; os perfis integram a identidade das novas execuções. Relatórios históricos não foram recalculados.
 
-Os módulos antes nomeados por semana foram renomeados para `task_sources`, `evaluation_metrics` e `evaluation_reporting`. Configurações, testes, scripts e DAGs usam nomes funcionais; a configuração de avaliação futura passou a `tracking.task_evaluation`. Artefatos e evidências históricos em `reports/` foram preservados.
+O perfil de avaliação de horizontes futuros fica em `tracking.task_evaluation`. A implementação e a publicação do suplemento estão descritas no [contrato de métricas](task-metrics.md).
 
 ## Estimativa de infraestrutura AWS
 
@@ -49,7 +49,7 @@ costs: # tracking.costs no fluxo principal
 
 As tarifas foram verificadas em 08/11/2026 nos catálogos públicos da AWS: [Fargate Linux/x86 On-Demand em us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECS/current/us-east-1/index.json), publicado em 19/10/2026, e [S3 Standard em us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.json), publicado em 04/11/2026. Armazenamento usa a primeira faixa de 50 TB/mês. Os preços ficam fixados na configuração, sem consulta remota durante a execução. Outra região exige informar os três preços, fontes e data explicitamente. Atualizações de tarifa ou alocação alteram a identidade da execução.
 
-Conforme as [regras do Fargate](https://aws.amazon.com/fargate/pricing/), CPU e RAM são recursos **reservados**, não utilização observada. A capacidade configurada é uma hipótese de execução em nuvem, não uma detecção do hardware local. O padrão de 1 vCPU e 2 GiB foi definido individualmente para cada um dos oito containers de execução, com uma run por container e swap desabilitado. As oito runs simultâneas têm limites independentes, somando até 8 vCPUs e 16 GiB para execução. O cálculo por run projeta uma tarefa AWS com a mesma capacidade individual; não divide CPU/RAM de um único container entre runs. Essa mudança de arquivos ainda aguarda aplicação no homelab; ela não altera os recursos das runs históricas. O [perfil operacional](benchmark-operations.md#perfil-padrão-de-recursos-dos-experimentos) descreve os limites, a implantação e a separação entre campanhas de perfis diferentes. Combinações de CPU/RAM precisam ser aceitas pelo Fargate. A duração estimada é a soma dos tempos medidos de treino (incluindo aquecimento/replay) e predição de cada protocolo. Aplica-se arredondamento para cima por segundo e mínimo de 60 segundos uma única vez por execução:
+O perfil de estimativa usa CPU e RAM **reservadas** e projeta uma tarefa Fargate por run. O Compose padrão do homelab define oito containers de até uma run cada, com 1 vCPU e 2 GiB por container e swap desabilitado. Compare o perfil de cada run pelo registro da campanha, que preserva o ambiente original. A duração estimada soma os tempos medidos de treino (incluindo aquecimento e replay) e predição de cada protocolo. O cálculo arredonda os segundos para cima e aplica o mínimo de 60 segundos uma vez por execução. [Regras do Fargate](https://aws.amazon.com/fargate/pricing/), [perfil do homelab](benchmark-operations.md#perfil-padrão-de-recursos-dos-experimentos), [custos do runtime AWS](aws/costs.md).
 
 - `billed_seconds = max(minimum_compute_seconds, ceil(train_seconds + prediction_seconds))`
 - `cost_cpu_usd = vcpus × billed_seconds / 3600 × vcpu_hour_usd`

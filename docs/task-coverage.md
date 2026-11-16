@@ -1,10 +1,10 @@
 # Matriz de cobertura da Semana 09
 
-> **Atualização em 08/11/2026:** Stream51 foi removido do projeto (catálogo, adaptador, lock e DAG), porque a origem oficial `klab.cis.rit.edu` continuou sem resolver DNS e não há cópia oficial disponível. O catálogo e o gate de admissão passaram a exigir 17 fontes; os registros abaixo preservam o estado de 04/11/2026.
+O catálogo vigente admite 17 fontes. Stream51 foi retirado do catálogo, adaptador, lock e DAG em 8 de novembro de 2026, após o bloqueio de aquisição descrito no relatório de datasets. A matriz `benchmark_task_suite` vigente tem 518 casos no padrão, com 501 avaliações binárias e 17 por épocas. O código da matriz é compartilhado com `project_suite` na AWS. As políticas de custo em lotes foram integradas em 12 de novembro ao [benchmark Zia](cost-aware-retraining.md). A tabela registra o escopo avaliado em 4 de novembro.
 
 O escopo verificável partiu do pedido e das Pages da Semana 09, lidas em 3 de novembro de 2026. A planilha `Semana_09_Datasets_Benchmarks.xlsx` não foi materializada: o leitor autorizado retornou `page_reference_unsupported_format` para a referência fornecida. A matriz abaixo não substituiu os 47 registros, 39 associações e 64 referências da pesquisa. Não foram inventados registros nem seleções ausentes.
 
-**Implementado** descreveu código executável; **validado inicialmente** descreveu testes pequenos no homelab; **campanha pendente** descreveu comparação experimental ainda não realizada. Fixtures não homologaram dados originais. A ampliação de 4 de novembro, incluindo os testes de 100 exemplos/2 épocas e o bloqueio de Stream51, foi registrada no [relatório de datasets](semana09-dataset-execution.md).
+**Implementado** descreveu código executável. **Validado inicialmente** descreveu testes pequenos no homelab. **Campanha pendente** descreveu comparações que aquela rodada não executou. A ampliação de 4 de novembro, incluindo os testes de 100 exemplos/2 épocas e o bloqueio de Stream51, ficou no [relatório de datasets](task-dataset-execution.md).
 
 | Componente | Fonte e versão | Implementação | Testes e estado |
 | --- | --- | --- | --- |
@@ -23,7 +23,7 @@ O escopo verificável partiu do pedido e das Pages da Semana 09, lidas em 3 de n
 | CGLM, CLOC, BudgetCL, CLAD e demais registros | Catálogo não materializado | Mantidos como candidatos sem implementação presumida | Escopo, acesso, licença e recursos pendentes |
 | Sem retreinamento, periódico, online e por alarme | Contratos Semana 08 | Preservados | Suíte anterior e smoke declarativo |
 | Por desempenho | Regra operacional declarada, versão local v1 | Janela de erro dos rótulos liberados, threshold, cooldown, orçamento | Unitários, integração, retomada e serviços |
-| Por custo | CARA-T/CT/P ([2024](https://ananthmahadevan.com/publication/cost-aware-retraining/cost-aware-retraining.pdf)), UPF ([ICML 2025](https://proceedings.mlr.press/v267/regol25a.html)) e Oracle, em lotes ([detalhes](cost-aware-retraining.md)) | Matriz de desempenho por lote; fase offline e online; retreino vale do lote seguinte (desvio dos artigos) | Algoritmos e Oracle testados contra busca exaustiva; sem campanha de reprodução dos números dos artigos |
+| Por custo | Heurística de cenário `cost_heuristic`, depois removida | Benefício projetado versus custo fixo e por amostra | Ponto de equilíbrio e guardas verificados na suíte histórica |
 | ADWIN, DDM, EDDM, HDDMA, HDDMW, Page Hinkley, KSWIN | River 0.26.1 | Wrappers nativos sobre erro binário liberado; KSWIN com seed | Contratos, pickle e mudança controlada; análise de sensibilidade pendente |
 | Drift em atributos P(X) | Distinção documentada | O engine monitorou erro, não atribuiu alarmes a P(X) | Detector multivariado de atributos não implementado nem presumido selecionado |
 | Promoção de modelo | Gate operacional local v1 | Holdout temporal do candidato separado do treino; rejeitados consumiram orçamento | Falhas, atraso, rejeição, contabilidade e fluxo integrado testados |
@@ -36,4 +36,4 @@ O escopo verificável partiu do pedido e das Pages da Semana 09, lidas em 3 de n
 | DAG ampliada | `benchmark_task_suite`, Airflow 3.3.2 | 549 casos: matriz binária e 18 fontes tipadas; gate 100 exemplos/2 épocas/fingerprint | Importação e plano aprovados; DAG não iniciada enquanto Stream51 permaneceu bloqueado |
 | Kafka, ZenML, MLflow, MinIO | Versões da stack Semana 08 | Integração preservada, suplemento publicado com os artefatos | Verificação real de eventos, quatro passos, hashes, registro e replay; ver relatório |
 
-Fontes, decisões e testes por área: [datasets](dataset-catalog.md), [políticas](task_evaluation-policies.md), [métricas](task_evaluation-metrics.md). Resultados e limitações observados: [relatório](semana09-report.md).
+Consulte o [catálogo de datasets](dataset-catalog.md), o [guia de políticas](task-policies.md), o [contrato de métricas](task-metrics.md) e o [relatório da etapa inicial](task-report.md).

@@ -3,32 +3,37 @@
 Perfil de execução em us-east-1 que adquire e prepara datasets, executa campanhas de
 benchmark em paralelo no AWS Batch sobre Fargate, publica resultados consultáveis no S3,
 Glue e Athena, registra candidatos no SageMaker Model Registry e concilia custos com o CUR 2.0.
-O perfil roda sem Airflow, ZenML, MinIO, Kafka, MLflow ou servidor HTTP de workers. Os fluxos
-locais (Compose, DAGs, MLflow) continuam inalterados.
+O SageMaker Studio acompanha as campanhas do Batch e os jobs nativos em Pipelines. As métricas
+ficam no MLflow App serverless, e o SageMaker Unified Studio cataloga os snapshots Zia com
+links para avaliações. A operação do perfil AWS é independente do Compose, Airflow, ZenML,
+MinIO e Kafka locais.
 
 | Documento | Conteúdo |
 |---|---|
 | [plan.md](plan.md) | Plano registrado antes da implementação |
-| [operations.md](operations.md) | Bootstrap, CI/CD, rollback, datasets, campanhas, cancelamento, consultas e remoção |
+| [operations.md](operations.md) | Bootstrap, CI/CD, datasets, campanhas, SageMaker Studio, MLflow e catálogo |
 | [costs.md](costs.md) | CUR 2.0, Split Cost Allocation Data, tags, Budgets, anomalias, Price List e conciliação |
 | [modules.md](modules.md) | Streaming, Feature Store, ML avançado e BI: ativação, custo e parada |
-| [validation.md](validation.md) | O que foi validado localmente e o que ainda depende da conta AWS |
+| [validation.md](validation.md) | Evidências datadas das validações locais e na conta AWS |
 
-## Três fluxos independentes
+## Publicação, execução e acompanhamento
 
 ```
-GitHub main ──push/merge──▶ CodePipeline V2 ─▶ testes, lint, cfn-lint, ASL, smoke local
+GitHub main ──push/merge──▶ GitHub Actions ─▶ testes, lint, cfn-lint, ASL, smoke local
                                               ─▶ imagens x86_64 (tag git-<sha>, digest) ─▶ change set ─▶ releases/<sha>
 operador ──start-execution──▶ state machine de datasets ─▶ resolver ─▶ adquirir (CodeBuild, fora da VPC)
                                                         ─▶ validar ─▶ preparar (Batch privado) ─▶ manifesto + _SUCCESS
 operador ──start-execution──▶ state machine de benchmark ─▶ plano no S3 ─▶ Map (1 job Batch/Fargate por run)
                                                         ─▶ consolidar ─▶ verificar tasks paradas
 EventBridge (Batch e Step Functions) ─▶ Lambda de controle ─▶ registro, SNS e reconciliação (nunca inicia campanhas)
+SageMaker Studio ─▶ continual-bench-campaign ─▶ callbacks que iniciam e acompanham os workflows
+SageMaker Studio ─▶ continual-bench-native ─▶ Processing, Training e Tuning (Social)
+Workers Batch e jobs nativos ─▶ MLflow App
+S3 (snapshot pronto, avaliação Zia concluída) ─▶ EventBridge ─▶ SQS FIFO ─▶ Lambda ─▶ catálogo e links MLflow
 ```
 
-O merge publica imagens e atualiza a infraestrutura. Ele não baixa datasets nem inicia
-campanhas: os buildspecs não contêm `start-execution`, `acquire` nem `submit-job`, e um teste
-garante isso (`tests/test_aws_infra.py`).
+O workflow de deploy publica imagens e atualiza o runtime. Os workflows de datasets e
+campanhas são acionados separadamente, pela CLI ou pelo SageMaker Pipeline.
 
 ## Fronteiras dos módulos Python
 
@@ -36,7 +41,7 @@ garante isso (`tests/test_aws_infra.py`).
 |---|---|---|
 | `infrastructure` | `object_store.py` | Porta de armazenamento e implementação local com criação condicional |
 | `infrastructure` | `stream_order.py` | Ordem, duplicatas e lacunas de eventos, independente do transporte |
-| `infrastructure.aws` | `s3`, `batch`, `model_registry`, `kinesis`, `feature_store`, `athena`, `quotas`, `pricing`, `emf`, `session` | Adaptadores boto3 |
+| `infrastructure.aws` | `s3`, `batch`, `model_registry`, `kinesis`, `feature_store`, `athena`, `quotas`, `pricing`, `emf`, `session`, `mlflow_tracking` | Adaptadores AWS e publicação MLflow assinada com SigV4 |
 | `application.cloud` | `contracts`, `layout` | Entradas validadas, manifesto de release e layout das chaves S3 |
 | `application.cloud` | `sources`, `snapshots` | Fontes do catálogo, download limitado e verificado, preparação e manifesto do snapshot |
 | `application.cloud` | `planning`, `worker` | Plano da campanha, `run_id` determinístico e execução de uma run |
@@ -87,8 +92,11 @@ analytics/<tabela>/<campanha>__<run_id>[__<job>].json              JSON Lines pa
 | Stack | Template | Ciclo de vida |
 |---|---|---|
 | `continual-bench-persistent` | `infra/cloudformation/persistent.yaml` | Bootstrap. KMS, buckets de dados, artefatos, billing e logs de acesso, ECR. Tudo com `Retain` e proteção contra término. |
-| `continual-bench-cicd` | `infra/cloudformation/cicd.yaml` | Bootstrap. CodeConnections, CodeBuild, CodePipeline V2 e roles por estágio. |
-| `continual-bench-runtime` | `infra/cloudformation/root.yaml` | Pipeline. Aninha `network`, `execution`, `observability`, `analytics` (Core) e `billing`, `streaming`, `features`, `ml`, `bi` (ativáveis). |
+| `continual-bench-cicd` | `infra/cloudformation/cicd.yaml` | Bootstrap. Provedor OIDC do GitHub Actions e roles de deploy. |
+| `continual-bench-runtime` | `infra/cloudformation/root.yaml` | GitHub Actions. Aninha `network`, `execution`, `observability`, `analytics` (Core) e `billing`, `streaming`, `features`, `ml`, `bi` (ativáveis). O módulo de execução cria o MLflow App com `EnableModelRegistry=true`. |
+| `continual-bench-studio` | `infra/cloudformation/studio.yaml` | Pipeline de campanhas com callbacks para Step Functions, implantado separadamente. |
+| `continual-bench-studio-native` | `infra/cloudformation/studio-native.yaml` | Pipeline nativo para perfil, treinamento e tuning do Social, implantado separadamente. |
+| `continual-bench-studio-catalog` | `infra/cloudformation/studio-catalog.yaml` | Publicação de snapshots Zia e links para avaliações no catálogo, implantada separadamente. |
 
 Não há ciclo entre pipeline, ECR e job definition. O ECR fica na stack persistente, o
 pipeline publica imagens por digest e passa o digest como parâmetro da stack de execução.
@@ -101,36 +109,38 @@ release depois do deploy.
   `AssignPublicIp=DISABLED`. Não há Internet Gateway, NAT, Elastic IP nem load balancer.
   O S3 é acessado pelo gateway endpoint, cuja política inclui o bucket de camadas do ECR. ECR
   API, ECR Docker e CloudWatch Logs passam por endpoints de interface com DNS privado e política
-  restrita à conta. SageMaker API, Kinesis, Feature Store runtime, KMS e Secrets Manager ganham
-  endpoints só quando o módulo correspondente está ativo. O security group dos workers só sai
-  por HTTPS para os endpoints e para a prefix list do S3.
-- **IAM**: há roles separadas para CodePipeline, cada estágio do CodeBuild (teste, build,
-  deploy, release), execução do CloudFormation, Step Functions, execução da task, job de
+  restrita à conta. SageMaker API e MLflow usam endpoints de interface quando
+  `EnableModelRegistry=true`. Kinesis e Feature Store runtime usam endpoints quando os
+  módulos correspondentes estão ativos. A rede admite duas sub-redes do Batch com os
+  endpoints de interface em uma AZ (`InterfaceEndpointAzMode=single`), mantendo a rota
+  compartilhada para o gateway do S3. O security group dos workers só sai por HTTPS para os
+  endpoints e para a prefix list do S3.
+- **IAM**: há roles separadas para GitHub Actions, execução do CloudFormation,
+  Step Functions, execução da task, job de
   benchmark, job de preparação, aquisição, Lambda de controle, Firehose, Flink, Feature Store,
   Glue e SageMaker. O acesso direto dos workers ao S3 exige `aws:SourceVpce` do gateway
   endpoint. O SageMaker pode ler apenas o arquivo do modelo quando valida um candidato
-  em nome do worker. `TerminateJob` exige a tag `cb-stack`. `iam:PassRole` só aparece no deploy,
-  restrito à role do CloudFormation, e na role do CloudFormation, restrito às roles do projeto
-  e ao serviço de destino.
+  em nome do worker. `TerminateJob` exige a tag `cb-stack`. O GitHub Actions só pode
+  repassar ao CloudFormation a role de execução. As permissões de `iam:PassRole` dos
+  serviços são limitadas pelas roles e pelos serviços declarados nos templates.
 - **Dados**: KMS com rotação em buckets, logs, SNS, Kinesis e ECR. Versionamento, bloqueio de
   acesso público, TLS obrigatório e lifecycle em todos os buckets. O bucket de dados nega
   `DeleteObjectVersion` em `datasets/`, `campaigns/` e `releases/` para qualquer principal
   exceto uma role `continual-bench-data-steward` criada manualmente. O bucket policy não exige
   VPC endpoint, para permitir as gravações autorizadas do CodeBuild de aquisição, do Firehose,
   do Lambda e do Data Exports, que ocorrem fora da VPC.
-- **Segredos**: nenhum módulo precisa de segredo. As fontes Zia são públicas e a autenticação
-  GitHub é feita pela CodeConnections. Um token futuro de fonte privada deve ir para o Secrets
-  Manager, ser lido pelo projeto de aquisição como variável `secrets-manager` e ter o endpoint
-  ativado com `EnableKmsAndSecretsEndpoints`.
+- **Credenciais**: as fontes Zia são públicas. O GitHub Actions obtém credenciais temporárias
+  da AWS por OIDC.
 
 ## APIs sem suporte nativo no CloudFormation
 
 | Configuração | Como é tratada | Motivo |
 |---|---|---|
 | Container Insights para o cluster ECS criado pelo Batch | `bootstrap.sh`: `aws ecs put-account-setting-default containerInsights=enhanced`, idempotente | O Batch cria o cluster; não há propriedade de cluster nem recurso de account setting no CloudFormation |
-| Autorização do GitHub App na CodeConnections | Passo manual documentado e `wait_connection.sh` | O handshake OAuth exige o console |
+| Variáveis e ambiente `production` no GitHub | Bootstrap publica `AWS_ROLE_ARN` via `gh` quando disponível, e os demais valores são configurados no GitHub | Os workflows leem a configuração do repositório ou ambiente |
 | Ativação de tags de alocação | CLI `ce update-cost-allocation-tags-status` na conta pagadora | Só a pagadora pode ativar; as tags só existem depois de aparecer no billing |
 | Split Cost Allocation Data para ECS | Console da conta pagadora | Não há API pública nem recurso CloudFormation |
 | Início e parada da aplicação Flink | `scripts/aws/flink.sh` | O CloudFormation cria a aplicação em READY; iniciar é uma decisão de custo |
 | Jobs SageMaker (Processing, Training, Tuning) | `scripts/aws/sagemaker_jobs.py` a partir de perfis versionados | São execuções, não recursos de infraestrutura |
 | Model package groups do Registry | Criados pelo worker sob demanda (`ensure_group`) | Ficam fora das stacks e sobrevivem à remoção delas |
+| Autorização no catálogo | `scripts/aws/deploy_studio_catalog.sh` associa a role publicadora ao projeto do Unified Studio | A role atua com as permissões do projeto do catálogo |

@@ -1,50 +1,46 @@
 # Operação
 
-Todos os comandos usam us-east-1 e credenciais com permissão de administração da conta alvo.
-Antes de qualquer comando que crie recursos, confirme a autorização para provisionar recursos
-cobrados na conta.
+Os exemplos usam `us-east-1`. Configure a região e as credenciais da conta alvo no shell.
 
-## 1. Bootstrap (uma vez, idempotente)
+## 1. Bootstrap
 
 ```bash
-REPOSITORY=owner/residencia-ia OVERRIDES=infra/params/runtime-overrides.example.json scripts/aws/bootstrap.sh
+REPOSITORY=owner/residencia-ia scripts/aws/bootstrap.sh
 ```
 
 O script cria ou atualiza a stack persistente e liga a proteção contra término. Depois define
-o padrão de conta `containerInsights=enhanced`, para que o cluster ECS criado pelo Batch tenha
-Container Insights, e cria os service-linked roles. Por fim, implanta a stack de CI/CD.
-Para usar uma conexão já existente, exporte `CONNECTION_ARN=arn:aws:codeconnections:...`.
+o padrão de conta `containerInsights=enhanced` para o cluster ECS criado pelo Batch, cria as
+service-linked roles e implanta a stack de CI/CD. Para reutilizar o provedor OIDC da conta,
+exporte `OIDC_PROVIDER_ARN`. Para enviar um arquivo de parâmetros operacionais ao bucket de
+artefatos durante o bootstrap, defina `OVERRIDES` com o caminho do arquivo.
 
-### Conexão GitHub
+### Configuração do GitHub Actions
 
-Sem `CONNECTION_ARN`, a stack cria a conexão no estado `PENDING`. O CloudFormation não conclui
-a autorização OAuth.
-
-1. Console → Developer Tools → Settings → Connections → `continual-bench-github` → *Update pending connection*.
-2. Instale ou escolha o GitHub App "AWS Connector for GitHub" com acesso ao repositório.
-3. Aguarde `AVAILABLE`:
+Crie o ambiente `production` no GitHub e restrinja as branches de deploy conforme as regras do
+repositório. A role AWS confia no subject OIDC desse ambiente. O bootstrap configura
+`AWS_ROLE_ARN` com `gh` quando disponível. Caso contrário, use a saída `GitHubActionsRoleArn`
+da stack `continual-bench-cicd`. Configure também as variáveis do workflow:
 
 ```bash
-scripts/aws/wait_connection.sh "$(aws cloudformation describe-stacks --stack-name continual-bench-cicd --query "Stacks[0].Outputs[?OutputKey=='ConnectionArn'].OutputValue" --output text)"
+gh variable set AWS_REGION --body us-east-1
+gh variable set PROJECT --body continual-bench
+gh variable set RUNTIME_STACK --body continual-bench-runtime
+gh variable set RUNTIME_CONFIG_KEY --body config/runtime-parameters.json
 ```
 
-### Gatilho e regras do GitHub
-
-O pipeline V2 tem um único gatilho, `push` filtrado para `main`. O push gerado pelo merge de
-um pull request também dispara. Não há regra do EventBridge, webhook ou polling para o mesmo
-repositório, então uma revisão não dispara duas execuções. A detecção nativa da ação de origem
-é substituída pelo filtro do gatilho. `ExecutionMode: SUPERSEDED` prioriza a execução mais recente e pula execuções intermediárias obsoletas em fila/andamento caso existam, otimizando o tempo de deploy. Exigir
-merge em vez de push direto é responsabilidade das regras do GitHub: ative branch protection ou
-ruleset em `main` com pull request obrigatório e checks exigidos.
+O workflow [Build and deploy](../../.github/workflows/deploy.yml) inicia com push ou merge em
+`main` e também aceita execução manual. O grupo `deploy-main` serializa as execuções com
+`cancel-in-progress: false`. O workflow [CI](../../.github/workflows/ci.yml) verifica pull
+requests e pushes fora de `main`.
 
 ## 2. CI/CD
 
-| Estágio | Projeto | O que faz |
-|---|---|---|
-| Verify | `continual-bench-ci-test` | `pip install --require-hashes`, `ruff`, `pytest`, `validate_templates.py` (cfn-lint e invariantes), `validate_asl.py` offline e `--service` (`ValidateStateMachineDefinition`) e `continual-bench aws local-smoke`. |
-| Build | `continual-bench-ci-build` | `build_images.sh`: tag imutável `git-<sha>`, reutiliza a tag se já existir, build `linux/amd64` a partir de `requirements-aws.lock`, selftest e contrato SageMaker antes do push, digest resolvido no ECR. Gera o zip determinístico do Lambda (`lambda/<sha>/control-<hash>.zip`), o código de Glue e Flink e os templates empacotados. |
-| Deploy | `continual-bench-ci-deploy` | `deploy_change_set.sh`: cria, descreve e executa o change set. Um change set vazio, como na reexecução do mesmo commit, é removido sem falhar. |
-| Deploy | `continual-bench-ci-release` | `write_release.py`: confere as saídas da stack contra o build e os digests no ECR. Grava `releases/<sha>/release.json` uma vez e move `releases/latest.json`. |
+| Job | O que faz |
+|---|---|
+| `verify` | Executa o workflow CI reutilizável com dependências fixadas por hash, Ruff, pytest, CloudFormation, ASL offline e smoke local de Social, Fraud e E-commerce. |
+| `build` | Valida o ASL na AWS e publica imagens `linux/amd64` com `build_images.sh`. O script reaproveita a tag imutável `git-<sha>` existente e resolve o digest no ECR. Valida imagens novas com selftest e contrato SageMaker antes do push. Também empacota os templates, o zip do Lambda e o código de Glue e Flink. |
+| `deploy` | Aplica o change set do runtime com `deploy_change_set.sh` e lê os parâmetros operacionais do objeto S3 indicado por `RUNTIME_CONFIG_KEY`. Um change set vazio é removido sem falhar. |
+| `release` | `write_release.py` confere as saídas da stack contra o build e os digests no ECR. Grava `releases/<sha>/release.json` uma vez e move `releases/latest.json`. |
 
 O manifesto de release contém o Git SHA, as imagens por digest, as revisões das job
 definitions e a versão do Lambda de controle. A campanha resolve `latest` uma única vez, no
@@ -151,11 +147,12 @@ de eventos, respectivamente. Aguarde os três marcadores `_SUCCESS.json` no esco
 e confira as contagens no manifesto antes de iniciar as campanhas.
 
 Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem seis jobs independentes
-por dataset. Fixe o mesmo SHA de release nos três arquivos. Para disparar as três campanhas
-em paralelo, confira se a fila, o compute environment e a quota regional permitem **18 jobs
-simultâneos**. Cada job usa 2 vCPU e 2 GiB de RAM (`BenchmarkVcpus=2` e
-`BenchmarkMemoryMiB=2048`). Reserve pelo menos 18 vCPUs livres no ambiente compartilhado.
-Os exemplos pedem seis jobs simultâneos por campanha e uma tentativa por job.
+por dataset, com `max_parallel=6` e uma tentativa por job. Fixe o mesmo SHA de release nos
+três arquivos. Para ter os 18 jobs ativos juntos, confira a fila, o compute environment,
+a quota regional e as reservas da job definition da release. Com 1 vCPU por job, são
+necessárias 18 vCPUs livres no ambiente compartilhado. Com 2 vCPU por job, são 36.
+Reduza `max_parallel` ou rode as campanhas em sequência se a capacidade for menor.
+Use um novo `campaign_id` ao alterar o plano de um exemplo que já foi executado na conta.
 
 As variantes são `frozen`, `online`, `drift_adwin`, `drift_ddm`, `incremental` e
 `periodic`. Todas usam o mesmo modelo por dataset, o mesmo warm-up e
@@ -236,11 +233,12 @@ métricas EMF por dataset, escopo e política, sem `run_id` como dimensão.
 ```bash
 scripts/aws/flink.sh stop                 # se o streaming estiver ativo
 scripts/aws/teardown.sh                   # runtime: endpoints da VPC, Batch, Lambda, state machines, módulos
-scripts/aws/teardown.sh --with-cicd       # também o pipeline
+scripts/aws/teardown.sh --with-cicd       # também a stack de OIDC e roles de deploy
 ```
 
-A stack persistente (buckets, KMS, ECR), os log groups de jobs e aquisição e o Model Registry
-são preservados. Removê-los é uma decisão manual e irreversível, fora destes scripts.
+O script preserva a stack persistente (buckets, KMS, ECR), os log groups de jobs e aquisição
+e o Model Registry. Planeje separadamente a parada de execuções e remoção das stacks
+complementares do Studio. Elas usam os workflows, buckets e app MLflow do ambiente.
 
 ## Campanhas no SageMaker Studio
 
@@ -359,3 +357,15 @@ mostra o status e os detalhes de cada job nativo. No MLflow, use o experimento
 `continual-bench-native` e filtre pela tag `cb-pipeline-execution-id`. O processamento
 registra o progresso por lote de linhas, o treinamento publica métricas por época e
 cada trial de tuning tem seu próprio run com os hiperparâmetros e o objetivo medido.
+
+
+Na etapa `TuneHyperparameters`, abra o job de tuning e consulte **Top Training Jobs**.
+O SageMaker ordena os trials pelo valor final de `validation:log_loss`, do menor para o
+maior. O treinamento emite a métrica no formato esperado pela definição do job. Para cruzar
+os dados da interface com a API:
+
+```bash
+aws sagemaker list-training-jobs-for-hyper-parameter-tuning-job \
+  --hyper-parameter-tuning-job-name "$TUNING_JOB" \
+  --sort-by FinalObjectiveMetricValue --sort-order Ascending
+```

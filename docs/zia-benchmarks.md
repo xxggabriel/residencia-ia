@@ -1,7 +1,9 @@
 # Benchmarks temporais Zia Data Labs
 
-Cada dataset tem uma DAG com quatro runs. O algoritmo, os dados, os limites e o
-protocolo ficam fixos dentro de cada DAG. As fontes são sintéticas, publicadas
+Cada dataset tem uma DAG do Airflow com quatro runs. Na AWS, os exemplos de
+campanha integral do Batch definem seis runs por dataset e podem ser iniciados
+pelo SageMaker Pipelines. Cada campanha fixa o modelo, os dados, os limites e o
+protocolo. As fontes são sintéticas, publicadas
 pela Zia Data Labs sob CC BY-NC 4.0. As revisões e os SHA-256 estão fixados no
 [contrato de entrada](../src/continual_bench/datasets/zia.py).
 
@@ -31,14 +33,25 @@ representa o status observado e depende da maturação dos pedidos.
    holdout temporal com modelo congelado, separado das métricas prequenciais.
    A fonte fornece data do evento, sem confirmação do atraso dos rótulos.
    No protocolo, os rótulos do bloco ficam disponíveis após a predição.
-3. Aplicar exatamente uma das políticas a cada run.
+3. Aplicar uma política por run. Quando o modelo usa o loop iterativo, cada
+   ajuste separa um sufixo temporal para validação interna. Os padrões são até
+   100 épocas, 10% para validação e seleção por `validation:log_loss`.
+   O holdout temporal final permanece separado da validação de cada ajuste.
 
 | Política | Atualização após predição |
 |---|---|
 | `frozen` | Modelo inicial congelado. |
 | `periodic` | Reinicia o ajuste a cada quatro blocos e usa os quatro mais recentes. |
 | `drift` | ADWIN sobre taxa de erro por bloco. Reinicia o ajuste em alarmes, com até quatro blocos recentes. |
-| `incremental` | Continua o ajuste a cada bloco a partir do modelo atual. XGBoost acrescenta uma rodada. A logística usa os pesos anteriores como ponto inicial do otimizador. |
+| `drift_adwin`, `drift_ddm` | ADWIN e DDM sobre a sequência de erros binários de cada predição. Um alarme aciona retreino com até quatro blocos recentes. |
+| `incremental` | Continua o ajuste iterativo em cada bloco a partir do modelo vigente. O XGBoost acrescenta rodadas ao booster e a logística parte dos pesos anteriores. |
+| `online` | Atualiza após cada bloco, em minibatches. Em Social, SGD do River ajusta a logística multinomial. Em Fraud e E-commerce, o gradiente da perda logística do River atualiza as folhas das árvores existentes do XGBoost. |
+
+As DAGs do Airflow executam `frozen`, `periodic`, `drift` e `incremental`.
+Os exemplos Batch `campaign-{social,fraud,ecommerce}-full.json` executam
+`frozen`, `online`, `drift_adwin`, `drift_ddm`, `incremental` e `periodic`.
+A campanha Batch `campaign-social-full-cost-aware.json` agrupa as [políticas
+por custo e o Oracle](cost-aware-retraining.md).
 
 ## Telemetria
 
@@ -73,10 +86,11 @@ Na rede social, a decisão continua sendo o argmax, e `pr_auc` fica nulo.
 Para usar outros custos, crie um perfil em `configs/` e informe-o no campo `tracking` da
 campanha. Fixe os custos antes da execução, sem ajustá-los pelos resultados do holdout.
 
-Cada run também publica o índice de gráficos, SVGs e seus dados em `plots/`
+Os runs publicados incluem o índice de gráficos, SVGs e seus dados em `plots/`
 e `data/`, definições e métricas versionadas em `tracking/`, configuração,
-ambiente, catálogo e linhagem das versões. O modelo final é carregável em
-`model/` e tem uma versão no Model Registry. A assinatura recebe as
+ambiente, catálogo e linhagem das versões. A publicação do homelab coloca
+o modelo final carregável em `model/` e registra uma versão no MLflow Model
+Registry. A assinatura recebe as
 features numéricas preparadas na ordem registrada e devolve uma coluna de
 probabilidade por classe. Famílias de teste usam o sufixo `-smoke`.
 
@@ -133,3 +147,15 @@ distinto. O nome do experimento segue
 `progress.json`, `report.json` e `receipt.json` no estado da run. Uma
 publicação incompleta pode ser repetida usando a mesma campanha. Uma
 interrupção anterior ao relatório final pode refazer o treinamento.
+
+Na AWS, publique o snapshot e confira seu marcador `_SUCCESS.json` antes de
+iniciar as campanhas, ou envie também a solicitação de preparação ao Pipeline.
+O Batch guarda o relatório, as predições e o modelo final no S3. Quando o tracking
+está configurado, publica métricas no MLflow App e inclui o ID desse run no manifesto
+final. Uma falha na publicação MLflow fica no log e preserva a evidência no S3. Abra a
+execução de `continual-bench-campaign` no SageMaker Studio para acompanhar as
+etapas e consulte os resultados por job no Batch e no MLflow. Os snapshots
+publicados e suas avaliações Zia podem ser localizados pelo [catálogo do
+SageMaker Unified Studio](aws/operations.md#onde-localizar-datasets-e-avaliações).
+O [runbook AWS](aws/operations.md#campanhas-no-sagemaker-studio) cobre a
+submissão e o acompanhamento.

@@ -10,6 +10,11 @@
 | `contracts/` | Contratos de runtime: locks de datasets, definições de métricas e catálogo bibliográfico. Entram no fingerprint dos datasets e no wheel | Só com nova versão de contrato |
 | `history/` | Manifestos congelados das campanhas executadas (controlled-v3, versioned-v4, nonlinear-v5), com `run_key` e hash do código | Não; são evidência |
 
+Para enviar a matriz de smoke ao SageMaker Studio, copie a solicitação de
+[campaign-binary-matrix.json](../infra/examples/campaign-binary-matrix.json), defina um
+novo `campaign_id` e ajuste `request.matrix.path` para `configs/matrices/studio-smoke.yaml`.
+Os exemplos de solicitação ficam em `infra/examples/`. [Runbook do Studio](../docs/aws/operations.md#campanhas-no-sagemaker-studio).
+
 ## Herança com `extends`
 
 Qualquer mapeamento de um arquivo YAML/JSON pode declarar `extends` com um caminho, ou uma lista
@@ -54,8 +59,8 @@ python -c "import json, sys; from continual_bench.config import load_document; p
 
 ## Identidade
 
-A identidade de uma execução (`Config.identity()`) depende só da configuração resolvida, não da
-forma como ela foi escrita. A reorganização preservou as identidades de todos os arquivos
-anteriores, e `tests/test_config_files.py` fixa as identidades dos exemplos versionados. Alterar
-uma base muda a identidade de todos os herdeiros: esse teste falha e mostra quais arquivos foram
-afetados.
+A identidade de uma execução (`Config.identity()`) depende da configuração resolvida.
+`tests/test_config_files.py` fixa as identidades de exemplos versionados. Alterações nos valores
+efetivamente herdados mudam a identidade dos casos; uma chave sobrescrita pelo filho mantém o valor
+já declarado nele. Para compartilhar as evidências de uma campanha histórica, use o manifesto
+congelado correspondente.

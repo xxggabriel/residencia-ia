@@ -251,6 +251,9 @@ reconstituir os testes das matrizes e referências, inclusive recorrências; uma
 reconstitui sua linhagem. A retomada por checkpoint precisa preservar matrizes,
 contadores e referências, respeitando os guards de fonte e configuração existentes.
 
-O catálogo é uma fonte de definições e proveniência. A confirmação de captura e
-publicação requer verificações da implementação e evidência da execução; esta
-entrega documental não constitui nova campanha nem relatório de resultados.
+O catálogo é uma fonte de definições e proveniência. Para verificar o que foi
+publicado, consulte o relatório e o run de cada execução. No perfil AWS, o MLflow
+recebe métricas das campanhas Zia, das matrizes e dos jobs nativos com a granularidade
+própria de cada avaliador. O catálogo no SageMaker Unified Studio associa o snapshot
+ao run Zia cujo manifesto final comprova o vínculo. Veja
+[rastreamento no MLflow](mlflow-tracking.md) e [publicação do catálogo](aws/operations.md#publicação-automática-no-catálogo).

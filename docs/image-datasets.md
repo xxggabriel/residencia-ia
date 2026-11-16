@@ -1,16 +1,16 @@
-# Loaders de imagens da Semana 09
+# Loaders de MNIST e CIFAR
 
-Foram implementados loaders de arquivos brutos para Split MNIST, Permuted MNIST,
-Split CIFAR10 e Split CIFAR100, sem Torch, TensorFlow, pickle ou extração de tar
-para o filesystem. O avaliador recebeu pixels reais normalizados por 255, sem
-resize, augmentação, pré-treino ou ajuste de normalizadores no teste.
+O [registro executável de datasets](../src/continual_bench/datasets/catalog.py)
+usa os arquivos IDX para Split MNIST e Permuted MNIST e os espelhos Parquet
+versionados para Split CIFAR10 e Split CIFAR100. Os loaders binários de CIFAR
+continuam disponíveis para seleção explícita. Os avaliadores recebem pixels
+normalizados por 255, nas dimensões originais.
 
 ## Aquisição e proveniência
 
-`prepare_image_dataset(name, cache, limit=100, seed=42, download=False)` retornou
-uma fonte com `samples_iter()` de `TaskSample` e `manifest()`. Apenas
-`download=True` autorizou aquisição. O cache foi compartilhado por dataset bruto;
-Split e Permuted MNIST reutilizaram os mesmos quatro arquivos IDX.
+`prepare_image_dataset(name, cache, limit=100, seed=42, *, download=False)` retorna
+uma fonte com `samples_iter()` de `TaskSample` e `manifest()`. A aquisição exige
+`download=True`. Split e Permuted MNIST reutilizam os mesmos quatro arquivos IDX.
 
 Os arquivos e tamanhos foram fixados por SHA-256 no
 `configs/contracts/image-datasets.lock.json`, com base nos catálogos oficiais de checksums
@@ -36,7 +36,7 @@ SPDX; nenhuma licença do código foi atribuída aos dados, e nenhum aceite de
 termos restritos foi realizado. Os direitos e referências foram registrados
 literalmente no lock e no manifesto, sem inferir uma autorização SPDX.
 
-## Protocolo limitado a 100 exemplos originais
+## Protocolo do smoke de 100 exemplos originais
 
 A seleção utilizou exatamente 100 IDs originais distintos: 80 registros do
 treino oficial e 20 do teste oficial. A divisão foi preservada, sem mover imagens
@@ -71,14 +71,14 @@ silenciosamente. Foram aplicados lock por asset, limite de bytes e deadline.
 Os testes entregues cobriram fixtures binárias reais de formato, limites,
 split/ID/classe/permutação, corrupção, falhas de rede e idempotência de cache.
 Os testes iniciais foram executados somente no homelab. Os resultados de
-aquisição e treinamento ficaram no [relatório de execução](semana09-dataset-execution.md).
+aquisição e treinamento ficaram no [relatório de execução](task-dataset-execution.md).
 
 ## Fonte CIFAR Parquet explicitamente selecionada
 
-Foi acrescentada `prepare_cifar_parquet(name, cache, limit=100, seed=42,
-download=False)` em `datasets/cifar_parquet.py`. Essa função foi uma fonte
-alternativa explícita após timeout de transferência no servidor Toronto; ela não
-foi fallback automático após negação de acesso. Os repositórios públicos
+`prepare_cifar_parquet(name, cache, limit=100, seed=42, *, download=False)`
+é o loader de CIFAR usado pelo registro executável na preparação por épocas.
+A escolha foi feita no primeiro smoke, após timeout de transferência no
+servidor de Toronto. Os repositórios públicos
 [uoft-cs/cifar10](https://huggingface.co/datasets/uoft-cs/cifar10) e
 [uoft-cs/cifar100](https://huggingface.co/datasets/uoft-cs/cifar100) identificaram a
 origem CIFAR, classes e splits oficiais em seus próprios dataset cards. A licença
@@ -107,3 +107,7 @@ prefixo do mirror, sem alegar igualdade de bytes com o arquivo tar de Toronto.
 Cache preparado completo pôde ser relido sem rede; corrupção foi rejeitada sem
 reparo automático. O leitor não buscou URLs externas encontradas em campos de
 imagem: os bytes precisaram estar embutidos no Parquet.
+
+O benchmark iterativo usa uma representação compacta separada. O loader
+`load_iterative` prepara 10.000 imagens por fonte em uma matriz de pixels
+`uint8` e converte somente a linha em uso em features normalizadas.

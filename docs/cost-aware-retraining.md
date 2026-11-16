@@ -13,7 +13,7 @@ Código em `src/continual_bench/retraining/`; as políticas se registram em `Pol
 Os fluxos são divididos em `B` lotes (blocos do Zia). `err[i, j]` é a taxa de erro 0-1 do modelo treinado ao fim do lote `i` no lote `j > i`. O modelo de `i` usa a mesma janela de reposição do `periodic` (últimos `REPLAY_BLOCKS` blocos).
 
 1. **Matriz de desempenho** (`retraining/matrix.py`). Uma passada pelo fluxo treina um modelo por lote e avalia cada modelo em cada lote posterior: `B` ajustes e `B(B-1)/2` predições. O rodízio guarda também 512 pontos e 100 queries por lote para a obsolescência do CARA.
-2. **Fase offline**: os primeiros `w` lotes (`retraining.offline_blocks`, padrão `max(2, B // 3)`). O CARA otimiza `τ`, `τ_cum` ou `φ` repetindo o Algoritmo 1 sobre eles; o UPF não tem parâmetros offline, apenas histórico.
+2. **Fase offline**: os primeiros `w` lotes (`retraining.offline_blocks`, padrão `max(2, B // 3)`). O CARA otimiza `τ`, `τ_cum` ou o par período/deslocamento repetindo o Algoritmo 1 sobre eles. O UPF usa o histórico inicial de erros para ajustar o previsor durante a fase online.
 3. **Fase online**: do lote `w` ao fim. O modelo do lote `w-1` (o último offline) é implantado, como o `f_0` do UPF. Após observar o lote `t`, a política decide; um retreino passa a valer no lote `t+1`.
 4. **Execução**: ao decidir *retrain*, o runner carrega o modelo já treinado para a matriz (mesma janela, mesmo seed), sem ajuste duplicado. O stream avaliado reproduz a matriz exatamente, e `verify_realised` falha o run se divergir.
 
@@ -28,9 +28,9 @@ Os fluxos são divididos em `B` lotes (blocos do Zia). `err[i, j]` é a taxa de 
 **CARA** (`retraining/rules.py`, `matrix.staleness`). Obsolescência relativa `Ψ̄(t, t') = Ψ(Q_t, D_t, M_t') − Ψ(Q_t, D_t', M_t')`, com `Ψ(q, D, M) = 1/|D| Σ sim(q,x)·ℓ(M,x,y)`, kernel RBF com `γ = 1/(d · Var(X_offline))`, atributos brutos e média sobre as queries no pipeline.
 - `cara`: retreina se `Ψ̄ ≥ τ`.
 - `cara_cumulative`: soma `Ψ̄` desde o último retreino e retreina ao atingir `τ_cum`.
-- `cara_periodic`: retreina a cada `φ` decisões.
+- `cara_periodic`: retreina nos lotes da fase do deslocamento ajustado, repetindo a cada `φ` lotes.
 
-A otimização offline é uma busca em grade sobre os valores observados (exata para `τ`, pois o custo é constante por partes), preferindo o maior limiar em empate. O artigo usa *dual annealing* para `τ` e `τ_cum`.
+A otimização offline busca candidatos para `τ` entre os valores observados e usa quantis quando a quantidade de valores excede o limite implementado. Para `τ_cum`, avalia uma grade de 200 pontos e o caso sem retreino. Em empate, prefere o maior limiar. O benchmark de referência do CARA usa *dual annealing* para `τ` e `τ_cum`.
 
 **UPF**. O `ElasticNetCV` do scikit-learn prevê o erro médio usando `[i, j, j−i, z_shift]`.
 O termo `z_shift` é a distância L1 entre as médias dos atributos dos dois últimos lotes observados.
@@ -40,7 +40,7 @@ continuação compartilhada por todas as amostras, comparando os quantis de cust
 manter. O UPF retreina quando o quantil `δ` (0,95) do primeiro ramo é estritamente menor
 (eq. 16–22). Com `δ = 0,5`, a comparação usa as medianas (ablação PF).
 
-**Oracle**. DP em `O(B²)` sobre `err` (objetivo `error`, padrão) ou sobre `Ψ̄` (`objective="staleness"`, o Oracle do CARA). Os testes comparam com busca exaustiva.
+**Oracle**. A programação dinâmica calcula em `O(B²)` o cronograma ótimo para `err` (`oracle`, objetivo usado pela campanha Zia) ou `Ψ̄` (`oracle_staleness`, referência para a análise de obsolescência). Os testes comparam com busca exaustiva.
 
 ## Métricas rastreadas
 
@@ -52,7 +52,7 @@ No `report.json`/MLflow (`tracking_v1/summary/<nome>`), só para estas política
 | `upf_paper_auc` | UPF Tab. 1 | AUC de `Ĉα` em `[0, α_max]` (10 pontos, trapézio), política reexecutada por `α` |
 | `retraining_alpha_max` | UPF §5 | menor `α` em que o Oracle não retreina: `max_r (E₀−E_r)/r` |
 | `retraining_oracle_c_hat`, `retraining_oracle_retrains` | UPF, CARA | custo e retreinos do Oracle no mesmo `α` |
-| `cost_scpe`, `retraining_mean_scpe` | CARA Tab. 2 | `100·(Ĉ−Ĉ_oracle)/Ĉ_oracle` no `α` do run e média na grade |
+| `cost_scpe`, `retraining_mean_scpe` | Forma do SCPE da Tab. 2 de CARA aplicada ao objetivo de erro | `100·(Ĉ−Ĉ_oracle)/Ĉ_oracle` no `α` do run e média na grade. A curva de obsolescência usa `strategy_scpe` com seu próprio Oracle. |
 | `retraining_online_retrains` | CARA Tab. 4, UPF Tab. 2 | decisões de retreino online (sem o aquecimento) |
 | `retraining_average_accuracy` | CARA Tab. 3, UPF Tab. 2 | acurácia média online (as queries são amostras dos lotes) |
 | `performance_forecast_mae`, `performance_forecast_bias` | UPF §A.7 | erro e viés do previsor frente às entradas realizadas (só `upf`) |
@@ -63,7 +63,7 @@ No `report.json`/MLflow (`tracking_v1/summary/<nome>`), só para estas política
 
 Séries (passo = índice da grade de `α`, ou lote online): `retraining/{cost,retrains,average_accuracy,scpe,strategy_cost}_vs_alpha/<política>` e `retraining/cumulative_strategy_cost/<política>`. O relatório traz ainda `retraining` com a matriz de desempenho, a de obsolescência, as curvas por política, a tabela `α` baixo/alto (0,1 e 0,9 de `α_max`), a robustez a `α` errado e os pares previsto×realizado do UPF. As definições estão em `configs/contracts/metric-definitions.json`.
 
-`α_max`, a grade e a AUC usam a matriz do próprio run. A AUC do paper compara políticas na *mesma* grade; por isso `retraining.comparison_rules` (padrão: todas) é simulada em cada run, e `upf_paper_auc` é comparável entre runs do mesmo dataset.
+`α_max`, a grade e a AUC usam a matriz do próprio run. A análise simula `retraining.comparison_rules` na mesma grade. O padrão inclui CARA-T/CT/P, UPF, Oracle de erro e Frozen. Compare `upf_paper_auc` entre runs com o mesmo snapshot, a mesma matriz e a mesma grade.
 
 ## Gráficos
 
@@ -156,9 +156,9 @@ dessa grade descreve a comparação local.
 ## Benchmark do CARA com o protocolo dos autores
 
 O benchmark em `scripts/replicate_cara.py` segue o repositório fornecido com o artigo, revisão
-`ac2a600a3bbc5729087318087c9def96104c9023`. O fluxo do laboratório que compara CARA e UPF continua com a
-contabilidade descrita acima. Os JSONs e gráficos de execuções antigas em `docs/results/` registram o
-protocolo usado na época. Os JSONs novos incluem o campo `reference` com a revisão de referência.
+`ac2a600a3bbc5729087318087c9def96104c9023`. Os JSONs gerados incluem o campo `reference` com
+essa revisão. Os resultados arquivados de `docs/results/` ficaram no histórico Git anterior ao
+commit `80f86c2`. Para gerar resultados do código atual, execute os comandos desta seção.
 
 | Código dos autores | Implementação do benchmark |
 |---|---|
