@@ -262,11 +262,14 @@ def build_paper_matrix(
     seed: int = 0,
     n_points: int = N_POINTS,
     n_queries: int = N_QUERIES,
+    separate_query_split: bool = False,
 ) -> tuple[PerformanceMatrix, list[object]]:
     """Train each candidate on its own batch and score it on held-out rows.
 
     The seven offline batches contribute the strict upper triangle (21 pairs in Table 4).
     Online candidates also have an observed diagonal after they have been deployed.
+    With separate_query_split, CARA estimates staleness on labeled training rows
+    and uses test features as unlabeled queries.
     """
     size = len(batches)
     if not 2 <= offline <= size - 2:
@@ -276,11 +279,14 @@ def build_paper_matrix(
     states, seconds = [], []
     for i, (x_train, y_train, x_test, y_test) in enumerate(batches):
         pool = np.concatenate([x_train, x_test])
-        point_indices = rng.choice(len(pool), size=min(n_points, len(pool)), replace=False)
-        query_indices = rng.choice(len(pool), size=min(n_queries, len(pool)), replace=False)
-        points.append(pool[point_indices].astype(np.float64))
-        labels.append(np.concatenate([y_train, y_test])[point_indices])
-        queries.append(pool[query_indices].astype(np.float64))
+        reference = x_train if separate_query_split else pool
+        reference_labels = y_train if separate_query_split else np.concatenate([y_train, y_test])
+        query_pool = x_test if separate_query_split else pool
+        point_indices = rng.choice(len(reference), size=min(n_points, len(reference)), replace=False)
+        query_indices = rng.choice(len(query_pool), size=min(n_queries, len(query_pool)), replace=False)
+        points.append(reference[point_indices].astype(np.float64))
+        labels.append(reference_labels[point_indices])
+        queries.append(query_pool[query_indices].astype(np.float64))
         means.append(pool.mean(axis=0, dtype=np.float64))
         started = time.perf_counter()
         states.append(learner.fit(i, x_train, y_train))

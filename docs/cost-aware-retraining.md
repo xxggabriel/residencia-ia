@@ -126,6 +126,33 @@ são escolhas locais. A fórmula de Gauss tem um parêntese ausente no artigo e 
 baselines locais, além do Oracle. Os números do pipeline prequential usam a temporização
 operacional descrita acima.
 
+## Comparação pareada de CARA, UPF e os dois Oracles em Electricity
+
+```bash
+python scripts/replicate_upf.py electricity --electricity ~/Downloads/electricity-normalized.arff \
+  --compare-oracles --decision-timing next-batch --output /path/to/electricity-next-batch.json
+python scripts/replicate_upf.py electricity --electricity ~/Downloads/electricity-normalized.arff \
+  --compare-oracles --decision-timing same-batch --output /path/to/electricity-same-batch.json
+python scripts/plot_replication.py /path/to/electricity-next-batch.json \
+  /path/to/electricity-same-batch.json --output /path/to/plots
+```
+
+Em cada execução, todas as políticas usam os mesmos modelos XGBoost e lotes de Electricity.
+São sete lotes offline e oito online, com 2.000 linhas por lote e partições 80/20. O CARA usa
+rótulos da partição de treino para estimar obsolescência e apenas atributos da partição de teste
+para as queries. O UPF usa quantil de 95% e 100 amostras Monte Carlo por padrão.
+
+Em `next-batch`, ambas as políticas decidem após o mesmo lote e o modelo novo serve o seguinte.
+Em `same-batch`, o modelo novo pode servir o teste do próprio lote. Nesse protocolo, o CARA usa
+as queries e a referência de treino do lote corrente e o UPF decide com o histórico anterior.
+
+Cada cronograma é avaliado pelo custo combinado de erro e pelo custo de obsolescência. Os dois
+Oracles otimizam seus respectivos objetivos com a mesma temporização das políticas. O JSON contém
+as curvas, os desvios nos pontos 0,1 e 0,9 e os cronogramas por semente. A grade numérica de 20
+preços é comum, com resolução maior perto de zero. A escala de α difere da escala de κ, e o
+gráfico por frequência mostra o erro e a obsolescência sem a parcela do preço do retreino. A AUC
+dessa grade descreve a comparação local.
+
 ## Benchmark do CARA com o protocolo dos autores
 
 O benchmark em `scripts/replicate_cara.py` segue o repositório fornecido com o artigo, revisão

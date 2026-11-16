@@ -102,6 +102,7 @@ def analyze(
     rules=DEFAULT_RULES,
     n_alphas: int = 10,
     alpha_top: float | None = None,
+    alpha_grid: tuple[float, ...] | None = None,
     focus_alpha: float | None = None,
     delta: float = 0.95,
     samples: int = 100,
@@ -118,7 +119,14 @@ def analyze(
     oracle_top = top
     if alpha_top is not None:  # fixed range from the paper (UPF Table 4) instead of the oracle's own
         top = float(alpha_top)
-    alphas = [float(a) for a in np.linspace(0.0, top, n_alphas)] if top > 0 else [0.0, 1.0]
+    if alpha_grid is None:
+        alphas = [float(a) for a in np.linspace(0.0, top, n_alphas)] if top > 0 else [0.0, 1.0]
+    else:
+        alphas = [float(a) for a in alpha_grid]
+        if (len(alphas) < 2 or alphas[0] != 0 or not all(math.isfinite(a) for a in alphas)
+                or any(a >= b for a, b in zip(alphas, alphas[1:]))):
+            raise ValueError("alpha_grid must start at zero and be finite and strictly increasing")
+        top = alphas[-1]
     focus = alphas[len(alphas) // 2] if focus_alpha is None else float(focus_alpha)
     all_alphas = sorted({*alphas, focus, *(top * f for f in LOW_HIGH.values())})
     rules = tuple(dict.fromkeys(("oracle", *rules)))
@@ -133,7 +141,9 @@ def analyze(
     stale_cost = np.nan_to_num(staleness.T, nan=0.0)
     strategy_oracle = {}
     for alpha in all_alphas:
-        if same_batch or matrix.paper_timing:
+        if "oracle_staleness" in rules:
+            value = sims["oracle_staleness", alpha].strategy_cost(matrix)
+        elif same_batch or matrix.paper_timing:
             _, value = optimal_schedule_same_batch(stale_cost.T, matrix.initial, first, last, alpha)
         else:
             _, value = optimal_schedule(stale_cost, matrix.initial, first, last, alpha)
@@ -153,6 +163,8 @@ def analyze(
             "retrain_points": result.retrains, "average_accuracy": _num(result.average_accuracy),
             "scpe": _num(scpe(result.cost, oracle.cost)),
             "strategy_cost": _num(strategy),
+            "error_oracle_gap": _num(result.cost - oracle.cost),
+            "strategy_oracle_gap": _num(strategy - strategy_oracle[alpha]),
             "oracle_strategy_cost": _num(strategy_oracle[alpha]),
             "strategy_scpe": _num(strategy_scpe(strategy, strategy_oracle[alpha])),
             "parameters": json_parameters(result.parameters),

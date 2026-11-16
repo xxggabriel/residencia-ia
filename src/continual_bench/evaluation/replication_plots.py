@@ -265,3 +265,79 @@ def schedule_figure(showcase):
     handles, labels = ax.get_legend_handles_labels()
     _legend(fig, [handles[-1], *handles[:-1]], [labels[-1], *labels[:-1]], x=0.1, columns=6)
     return f"cara_schedule_{showcase['dataset']}.png", fig
+
+
+def oracle_comparison_figures(result):
+    """Compare shared Electricity schedules under each objective and its own lower bound."""
+    from matplotlib.ticker import FuncFormatter
+
+    curves, prices = result["curves"], np.asarray(result["alphas"])
+    order = ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle", "oracle_staleness")
+    rules = [rule for rule in order if rule in curves]
+    labels = {**LABELS, "oracle": "Oracle · erro", "oracle_staleness": "Oracle · obsolescência"}
+    colors = {**COLORS, "oracle_staleness": "#B13E62"}
+    same_batch = result["comparison"]["same_batch"]
+    mode = "same_batch" if same_batch else "next_batch"
+    prefix = f"oracle_comparison_{result['dataset']}_{mode}"
+    timing = "ativação no próprio lote" if same_batch else "ativação no lote seguinte"
+    subtitle = f"{result['trials']} sementes pareadas · mesmos modelos, lotes e partições · {timing}"
+
+    def draw(ax, rule, x, y, *, scatter=False):
+        style = STYLES.get(rule, "-")
+        ax.plot(x, y, color=colors[rule], label=labels[rule], linestyle="none" if scatter else style,
+                linewidth=1.8, marker="o", ms=4 if scatter else 2.7, alpha=0.88)
+
+    def panel(ax, title):
+        _axes(ax)
+        ax.set_title(title, loc="left", color=INK, fontsize=12, fontweight="bold", pad=9)
+
+    def price_axis(ax):
+        ax.set_xscale("symlog", linthresh=0.01)
+        ax.set_xticks([0, 0.005, 0.01, 0.05, 0.1, 0.5, 1])
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}".replace(".", ",")))
+        ax.set_xlabel("Preço do retreino (α / κ)")
+
+    fig, axes = _subplots(2, 2, figsize=(12, 8))
+    for ax, (metric, title) in zip(axes.flat, (
+        ("cost", "Custo de erro · UPF"),
+        ("strategy_cost", "Custo de obsolescência · CARA"),
+        ("error_oracle_gap", "Excesso sobre o Oracle de erro"),
+        ("strategy_oracle_gap", "Excesso sobre o Oracle de obsolescência"),
+    ), strict=True):
+        panel(ax, title)
+        for rule in rules:
+            draw(ax, rule, prices, curves[rule][metric])
+        price_axis(ax)
+    _header(fig, "CARA / UPF", "Electricity · dois objetivos e dois Oracles", subtitle,
+            left=.075, top=.71, right=.97, bottom=.10, hspace=.50, wspace=.26)
+    _legend(fig, *axes[0, 0].get_legend_handles_labels(), columns=3, x=.075, y=.80)
+    costs = fig
+
+    fig, axes = _subplots(1, 2, figsize=(12, 5.5))
+    for ax, (metric, title) in zip(axes, (("retrains", "Número de retreinos"),
+                                        ("average_accuracy", "Acurácia no teste")), strict=True):
+        panel(ax, title)
+        for rule in rules:
+            draw(ax, rule, prices, curves[rule][metric])
+        price_axis(ax)
+    _percent(axes[1])
+    _header(fig, "CARA / UPF", "Electricity · retreinos e acurácia", subtitle,
+            left=.075, top=.66, right=.97, bottom=.16, wspace=.25)
+    _legend(fig, *axes[0].get_legend_handles_labels(), columns=3, x=.075, y=.80)
+    schedules = fig
+
+    fig, axes = _subplots(1, 2, figsize=(12, 5.5))
+    for ax, (metric, title) in zip(axes, (("cost", "Erro acumulado"),
+                                        ("strategy_cost", "Obsolescência acumulada")), strict=True):
+        panel(ax, title)
+        for rule in rules:
+            retrains = np.asarray(curves[rule]["retrains"])
+            measure = np.asarray(curves[rule][metric]) - prices * retrains
+            draw(ax, rule, retrains, measure, scatter=True)
+        ax.set_xlabel("Número médio de retreinos")
+    _header(fig, "CARA / UPF", "Electricity · desempenho por frequência de retreino",
+            f"Um ponto por preço, sem cobrar o retreino no eixo vertical · {timing}.",
+            left=.075, top=.66, right=.97, bottom=.16, wspace=.25)
+    _legend(fig, *axes[0].get_legend_handles_labels(), columns=3, x=.075, y=.80)
+    return [(f"{prefix}_custos.png", costs), (f"{prefix}_retreinos.png", schedules),
+            (f"{prefix}_frequencia.png", fig)]

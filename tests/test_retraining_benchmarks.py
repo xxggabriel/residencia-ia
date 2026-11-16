@@ -8,6 +8,7 @@ import pytest
 from continual_bench.datasets import retraining_benchmarks as data
 from continual_bench.evaluation.retraining_replication import (
     ALPHA_MAX,
+    COMPARISON_GRID,
     PAPER_AUC,
     XGBoostLearner,
     replicate,
@@ -122,6 +123,51 @@ def test_electricity_article_figures_include_table_2():
     assert len(table.axes) == 6
     assert [text.get_text() for text in table.legends[0].get_texts()] == ["Resultado local", "Artigo"]
     assert table.axes[0].lines[3].get_ydata().astype(float) == pytest.approx([2.5, 5.6])
+
+
+def test_shared_staleness_uses_unlabeled_test_queries():
+    class Learner:
+        def fit(self, index, x, y):
+            return float(x.mean())
+
+        def losses(self, cutoff, x, y):
+            return (x[:, 0] > cutoff) != y
+
+    rng = np.random.default_rng(4)
+    batches = [data.split_batch(x, y, rng) for x, y in data.upf_gauss(6, size=64, seed=4)]
+    flipped = [(x, y, xt, 1 - yt) for x, y, xt, yt in batches]
+    original, _ = build_paper_matrix(batches, Learner(), 3, separate_query_split=True)
+    modified, _ = build_paper_matrix(flipped, Learner(), 3, separate_query_split=True)
+    np.testing.assert_allclose(original.staleness_matrix(), modified.staleness_matrix())
+    np.testing.assert_allclose(original.err, 1 - modified.err)
+
+
+@pytest.mark.parametrize(("timing", "decisions"), [("same-batch", 8), ("next-batch", 7)])
+def test_shared_benchmark_scores_both_objectives_with_their_oracles(tmp_path, timing, decisions):
+    pytest.importorskip("xgboost")
+    rows = []
+    for batch in range(15):
+        for i in range(48):
+            label = "UP" if i % 11 < 3 + (batch % 4) else "DOWN"
+            rows.append(f"0,1,{i / 48},{i % 11 / 11},{batch / 15},0.2,0.3,0.4,{label}")
+    path = tmp_path / "electricity.arff"
+    path.write_text("@data\n" + "\n".join(rows))
+    report = replicate("electricity", trials=1, electricity_path=path, size=48, samples=10,
+                       rules=("cara", "upf"), compare_oracles=True, decision_timing=timing)
+    assert report["alphas"] == list(COMPARISON_GRID)
+    assert report["comparison"]["decision_points"] == decisions
+    assert report["summary"]["oracle"]["paper_auc"] is None
+    curves = report["curves"]
+    strategy_reference = curves["oracle_staleness"]["strategy_cost"]
+    for rule in curves.values():
+        np.testing.assert_allclose(rule["error_oracle_gap"],
+                                   np.asarray(rule["cost"]) - curves["oracle"]["cost"], atol=1e-10)
+        np.testing.assert_allclose(rule["strategy_oracle_gap"],
+                                   np.asarray(rule["strategy_cost"]) - strategy_reference,
+                                   atol=1e-10)
+        assert min(rule["error_oracle_gap"]) >= -1e-10
+        assert min(rule["strategy_oracle_gap"]) >= -1e-10
+        assert max(rule["retrains"]) <= decisions
 
 
 def test_fast_forest_prediction_matches_scikit_learn():
