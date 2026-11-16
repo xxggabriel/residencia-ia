@@ -89,10 +89,13 @@ class PerformanceMatrix:
             return 0.0
         return float(np.abs(self.feature_means[j] - self.feature_means[j - 1]).sum())
 
-    def scaler(self) -> tuple[np.ndarray, np.ndarray]:
-        sample = np.concatenate(self.points[: self.offline])
-        scale = sample.std(axis=0)
-        return sample.mean(axis=0), np.where(scale > 1e-12, scale, 1.0)
+    def kernel_gamma(self) -> float:
+        """Pipeline RBF scale from raw offline features, separate from the CARA replication settings."""
+        if not hasattr(self, "_gamma"):
+            sample = np.concatenate(self.points[: self.offline])
+            variance = float(sample.var())
+            self._gamma = 1.0 / (sample.shape[1] * (variance if variance > 1e-12 else 1.0))
+        return self._gamma
 
     def staleness(self, t: int, model: int) -> float:
         """Relative staleness of ``model`` for the queries of batch ``t`` (CARA, eq. 1-3).
@@ -102,25 +105,18 @@ class PerformanceMatrix:
         """
         if not model < t:
             raise ValueError("staleness is defined for a model trained before batch t")
-        mean, scale = self._scale
-        queries = (self.queries[t] - mean) / scale
-        gamma = 1.0 / queries.shape[1]
+        queries = self.queries[t]
+        gamma = self.kernel_gamma()
 
         query_norm = (queries**2).sum(axis=1)[:, None]
 
         def psi(batch: int, loss: np.ndarray) -> float:
-            data = (self.points[batch] - mean) / scale
+            data = self.points[batch]
             distance = query_norm + (data**2).sum(axis=1)[None, :] - 2 * queries @ data.T
             return float((np.exp(-gamma * np.maximum(distance, 0.0)) * loss[None, :]).mean())
 
         own = model if self.source is None else int(self.source[model])
         return psi(t, self.sub_loss[model, t]) - psi(own, self.sub_loss[model, model])
-
-    @property
-    def _scale(self):
-        if not hasattr(self, "_cached_scale"):
-            self._cached_scale = self.scaler()
-        return self._cached_scale
 
     def staleness_matrix(self) -> np.ndarray:
         """``s[t, model]`` for every observed ``model < t`` (full matrix; reporting and the Oracle only)."""

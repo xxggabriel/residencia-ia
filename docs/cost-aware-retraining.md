@@ -25,7 +25,7 @@ Os fluxos são divididos em `B` lotes (blocos do Zia). `err[i, j]` é a taxa de 
 
 **Custo** (UPF, eq. 3 e 24, com `eN = 1`): `Ĉα(θ) = α‖θ‖₁ + Σₜ err[modelo implantado em t, t]`. `α` é o custo de retreinar relativo ao de errar um lote inteiro; é o `κ` do CARA por query. Vem de `tracking.upf_alpha` (padrão 1.0).
 
-**CARA** (`retraining/rules.py`, `matrix.staleness`). Obsolescência relativa `Ψ̄(t, t') = Ψ(Q_t, D_t, M_t') − Ψ(Q_t, D_t', M_t')`, com `Ψ(q, D, M) = 1/|D| Σ sim(q,x)·ℓ(M,x,y)`, kernel RBF (`γ = 1/d`, atributos padronizados pela fase offline) e média sobre as queries.
+**CARA** (`retraining/rules.py`, `matrix.staleness`). Obsolescência relativa `Ψ̄(t, t') = Ψ(Q_t, D_t, M_t') − Ψ(Q_t, D_t', M_t')`, com `Ψ(q, D, M) = 1/|D| Σ sim(q,x)·ℓ(M,x,y)`, kernel RBF com `γ = 1/(d · Var(X_offline))`, atributos brutos e média sobre as queries no pipeline.
 - `cara`: retreina se `Ψ̄ ≥ τ`.
 - `cara_cumulative`: soma `Ψ̄` desde o último retreino e retreina ao atingir `τ_cum`.
 - `cara_periodic`: retreina a cada `φ` decisões.
