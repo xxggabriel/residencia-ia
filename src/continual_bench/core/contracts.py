@@ -66,6 +66,7 @@ class DecisionContext:
     drift: bool
     recent_error: float | None = None
     monitored: int = 0
+    batch: int | None = None  # Index of the batch just observed (batch policies only).
 
 
 @dataclass(frozen=True)

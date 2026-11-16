@@ -1,9 +1,10 @@
 # Módulos ativáveis
 
 O perfil Core (rede, execução, observabilidade, analytics e billing) é o padrão. Os demais
-módulos têm flag explícita em `infra/params/runtime-overrides.example.json`. Para ativar,
-copie o arquivo para `s3://<artefatos>/config/runtime-parameters.json` e faça um merge, ou
-reexecute o pipeline. A etapa de deploy aplica as flags no change set.
+módulos têm flags no [exemplo de parâmetros](../../infra/params/runtime-overrides.example.json).
+Para ativar um módulo, preserve os overrides do ambiente e altere as flags no objeto
+`config/runtime-parameters.json` do bucket de artefatos. O workflow de deploy do GitHub
+Actions aplica as flags no change set.
 
 ## Streaming (`EnableStreaming=true`)
 
@@ -55,6 +56,10 @@ Desative o online store ao fim do teste (`EnableOnlineStore=false`).
 
 ## ML avançado (`EnableMl=true`, endpoint com `EnableEndpoint=true`)
 
+Este módulo provisiona a role e recursos dos perfis avulsos abaixo. A stack
+`continual-bench-studio-native` tem role própria e é implantada separadamente. Veja
+[o pipeline nativo do Studio](operations.md#executar-o-pipeline-nativo).
+
 A imagem `ml` reaproveita as dependências da `runtime` e só muda o ponto de entrada
 (`process`, `train`, `serve`). Perfis em `infra/sagemaker/profiles/`:
 
@@ -66,10 +71,11 @@ python scripts/aws/sagemaker_jobs.py inference  --bucket $BUCKET --role $SM_ROLE
   --model-data s3://$BUCKET/campaigns/<id>/runs/<run>/attempts/<a>/model/model.tar.gz --delete-after
 ```
 
-O tuning é uma execução separada. Ele minimiza `validation:log_loss` com no máximo 8 jobs
-(2 em paralelo) num split de validação cronológico próprio, anterior ao holdout, que nunca é
-lido. Cada run Zia registra no Model Registry (`continual-bench-zia-<dataset>-<política>`) um
-candidato `PendingManualApproval`. O candidato referencia o snapshot, a run, o relatório, o
+O perfil avulso de tuning minimiza `validation:log_loss` com no máximo 8 jobs (2 em paralelo)
+num split de validação cronológico anterior ao holdout. O pipeline nativo expõe esses limites
+como parâmetros de execução. Com `EnableModelRegistry=true` no runtime, os jobs Zia publicam
+um candidato `PendingManualApproval` no grupo correspondente ao dataset, à política e ao escopo.
+O candidato referencia o snapshot, a run, o relatório, o
 `model.tar.gz` no S3 e a imagem `ml` por digest. Antes de publicar, o worker confirma que o
 `ZiaPredictor` reproduz as predições arquivadas do holdout. No build, a imagem `ml` passa pelo
 contrato `/ping` e `/invocations`. Os checkpoints intermediários ficam em `models/` de cada

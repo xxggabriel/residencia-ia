@@ -2,7 +2,7 @@
         aws-bootstrap aws-dataset-smoke aws-dataset-full \
         aws-dataset-fraud-full aws-dataset-ecommerce-full \
         aws-campaign-smoke aws-campaign-full aws-campaign-fraud-full aws-campaign-ecommerce-full \
-        aws-campaign-full-cost-heuristic aws-campaign-matrix \
+        aws-campaign-full-cost-aware aws-campaign-matrix \
         aws-mlflow-ui aws-studio-ui aws-cancel aws-teardown aws-teardown-all
 
 REPOSITORY ?= xxggabriel/residencia-ia
@@ -64,8 +64,8 @@ aws-campaign-fraud-full:
 aws-campaign-ecommerce-full:
 	scripts/aws/start_campaign.sh infra/examples/campaign-ecommerce-full.json $(SUFFIX)
 
-aws-campaign-full-cost-heuristic:
-	scripts/aws/start_campaign.sh infra/examples/campaign-social-full-cost-heuristic.json $(SUFFIX)
+aws-campaign-full-cost-aware:
+	scripts/aws/start_campaign.sh infra/examples/campaign-social-full-cost-aware.json $(SUFFIX)
 
 aws-campaign-matrix:
 	scripts/aws/start_campaign.sh infra/examples/campaign-binary-matrix.json

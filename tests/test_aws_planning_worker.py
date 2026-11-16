@@ -75,7 +75,7 @@ def test_plan_is_published_once_before_submission(campaign):
         planning.publish_plan(store, changed)
 
 
-def test_zia_full_examples_plan_all_twenty_one_independent_jobs(campaign):
+def test_zia_full_examples_plan_all_eighteen_independent_jobs(campaign):
     _, _, release, _, _ = campaign
     jobs = set()
     for dataset in ("fraud", "social", "ecommerce"):
@@ -90,12 +90,24 @@ def test_zia_full_examples_plan_all_twenty_one_independent_jobs(campaign):
             "manifest_sha256": "a" * 64, "manifest_uri": "s3://bucket/snapshot.json",
             "prepared": {"sha256": "b" * 64},
         })
-        assert plan["concurrency"] == len(plan["units"]) == 7
+        assert plan["concurrency"] == len(plan["units"]) == 6
         assert {u["params"]["policy"] for u in plan["units"]} == {
-            "frozen", "online", "drift_adwin", "drift_ddm", "incremental", "periodic", "cost_heuristic",
+            "frozen", "online", "drift_adwin", "drift_ddm", "incremental", "periodic",
         }
         jobs.update(u["job_name"] for u in plan["units"])
-    assert len(jobs) == 21
+    assert len(jobs) == 18
+
+
+def test_cost_aware_example_plans_cara_upf_and_oracle(campaign):
+    _, _, release, _, _ = campaign
+    request = CampaignRequest.model_validate(json.loads(
+        Path("infra/examples/campaign-social-full-cost-aware.json").read_text())["request"])
+    plan = planning.build_plan(request, release, snapshot_manifest={
+        "manifest_sha256": "a" * 64, "manifest_uri": "s3://bucket/snapshot.json",
+        "prepared": {"sha256": "b" * 64},
+    })
+    assert {u["params"]["policy"] for u in plan["units"]} == {
+        "cara", "cara_cumulative", "cara_periodic", "upf", "oracle"}
 
 
 def test_latest_release_resolution_is_pinned_in_the_plan(campaign):
@@ -163,10 +175,10 @@ def test_project_suite_preserves_all_cases_and_binds_external_inputs(tmp_path):
         campaign_id="suite", matrix={"kind": "project_suite"}, source_digests=sources,
     )
     plan = planning.build_plan(request, publish_fixture_release(LocalObjectStore(tmp_path)))
-    assert plan["mode"] == "distributed" and len(plan["units"]) == 548
+    assert plan["mode"] == "distributed" and len(plan["units"]) == 518
     bound = [unit for unit in plan["units"] if unit["params"].get("source_sha256")]
     assert len(bound) == 113 and {u["labels"]["dataset"] for u in bound} == sources.keys()
-    assert len({u["run_id"] for u in plan["units"]}) == 548
+    assert len({u["run_id"] for u in plan["units"]}) == 518
 
 
 def test_worker_executes_a_checksum_bound_external_epoch_source(tmp_path, monkeypatch):

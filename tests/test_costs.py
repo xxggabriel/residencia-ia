@@ -24,7 +24,7 @@ def test_invalid_profiles_are_rejected(values):
         profile(values)
 
 
-@pytest.mark.parametrize("policy", ["none", "online", "periodic", "drift", "performance", "cost_heuristic"])
+@pytest.mark.parametrize("policy", ["none", "online", "periodic", "drift", "performance"])
 def test_main_flow_records_default_costs_for_every_policy(tmp_path, policy):
     from continual_bench.application.runner import run
     from continual_bench.config import Config

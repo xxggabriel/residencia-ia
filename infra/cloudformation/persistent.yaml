@@ -4,6 +4,10 @@ Description: >-
   billing and access-log buckets, ECR repositories. Every stateful resource is retained on
   stack deletion and on replacement so datasets, models and billing history survive.
 
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
 Parameters:
   Project:
     Type: String
@@ -114,10 +118,16 @@ Resources:
 
   DataBucket:
     Type: AWS::S3::Bucket
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Retain benchmark data and notify the standalone catalog integration of committed objects.
+        must: Preserve all data, encryption, versioning and benchmark access.
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub "${Project}-data-${AWS::AccountId}-${AWS::Region}"
+      NotificationConfiguration:
+        EventBridgeConfiguration: {EventBridgeEnabled: true}
       VersioningConfiguration: {Status: Enabled}
       OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
       PublicAccessBlockConfiguration:

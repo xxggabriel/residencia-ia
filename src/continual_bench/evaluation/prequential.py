@@ -56,6 +56,9 @@ class Prequential(BinaryProtocol):
             engine.observe_batch(batch)
             if len(engine.windows) > before:
                 engine.probe(probes)
+                if run.progress is not None:
+                    for window in engine.windows[before:]:
+                        run.progress(window["end_seq"], window)
             if engine.next_seq >= next_checkpoint:
                 engine.versions.flush()
                 run.checkpoint(engine)

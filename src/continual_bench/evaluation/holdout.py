@@ -45,6 +45,8 @@ class TemporalHoldout(BinaryProtocol):
                 current.add(event.y, p)
                 if current.n == config.metric_window:
                     windows.append({"end_seq": event.seq, **current.values()})
+                    if run.progress is not None:
+                        run.progress(event.seq, windows[-1])
                     current = Metrics()
             if event.seq % config.metric_window == 0:
                 observer.sample_memory()

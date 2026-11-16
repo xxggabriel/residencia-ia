@@ -1,50 +1,46 @@
 # Operação
 
-Todos os comandos usam us-east-1 e credenciais com permissão de administração da conta alvo.
-Antes de qualquer comando que crie recursos, confirme a autorização para provisionar recursos
-cobrados na conta.
+Os exemplos usam `us-east-1`. Configure a região e as credenciais da conta alvo no shell.
 
-## 1. Bootstrap (uma vez, idempotente)
+## 1. Bootstrap
 
 ```bash
-REPOSITORY=owner/residencia-ia OVERRIDES=infra/params/runtime-overrides.example.json scripts/aws/bootstrap.sh
+REPOSITORY=owner/residencia-ia scripts/aws/bootstrap.sh
 ```
 
 O script cria ou atualiza a stack persistente e liga a proteção contra término. Depois define
-o padrão de conta `containerInsights=enhanced`, para que o cluster ECS criado pelo Batch tenha
-Container Insights, e cria os service-linked roles. Por fim, implanta a stack de CI/CD.
-Para usar uma conexão já existente, exporte `CONNECTION_ARN=arn:aws:codeconnections:...`.
+o padrão de conta `containerInsights=enhanced` para o cluster ECS criado pelo Batch, cria as
+service-linked roles e implanta a stack de CI/CD. Para reutilizar o provedor OIDC da conta,
+exporte `OIDC_PROVIDER_ARN`. Para enviar um arquivo de parâmetros operacionais ao bucket de
+artefatos durante o bootstrap, defina `OVERRIDES` com o caminho do arquivo.
 
-### Conexão GitHub
+### Configuração do GitHub Actions
 
-Sem `CONNECTION_ARN`, a stack cria a conexão no estado `PENDING`. O CloudFormation não conclui
-a autorização OAuth.
-
-1. Console → Developer Tools → Settings → Connections → `continual-bench-github` → *Update pending connection*.
-2. Instale ou escolha o GitHub App "AWS Connector for GitHub" com acesso ao repositório.
-3. Aguarde `AVAILABLE`:
+Crie o ambiente `production` no GitHub e restrinja as branches de deploy conforme as regras do
+repositório. A role AWS confia no subject OIDC desse ambiente. O bootstrap configura
+`AWS_ROLE_ARN` com `gh` quando disponível. Caso contrário, use a saída `GitHubActionsRoleArn`
+da stack `continual-bench-cicd`. Configure também as variáveis do workflow:
 
 ```bash
-scripts/aws/wait_connection.sh "$(aws cloudformation describe-stacks --stack-name continual-bench-cicd --query "Stacks[0].Outputs[?OutputKey=='ConnectionArn'].OutputValue" --output text)"
+gh variable set AWS_REGION --body us-east-1
+gh variable set PROJECT --body continual-bench
+gh variable set RUNTIME_STACK --body continual-bench-runtime
+gh variable set RUNTIME_CONFIG_KEY --body config/runtime-parameters.json
 ```
 
-### Gatilho e regras do GitHub
-
-O pipeline V2 tem um único gatilho, `push` filtrado para `main`. O push gerado pelo merge de
-um pull request também dispara. Não há regra do EventBridge, webhook ou polling para o mesmo
-repositório, então uma revisão não dispara duas execuções. A detecção nativa da ação de origem
-é substituída pelo filtro do gatilho. `ExecutionMode: SUPERSEDED` prioriza a execução mais recente e pula execuções intermediárias obsoletas em fila/andamento caso existam, otimizando o tempo de deploy. Exigir
-merge em vez de push direto é responsabilidade das regras do GitHub: ative branch protection ou
-ruleset em `main` com pull request obrigatório e checks exigidos.
+O workflow [Build and deploy](../../.github/workflows/deploy.yml) inicia com push ou merge em
+`main` e também aceita execução manual. O grupo `deploy-main` serializa as execuções com
+`cancel-in-progress: false`. O workflow [CI](../../.github/workflows/ci.yml) verifica pull
+requests e pushes fora de `main`.
 
 ## 2. CI/CD
 
-| Estágio | Projeto | O que faz |
-|---|---|---|
-| Verify | `continual-bench-ci-test` | `pip install --require-hashes`, `ruff`, `pytest`, `validate_templates.py` (cfn-lint e invariantes), `validate_asl.py` offline e `--service` (`ValidateStateMachineDefinition`) e `continual-bench aws local-smoke`. |
-| Build | `continual-bench-ci-build` | `build_images.sh`: tag imutável `git-<sha>`, reutiliza a tag se já existir, build `linux/amd64` a partir de `requirements-aws.lock`, selftest e contrato SageMaker antes do push, digest resolvido no ECR. Gera o zip determinístico do Lambda (`lambda/<sha>/control-<hash>.zip`), o código de Glue e Flink e os templates empacotados. |
-| Deploy | `continual-bench-ci-deploy` | `deploy_change_set.sh`: cria, descreve e executa o change set. Um change set vazio, como na reexecução do mesmo commit, é removido sem falhar. |
-| Deploy | `continual-bench-ci-release` | `write_release.py`: confere as saídas da stack contra o build e os digests no ECR. Grava `releases/<sha>/release.json` uma vez e move `releases/latest.json`. |
+| Job | O que faz |
+|---|---|
+| `verify` | Executa o workflow CI reutilizável com dependências fixadas por hash, Ruff, pytest, CloudFormation, ASL offline e smoke local de Social, Fraud e E-commerce. |
+| `build` | Valida o ASL na AWS e publica imagens `linux/amd64` com `build_images.sh`. O script reaproveita a tag imutável `git-<sha>` existente e resolve o digest no ECR. Valida imagens novas com selftest e contrato SageMaker antes do push. Também empacota os templates, o zip do Lambda e o código de Glue e Flink. |
+| `deploy` | Aplica o change set do runtime com `deploy_change_set.sh` e lê os parâmetros operacionais do objeto S3 indicado por `RUNTIME_CONFIG_KEY`. Um change set vazio é removido sem falhar. |
+| `release` | `write_release.py` confere as saídas da stack contra o build e os digests no ECR. Grava `releases/<sha>/release.json` uma vez e move `releases/latest.json`. |
 
 O manifesto de release contém o Git SHA, as imagens por digest, as revisões das job
 definitions e a versão do Lambda de controle. A campanha resolve `latest` uma única vez, no
@@ -150,29 +146,34 @@ Os exemplos `dataset-{fraud,social,ecommerce}-full.json` preparam 50, 100 e 50 m
 de eventos, respectivamente. Aguarde os três marcadores `_SUCCESS.json` no escopo `full`
 e confira as contagens no manifesto antes de iniciar as campanhas.
 
-Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem sete jobs independentes
-por dataset. Fixe o mesmo SHA de release nos três arquivos. Para disparar as três campanhas
-em paralelo, confira se a fila, o compute environment e a quota regional permitem **21 jobs
-simultâneos**. Cada job usa 2 vCPU e 2 GiB de RAM (`BenchmarkVcpus=2` e
-`BenchmarkMemoryMiB=2048`). Reserve pelo menos 21 vCPUs livres no ambiente compartilhado.
-Os exemplos pedem sete jobs simultâneos por campanha e uma tentativa por job.
+Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem seis jobs independentes
+por dataset, com `max_parallel=6` e uma tentativa por job. Fixe o mesmo SHA de release nos
+três arquivos. Para ter os 18 jobs ativos juntos, confira a fila, o compute environment,
+a quota regional e as reservas da job definition da release. Com 1 vCPU por job, são
+necessárias 18 vCPUs livres no ambiente compartilhado. Com 2 vCPU por job, são 36.
+Reduza `max_parallel` ou rode as campanhas em sequência se a capacidade for menor.
+Use um novo `campaign_id` ao alterar o plano de um exemplo que já foi executado na conta.
 
-As variantes são `frozen`, `online`, `drift_adwin`, `drift_ddm`, `incremental`,
-`periodic` e `cost_heuristic`. Todas usam o mesmo modelo por dataset, o mesmo warm-up e
+As variantes são `frozen`, `online`, `drift_adwin`, `drift_ddm`, `incremental` e
+`periodic`. Todas usam o mesmo modelo por dataset, o mesmo warm-up e
 as mesmas fronteiras temporais. O modo `online` atualiza em minibatches após a predição
 do bloco. Em Social, River SGD atualiza os coeficientes da regressão logística multinomial.
 Em Fraud e E-commerce, a perda logística do River fornece os gradientes e o XGBoost
 atualiza os pesos das folhas das árvores existentes. O holdout usa o último checkpoint.
 
 Os dois detectores recebem o mesmo sinal binário de erro de cada predição e podem acionar
-um retreino por bloco. A heurística compara o custo de retreinar com a redução projetada
-no erro, usando os quatro últimos blocos e os custos do perfil de tracking em unidades de
-cenário. O relatório registra os parâmetros de decisão e o método de atualização.
+um retreino por bloco. O relatório registra os parâmetros de decisão e o método de atualização.
+
+As políticas com custo (`cara`, `cara_cumulative`, `cara_periodic`, `upf` e `oracle`, veja
+[cost-aware-retraining.md](../cost-aware-retraining.md)) têm campanha própria,
+`campaign-social-full-cost-aware.json` (`make aws-campaign-full-cost-aware`, cinco jobs). Cada
+job mede a matriz de desempenho (um ajuste por bloco e O(B²) predições), então dimensione o
+`run_timeout_seconds` para esse custo adicional.
 
 ### Suíte de todos os datasets
 
 `matrix.kind=project_suite` usa o mesmo gerador de casos da DAG `benchmark_task_suite`.
-O padrão tem 548 unidades e usa 3.000 eventos nos casos binários, 100 exemplos e duas
+O padrão tem 518 unidades e usa 3.000 eventos nos casos binários, 100 exemplos e duas
 épocas nos casos por épocas, atraso de três e seed 42. `matrix` aceita os campos
 `samples`, `dataset_examples`, `epochs`, `label_delay` e `seed`.
 
@@ -232,8 +233,139 @@ métricas EMF por dataset, escopo e política, sem `run_id` como dimensão.
 ```bash
 scripts/aws/flink.sh stop                 # se o streaming estiver ativo
 scripts/aws/teardown.sh                   # runtime: endpoints da VPC, Batch, Lambda, state machines, módulos
-scripts/aws/teardown.sh --with-cicd       # também o pipeline
+scripts/aws/teardown.sh --with-cicd       # também a stack de OIDC e roles de deploy
 ```
 
-A stack persistente (buckets, KMS, ECR), os log groups de jobs e aquisição e o Model Registry
-são preservados. Removê-los é uma decisão manual e irreversível, fora destes scripts.
+O script preserva a stack persistente (buckets, KMS, ECR), os log groups de jobs e aquisição
+e o Model Registry. Planeje separadamente a parada de execuções e remoção das stacks
+complementares do Studio. Elas usam os workflows, buckets e app MLflow do ambiente.
+
+## Campanhas no SageMaker Studio
+
+A stack complementar `infra/cloudformation/studio.yaml` usa os ARNs dos workflows de
+dataset e benchmark da stack de runtime. Empacote-a com `aws cloudformation package` no
+bucket de artefatos e passe `DataBucket`, `KeyArn`, `CampaignWorkflowArn` e
+`DatasetWorkflowArn` no deploy. A aplicação MLflow do runtime precisa estar ativa para o
+tracking do Batch.
+
+```bash
+scripts/aws/start_studio_campaign.sh infra/examples/campaign-social-smoke.json
+# Ou solicite a preparação do snapshot antes da campanha
+scripts/aws/start_studio_campaign.sh infra/examples/campaign-social-smoke.json infra/examples/dataset-social-smoke.json
+```
+
+No Studio, em **Pipelines -> continual-bench-campaign**, abra a execução pelo ID da
+campanha. A etapa `PrepareDataset` reutiliza o workflow de dataset quando recebe uma
+solicitação. `RunBatchCampaign` acompanha o workflow de benchmark e publica seu ARN.
+`VerifyResults` verifica a conclusão e expõe o URI do resumo no S3. O mapa da campanha
+e os estados de cada job ficam no Step Functions e no Batch. Se houver cancelamento pelo
+Studio, o callback cancela o workflow associado e o reconciliador existente encerra os
+jobs da campanha. A etapa fica como `Failed`, com motivo `Cancelled from SageMaker Studio`,
+para impedir que o SageMaker inicie etapas dependentes após o cancelamento.
+
+Para abrir os experimentos, siga **Studio → Applications → MLflow →
+continual-bench-mlflow → Open MLflow → workspace default → Experiments**.
+A aba **Experiments** do menu principal do Studio consulta os recursos **MLflow
+Tracking Server**. Neste ambiente ela exibe `No tracking server`, pois os jobs
+publicam no **MLflow App** serverless. O app contém os experimentos e o histórico
+dos runs da matriz, dos jobs nativos e das campanhas Zia.
+
+No app MLflow, filtre o experimento `continual-bench-matrix` por `cb-campaign-id`.
+Cada tentativa do Batch registra um run com o ID do job, a revisão e o contrato da
+unidade. As métricas `progress/*` usam a janela ou época do avaliador, e `final/*`
+registra as métricas finais. O manifesto final da unidade aponta para o run MLflow.
+
+## Jobs nativos no SageMaker Studio
+
+### Onde localizar datasets e avaliações
+
+O menu **Assets -> Datasets / Evaluators** do SageMaker Studio lista ativos
+registrados para customização de modelos generativos. O formulário de datasets
+espera JSONL no esquema da técnica escolhida. O de evaluators registra funções
+ou prompts de recompensa. Veja os [tipos de ativos na documentação da AWS](https://docs.aws.amazon.com/sagemaker/latest/dg/model-customize-open-weight-create-assets-ui.html).
+
+Para localizar os snapshots tabulares do projeto, abra o prefixo `datasets/` do
+bucket de dados. Cada manifesto fica em `datasets/<dataset>/<revisão>/manifests/<versão>/<escopo>/`.
+O marcador `_SUCCESS.json` indica que o snapshot foi publicado, e `snapshot.json`
+referencia o Parquet preparado. Para as avaliações, abra **Applications → MLflow →
+continual-bench-mlflow → Open MLflow → default → Experiments**. Use
+`continual-bench-native` para os jobs nativos ou `continual-bench-matrix` para as
+matrizes. As tabelas `runs` e `metrics` do Athena também permitem consultar os
+resultados do benchmark.
+
+No [catálogo do SageMaker Unified Studio](https://dzd-6vrgrvxbeefk2v.sagemaker.us-east-1.on.aws/projects/dtpvnbwwrsq6xz/search?searchText=Continual%20Bench),
+abra os ativos **Continual Bench - Social (full)**, **Continual Bench - Fraud (full)**
+ou **Continual Bench - E-commerce (full)**. O formulário `SnapshotMetadata` registra
+a revisão da fonte, o URI e a versão do Parquet, o manifesto e os hashes SHA-256.
+A seção **Avaliações no MLflow** agrupa por campanha os links para os runs que
+usaram esses snapshots completos. Nos runs correspondentes, `cb-catalog-asset-url`
+aponta de volta para o ativo, e `cb-catalog-snapshot-sha256` identifica o manifesto.
+
+#### Publicação automática no catálogo
+
+O EventBridge envia os eventos `_SUCCESS.json` de Social, Fraud e E-commerce e os
+`final.json` das campanhas Batch para a fila FIFO da stack `continual-bench-studio-catalog`.
+A função valida o manifesto e a versão do Parquet no S3. Uma nova identidade de
+snapshot (dataset, revisão da fonte, versão da preparação e escopo) gera um ativo
+distinto, mantendo acessíveis os snapshots anteriores. A função reaproveita os
+ativos já cadastrados. Ao encontrar uma avaliação concluída e ativa no MLflow
+que corresponde ao snapshot, publica uma revisão dos metadados e grava o vínculo
+inverso no run.
+Até 20 avaliações recentes ficam no README do ativo. Para localizar todas as
+avaliações de um snapshot no MLflow, filtre pela tag `cb-catalog-asset-id`.
+
+Para implantar, habilite a notificação EventBridge no bucket de dados com
+`infra/cloudformation/persistent.yaml` e execute o comando abaixo no ambiente
+em que o tipo `ContinualBenchTabularSnapshot` e seu formulário já existem.
+O script inclui a função como colaboradora no projeto do catálogo.
+
+```bash
+scripts/aws/deploy_studio_catalog.sh <domain-id> <project-id>
+```
+
+Os outputs `DeliveryFailureQueueUrl` e `ProcessingFailureQueueUrl` identificam as
+filas de falhas. Depois de corrigir a causa, republique a mensagem original na
+`PublicationQueueUrl` com o grupo FIFO `catalog`, ou faça redrive a partir da fila
+de processamento. A automação confere novamente a identidade e os vínculos ao
+receber o mesmo evento. As avaliações nativas e de matriz continuam nos
+experimentos existentes do MLflow. O vínculo automático usa o `final.json` das
+campanhas Zia, que registra a identidade e os hashes do snapshot e o ID do run.
+
+### Executar o pipeline nativo
+
+O pipeline `continual-bench-native` tem três tipos nativos de etapa. `ProfileSnapshot`
+valida o hash e a contagem de linhas do snapshot Social, grava o perfil e publica o
+canal de treinamento. `TrainBaseline` treina o modelo com esse canal.
+`TuneHyperparameters` usa o mesmo canal e procura valores de regularização e de
+`max_epochs`, minimizando `validation:log_loss` na validação temporal.
+
+Para publicar outra revisão, construa as duas imagens AWS a partir da mesma revisão
+e passe os seus digests ao script. A implantação usa a stack complementar
+`continual-bench-studio-native` e a aplicação MLflow da stack de runtime.
+
+```bash
+scripts/aws/deploy_native_pipeline.sh "$RUNTIME_IMAGE" "$ML_IMAGE" "$GIT_SHA"
+
+aws sagemaker start-pipeline-execution --region us-east-1 --pipeline-name continual-bench-native \
+  --pipeline-parameters Name=MaxEpochs,Value=24 Name=TuningMaxEpochs,Value=24 \
+    Name=MaxTuningJobs,Value=2 Name=MaxParallelTuningJobs,Value=1
+```
+
+Os padrões de entrada apontam para o snapshot `smoke`. Para outra revisão ou escopo,
+informe juntos `PreparedParquetUri`, `PreparedManifestUri` e `Scope`. No Studio, o grafo
+mostra o status e os detalhes de cada job nativo. No MLflow, use o experimento
+`continual-bench-native` e filtre pela tag `cb-pipeline-execution-id`. O processamento
+registra o progresso por lote de linhas, o treinamento publica métricas por época e
+cada trial de tuning tem seu próprio run com os hiperparâmetros e o objetivo medido.
+
+
+Na etapa `TuneHyperparameters`, abra o job de tuning e consulte **Top Training Jobs**.
+O SageMaker ordena os trials pelo valor final de `validation:log_loss`, do menor para o
+maior. O treinamento emite a métrica no formato esperado pela definição do job. Para cruzar
+os dados da interface com a API:
+
+```bash
+aws sagemaker list-training-jobs-for-hyper-parameter-tuning-job \
+  --hyper-parameter-tuning-job-name "$TUNING_JOB" \
+  --sort-by FinalObjectiveMetricValue --sort-order Ascending
+```

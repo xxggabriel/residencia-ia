@@ -147,15 +147,14 @@ def test_real_dataset_policy_suite_covers_every_policy_and_detector_in_one_exper
     params = {"samples": 10000, "seeds": [42], "label_delay": 3, "dataset": "electricity",
               "models": ["logistic", "hoeffding_tree", "knn"], "campaign": "", "experiment": ""}
     configs = [Config.model_validate(c) for c in jobs_module().configurations(params, "policies")]
-    assert len(configs) == len({c.identity() for c in configs}) == 75
+    assert len(configs) == len({c.identity() for c in configs}) == 69
     assert {c.dataset.name for c in configs} == {"electricity"}
-    assert {c.policy.name for c in configs} == {"none", "online", "periodic", "drift", "performance",
-                                                 "cost_heuristic"}
+    assert {c.policy.name for c in configs} == {"none", "online", "periodic", "drift", "performance"}
     assert {c.detector.name for c in configs if c.policy.name == "drift"} == {
         "adwin", "ddm", "eddm", "hddm_a", "hddm_w", "page_hinkley", "kswin"}
     assert {c.mlflow_experiment for c in configs} == {"continual-bench/policies-electricity-v1"}
     assert all(c.tracking is None for c in configs)  # Full default metric profile on the worker.
-    assert Counter(c.mode for c in configs) == {"streaming": 36, "incremental": 36, "offline": 3}
+    assert Counter(c.mode for c in configs) == {"streaming": 33, "incremental": 33, "offline": 3}
     data = {k: v for k, v in configs[0].model_dump().items() if k != "mlflow_experiment"}
     plain = Config.model_validate(data)
     assert "mlflow_experiment" not in plain.model_dump()  # Historical identities stay unchanged.
@@ -166,7 +165,7 @@ def test_policy_suite_runs_on_every_binary_dataset_in_its_own_experiment(dataset
     params = {"samples": 3000, "seeds": [42], "label_delay": 3, "dataset": dataset,
               "models": ["logistic", "hoeffding_tree", "knn"], "campaign": "", "experiment": ""}
     configs = [Config.model_validate(c) for c in jobs_module().configurations(params, "policies")]
-    assert len({c.identity() for c in configs}) == 75
+    assert len({c.identity() for c in configs}) == 69
     assert {c.mlflow_experiment for c in configs} == {f"continual-bench/policies-{dataset}-v1"}
     trees = [c for c in configs if c.model.name == "hoeffding_tree"]
     assert all(("nominal_attributes" in c.model.params) == (dataset in {"agrawal", "stagger"}) for c in trees)

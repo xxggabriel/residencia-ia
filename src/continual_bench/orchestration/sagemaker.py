@@ -11,6 +11,7 @@
 import gc
 import json
 import os
+import signal
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -54,7 +55,7 @@ def _read(path, columns, start, stop):
     return x, table["label"].to_numpy().astype(np.uint8)
 
 
-def train(channel=None, model_dir=None, params=None, *, tracker=None) -> dict:
+def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tracker=True) -> dict:
     from continual_bench.config.iterative import IterativeTrainingConfig
     from continual_bench.datasets.zia import DATASETS
     from continual_bench.evaluation.zia_metrics import ClassificationMetrics
@@ -109,6 +110,8 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None) -> dict:
         tracker=tracker,
         emit_stdout=True,
     )
+    if loop_result["stopped_by_signal"]:
+        raise SystemExit(128 + signal.SIGTERM)
     del x, y
     gc.collect()
     metrics = ClassificationMetrics(len(classes))
@@ -116,7 +119,7 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None) -> dict:
     del vx, vy
     gc.collect()
     summary, _ = metrics.metrics()
-    if tracker is not None and hasattr(tracker, "finish"):
+    if finish_tracker and tracker is not None and hasattr(tracker, "finish"):
         tracker.finish("Completed")
     payload, extension = model.payload()
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -160,17 +163,20 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None) -> dict:
     return {"validation": summary, "metadata": metadata, "training": dict(loop_result)}
 
 
-def process(input_dir=None, output_dir=None) -> dict:
+def process(input_dir=None, output_dir=None, *, tracker=None) -> dict:
     import numpy as np
     import pyarrow.parquet as pq
 
     input_dir = Path(input_dir or PREFIX / "processing" / "input")
     output_dir = Path(output_dir or PREFIX / "processing" / "output")
     profile = {}
+    processed_rows = 0
+    step = 0
     for parquet in sorted(input_dir.glob("*.parquet")):
         months, features = {}, {}
         with pq.ParquetFile(parquet) as source:
-            for batch in source.iter_batches(batch_size=262_144, use_threads=False):
+            batch_size = 4096 if tracker is not None else 262_144
+            for batch in source.iter_batches(batch_size=batch_size, use_threads=False):
                 month = (batch["event_time"].to_numpy() // (30 * 86_400_000)).astype(np.int64)
                 labels = batch["label"].to_numpy()
                 pairs, counts = np.unique(np.column_stack((month, labels)), axis=0, return_counts=True)
@@ -183,6 +189,12 @@ def process(input_dir=None, output_dir=None) -> dict:
                     current["min"] = min(current["min"], float(np.nanmin(values)))
                     current["max"] = max(current["max"], float(np.nanmax(values)))
                     current["nulls"] += int(batch[name].null_count)
+                if tracker is not None:
+                    step += 1
+                    processed_rows += batch.num_rows
+                    tracker.log_epoch_metrics(
+                        {"processing_rows": processed_rows, "processing_features": len(features)}, step=step
+                    )
             profile[parquet.name] = {
                 "rows": source.metadata.num_rows,
                 "class_by_month": months,
@@ -191,6 +203,57 @@ def process(input_dir=None, output_dir=None) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "profile.json").write_text(json.dumps(profile, indent=2))
     return profile
+
+
+def native_pipeline_job(command):
+    """Profile and stage verified inputs, or run native training with per-job MLflow tracking."""
+    import hashlib
+    import shutil
+
+    from continual_bench.infrastructure.aws.native_tracking import track_native_job
+
+    uri = os.environ["MLFLOW_TRACKING_URI"]
+    execution = os.environ["BENCH_NATIVE_EXECUTION_ID"]
+    stage = os.environ["BENCH_NATIVE_STAGE"]
+    job_name = os.environ.get("TRAINING_JOB_NAME") if command == "train" else os.environ.get(
+        "BENCH_PROCESSING_JOB_NAME"
+    )
+    if not job_name:
+        raise RuntimeError("Missing SageMaker job name")
+
+    def stopped(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, stopped)
+    with track_native_job(uri, execution, stage, job_name) as tracker:
+        if command == "train":
+            params = hyperparameters()
+            tracker.log_hyperparameters(params)
+            result = train(params=params, tracker=tracker, finish_tracker=False)
+            tracker.log_epoch_metrics(
+                {f"final_{name}": value for name, value in result["validation"].items()},
+                step=result["training"]["epochs_run"],
+            )
+            return result["validation"]
+
+        scope = os.environ["BENCH_NATIVE_SCOPE"]
+        directory = PREFIX / "processing"
+        data_path = directory / "input" / "data" / "data.parquet"
+        manifest_path = directory / "input" / "manifest" / f"{scope}.json"
+        manifest = json.loads(manifest_path.read_text())
+        with data_path.open("rb") as data:
+            digest = hashlib.file_digest(data, "sha256").hexdigest()
+        if manifest["dataset"] != "social" or manifest["scope"] != scope or manifest["sha256"] != digest:
+            raise ValueError("Prepared snapshot manifest does not match the pipeline input")
+        tracker.log_hyperparameters({"scope": scope, "dataset_sha256": digest})
+        report = process(data_path.parent, directory / "output", tracker=tracker)
+        if report[data_path.name]["rows"] != manifest["rows"]:
+            raise ValueError("Prepared snapshot row count does not match its manifest")
+        channel = directory / "channel"
+        channel.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(manifest_path, channel / manifest_path.name)
+        shutil.copyfile(data_path, channel / f"{scope}.parquet")
+        return report
 
 
 def load_predictor(model_dir=None):
@@ -252,7 +315,11 @@ def serve(model_dir=None, port=8080):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     command = argv[0] if argv else "serve"
-    if command == "train":
+    if command in {"train", "process"} and os.environ.get("BENCH_NATIVE_EXECUTION_ID"):
+        result = native_pipeline_job(command)
+        if command == "train":
+            print(json.dumps(result, default=float))
+    elif command == "train":
         print(json.dumps(train()["validation"], default=float))
     elif command == "process":
         process()

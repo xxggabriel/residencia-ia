@@ -98,9 +98,6 @@ def policy_strategies():
     strategies += [(detector, {"name": "drift", **guards}) for detector in DRIFT_DETECTORS]
     strategies.append(("none", {"name": "performance", **guards,
                                 "params": {"monitor_window": 200, "error_threshold": 0.3}}))
-    strategies.append(("none", {"name": "cost_heuristic", **guards,
-                                "params": {"monitor_window": 200, "target_error": 0.15, "horizon": 500,
-                                           "fixed_train_cost": 5.0, "sample_train_cost": 0.01}}))
     return strategies
 
 

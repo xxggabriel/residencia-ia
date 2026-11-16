@@ -117,7 +117,7 @@ def project_configurations(params, code):
                     ["elevel", "car", "zipcode"] if name == "agrawal" else ["size", "color", "shape"]
                 )
             for mode in ("streaming", "incremental"):
-                variants = [("none", "performance"), ("none", "cost_heuristic")]
+                variants = [("none", "performance")]
                 variants += [(d, "drift") for d in ("eddm", "hddm_a", "hddm_w", "page_hinkley", "kswin")]
                 if name in {"hyperplane", "rbf_drift"}:
                     variants += [("none", "none"), ("none", "periodic"), ("none", "online"),

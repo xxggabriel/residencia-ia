@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from continual_bench.core.policies import POLICIES, PolicyStrategy
+from continual_bench.core.policies import BATCH_POLICY_KINDS, POLICIES, PolicyStrategy
 from continual_bench.core.tasks import BINARY
 
 
@@ -45,6 +45,9 @@ class PolicyConfig(Strict):
 
     @model_validator(mode="after")
     def validate_builtin_policy(self):
+        if self.name in BATCH_POLICY_KINDS:
+            raise ValueError(f"policy {self.name} decides per batch from a performance matrix; "
+                             "run it through the batch-prequential Zia pipeline")
         if self.name in POLICIES and self.params:
             PolicyStrategy(kind=self.name, **self.model_dump(exclude={"name"}))
         return self

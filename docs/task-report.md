@@ -2,7 +2,7 @@
 
 Em 3 de novembro de 2026, foi ampliado o laboratório da Semana 08 na branch local `Semana-09`, criada de `origin/main` (`bd8ac1c`) do remoto confirmado `https://github.com/xxggabriel/residencia-ia.git`. O checkout inicial estava limpo. Foram implementados componentes e executadas validações funcionais no homelab; não foi concluída uma campanha comparativa, um ranking ou uma reprodução CARA/UPF.
 
-A continuidade de 4 de novembro implementou os loaders brutos e os testes de **100 exemplos/2 épocas**. Os resultados atuais e a preparação da DAG completa ficaram no [relatório de datasets e execução](semana09-dataset-execution.md). As seções abaixo preservaram o registro da primeira etapa; seus itens então pendentes não substituíram o estado atualizado desse complemento.
+A etapa de 4 de novembro acrescentou os loaders brutos e os testes de **100 exemplos/2 épocas**. A remoção de Stream51 e o gate vigente de 17 fontes estão registrados no [relatório de datasets e execução](task-dataset-execution.md). Em 12 de novembro, CARA, UPF e Oracle substituíram a heurística de custo na base do projeto. A integração e as comparações que vieram depois estão no [guia de retreinamento por custo](cost-aware-retraining.md). As seções abaixo registram a primeira etapa, de 3 de novembro.
 
 ## Implementação realizada
 
@@ -11,12 +11,12 @@ A continuidade de 4 de novembro implementou os loaders brutos e os testes de **1
 - Foram implementadas transformações Split, Permuted e por grupo/sessão temporal. Elas preservaram classes, splits e metadados; não substituíram loaders brutos de imagens ou protocolos oficiais ainda não configurados.
 - Foi implementado um avaliador tipado para regressão e multiclasse com River, predição antes da liberação/aprendizagem, atraso de rótulos, warm-up, orçamento e baselines none/online/periodic. Rótulos de validation/test não treinaram o modelo. Essa avaliação foi intercalada, não um holdout temporal congelado. Sua retomada reaproveitou runs completos; execuções tipadas interrompidas reiniciaram do zero.
 - Foram integrados EDDM, HDDMA, HDDMW, Page Hinkley e KSWIN, mantendo ADWIN/DDM. O sinal dos detectores no motor binário foi o erro preditivo dos rótulos liberados. Alarmes não foram interpretados isoladamente como mudanças em P(X) ou P(Y|X).
-- Foram implementadas políticas por desempenho e custo de cenário. `cost_heuristic` comparou uma hipótese explícita de redução de erro com custos fixo e por amostra; não implementou os algoritmos completos CARA ou UPF. Os desvios ficaram em [políticas](task_evaluation-policies.md).
+- Foram implementadas a política por desempenho e a heurística de custo de cenário `cost_heuristic`, que comparava uma redução de erro projetada com os custos fixo e por amostra.
 - Foi separada a decisão de treinar da promoção. O gate opcional treinou no prefixo da janela e validou no sufixo histórico disponível. Candidatos rejeitados consumiram orçamento/cooldown e foram incluídos em amostras e tempo de treinamento. O holdout do candidato não integrou seu treino; o incumbente pôde ter aprendido esses exemplos anteriormente. Esse gate não constituiu evidência independente de generalização.
 - Foi acrescentado o suplemento `semana09-metrics-v1`: validação de anotações de drift, resumo GEM, forgetting após aprendizado, retenção, recursos e near-future accuracy operacional com snapshots congelados. Ausência de anotações manteve F1 do detector indisponível. FWT de GEM sem baseline inicial permaneceu indisponível. As definições históricas da Semana 08 foram preservadas e distinguidas.
 - Foram acrescentados campanha declarativa limitada, journal, locks, falhas visíveis e retomada verificada, além de configuração de um cliente transitório de testes com serviços. Os parâmetros vazios novos foram omitidos das identidades históricas. Não foram atualizadas dependências ou lockfiles.
 
-A matriz com componentes, versões, fontes, testes e restrições ficou em [cobertura](semana09-coverage.md). O catálogo parcial executável ficou em `configs/contracts/dataset-catalog.json`.
+A matriz com componentes, versões, fontes, testes e restrições está em [cobertura](task-coverage.md). O catálogo executável está em `configs/contracts/dataset-catalog.json`.
 
 ## Ambiente e isolamento
 
@@ -35,15 +35,18 @@ O projeto/stack ZenML isolado foi `semana09-20261103-2146` / `semana09-validatio
 | Verificação | Resultado | Evidência |
 | --- | --- | --- |
 | Base antes das mudanças | PASS, 343 testes, 28 excluídos, 28,24 s | `evidence/baseline.txt` no homelab |
-| Suíte final sem serviços/benchmark | PASS, 430 testes, 31 excluídos, 29,63 s | [unit.txt](../reports/semana09/unit.txt) |
-| Ruff final | PASS | [lint.txt](../reports/semana09/lint.txt) |
+| Suíte final sem serviços/benchmark | PASS, 430 testes, 31 excluídos, 29,63 s | `reports/semana09/unit.txt` |
+| Ruff final | PASS | `reports/semana09/lint.txt` |
 | Compose do cliente transitório | PASS, `config --quiet` | Comando abaixo; nenhum serviço foi iniciado por essa validação |
-| Smoke declarativo | PASS, 6 casos de 180 exemplos, seed 42, atraso 3 | [smokes.json](../reports/semana09/smokes.json), configurações versionadas |
-| Smoke Friedman | PASS, 120 exemplos, 20 de warm-up, 100 avaliados, atraso 3 | [smokes.json](../reports/semana09/smokes.json) |
-| Serviços reais finais | PASS, 3 testes, 279,29 s | [services.txt](../reports/semana09/services.txt), IDs e hashes em smokes.json |
+| Smoke declarativo | PASS, 6 casos de 180 exemplos, seed 42, atraso 3 | `reports/semana09/smokes.json`, configurações versionadas |
+| Smoke Friedman | PASS, 120 exemplos, 20 de warm-up, 100 avaliados, atraso 3 | `reports/semana09/smokes.json` |
+| Serviços reais finais | PASS, 3 testes, 279,29 s | `reports/semana09/services.txt`, IDs e hashes em `smokes.json` |
 | Downloads/homologação das bases reais novas | NOT RUN | Dependem de versão, licença, acesso e preparação |
 | Campanha comparativa, múltiplas seeds e escalabilidade | NOT RUN | Não houve ranking nem teste de superioridade |
-| Reprodução fiel CARA e UPF | NOT RUN | Heurística explicitamente distinta |
+| Reprodução CARA e UPF | NOT RUN | O teste da época cobriu a heurística de custo de cenário |
+
+Os arquivos de `reports/semana09/` estão no histórico Git. Exemplo de leitura:
+`git show f835ee8:reports/semana09/unit.txt`.
 
 O aviso preexistente do MLflow sobre ausência de input example em um teste de backfill permaneceu na suíte final. Não foi desativado para obter sucesso.
 
@@ -99,13 +102,11 @@ python scripts/export_task_evidence.py --state /state
 
 O script de campanha verificou o prazo entre casos e após cada retorno; o timeout externo limitou o processo inteiro. O `max_seconds` de um caso não abrangeu todas as chamadas de serviço, portanto o timeout externo continuou necessário. A execução permaneceu sequencial e limitada a 128 casos, até 100 mil eventos no motor binário e até 10 mil no avaliador tipado. Isso preparou experimentos pequenos; não demonstrou escalabilidade big data.
 
-## Bloqueios e continuidade
+## Bloqueios da etapa inicial
 
 A ação de ler/materializar a planilha pela referência Library fornecida retornou `page_reference_unsupported_format`, não passível de retry inalterado. Nenhuma cópia foi encontrada no projeto ou em Downloads. O catálogo completo e a seleção de todos os seus registros permaneceram **bloqueados pela ausência do arquivo legível**; o código implementou o escopo explicitamente nomeado e não afirmou cobertura dos 47 registros.
 
-Para continuar: obter a planilha pelo fluxo suportado, reconciliar variantes e seleções; admitir dados originais com licença e hashes; fixar ordens/splits e cenários CL; executar matriz controlada com múltiplas seeds e orçamento; avaliar escalabilidade, acesso e recursos antes das cargas grandes; implementar CARA/UPF fielmente somente com seus contratos completos; registrar resultados e limitações. Os resumos por tarefa do avaliador tipado não substituíram uma matriz de testes após cada tarefa em uma campanha visual CL.
-
-O trabalho permaneceu na branch solicitada. Não foram realizados merge, deploy público ou abertura de PR.
+As pendências naquele momento incluíam reconciliar o catálogo com a planilha, admitir os dados originais, executar uma matriz controlada com múltiplas seeds e orçamento e avaliar recursos. Os resumos do avaliador tipado mediram o recorte usado nos testes. Uma campanha visual CL completa exigiria uma matriz de testes após cada tarefa.
 
 ## Commits de implementação
 
@@ -113,7 +114,7 @@ O trabalho permaneceu na branch solicitada. Não foram realizados merge, deploy 
 - `877fbd4`: políticas, detectores e promoção com contabilidade de candidatos.
 - `003a0ba`: campanhas, métricas, integração e evidências.
 
-A documentação e os recibos finais foram registrados em commit separado. A branch permaneceu local, sem push ou PR.
+A documentação e os recibos finais foram registrados em commit separado. A branch `Semana-09` foi integrada à `main` pelo PR #16 em 12 de novembro (`8dc3484`).
 
 ## Relatório no Space
 

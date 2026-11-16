@@ -16,6 +16,8 @@ UPPER = {
     "detectors": {"datasets", "models", "evaluation", "application", "infrastructure", "orchestration",
                   "cli"},
     "config": {"evaluation", "application", "infrastructure", "orchestration", "cli"},
+    "retraining": {"config", "datasets", "models", "detectors", "evaluation", "application",
+                   "infrastructure", "orchestration", "cli"},
     "infrastructure": {"evaluation", "application", "orchestration", "cli"},
     "evaluation": {"application", "orchestration", "cli"},
     "application": {"orchestration", "cli"},

@@ -22,8 +22,9 @@ from river.drift.binary import DDM  # noqa: E402
 
 from continual_bench.config import IterativeTrainingConfig, TrackingConfig  # noqa: E402
 from continual_bench.core.contracts import DecisionContext  # noqa: E402
-from continual_bench.core.policies import PolicyStrategy, ZiaPolicy  # noqa: E402
+from continual_bench.core.policies import BATCH_POLICY_KINDS, PolicyStrategy, ZiaPolicy  # noqa: E402
 from continual_bench.datasets.zia import DATASETS, SCOPES, load_manifest, sha256_file  # noqa: E402
+from continual_bench.evaluation import zia_retraining  # noqa: E402
 from continual_bench.evaluation.costs import account, aws_account, profile  # noqa: E402
 from continual_bench.evaluation.environment import encoded, environment, peak_rss_bytes  # noqa: E402
 from continual_bench.evaluation.system_metrics import SystemMetricsSampler  # noqa: E402
@@ -125,13 +126,13 @@ def run(
     model = make_zia_model(spec["model"], classes, config=iter_config, dataset=dataset)
     monitoring = SystemMetricsSampler(output, interval=0.5 if scope == "smoke" else 5)
     replay = deque(maxlen=REPLAY_BLOCKS)
-    recent_errors = deque(maxlen=REPLAY_BLOCKS)
     detector = None
     policy_settings = {}
     block_rows = BLOCK_ROWS[scope]
     costs = profile(tracking_settings["costs"])
     threshold = decision_threshold(costs) if classes == 2 else None
-    cost_policy = None
+    batch_policy = None
+    retraining_options = zia_retraining.settings(tracking_settings) if policy in BATCH_POLICY_KINDS else None
     if policy == "online":
         policy_settings = model.online_params
     elif policy in ("drift", "drift_adwin"):
@@ -142,13 +143,17 @@ def run(
     elif policy == "drift_ddm":
         detector = DDM(**DDM_PARAMS)
         policy_settings = {"detector": "ddm", "params": DDM_PARAMS, "signal": "binary_error_per_example"}
-    elif policy == "cost_heuristic":
-        params = {"target_error": 0.1, "horizon": REPLAY_BLOCKS * block_rows,
-                  "error_cost": costs["classification_error"], "fixed_train_cost": costs["update"],
-                  "sample_train_cost": costs["train_sample"]}
-        cost_policy = PolicyStrategy(policy, min_samples=REPLAY_BLOCKS, min_window=1,
-                                     cooldown=REPLAY_BLOCKS, params=params)
-        policy_settings = {**params, "monitor_blocks": REPLAY_BLOCKS, "cooldown_blocks": REPLAY_BLOCKS}
+    elif retraining_options is not None:
+        alpha = tracking_settings["upf_alpha"]
+        params = {"alpha": alpha}
+        if policy == "upf":
+            params.update(delta=retraining_options["delta"], samples=retraining_options["mc_samples"],
+                          seed=retraining_options["seed"])
+        batch_policy = PolicyStrategy(policy, params=params)
+        policy_settings = {**params, "replay_blocks": REPLAY_BLOCKS, "objective": "error_rate_0_1",
+                           "offline_blocks": retraining_options["offline_blocks"],
+                           "timing": "retrain after block t serves t+1 onward"}
+    matrix = states = None
     def scores():
         return ClassificationMetrics(classes, threshold)
 
@@ -164,6 +169,13 @@ def run(
         output, spec["classes"], manifest["sha256"], "native", tracking_settings["fading_factor"],
         threshold=threshold,
     ) as predictions:
+        if batch_policy is not None:
+            matrix, states = zia_retraining.stream_matrix(
+                ((x, y) for _, x, y, held_out in batches(path, block_rows, split) if not held_out),
+                make_zia_model(spec["model"], classes, config=iter_config, dataset=dataset), threshold,
+                iter_config, REPLAY_BLOCKS, retraining_options)
+            batch_policy.prepare(matrix)
+            policy_settings["offline_blocks"] = matrix.offline
         for step, (timestamps, x, y, is_holdout) in enumerate(batches(path, block_rows, split)):
             if ((last_timestamp is not None and timestamps[0] < last_timestamp)
                     or np.any(timestamps[1:] < timestamps[:-1]) or np.any(y >= classes)):
@@ -172,6 +184,7 @@ def run(
             start, rows = rows, rows + len(y)
             class_counts += np.bincount(y, minlength=classes)
             action = "initial" if step == 0 else None
+            chosen, phase = (states[0] if step == 0 and states is not None else None), None
             if not step:
                 warmup = len(y)
             if step:
@@ -192,7 +205,7 @@ def run(
                 })
                 if not is_holdout:
                     stream_blocks += 1
-                    if policy == "periodic" or detector is not None or cost_policy is not None:
+                    if policy == "periodic" or detector is not None:
                         replay.append((start, x, y))
                     block_alarms = (
                         drift_alarms(detector, policy, probabilities, y, metrics, threshold)
@@ -205,34 +218,42 @@ def run(
                         action = "continue"
                     elif (policy == "periodic" and stream_blocks % REPLAY_BLOCKS == 0) or block_alarms:
                         action = "reset_retrain"
-                    elif cost_policy is not None:
-                        recent_errors.append(metrics["errors"])
-                        count = sum(len(block[2]) for block in replay)
-                        decision = cost_policy.decide(DecisionContext(
-                            labeled=stream_blocks, window_size=count, drift=False,
-                            recent_error=sum(recent_errors) / count, monitored=count,
-                        ))
-                        if decision.action == "reset_retrain":
-                            action = decision.action
-                            cost_policy.updated(stream_blocks)
+                    elif batch_policy is not None:
+                        if step == matrix.offline - 1:
+                            action, chosen, phase = "reset_retrain", states[step], "offline_final"
+                        elif matrix.offline <= step <= matrix.batches - 2:
+                            decision = batch_policy.decide(DecisionContext(
+                                labeled=step, window_size=len(y), drift=False, batch=step))
+                            if decision.action == "reset_retrain":
+                                action, chosen, phase = decision.action, states[step], "online"
             if action:
                 timer = time.monotonic()
-                if action == "reset_retrain":
+                if chosen is not None:
+                    # Pre-trained for the matrix with this exact window; no second fit.
+                    model.load(chosen["payload"])
+                    train_start, fit_rows, iterations = chosen["start"], chosen["rows"], chosen["iterations"]
+                    fit_x = fit_y = None
+                    resets += action == "reset_retrain"
+                elif action == "reset_retrain":
                     train_start = replay[0][0]
                     fit_x = np.concatenate([item[1] for item in replay])
                     fit_y = np.concatenate([item[2] for item in replay])
+                    fit_rows = len(fit_y)
                     resets += 1
                 else:
                     train_start, fit_x, fit_y = start, x, y
-                if action == "online":
+                    fit_rows = len(fit_y)
+                if chosen is not None:
+                    pass
+                elif action == "online":
                     iterations = model.fit_online(fit_x, fit_y)
                 else:
                     iterations = model.fit(
                         fit_x, fit_y, action == "continue", config=iter_config, tracker=tracker,
                     )
-                elapsed = time.monotonic() - timer
+                elapsed = chosen["seconds"] if chosen is not None else time.monotonic() - timer
                 train_seconds += elapsed
-                presentations += len(fit_y)
+                presentations += fit_rows
                 unique += rows - max(train_start, last_training_end or 0)
                 last_training_end = rows
                 payload, extension = model.payload()
@@ -241,9 +262,10 @@ def run(
                 versions.append({
                     "end_seq": rows, "file": filename, "action": action, "start_seq": train_start,
                     "sha256": sha256_file(output / filename), "bytes": len(payload),
-                    "train_samples": len(fit_y), "train_seconds": elapsed, "iterations": iterations,
+                    "train_samples": fit_rows, "train_seconds": elapsed, "iterations": iterations,
+                    **({"phase": phase} if phase else {}),
                 })
-                if action == "reset_retrain":
+                if action == "reset_retrain" and fit_x is not None:
                     del fit_x, fit_y
                     gc.collect()
             if step % 10 == 0:
@@ -253,6 +275,11 @@ def run(
                 }))
     if rows != manifest["rows"] or not online.confusion.sum() or not holdout.confusion.sum():
         raise ValueError("dataset coverage or temporal split is incomplete")
+    retraining, retraining_metrics = None, {}
+    if batch_policy is not None:
+        zia_retraining.verify_realised(matrix, windows, batch_policy)
+        retraining, retraining_metrics = zia_retraining.finalize(
+            batch_policy, matrix, states, retraining_options)
     summary, by_class = online.metrics()
     final, final_by_class = holdout.metrics()
     errors = int(online.confusion.sum() - online.confusion.trace())
@@ -296,6 +323,7 @@ def run(
              and w["accuracy"] >= tracking_settings["target_accuracy"]), None
         ),
         scenario_total_cost=cost_report["metrics"]["cost_total"],
+        **retraining_metrics,
         **cost_report["metrics"], **{"aws_" + k: v for k, v in cost_report["aws"]["metrics"].items()},
         **{"aws_evaluation_" + k: v for k, v in wall_cost["metrics"].items()},
     )
@@ -335,6 +363,7 @@ def run(
         "model_versions": versions, "model_explanation": model.explanation(manifest["features"]),
         "costs": cost_report, "evaluation_aws_cost": wall_cost, "cost_sensitivity": sensitivity,
         "availability": availability, "system_metrics": system,
+        **({"retraining": retraining} if retraining is not None else {}),
     }
     atomic_write(output / "report.json", encoded(report))
     atomic_write(output / "progress.json", encoded({"rows": rows, "total_rows": rows, "complete": True}))

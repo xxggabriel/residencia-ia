@@ -5,6 +5,10 @@ Description: >-
   explicitly activated Streaming, Feature Store, ML, BI and billing modules. Persistent data
   lives in the separate persistent stack, referenced through its exports.
 
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
 Parameters:
   Project:
     Type: String
@@ -24,6 +28,11 @@ Parameters:
     Type: Number
     Default: 2
     AllowedValues: [1, 2]
+  InterfaceEndpointAzMode:
+    Type: String
+    Default: all
+    AllowedValues: [all, single]
+    Description: Deploy interface endpoints in all private subnet AZs or only in the first AZ.
   S3PrefixListId:
     Type: String
     Default: pl-63a5400a
@@ -153,11 +162,15 @@ Rules:
 Resources:
   Network:
     Type: AWS::CloudFormation::Stack
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Keep the Batch subnet count independent of the paid interface endpoint footprint.
     Properties:
       TemplateURL: modules/network.yaml
       Parameters:
         Project: !Ref Project
         AvailabilityZoneCount: !Ref AvailabilityZoneCount
+        InterfaceEndpointAzMode: !Ref InterfaceEndpointAzMode
         DataBucketArn: {"Fn::ImportValue": !Sub "${Project}-DataBucketArn"}
         ArtifactsBucketArn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
         S3PrefixListId: !Ref S3PrefixListId
@@ -340,6 +353,10 @@ Outputs:
     Value: !GetAtt Analytics.Outputs.DatabaseName
   VpcId:
     Value: !GetAtt Network.Outputs.VpcId
+  S3GatewayEndpointId:
+    Value: !GetAtt Network.Outputs.S3GatewayEndpointId
+  InterfaceEndpointAvailabilityZoneCount:
+    Value: !GetAtt Network.Outputs.InterfaceEndpointAvailabilityZoneCount
   InterfaceEndpoints:
     Value: !GetAtt Network.Outputs.InterfaceEndpointCount
   StreamName:

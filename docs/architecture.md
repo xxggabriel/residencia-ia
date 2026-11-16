@@ -1,9 +1,8 @@
 # Arquitetura modular do `continual_bench`
 
-Este documento descreve a organização do pacote após a refatoração modular de 08/11/2026. O
-objetivo é permitir combinar **N datasets × M modelos × políticas de retreinamento × detectores
-de drift**, sem acoplamento entre esses eixos, e manter rastreáveis todas as métricas para o
-comparativo final entre estratégias.
+O pacote combina **datasets × modelos × políticas de retreinamento × detectores de drift**.
+Os catálogos, avaliadores e casos de uso mantêm rastreáveis as configurações e as métricas das
+comparações entre estratégias.
 
 ## Camadas e regra de dependência
 
@@ -81,7 +80,10 @@ O resultado fica em `state/matrices/<identidade>/`: `matrix.json` (diário retom
 de cada caso) e `summary.json` (uma linha por caso com dataset, semente, modelo, modo, detector,
 política e métricas finais). Uma nova execução reaproveita os casos concluídos; cada caso
 continua idempotente pela identidade da sua configuração. Veja também
-`configs/matrices/any-model.yaml` para o avaliador typed com regressão.
+`configs/matrices/any-model.yaml` para o avaliador typed com regressão. Na AWS, o mesmo plano
+alimenta o Step Functions e gera uma unidade Batch por caso. Cada tentativa recebe um run no
+MLflow. Consulte a campanha `infra/examples/campaign-binary-matrix.json` e o
+[guia do perfil AWS](aws/operations.md#campanhas-no-sagemaker-studio).
 
 ## Como estender
 
@@ -99,17 +101,13 @@ continua idempotente pela identidade da sua configuração. Veja também
 
 ## Compatibilidade e reprodutibilidade
 
-- `Config.identity()`, o formato JSONL dos eventos e os manifestos de dataset não mudaram: as
-  identidades de execução das campanhas anteriores continuam as mesmas.
-- Os campos novos (`model` em `TypedConfig`/`EpochConfig`) são omitidos do dump quando ausentes,
-  preservando os contratos padrão.
-- O `code_sha256` muda, como em qualquer alteração de código; checkpoints de versões anteriores
-  são recusados como contrato incompatível (e não com erro de importação).
-- Modelos já registrados no MLflow carregam o próprio código empacotado e continuam utilizáveis;
-  os scripts de recuperação leem o `loader_module` registrado no `MLmodel`.
-- Equivalência verificada no homelab: 100 casos (91 binários em 5 datasets × 3 modelos × 6
-  combinações de protocolo/política, 3 typed e 6 de épocas) produziram digests de predição e
-  métricas idênticos antes e depois da refatoração.
+- A identidade de execução vem da configuração validada. Checkpoints também validam o contrato
+  de código, dependências, fonte e transporte antes de retomar.
+- Modelos registrados pelo publicador local carregam o código empacotado. Os scripts de
+  recuperação leem o `loader_module` registrado no `MLmodel`.
+- Registro da refatoração de 08/11/2026. A comparação no homelab conferiu igualdade de digests
+  de predição e métricas em 100 casos, sendo 91 binários, 3 typed e 6 de épocas. Esse recorte
+  descreve a equivalência entre as duas revisões verificadas naquela data.
 
 ## Configurações
 
@@ -125,5 +123,17 @@ resultado.
 `application.cloud` implementa aquisição, preparação, plano, execução de uma run, publicação,
 reconciliação e custos do perfil AWS. Os adaptadores boto3 ficam em `infrastructure.aws` e
 são injetados nas fronteiras de I/O. O perfil reaproveita o avaliador Zia, os geradores de
-artefatos e o planejador de matrizes. Ele não usa Airflow, ZenML, MinIO, Kafka nem MLflow.
-Veja [docs/aws/README.md](aws/README.md).
+artefatos e o planejador de matrizes. Sua execução usa Step Functions, Batch e S3. A entrega
+do runtime usa GitHub Actions com OIDC.
+
+A stack complementar `studio.yaml` expõe a preparação, a campanha Batch e a verificação do
+resumo no SageMaker Pipelines. A stack `studio-native.yaml` encadeia Processing, Training e
+Tuning para o baseline Social. Os adaptadores em `infrastructure.aws` enviam métricas e
+metadados ao MLflow gerenciado por REST/SigV4. O estado do workflow e o estado de cada job
+são consultáveis no serviço executor correspondente.
+
+A stack `studio-catalog.yaml` conecta eventos S3 a uma fila FIFO e a uma função Lambda.
+O marcador do snapshot abastece o catálogo do SageMaker Unified Studio. O manifesto final
+de uma avaliação Batch Zia vincula o run MLflow ativo ao snapshot confirmado. A preparação,
+o treino e a avaliação tabular continuam nos mesmos pipelines e avaliadores. Veja
+[infraestrutura e operação na AWS](aws/README.md) e [tracking](mlflow-tracking.md).

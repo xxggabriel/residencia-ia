@@ -75,7 +75,7 @@ def split_records(records, manifest):
 
 
 def run_epochs(config, root, cache, *, download=False, real_directory=None, source=None, model_factory=None,
-               models=MODELS):
+               models=MODELS, progress=None):
     started = time.monotonic()
     source = source or load_dataset(config.dataset, cache, examples=config.examples, seed=config.seed,
                                     download=download, real_directory=real_directory)
@@ -111,7 +111,9 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
             return report
         costs = config.costs.model_dump()
         with SystemMetricsSampler(root) as sampler:
-            epochs, totals = _train_epochs(config, model_factory(), task, train, test, costs, started)
+            epochs, totals = _train_epochs(
+                config, model_factory(), task, train, test, costs, started, progress=progress
+            )
         report = {"version": "semana09-epochs-v1", "run_key": key, "complete": True,
                   "dataset": config.dataset, "unique_examples": len(records), "epochs": epochs,
                   "train_ids": [r.sample_id for r in train], "test_ids": [r.sample_id for r in test],
@@ -132,7 +134,7 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
         return report
 
 
-def _train_epochs(config, model, task, train, test, costs, started):
+def _train_epochs(config, model, task, train, test, costs, started, *, progress=None):
     """Train-only passes, each followed by scoring a frozen copy on the holdout."""
     kind = task_kind(task)
     epochs = []
@@ -170,6 +172,8 @@ def _train_epochs(config, model, task, train, test, costs, started):
                                         predict_seconds=prediction_seconds, include_aws=False),
                        "metrics": {name: metric.get() for name, metric in scores.items()},
                        "prediction_digest": hashlib.sha256(encoded(predictions)).hexdigest()})
+        if progress is not None:
+            progress(epoch + 1, epochs[-1]["metrics"])
     return epochs, totals
 
 

@@ -1,4 +1,8 @@
-# Operação do benchmark — Semana 08
+# Operação do benchmark no homelab
+
+Este guia cobre o perfil Docker Compose com Airflow, ZenML, MinIO e MLflow.
+Para as campanhas no Batch, os pipelines SageMaker e o catálogo tabular,
+consulte a [operação na AWS](aws/operations.md).
 
 ## Interfaces
 
@@ -68,22 +72,17 @@ e a cópia final. A estimativa do aprendiz não inclui distribuidor, Airflow, ML
 MinIO e PostgreSQL. Mesmo com containers independentes, CPU física, disco e rede do host podem
 ter contenção: registrar também as condições reais de concorrência.
 
-**Implantação pendente:** em 08/11/2026 foram atualizados apenas os arquivos, por decisão do
-operador, enquanto a campanha `policies-agrawal-20261108T154612` ainda estava em execução. O
-worker observado manteve 8 vCPUs, 8 GiB e oito subprocessos no mesmo container. Alterar arquivos
-ou reconstruir a imagem não modifica esse container. Após encerrar campanhas e drenar a fila,
-reconstruir a imagem e substituir o executor antigo pelo distribuidor e pelos oito backends.
-O bootstrap ZenML passa a ser executado em `worker-1`, que contém as credenciais e os volumes;
-o distribuidor `worker` não tem credenciais nem estado de treinamento. Conferir por `docker
-inspect` CPU/RAM/swap de **cada** backend e `concurrency=1` em seus `/health`; o `/health` do
-distribuidor deve informar oito workers saudáveis e concorrência agregada 8.
+O bootstrap ZenML roda em `worker-1`, que contém as credenciais e os volumes.
+O distribuidor `worker` encaminha as solicitações. Para verificar uma instalação, use
+`docker inspect` para conferir CPU, RAM e swap de cada backend. Os endpoints `/health`
+devem mostrar `concurrency=1` em cada backend e oito workers saudáveis no distribuidor.
 
-O worker de datasets antes usava 6 GiB. Repetir sua admissão com os novos limites e diretórios
-novos de resultados/recibos; a admissão antiga não comprova execução em 2 GiB. Não ampliar memória
-silenciosamente em caso de OOM. Os resultados anteriores, inclusive a estimativa retrospectiva de
-`policies-airlines-v1`, não passam a representar treino medido no novo perfil. Usar outro nome de
-campanha/experimento, por exemplo `policies-airlines-1vcpu-2g-v1`, para não reutilizar jobs antigos.
-Não misturar resultados de perfis de recursos distintos no mesmo comparativo de tempo/custo.
+Em 08/11/2026, a campanha `policies-agrawal-20261108T154612` ainda usou oito subprocessos
+em um único container de 8 vCPUs e 8 GiB, mantido até o fim da campanha. O antigo worker
+de datasets usava 6 GiB. Trate medições com esses limites, incluindo a estimativa retrospectiva
+de `policies-airlines-v1`, como dados históricos do perfil em que foram obtidas. Ao comparar
+tempos e custos em 2 GiB, faça a admissão com esse limite e use outro nome de campanha e
+experimento, por exemplo `policies-airlines-1vcpu-2g-v1`.
 
 ## Executar no Airflow
 
@@ -99,10 +98,15 @@ Todas as DAGs usam `schedule=None`: ativá-las permite disparos manuais, sem ini
 | `benchmark_smoke` | 9 | Verificação rápida original |
 | `benchmark_controlled` | 51 + controles | Campanha v3, 261 configurações no padrão |
 | `benchmark_versioned` | 51 sintéticas + 34 reais fixas | Campanha v4, 289 configurações no padrão |
+| `benchmark_nonlinear` | Conforme matriz v5 | Logística, Hoeffding Tree e kNN |
+| `benchmark_metrics`, `benchmark_metrics_smoke` | Matriz v5 ou 8 casos no smoke | Campanha de rastreamento de métricas |
+| `benchmark_policies` | Conforme dataset e modelos selecionados | Comparação entre políticas e detectores |
+| `benchmark_task_suite`, `benchmark_zia_<dataset>` | Conforme fonte e campanha | Suíte de datasets admitidos e campanhas Zia |
 
-Em **Trigger DAG**, configure `samples` (300–100000, padrão 3000), `seeds`
-(1–10 sementes distintas, padrão `[42]`) e `label_delay` (0–100, padrão 3).
-Os três datasets são SEA, Agrawal e STAGGER. Cada protocolo prequential compara:
+Os parâmetros de **Trigger DAG** vêm de cada DAG. Para `benchmark_full`, configure
+`samples` (300–100000, padrão 3000), `seeds` (1–10 sementes distintas, padrão
+`[42]`) e `label_delay` (0–100, padrão 3). Essa matriz usa SEA, Agrawal e STAGGER.
+Em seus protocolos prequential, ela compara:
 modelo congelado, atualização periódica, atualização online a cada rótulo disponível,
 retreinamento por ADWIN e retreinamento por DDM. O modo offline permanece congelado.
 
@@ -120,11 +124,9 @@ Para uma campanha com configurações novas, o tempo inclui captura dos logs Zen
 
 ## ZenML
 
-A instalação usa ZenML OSS 0.98.0. Seu SDK aceita o projeto adicional `continual-benchmark`,
-criado durante a correção, mas o próprio SDK informa que o dashboard OSS só exibe `default`.
-Por isso, a operação final usa o projeto `default`, com display name **Continual Benchmark**
-e descrição específica. O projeto adicional e as execuções de diagnóstico nele foram preservados;
-não foi contratada uma edição paga nem contornada essa limitação.
+O Compose configura o ZenML OSS 0.98.0 com o projeto `default`. O bootstrap define
+seu nome de exibição como **Continual Benchmark**. Os testes de outubro de 2026 com
+o projeto adicional `continual-benchmark` pertencem ao diagnóstico do homelab.
 
 A pipeline `finite_benchmark` tem quatro passos visíveis:
 
@@ -138,8 +140,9 @@ por evento alteraria a ordem prequential. O passo de auditoria inspeciona decis�
 os pontos de mudança sintéticos nunca são usados como gatilho de retreinamento.
 
 A stack `benchmark-minio-v2` usa um orquestrador local no worker e armazenamento S3 privado.
-Logs e visualizações novos são lidos pelo servidor no MinIO. O SDK `s3fs==2026.9.0` foi acrescentado
-ao lock; `boto3` passou a 1.43.117 para compatibilidade com `aiobotocore==3.10.0`.
+O servidor lê os logs e as visualizações das execuções gravadas nesse armazenamento.
+Os pins das dependências de S3 estão em [pyproject.toml](../pyproject.toml) e
+[uv.lock](../uv.lock).
 
 ## Bootstrap e recuperação
 
@@ -173,10 +176,11 @@ O servidor continua com a restrição de acesso local habilitada.
 
 ## Resultados e limites
 
-As execuções históricas usam `continual-bench-v1`. As novas são separadas por política/detector
-conforme a seção v4 abaixo, com nomes por dataset, modo, detector, política e semente. Registra métricas por janela, métricas agregadas `summary_*`, parâmetros, hash do código,
-hash dos dados, contagens de alarmes/atualizações e artefatos JSON. Relatórios completos também estão
-em `s3://benchmarks/<run_key>/report.json`; os recibos ligam cada execução ao MLflow e aos objetos.
+O nome do experimento MLflow depende da campanha. A campanha inicial usou
+`continual-bench-v1`; a v4 organiza os experimentos por política e detector. As DAGs de
+políticas também aceitam um experimento explícito. As execuções publicam métricas por janela,
+métricas agregadas `summary_*`, parâmetros, hashes, contagens de alarmes e atualizações.
+Os recibos vinculam os runs MLflow aos relatórios em `s3://benchmarks/<run_key>/report.json`.
 
 Streaming, incremental e offline mantêm protocolos próprios; a consolidação não mistura suas métricas.
 A campanha padrão é uma validação funcional com dados sintéticos e uma semente, não uma conclusão
@@ -229,12 +233,12 @@ A referência retrospectiva constante sempre-positivo tem acurácia 57.73% e F1 
 ficou em 66.52% e 66.42%. Essa referência foi calculada a posteriori a partir dos rótulos e não
 é um braço pré-especificado nem uma execução MLflow adicional.
 
-Comparação: [controlled-v3-comparison.json](../reports/controlled-v3-comparison.json).
-Validação e ambiente: [controlled-v3-validation.json](../reports/controlled-v3-validation.json) e
-[controlled-v3-environment.json](../reports/controlled-v3-environment.json).
-Scripts de coleta/verificação: `scripts/collect_controlled_campaign.py` (executar no worker) e
-`scripts/compare_controlled_campaign.py` (análise local). O cache bruto verificado fica em
-`reports/generated/controlled-v3-inputs.json`, ignorado pelo Git.
+O registro histórico de comparação, validação e ambiente usou os artefatos locais
+`reports/controlled-v3-comparison.json`, `reports/controlled-v3-validation.json` e
+`reports/controlled-v3-environment.json`. Para consultar os registros no histórico Git,
+use `git show f835ee8:reports/controlled-v3-comparison.json`.
+Os scripts versionados são [coleta no worker](../scripts/collect_controlled_campaign.py)
+e [análise local](../scripts/compare_controlled_campaign.py).
 A dispersão reportada é desvio-padrão entre cinco sementes, não intervalo de confiança.
 Os limites são apresentações de exemplos, não segundos de CPU nem orçamentos efetivamente iguais
 para os detectores. As mudanças de concorrência, quotas e RPCs impedem atribuir ganho de tempo
@@ -340,13 +344,14 @@ encaminha até oito avaliações simultâneas para seus oito containers isolados
 subprocessos, mas com outro orçamento de CPU/RAM; essa condição histórica não equivale ao novo perfil.
 
 O [protocolo](nonlinear-v5-protocol.md) fixa hiperparâmetros e representação. Os diários guardam
-cada estado treinado: árvore/online/Airlines gerou cerca de10GiB em um único diário no preflight.
+cada estado treinado: árvore/online/Airlines gerou cerca de 10 GiB em um único diário no preflight.
 Não dimensionar armazenamento somente pelo tamanho do modelo final. O auditor verifica os
 blobs em streaming, com hashes por estado e conteúdo completo do diário.
 
 Em uma recuperação por alteração de código, não reutilizar checkpoint de outra revisão.
 Preservar o diretório da tentativa, registrar o override por configuração e limpar somente
 as tarefas Airflow afetadas. A v5 preservou duas falhas de cache nominal do River e refez esses
-casos com a correção; os demais casos mantiveram sua revisão original. Conferir a evidência
-[de recuperação](../reports/nonlinear-v5-recovery.json) e o
-[relatório comparativo](../reports/nonlinear-v5.md).
+casos com a correção; os demais casos mantiveram sua revisão original. A recuperação e a
+comparação ficaram nos artefatos históricos
+`git show f835ee8:reports/nonlinear-v5-recovery.json` e
+`git show f835ee8:reports/nonlinear-v5.md`.

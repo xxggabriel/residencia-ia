@@ -54,6 +54,7 @@ class BinaryRun:
     transport: Any = None
     manifest: dict = field(default_factory=dict)
     stop_after: int | None = None
+    progress: Callable[[int, dict], None] | None = None
 
     def events(self):
         return read_events(self.events_path)

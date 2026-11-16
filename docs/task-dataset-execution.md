@@ -1,6 +1,12 @@
 # Datasets e preparação da DAG — 4 de novembro de 2026
 
-> **Atualização em 08/11/2026:** Stream51 foi removido do projeto (catálogo, adaptador, lock e DAG), porque a origem oficial `klab.cis.rit.edu` continuou sem resolver DNS e não há cópia oficial disponível. O catálogo e o gate de admissão passaram a exigir 17 fontes; os registros abaixo preservam o estado de 04/11/2026.
+## Execução vigente
+
+Stream51 saiu do catálogo, adaptador, lock e DAG em 8 de novembro de 2026. O gate de admissão exige recibos de **17 fontes**, com 100 exemplos, duas épocas e o fingerprint do runtime usado pelo worker. O plano padrão de `benchmark_task_suite` tem 518 casos (501 binários e 17 por épocas), seed 42, atraso de três e até oito tarefas Airflow ativas. A AWS usa a mesma definição de casos na [suíte `project_suite`](aws/operations.md#suíte-de-todos-os-datasets).
+
+Para preparar a execução no Airflow, rode `scripts/validate_dataset_epochs.py` no ambiente do worker. Use `--state` com o diretório configurado em `BENCH_DATASET_SMOKES` (padrão `/state/dataset-smokes`), `--cache` com o cache e `--real-directory` com o diretório dos dados reais. Confirme `complete=true` no recibo `dataset-smoke-complete.json` e verifique `/datasets-ready` antes de disparar a DAG `benchmark_task_suite`. [Operação no Airflow](benchmark-operations.md#executar-no-airflow).
+
+## Validação inicial de 4 de novembro
 
 Foram implementados loaders executáveis para as 18 fontes/variantes explicitadas no projeto, na branch local `Semana-09`. Foram realizados testes iniciais exclusivamente no homelab, acessado por `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes gabriel@192.168.100.27`. **A DAG completa não foi iniciada: a aquisição do Stream51 permaneceu bloqueada pela resolução DNS da origem oficial.** O seu adaptador passou pelos testes de contrato com fixtures; isso não homologou seus dados reais.
 
@@ -48,9 +54,9 @@ Foi construída somente a imagem auxiliar `continual-bench-datasets:semana09-v2`
 | Verificação | Estado | Evidência |
 | --- | --- | --- |
 | Ruff, código/testes/DAGs/scripts | PASS | `evidence/reviewed-checks.txt` |
-| Suíte sem serviços/benchmark | PASS, 475 testes; 32 excluídos; 38,22 s | [final-checks.txt](../reports/semana09-datasets/final-checks.txt) |
-| Admissão das 18 fontes, 100 exemplos/2 épocas | 17 PASS; Stream51 BLOCKED | [evidence.json](../reports/semana09-datasets/evidence.json) e relatórios individuais em `state/dataset-smokes` |
-| ZenML → MLflow/MinIO, 100 exemplos/2 épocas, e três fluxos binários com serviços reais | PASS, quatro testes; 309,34 s na rodada revisada | [services.txt](../reports/semana09-datasets/services.txt); hashes/readback, Kafka e repetição idempotente |
+| Suíte sem serviços/benchmark | PASS, 475 testes; 32 excluídos; 38,22 s | `reports/semana09-datasets/final-checks.txt` |
+| Admissão das 18 fontes, 100 exemplos/2 épocas | 17 PASS; Stream51 BLOCKED | `reports/semana09-datasets/evidence.json` e relatórios individuais em `state/dataset-smokes` |
+| ZenML → MLflow/MinIO, 100 exemplos/2 épocas, e três fluxos binários com serviços reais | PASS, quatro testes; 309,34 s na rodada revisada | `reports/semana09-datasets/services.txt`, com hashes, leitura posterior, Kafka e repetição idempotente |
 | Empacotamento wheel | PASS, quatro contratos JSON incluídos | `evidence/wheel-package.txt` |
 | Importação no Airflow 3.3.2 e expansão da matriz | PASS, 549 casos/18 fontes | `evidence/airflow-parse-final.txt` |
 | Compose do worker isolado | PASS, `config --quiet` | Configuração versionada `compose.dataset-benchmark.yaml` |
@@ -60,15 +66,11 @@ O aviso preexistente de input example do MLflow permaneceu na suíte; os avisos 
 
 A revisão final corrigiu também a revogação de um recibo antigo antes de repetir a admissão via CLI: uma falha posterior deixou `complete=false`, com teste de regressão. Os smokes e serviços foram repetidos após essa mudança. O código Python revisado teve SHA-256 `c12041fa90c65452d7abe64e66d6f0c3bdfd2a6aafd9c79254224d63f7912d30`; o fingerprint incluiu também os contratos e as versões do runtime. A imagem usada nos testes precedeu os commits locais e registrou `git_revision=uncommitted`; a correspondência foi estabelecida pelo hash dos fontes, sem inventar uma revisão executada.
 
-Os loaders foram registrados no commit `4c7a6ae` e o protocolo de épocas/gate da DAG no commit `90706ad`. A [consolidação verificada no homelab](../reports/semana09-datasets/consolidation.json) confirmou os 17 resultados no mesmo fingerprint e as quatro evidências reais de serviços. O pico RSS foi do processo executor compartilhado, não uma estimativa de memória incremental por dataset. O [complemento do relatório no Space](https://chatgpt.com/space/page_ea19e36695b88191aeefc5cc7af299ad) foi criado e vinculado ao relatório Semana 09, preservando os registros anteriores.
+Os loaders foram registrados no commit `4c7a6ae` e o protocolo de épocas e o gate da DAG no commit `90706ad`. A consolidação do homelab confirmou os 17 resultados com o mesmo fingerprint e as quatro evidências de serviços. O pico RSS foi medido no processo executor compartilhado. Os arquivos de `reports/semana09-datasets/` estão no histórico Git. Para ler a consolidação, use `git show f835ee8:reports/semana09-datasets/consolidation.json`. [Complemento do relatório no Space](https://chatgpt.com/space/page_ea19e36695b88191aeefc5cc7af299ad).
 
-## Bloqueio e retomada
+## Bloqueio registrado na primeira rodada
 
-O endereço oficial `http://klab.cis.rit.edu/files/Stream-51.zip`, ainda indicado na implementação dos autores, não resolveu DNS no homelab (`Name or service not known`). Não houve negação de autenticação, alteração de DNS/firewall/credenciais ou contorno de controle de acesso. A obtenção do arquivo permaneceu **pendente de uma cópia oficial acessível**. O MD5 publicado `5f34d542b71af7e5ecb2226d1bc7297c` ficou como referência; uma leitura parcial não verificou o arquivo integral.
-
-Para retomar, fornecer o caminho de uma cópia oficial de `Stream-51.zip` no homelab, ou uma URL de origem autorizada. Montar o arquivo somente para leitura no cliente isolado e definir `BENCH_STREAM51_ARCHIVE` com o caminho interno. Preparar os 100 exemplos, repetir a admissão completa e conferir `complete=true` com as 18 fontes/fingerprint atual. Não iniciar a campanha com recibo parcial.
-
-Com a admissão aprovada, iniciar somente o worker de `compose.dataset-benchmark.yaml`, usando o arquivo de ambiente já existente, sem ler seu conteúdo. Copiar somente os dois novos arquivos (`benchmark_task_suite.py` e `task_jobs.py`) para os componentes Airflow necessários, sem substituir os arquivos antigos. Confirmar importação, saúde do worker e `/datasets-ready`; despausar e disparar `benchmark_task_suite` com run ID único. Conferir que o estado do dag_run passou a `running`; esse foi o critério solicitado para encerrar a tarefa, sem esperar a conclusão da campanha.
+O endereço oficial `http://klab.cis.rit.edu/files/Stream-51.zip` não resolveu DNS no homelab (`Name or service not known`). O MD5 publicado `5f34d542b71af7e5ecb2226d1bc7297c` ficou como referência para o arquivo integral. A falta dessa fonte impediu a aprovação do gate da época. O gate vigente usa o catálogo de 17 fontes descrito acima.
 
 Comandos de validação, executados **no homelab** com o snapshot final e o estado isolado:
 
@@ -96,4 +98,4 @@ timeout 420 docker compose --env-file "$TASK_BENCH_SERVICE_ENV" \
   tests/test_epoch_services.py tests/test_task_services.py
 ```
 
-O primeiro comando terminou com exit code 1 enquanto faltou Stream51; isso foi o resultado esperado do gate fechado, não uma aprovação de todas as fontes. A repetição offline usou o cache verificado e não repetiu a tentativa DNS conhecida. Para uma nova aquisição explicitamente autorizada, acrescentar `--download` e o mount do arquivo local quando necessário.
+O primeiro comando terminou com exit code 1, conforme o gate de 18 fontes na época. A repetição offline usou o cache verificado.

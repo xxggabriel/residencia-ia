@@ -31,6 +31,8 @@ class Engine:
         observer=None,
         promotion: dict | None = None,
     ):
+        if getattr(policy, "requires_batches", False):
+            raise ValueError("batch policies (CARA, UPF, Oracle) cannot drive the per-sample engine")
         self.model_factory = model_factory
         self.detector_factory = detector_factory
         self.model = model_factory()

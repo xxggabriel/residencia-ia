@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Native SageMaker Studio Processing, Training and Tuning steps with managed MLflow.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  Project:
+    Type: String
+    Default: continual-bench
+    AllowedPattern: '[a-z][a-z0-9-]{0,32}'
+  DataBucket:
+    Type: String
+  KeyArn:
+    Type: String
+  ArtifactsBucket:
+    Type: String
+  DefinitionKey:
+    Type: String
+    AllowedPattern: 'templates/studio-native/[0-9a-f]{64}\.json'
+  MlflowAppArn:
+    Type: String
+
+Resources:
+  JobRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Give native jobs access to prepared inputs, pipeline outputs, images and the existing MLflow app.
+    Properties:
+      RoleName: !Sub "${Project}-studio-native-job"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: sagemaker.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: native-workload
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetBucketLocation, s3:ListBucket]
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${DataBucket}"
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/datasets/social/*/prepared/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/sagemaker/native/*"
+              - Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload]
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/sagemaker/native/*"
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey, kms:DescribeKey, kms:CreateGrant]
+                Resource: !Ref KeyArn
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Project}-ml"
+                  - !Sub "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Project}-runtime"
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:DescribeLogStreams, logs:PutLogEvents]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/sagemaker/*"
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition: {StringLike: {cloudwatch:namespace: "/aws/sagemaker/*"}}
+              - Effect: Allow
+                Action: [sagemaker:CallMlflowAppApi, sagemaker:DescribeMlflowApp,
+                         sagemaker-mlflow:GetExperimentByName, sagemaker-mlflow:CreateExperiment,
+                         sagemaker-mlflow:SearchRuns, sagemaker-mlflow:CreateRun,
+                         sagemaker-mlflow:LogBatch, sagemaker-mlflow:UpdateRun]
+                Resource: !Ref MlflowAppArn
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: sagemaker.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: native-steps
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt JobRole.Arn
+                Condition: {StringEquals: {iam:PassedToService: sagemaker.amazonaws.com}}
+              - Effect: Allow
+                Action: [sagemaker:CreateProcessingJob, sagemaker:DescribeProcessingJob, sagemaker:StopProcessingJob,
+                         sagemaker:CreateTrainingJob, sagemaker:DescribeTrainingJob, sagemaker:StopTrainingJob,
+                         sagemaker:CreateHyperParameterTuningJob, sagemaker:DescribeHyperParameterTuningJob,
+                         sagemaker:StopHyperParameterTuningJob, sagemaker:ListTrainingJobsForHyperParameterTuningJob,
+                         sagemaker:AddTags]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:processing-job/pipelines-*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:training-job/pipelines-*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:hyper-parameter-tuning-job/*"
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactsBucket}/${DefinitionKey}"
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref KeyArn
+
+  Pipeline:
+    Type: AWS::SageMaker::Pipeline
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Expose the native job ARNs, execution graph, and step status in Studio.
+    Properties:
+      PipelineName: !Sub "${Project}-native"
+      PipelineDisplayName: !Sub "${Project}-native"
+      RoleArn: !GetAtt PipelineRole.Arn
+      PipelineDefinition:
+        PipelineDefinitionS3Location:
+          Bucket: !Ref ArtifactsBucket
+          Key: !Ref DefinitionKey
+
+Outputs:
+  PipelineName:
+    Value: !Sub "${Project}-native"
+  JobRoleArn:
+    Value: !GetAtt JobRole.Arn

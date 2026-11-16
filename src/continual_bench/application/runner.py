@@ -70,7 +70,9 @@ def resume_contract(config: Config, manifest: dict, env: dict, transport) -> dic
     }
 
 
-def evaluate(config: Config, manifest: dict, root: str, transport=None, *, stop_after=None) -> dict:
+def evaluate(
+    config: Config, manifest: dict, root: str, transport=None, *, stop_after=None, progress=None
+) -> dict:
     """Returns complete report or bounded progress; service I/O is injected."""
     registry = default_registry(config.plugins)
     source = make_source(registry, config.dataset)
@@ -109,6 +111,7 @@ def evaluate(config: Config, manifest: dict, root: str, transport=None, *, stop_
             transport=transport,
             manifest=manifest,
             stop_after=stop_after,
+            progress=progress,
         )
         with SystemMetricsSampler(root) as system:
             outcome = protocol.execute(run)
@@ -169,7 +172,7 @@ def write_binary_artifacts(directory, report) -> dict:
     })
 
 
-def run(config: Config, root="state", *, services=False, source=None):
+def run(config: Config, root="state", *, services=False, source=None, progress=None):
     if services:
         from .readiness import ensure_tracking_ready
 
@@ -180,7 +183,7 @@ def run(config: Config, root="state", *, services=False, source=None):
         from continual_bench.infrastructure.services import KafkaTransport
 
         transport = KafkaTransport()
-    report = evaluate(config, manifest, root, transport)
+    report = evaluate(config, manifest, root, transport, progress=progress)
     if services:
         from continual_bench.infrastructure.services import publish
 

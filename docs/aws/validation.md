@@ -1,9 +1,11 @@
 # Evidências de validação
 
-Validação local em 09/11/2026 em macOS arm64, com Docker Desktop 29.9.2 e emulação
-`linux/amd64`. As verificações na conta AWS foram feitas separadamente pelo AWS Core MCP.
+Os registros abaixo descrevem as revisões, execuções e ambientes observados em cada data.
+Para comandos de operação e configuração, consulte o [guia operacional](operations.md).
 
-## Validado localmente
+## Validação local inicial em 09/11/2026
+
+Ambiente macOS arm64, com Docker Desktop 29.9.2 e emulação `linux/amd64`.
 
 | Verificação | Comando | Resultado |
 |---|---|---|
@@ -33,7 +35,7 @@ janelas por tempo do evento com restauração, para as checagens point-in-time, 
 SageMaker, para a idempotência do Model Registry, para as dimensões EMF e para a contabilidade
 em USD.
 
-## Imagens (linux/amd64)
+## Imagens da validação inicial (linux/amd64)
 
 - **Build**: `runtime` e `ml` construídas para `linux/amd64` a partir de
   `requirements-aws.lock` com hashes (740 MB cada, camada de dependências compartilhada).
@@ -41,7 +43,7 @@ em USD.
   `runtime` recebeu `qemu: uncaught target signal 11` e ficou preso. Isolando os imports,
   numpy e scipy carregaram e `import pyarrow` travou sob a emulação. É uma limitação conhecida
   do QEMU com o pyarrow, mas, sem host x86_64, a execução da imagem não foi demonstrada aqui.
-- **Onde fica comprovada**: o estágio Build roda em CodeBuild x86_64 nativo e, antes do push,
+- **Onde ficou comprovada naquela revisão**: o estágio Build rodava em CodeBuild x86_64 nativo e, antes do push,
   executa `selftest --require-x86-64` na `runtime` e `check_inference_image.sh` na `ml`
   (treino da fixture, `/ping`, `/invocations`). Uma falha impede a publicação.
 - **Alternativa local**: `IMAGE_PLATFORM=linux/arm64` (argumento do Dockerfile) e `PLATFORM=linux/arm64`
@@ -49,7 +51,7 @@ em USD.
   e interrompida durante o primeiro build, sem resultado. Ativar "Use Rosetta for x86_64/amd64
   emulation" no Docker Desktop costuma permitir rodar a imagem amd64 localmente.
 
-## Validado na AWS em 09/11/2026
+## Validação inicial na AWS em 09/11/2026
 
 - O pipeline `f2bb99b5-e81d-44b5-aad1-89968f6d31ba` publicou a release
   `f1cb05e1bd22005f3994869fd664e4159a122cb2` após Verify, Build e Deploy bem-sucedidos.
@@ -108,8 +110,8 @@ nenhum manifesto final.
   `reconciliation/20261109T142454Z.json` e `reconciliation/20261109T142455Z.json`
   sob o prefixo da campanha, ambos com `clean: true`, zero jobs ativos e zero
   tasks em execução. Nenhum job precisou ser terminado pela reconciliação.
-  O retry automático foi observado. O cancelamento manual e o teste com marcador
-  ausente continuam pendentes.
+  A execução exercitou o retry automático. O cancelamento manual e o teste com
+  marcador ausente ficaram fora desse smoke.
 
 ### Release do PR #12 e campanha `social-smoke-v3`
 
@@ -150,7 +152,7 @@ oito tasks.
   em `DescribeNetworkInterfaces`. O gateway S3 `vpce-0935fe0a9f6cf1d92`
   estava disponível. Os workers leram o snapshot e publicaram os registros de
   tentativa com permissões vinculadas ao endpoint. A correlação com registros
-  individuais do log de acesso do bucket segue pendente.
+  individuais do log de acesso do bucket ficou fora dessa verificação.
 - **Falha dos workers.** Os oito streams de `/continual-bench/batch` registraram
   uma `ValidationException` de `CreateModelPackage` com acesso negado ao ECR
   `continual-bench-ml`. O ECR confirmou o digest de inferência da release como
@@ -217,27 +219,74 @@ jobs e o ECS reportou `STOPPED` com código 0 nas quatro tasks.
 - O SageMaker retornou `Completed` e `PendingManualApproval` para a versão
   `1` de cada grupo `continual-bench-zia-social-{frozen,drift,incremental,periodic}-smoke`.
 - O relatório `reconciliation/20261109T161420Z.json` registrou `clean: true`,
-  sem jobs ativos ou tasks em execução. A validação do full segue pendente.
+  sem jobs ativos ou tasks em execução. A campanha cobriu o snapshot `smoke`.
 
-### Validações pendentes na AWS
+## Evidências verificadas em 16/11/2026
 
-- Testar cancelamento com jobs ativos, snapshot sem marcador e retry manual com sufixo.
-- Preparar o snapshot full e confirmar memória, disco, quota e orçamento antes de
-  iniciar a campanha full.
-- Validar consultas Glue/Athena com resultados de uma campanha concluída,
-  Kinesis/Firehose/Flink, Feature Store, perfis SageMaker,
-  Quick Sight e `refresh-prices` na Price List API.
+### Validação local da revisão
+
+A suíte padrão `python -m pytest -q` passou com 785 testes e 50 casos fora da seleção.
+O Ruff passou e `scripts/aws/validate_templates.py` aprovou os 15 templates com cfn-lint
+e as invariantes do projeto.
+
+### GitHub Actions
+
+O workflow `Build and deploy` concluiu os quatro jobs na
+[execução de 12/11/2026](https://github.com/xxggabriel/residencia-ia/actions/runs/43292423642).
+O CloudFormation da conta expõe as roles OIDC de GitHub Actions e de execução do deploy.
+
+### Rede do Batch
+
+O runtime estava em `UPDATE_COMPLETE` com `AvailabilityZoneCount=2` e
+`InterfaceEndpointAzMode=single`. O compute environment do Batch listava duas sub-redes
+privadas em `us-east-1a` e `us-east-1b`. Ambas usavam a mesma tabela de rotas com o
+gateway endpoint do S3 (`vpce-07b6b443331a5588f`). Os cinco endpoints de interface
+estavam em `us-east-1a`, no estado `available`.
+
+Os quatro jobs `cb-network-smoke-20261116132423-*` terminaram com `SUCCEEDED`. Os logs do
+CloudWatch registraram `S3_GET_OK` nas duas zonas, após a leitura do marcador Social
+`smoke`. O digest da imagem em execução coincidiu com o da URI no ECR.
+
+O arquivo de overrides usado pelo GitHub Actions ainda definia uma AZ para o Batch e
+omitia o modo dos endpoints. Veja [como manter o perfil implantado](costs.md#reduzir-o-custo-de-rede).
+
+### Campanhas integrais de Zia
+
+Os resumos no S3 das campanhas `zia-{social,fraud,ecommerce}-full-v1` confirmaram
+`complete: true` e 7/7 runs concluídas em cada dataset. Os resumos `full-v2` registravam
+`complete: false`, com 4/7 no Social, 6/7 no Fraud e 6/7 no E-commerce. Esses resumos
+descrevem as execuções históricas. Os [exemplos versionados](operations.md#campanha-integral-dos-três-datasets-zia)
+definem seis políticas por dataset.
+
+### SageMaker Pipelines, MLflow e catálogo
+
+- `studio-matrix-151104` terminou com `Succeeded` em `PrepareDataset`, `RunBatchCampaign`
+  e `VerifyResults`. O resumo do Batch registrou a unidade da matriz concluída (1/1).
+  O manifesto final apontou ao run MLflow `f26aa09c40134af68eff22de3a708e72`,
+  com status `FINISHED` e 36 métricas `progress/*` e `final/*`.
+- `native-smoke-155750` (`w3wfx3yctl6d`) terminou com `Succeeded` em `ProfileSnapshot`,
+  `TrainBaseline` e `TuneHyperparameters`. A API de tuning retornou os dois trials
+  `Completed`, em ordem crescente de `validation:log_loss`: `001` (0,91775048),
+  marcado como melhor, e `002` (0,91872990).
+- A conta listava o app MLflow `continual-bench-mlflow` no estado `Created`. A DataZone API
+  retornou listagens `ACTIVE` no Unified Studio para Social, Fraud e E-commerce `full`
+  e para o Social `smoke` publicado pela automação.
+- Na validação da automação, um objeto de teste acionou S3, EventBridge, SQS FIFO e Lambda.
+  A repetição de eventos confirmou o reaproveitamento de listagem e vínculo. A função
+  restaurou a tag de catálogo do run E-commerce `f891e314b890465289e7e51a86ba2c3f`,
+  preservando suas métricas e parâmetros. A consulta ao MLflow confirmou as três tags
+  de catálogo e 253 métricas nesse run.
 
 ## Ordem de validação recomendada numa conta autorizada
 
-1. `scripts/aws/bootstrap.sh`, autorização do GitHub App e `wait_connection.sh`.
-2. Merge em `main`. Conferir as quatro etapas do pipeline, o digest no ECR (`operations.md`)
-   e `releases/<sha>/release.json`.
+1. Executar o [bootstrap e a configuração OIDC](operations.md#configuração-do-github-actions).
+2. Executar o workflow de deploy. Conferir os quatro jobs, o digest no ECR e
+   `releases/<sha>/release.json`.
 3. `start_dataset.sh infra/examples/dataset-social-smoke.json`. Conferir `_SUCCESS.json`.
 4. `start_campaign.sh infra/examples/campaign-social-smoke.json` e registrar:
    - os IDs dos jobs Batch e os ARNs das tasks em `analytics/attempts/`;
    - `describe-jobs` com `SUCCEEDED` e `describe-tasks` com `STOPPED`;
-   - a sobreposição de `startedAt`/`stoppedAt` das quatro tasks;
+   - a sobreposição de `startedAt`/`stoppedAt` das tasks esperadas;
    - `describe-network-interfaces` das tasks sem `Association.PublicIp`;
    - os acessos ao S3 pelo endpoint (`aws:SourceVpce` nas roles e nos logs de acesso do bucket).
 5. Repetir com uma falha induzida (snapshot sem marcador), um cancelamento

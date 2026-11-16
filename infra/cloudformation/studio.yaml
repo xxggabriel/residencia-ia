@@ -1,0 +1,255 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: SageMaker Studio pipeline for the continual-bench dataset and Batch workflows.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  Project:
+    Type: String
+    Default: continual-bench
+    AllowedPattern: '[a-z][a-z0-9-]{0,32}'
+  DataBucket:
+    Type: String
+  KeyArn:
+    Type: String
+  CampaignWorkflowArn:
+    Type: String
+  DatasetWorkflowArn:
+    Type: String
+
+Resources:
+  DeadLetters:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+  Callbacks:
+    Type: AWS::SQS::Queue
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Buffer SageMaker callback deliveries and retain failed messages for recovery.
+    Properties:
+      VisibilityTimeout: 180
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetters.Arn
+        maxReceiveCount: 8
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: sagemaker.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: send-callback
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt Callbacks.Arn
+
+  Pipeline:
+    Type: AWS::SageMaker::Pipeline
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Show external workload phases and their completion in the Studio DAG.
+    Properties:
+      PipelineName: !Sub "${Project}-campaign"
+      PipelineDisplayName: !Sub "${Project}-campaign"
+      RoleArn: !GetAtt PipelineRole.Arn
+      PipelineDefinition:
+        PipelineDefinitionBody: !Sub |
+          {
+            "Version": "2020-12-01",
+            "Parameters": [
+              {"Name": "CampaignRequestUri", "Type": "String"},
+              {"Name": "CampaignRequestVersion", "Type": "String"},
+              {"Name": "DatasetRequestUri", "Type": "String", "DefaultValue": ""},
+              {"Name": "DatasetRequestVersion", "Type": "String", "DefaultValue": ""}
+            ],
+            "Steps": [
+              {
+                "Name": "PrepareDataset", "Type": "Callback", "SqsQueueUrl": "${Callbacks}",
+                "Arguments": {"stage": "dataset", "request_uri": {"Get": "Parameters.DatasetRequestUri"},
+                              "request_version": {"Get": "Parameters.DatasetRequestVersion"}},
+                "OutputParameters": [{"OutputName": "DatasetResult", "OutputType": "String"}]
+              },
+              {
+                "Name": "RunBatchCampaign", "Type": "Callback", "SqsQueueUrl": "${Callbacks}",
+                "DependsOn": ["PrepareDataset"],
+                "Arguments": {"stage": "campaign", "request_uri": {"Get": "Parameters.CampaignRequestUri"},
+                              "request_version": {"Get": "Parameters.CampaignRequestVersion"}},
+                "OutputParameters": [{"OutputName": "WorkflowExecutionArn", "OutputType": "String"},
+                                     {"OutputName": "SummaryUri", "OutputType": "String"}]
+              },
+              {
+                "Name": "VerifyResults", "Type": "Callback", "SqsQueueUrl": "${Callbacks}",
+                "Arguments": {"stage": "verify",
+                              "summary_uri": {"Get": "Steps.RunBatchCampaign.OutputParameters['SummaryUri']"}},
+                "OutputParameters": [{"OutputName": "SummaryUri", "OutputType": "String"}]
+              }
+            ]
+          }
+
+  CallbackRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: bridge
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/studio-callback:log-stream:*"
+              - Effect: Allow
+                Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+                Resource: !GetAtt Callbacks.Arn
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource:
+                  - !Ref CampaignWorkflowArn
+                  - !Ref DatasetWorkflowArn
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${Project}-studio-callback"
+              - Effect: Allow
+                Action: [states:DescribeExecution, states:StopExecution]
+                Resource:
+                  - !Sub
+                    - "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${Name}:*"
+                    - Name: !Select [6, !Split [":", !Ref CampaignWorkflowArn]]
+                  - !Sub
+                    - "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${Name}:*"
+                    - Name: !Select [6, !Split [":", !Ref DatasetWorkflowArn]]
+              - Effect: Allow
+                Action: [sagemaker:DescribePipelineExecution, sagemaker:SendPipelineExecutionStepSuccess,
+                         sagemaker:SendPipelineExecutionStepFailure]
+                Resource: !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:pipeline/${Project}-campaign/execution/*"
+              - Effect: Allow
+                Action: s3:GetObjectVersion
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/studio/requests/*"
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/campaigns/*/summary.json"
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref KeyArn
+                Condition: {StringEquals: {kms:ViaService: !Sub "s3.${AWS::Region}.${AWS::URLSuffix}"}}
+
+  CallbackLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${Project}/studio-callback"
+      RetentionInDays: 14
+  CallbackFunction:
+    Type: AWS::Lambda::Function
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Start each downstream execution once and report its actual terminal state to SageMaker.
+        must:
+          - Use S3 object versions for immutable requests.
+          - Keep callback tokens out of application logs.
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt CallbackRole.Arn
+      Timeout: 30
+      Code: ../sagemaker/callback
+      LoggingConfig:
+        LogGroup: !Ref CallbackLogs
+      Environment:
+        Variables:
+          DATA_BUCKET: !Ref DataBucket
+          CAMPAIGN_ARN: !Ref CampaignWorkflowArn
+          DATASET_ARN: !Ref DatasetWorkflowArn
+          BRIDGE_ARN: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${Project}-studio-callback"
+
+  BridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: states.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-callback
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt CallbackFunction.Arn
+
+  Bridge:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${Project}-studio-callback"
+      RoleArn: !GetAtt BridgeRole.Arn
+      Definition:
+        StartAt: PollWorkflow
+        States:
+          PollWorkflow:
+            Type: Task
+            Resource: !GetAtt CallbackFunction.Arn
+            ResultPath: $.result
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 5
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.failure
+                Next: ReportBridgeFailure
+            Next: IsDone
+          IsDone:
+            Type: Choice
+            Choices:
+              - Variable: $.result.done
+                BooleanEquals: true
+                Next: Complete
+            Default: WaitForWorkflow
+          WaitForWorkflow:
+            Type: Wait
+            Seconds: 15
+            Next: PollWorkflow
+          Complete:
+            Type: Succeed
+          ReportBridgeFailure:
+            Type: Task
+            Resource: !GetAtt CallbackFunction.Arn
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 5
+                BackoffRate: 2
+            Next: BridgeFailed
+          BridgeFailed:
+            Type: Fail
+            Error: CallbackBridgeFailed
+
+  CallbackSubscription:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: Bridge
+    Properties:
+      EventSourceArn: !GetAtt Callbacks.Arn
+      FunctionName: !Ref CallbackFunction
+      BatchSize: 1
+
+Outputs:
+  PipelineName:
+    Value: !Sub "${Project}-campaign"

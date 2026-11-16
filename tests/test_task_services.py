@@ -16,7 +16,7 @@ from continual_bench.orchestration.zenml_pipeline import execute_pipeline
 @pytest.mark.services
 @pytest.mark.parametrize("priced_time", [False, True])
 @pytest.mark.parametrize("source,mode,policy", [
-    ("sea", "streaming", "cost_heuristic"),
+    ("sea", "streaming", "performance"),
     ("hyperplane", "incremental", "performance"),
     ("stagger", "offline", "none"),
 ])

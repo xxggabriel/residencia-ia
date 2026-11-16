@@ -4,6 +4,10 @@ Description: >-
   public load balancer), private DNS, S3 gateway endpoint and the interface endpoints the
   private Fargate workers call. Interface endpoints bill per hour per AZ plus per GB.
 
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
 Parameters:
   Project:
     Type: String
@@ -14,7 +18,12 @@ Parameters:
     Type: Number
     Default: 2
     AllowedValues: [1, 2]
-    Description: Each interface endpoint costs one hourly charge per AZ.
+    Description: Number of private subnets available to the workers.
+  InterfaceEndpointAzMode:
+    Type: String
+    Default: all
+    AllowedValues: [all, single]
+    Description: Deploy interface endpoints in all private subnet AZs or only in the first AZ.
   DataBucketArn:
     Type: String
   ArtifactsBucketArn:
@@ -43,6 +52,9 @@ Parameters:
 
 Conditions:
   TwoZones: !Equals [!Ref AvailabilityZoneCount, 2]
+  InterfaceEndpointsInTwoZones: !And
+    - !Condition TwoZones
+    - !Equals [!Ref InterfaceEndpointAzMode, all]
   ModelRegistry: !Equals [!Ref EnableModelRegistry, "true"]
   Streaming: !Equals [!Ref EnableStreaming, "true"]
   FeatureStore: !Equals [!Ref EnableFeatureStore, "true"]
@@ -134,6 +146,12 @@ Resources:
 
   S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Route regional S3 traffic and ECR image layers without a paid interface endpoint.
+        must:
+          - Keep the route on the shared private route table regardless of interface endpoint placement.
+          - Keep the ECR layer bucket accessible and preserve the endpoint ID used by worker IAM policies.
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
@@ -161,12 +179,15 @@ Resources:
   # Interface endpoints restrict callers to this account's principals.
   EcrApiEndpoint:
     Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to authenticate to ECR.
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
-      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SubnetIds: !If [InterfaceEndpointsInTwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
       PolicyDocument:
         Version: "2012-10-17"
@@ -180,12 +201,15 @@ Resources:
 
   EcrDockerEndpoint:
     Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to pull container images.
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
-      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SubnetIds: !If [InterfaceEndpointsInTwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
       PolicyDocument:
         Version: "2012-10-17"
@@ -198,12 +222,15 @@ Resources:
 
   LogsEndpoint:
     Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to deliver container logs.
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
-      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SubnetIds: !If [InterfaceEndpointsInTwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
       PolicyDocument:
         Version: "2012-10-17"
@@ -216,13 +243,16 @@ Resources:
 
   SageMakerApiEndpoint:
     Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to use the model registry and tracking APIs.
     Condition: ModelRegistry
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.sagemaker.api"
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
-      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SubnetIds: !If [InterfaceEndpointsInTwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
       PolicyDocument:
         Version: "2012-10-17"
@@ -243,13 +273,16 @@ Resources:
 
   SageMakerMlflowEndpoint:
     Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to call the MLflow data plane.
     Condition: ModelRegistry
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "aws.sagemaker.${AWS::Region}.mlflow"
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
-      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SubnetIds: !If [InterfaceEndpointsInTwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
       PolicyDocument:
         Version: "2012-10-17"
@@ -263,13 +296,16 @@ Resources:
 
   KinesisEndpoint:
     Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to use Kinesis when streaming is enabled.
     Condition: Streaming
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.kinesis-streams"
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
-      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SubnetIds: !If [InterfaceEndpointsInTwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
       PolicyDocument:
         Version: "2012-10-17"
@@ -283,35 +319,44 @@ Resources:
 
   FeatureStoreRuntimeEndpoint:
     Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to reach the optional Feature Store runtime.
     Condition: FeatureStore
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.sagemaker.featurestore-runtime"
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
-      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SubnetIds: !If [InterfaceEndpointsInTwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
 
   KmsEndpoint:
     Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Provide connectivity for optional direct KMS calls.
     Condition: KmsSecrets
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.kms"
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
-      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SubnetIds: !If [InterfaceEndpointsInTwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
 
   SecretsManagerEndpoint:
     Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Provide connectivity for optional direct Secrets Manager calls.
     Condition: KmsSecrets
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
-      SubnetIds: !If [TwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
+      SubnetIds: !If [InterfaceEndpointsInTwoZones, [!Ref PrivateSubnetA, !Ref PrivateSubnetB], [!Ref PrivateSubnetA]]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
 
 Outputs:
@@ -323,7 +368,10 @@ Outputs:
     Value: !Ref WorkerSecurityGroup
   S3GatewayEndpointId:
     Value: !Ref S3GatewayEndpoint
+  InterfaceEndpointAvailabilityZoneCount:
+    Description: Number of billed Availability Zones per interface endpoint.
+    Value: !If [InterfaceEndpointsInTwoZones, "2", "1"]
   InterfaceEndpointCount:
-    Description: Billed interface endpoints (each × AZ count × hours)
-    Value: !Join ["", [!If [ModelRegistry, "4", "3"], "+", !If [Streaming, "1", "0"], "+",
+    Description: Sum of interface endpoints before multiplying by the billed Availability Zone count.
+    Value: !Join ["", [!If [ModelRegistry, "5", "3"], "+", !If [Streaming, "1", "0"], "+",
                        !If [FeatureStore, "1", "0"], "+", !If [KmsSecrets, "2", "0"]]]

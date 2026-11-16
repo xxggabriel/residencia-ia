@@ -1,0 +1,309 @@
+"""CARA benchmark using the experiment protocol in the authors' source archive."""
+
+from __future__ import annotations
+
+import math
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+from continual_bench.datasets import retraining_benchmarks as data
+from continual_bench.retraining.cara_reference import (
+    fit_period,
+    fit_threshold,
+    oracle_schedule,
+    periodic_schedule,
+    strategy_cost,
+    strategy_scpe,
+    threshold_schedule,
+)
+from continual_bench.retraining.schedule import alpha_max_same_batch
+
+BATCHES, OFFLINE, GRID = 100, 25, 100
+REFERENCE = "ac2a600a3bbc5729087318087c9def96104c9023"
+RULES = ("cara", "cara_cumulative", "cara_periodic", "markov", "frozen", "oracle_staleness", "always_retrain")
+DRIFT_RULES = ("adwin", "ddm")
+DATASETS = ("covcon-d", "covcon-s", "circle-d", "circle-s", "gauss-d", "gauss-s", "electricity", "airlines",
+            "covertype")
+# Tables 2-4 of the paper: CARA-T, CARA-CT, CARA-P, Oracle (retrains/accuracy), NR, Markov.
+PAPER = {
+    "scpe": {"covcon-d": (17.72, 19.26, 16.3), "covcon-s": (15.58, 22.94, 104.79),
+             "circle-d": (45.61, 47.29, 84.96), "circle-s": (33.89, 45.15, 79.34),
+             "gauss-d": (8.63, 59.93, 135.95), "gauss-s": (66.62, 96.38, 202.09),
+             "electricity": (8.32, 40.32, 64.07), "airlines": (6.11, 5.48, 5.45),
+             "covertype": (26.39, 27.92, 38.37)},
+    "accuracy_oracle": {"covcon-d": 0.76, "covcon-s": 0.8, "circle-d": 0.97, "circle-s": 0.96,
+                        "gauss-d": 0.92, "gauss-s": 1.0, "electricity": 0.71, "airlines": 0.62,
+                        "covertype": 0.76},
+    "accuracy_cara_t": {"covcon-d": 0.7, "covcon-s": 0.79, "circle-d": 0.96, "circle-s": 0.93,
+                        "gauss-d": 0.9, "gauss-s": 0.99, "electricity": 0.68, "airlines": 0.6,
+                        "covertype": 0.66},
+    "retrains_oracle": {"covcon-d": 11.2, "covcon-s": 8.21, "circle-d": 3.89, "circle-s": 3.09,
+                        "gauss-d": 2.23, "gauss-s": 1.92, "electricity": 2.36, "airlines": 25.23,
+                        "covertype": 19.42},
+    "retrains_cara_t": {"covcon-d": 13.89, "covcon-s": 10.05, "circle-d": 5.67, "circle-s": 3.56,
+                        "gauss-d": 2.62, "gauss-s": 2.57, "electricity": 2.39, "airlines": 27.69,
+                        "covertype": 16.62},
+}
+
+
+class ForestLearner:
+    def __init__(self, seed: int):
+        self.seed = seed
+
+    def fit(self, index, x, y):
+        from sklearn.ensemble import RandomForestClassifier
+
+        return RandomForestClassifier(random_state=self.seed, n_jobs=1).fit(x, y)
+
+    def losses(self, state, x, y):
+        return (self.predict(state, x) != y).astype(np.float64)
+
+    @staticmethod
+    def predict(forest, x):
+        """``forest.predict`` without the per-tree validation overhead (identical output).
+
+        scikit-learn validates the input once per tree; with 100 trees on ~1000 rows that overhead is
+        ~10x the prediction, and the matrix needs about 5,000 forest evaluations per seed.
+        """
+        from scipy.sparse import issparse
+
+        if issparse(x):
+            return forest.predict(x)
+        rows = np.asarray(x, dtype=np.float32, order="C")
+        total = np.zeros((len(rows), len(forest.classes_)))
+        for tree in forest.estimators_:
+            counts = tree.tree_.predict(rows)
+            counts = counts[:, 0, :] if counts.ndim == 3 else counts
+            total += counts / counts.sum(axis=1, keepdims=True)
+        return forest.classes_[total.argmax(axis=1)]
+
+
+def batches_for(name, *, directory="~/.cache/continual-bench/datasets", electricity_path=None,
+                airlines_path=None, covertype_path=None, batches=BATCHES):
+    base, _, variant = name.partition("-")
+    if base in ("gauss", "circle", "covcon"):
+        stream = getattr(data, f"cara_{base}")(batches)
+        queries = data.cara_static_queries(base, batches) if variant == "s" else None
+        return stream, queries, 20.0
+    paths = {"electricity": electricity_path, "airlines": airlines_path, "covertype": covertype_path}
+    files = {"electricity": "elec.csv", "airlines": "airlines.csv",
+             "covertype": "covtype.libsvm.binary.scale.bz2"}
+    path = Path(paths[base] or Path(directory).expanduser() / files[base]).expanduser()
+    return data.cara_real_batches(base, path, batches), None, None if base == "airlines" else 20.0
+
+
+@dataclass
+class Phase:
+    stale: np.ndarray
+    accuracy: np.ndarray
+    train_errors: list[list[np.ndarray]]  # indexed by batch, then model
+
+
+def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_baselines=False):
+    """Train and score each candidate inside a single phase, using the reference's 90/10 split."""
+    from sklearn.metrics.pairwise import rbf_kernel
+    from sklearn.model_selection import train_test_split
+
+    splits = [train_test_split(x, y, test_size=0.1, random_state=0) for x, y in batches]
+    query_stream = [(q, labels) for _, q, _, labels in splits] if queries is None else queries
+    models = [learner.fit(i, x, y) for i, (x, _, y, _) in enumerate(splits)]
+    own_errors = [learner.losses(model, x, y).astype(bool)
+                  for model, (x, _, y, _) in zip(models, splits, strict=True)]
+
+    def score(t):
+        x, _, y, _ = splits[t]
+        query, labels = query_stream[t]
+        # The new-data kernel is shared by all models in this column. Average over training
+        # points only, then sum query costs in the same units as the reference.
+        weights = rbf_kernel(query, x, gamma=gamma).sum(axis=0) / len(y)
+        stale, accuracy, errors = [], [], []
+        for m, model in enumerate(models[:t + 1]):
+            accuracy.append(1.0 - learner.losses(model, query, labels).mean())
+            loss = own_errors[m] if m == t else learner.losses(model, x, y).astype(bool)
+            if drift_baselines:
+                errors.append(loss)
+            if m == t:
+                stale.append(0.0)
+                continue
+            old_x, old_loss = splits[m][0], own_errors[m]
+            old_cost = (rbf_kernel(query, old_x[old_loss], gamma=gamma).sum() / len(old_loss)
+                        if old_loss.any() else 0.0)
+            stale.append(float(weights[loss].sum() - old_cost))
+        return stale, accuracy, errors
+
+    size = len(splits)
+    stale, accuracy = (np.full((size, size), np.nan) for _ in range(2))
+    errors = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for t, (costs, scores, losses) in enumerate(pool.map(score, range(size))):
+            stale[:t + 1, t] = costs
+            accuracy[:t + 1, t] = scores
+            errors.append(losses)
+    return Phase(stale, accuracy, errors)
+
+
+def prequential_accuracy(accuracy, retrains):
+    """Match the authors' report, including clipping the last deployment to the final batch."""
+    batches = np.arange(len(accuracy))
+    deployed = np.zeros(len(accuracy), dtype=int)
+    for retrain in retrains:
+        deployed[min(retrain + 1, len(accuracy) - 1)] = retrain
+    return float(accuracy[np.maximum.accumulate(deployed), batches].mean())
+
+
+def drift_detectors(backend):
+    if backend == "skmultiflow":
+        from skmultiflow.drift_detection import ADWIN, DDM
+    else:
+        from river.drift import ADWIN
+        from river.drift.binary import DDM
+
+    return (("adwin", ADWIN()), ("ddm", DDM()))
+
+
+def drift_schedules(phase, backend):
+    schedules = {}
+    for name, detector in drift_detectors(backend):
+        model, retrains = 0, []
+        detected = False
+        for t, losses in enumerate(phase.train_errors):
+            if detected:
+                model = t - 1
+            detected = False
+            for loss in losses[model]:
+                if backend == "skmultiflow":
+                    detector.add_element(int(loss))
+                    detected |= detector.detected_change()
+                else:
+                    detector.update(int(loss))
+                    detected |= detector.drift_detected
+            if detected:
+                retrains.append(t)
+        schedules[name] = retrains
+    return schedules
+
+
+def evaluate_kappa(offline, online, kappa, seed, baseline_schedules=None):
+    tau = fit_threshold(offline.stale, kappa, cumulative=False, seed=seed)
+    tau_cum = fit_threshold(offline.stale, kappa, cumulative=True, seed=seed)
+    period, offset = fit_period(offline.stale, kappa)
+    stale = online.stale
+    schedules = {
+        "cara": threshold_schedule(stale, tau),
+        "cara_cumulative": threshold_schedule(stale, tau_cum, cumulative=True),
+        "cara_periodic": periodic_schedule(len(stale), period, offset),
+        "markov": threshold_schedule(stale, kappa),
+        "frozen": [0],
+        "oracle_staleness": oracle_schedule(stale, kappa),
+        "always_retrain": list(range(len(stale))),
+        **(baseline_schedules or {}),
+    }
+    optimum = strategy_cost(stale, schedules["oracle_staleness"], kappa)
+    report = {}
+    for rule, schedule in schedules.items():
+        cost = strategy_cost(stale, schedule, kappa)
+        # The reference backtracks Oracle in reverse order. If two deployments collide
+        # at the final batch after clipping, the assignment order affects accuracy.
+        accuracy_schedule = schedule[::-1] if rule == "oracle_staleness" else schedule
+        retrain_count = len(schedule) if rule in DRIFT_RULES else len(schedule) - 1
+        report[rule] = {
+            "strategy_cost": cost,
+            "strategy_scpe": strategy_scpe(cost, optimum),
+            "average_accuracy": prequential_accuracy(online.accuracy, accuracy_schedule),
+            "retrains": retrain_count,
+        }
+    return report
+
+
+def _mean(values):
+    available = [value for value in values if value is not None]
+    return float(np.mean(available)) if available else None
+
+
+def replicate(name, seeds=5, *, kappa_points=GRID, kappa_max=None, progress=None,
+              workers=1, drift_backend=None, **options):
+    """Evaluate the CARA variants against a retrospective phase-local Oracle."""
+    if seeds < 1 or kappa_points < 2 or workers < 1:
+        raise ValueError("CARA needs at least one seed and worker, and at least two kappa points")
+    if kappa_max is not None and (not math.isfinite(kappa_max) or kappa_max <= 0):
+        raise ValueError("kappa_max must be positive and finite")
+    if drift_backend not in (None, "skmultiflow", "river"):
+        raise ValueError("unknown CARA drift detector backend")
+    if drift_backend is not None:
+        drift_detectors(drift_backend)
+    emit = progress or (lambda event: None)
+    batches, queries, gamma = batches_for(name, **options)
+    offline_queries = None if queries is None else queries[:OFFLINE]
+    online_queries = None if queries is None else queries[OFFLINE:]
+    matrices = []
+    for seed in range(seeds):
+        learner = ForestLearner(seed)
+        offline = build_phase(batches[:OFFLINE], learner, gamma, offline_queries, workers=workers)
+        online = build_phase(batches[OFFLINE:], learner, gamma, online_queries, workers=workers,
+                             drift_baselines=drift_backend is not None)
+        matrices.append((offline, online))
+        emit({"event": "matrix", "dataset": name, "seed": seed})
+
+    # The authors choose the smallest offline boundary over seeds, rounded to the next
+    # integer. Solve the same boundary with a bracketed search instead of fsolve on a plateau.
+    top = kappa_max if kappa_max is not None else min(
+        math.floor(alpha_max_same_batch(phase.stale.T, 0, 1, len(phase.stale) - 1)) + 1
+        for phase, _ in matrices
+    )
+    kappas = np.linspace(0.0, top, kappa_points).tolist()
+    emit({"event": "grid", "dataset": name, "kappa_max": top, "points": kappa_points})
+    runs = []
+    for seed, (offline, online) in enumerate(matrices):
+        baselines = drift_schedules(online, drift_backend) if drift_backend else {}
+        runs.append([evaluate_kappa(offline, online, kappa, seed, baselines) for kappa in kappas])
+        emit({"event": "analysis", "dataset": name, "seed": seed})
+
+    curves = {
+        rule: {metric: [_mean(run[i][rule][metric] for run in runs) for i in range(len(kappas))]
+               for metric in runs[0][0][rule]}
+        for rule in (*RULES, *(DRIFT_RULES if drift_backend else ()))
+    }
+    summary = {
+        rule: {"strategy_scpe": _mean(metrics["strategy_scpe"][1:]),
+               "accuracy": _mean(metrics["average_accuracy"][1:]),
+               "retrains": _mean(metrics["retrains"][1:])}
+        for rule, metrics in curves.items()
+    }
+    return {"dataset": name, "seeds": seeds, "reference": REFERENCE, "kappa_max": top,
+            "summary": summary, "kappa": kappas, "curves": curves, "drift_backend": drift_backend,
+            "kappa_range": "offline-oracle" if kappa_max is None else "fixed",
+            "kernel_gamma": gamma if gamma is not None else "1/n_features",
+            "oracle_retrains": summary["oracle_staleness"]["retrains"]}
+
+
+def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fraction=0.25, **options):
+    """Illustrate a CARA-T schedule on a short prefix of the reference data stream."""
+    if not 2 <= offline <= batches - 2 or seeds < 1 or fraction < 0:
+        raise ValueError("invalid CARA showcase horizon, seeds or cost fraction")
+    stream, queries, gamma = batches_for(name, **options)
+    if batches > len(stream):
+        raise ValueError("showcase horizon exceeds the available batches")
+    accuracy, deployed, changes, kappas = [], [], [], []
+    for seed in range(seeds):
+        phase = build_phase(stream[:batches], ForestLearner(seed), gamma,
+                            None if queries is None else queries[:batches])
+        history, online = phase.stale[:offline, :offline], phase.stale[offline:, offline:]
+        kappa = fraction * alpha_max_same_batch(history.T, 0, 1, offline - 1)
+        tau = fit_threshold(history, kappa, cumulative=False, seed=seed)
+        retrains = threshold_schedule(online, tau)
+        models = np.zeros(len(online), dtype=int)
+        models[retrains] = retrains
+        models = np.maximum.accumulate(models)
+        accuracy.append(np.where(np.isnan(phase.accuracy), 0.0, phase.accuracy))
+        deployed.append(phase.accuracy[offline + models, np.arange(offline, batches)])
+        changes.append({offline + t for t in retrains[1:]})
+        kappas.append(kappa)
+    stack, scores = np.asarray(accuracy), np.asarray(deployed)
+    marked = [t for t in range(offline, batches) if sum(t in run for run in changes) * 2 >= seeds]
+    return {"dataset": name, "rule": "cara", "seeds": seeds, "batches": batches, "offline": offline,
+            "alpha": float(np.mean(kappas)), "accuracy_mean": stack.mean(axis=0).tolist(),
+            "accuracy_std": stack.std(axis=0).tolist(), "schedule_mean": scores.mean(axis=0).tolist(),
+            "schedule_std": scores.std(axis=0).tolist(), "retrain_batches": marked}

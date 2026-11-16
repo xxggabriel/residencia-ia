@@ -3,7 +3,13 @@
 import hashlib
 from itertools import accumulate
 
-from continual_bench.evaluation.artifacts import Figure, binary_figures, system_figures, write_artifacts
+from continual_bench.evaluation.artifacts import (
+    Figure,
+    binary_figures,
+    retraining_figures,
+    system_figures,
+    write_artifacts,
+)
 from continual_bench.evaluation.tracking import VERSION, metric_catalog
 from continual_bench.infrastructure.storage import atomic_write
 
@@ -53,6 +59,24 @@ def tracking_report(report, predictions=None):
                      "score_bins": report["contract"]["score_bins"], "costs": report["costs"]["settings"],
                      "upf_alphas": [row["alpha"] for row in sensitivity]},
     }
+    retraining = report.get("retraining")
+    if retraining:
+        for name, rule in retraining["rules"].items():
+            for key in ("cost", "retrains", "average_accuracy", "scpe", "strategy_cost"):
+                series[f"retraining/{key}_vs_alpha/{name}"] = [
+                    {"step": index, "value": row[key]} for index, row in enumerate(rule["curve"])
+                    if row[key] is not None]
+        first = retraining["setup"]["offline_batches"]
+        for name, values in retraining["cumulative_strategy_cost"].items():
+            series[f"retraining/cumulative_strategy_cost/{name}"] = [
+                {"step": first + index, "value": value} for index, value in enumerate(values)
+                if value is not None]
+        tracking["settings"]["retraining"] = {
+            "alphas": retraining["alphas"], "alpha_max": retraining["setup"]["alpha_max"],
+            "focus_alpha": retraining["setup"]["focus_alpha"], "timing": retraining["setup"]["timing"],
+            "offline_batches": first, "online_batches": retraining["setup"]["online_batches"],
+            "series_step": "alpha grid index (cost/retrains/accuracy/scpe) or online batch index",
+        }
     if predictions:
         tracking["settings"]["fading_factor"] = predictions["fading_factor"]
         tracking["prediction_archive"] = {"path": "predictions", "origin": predictions["origin"],
@@ -73,6 +97,8 @@ def write_zia_artifacts(directory, report, adapted):
     plot_tracking = {**tracking, "metrics": {k: v for k, v in tracking["metrics"].items() if v is not None}}
     figures = binary_figures({**adapted, "tracking": plot_tracking})
     figures.extend(system_figures(report["system_metrics"]))
+    if report.get("retraining"):
+        figures.extend(retraining_figures(report["retraining"]))
     classes = report["contract"]["input"]["source"]["classes"]
     for scope, field in (("prequential", "prequential_confusion"), ("holdout", "holdout_confusion")):
         matrix = report[field]
@@ -106,4 +132,5 @@ def write_zia_artifacts(directory, report, adapted):
         "system/samples": report["system_metrics"],
         "costs/accounting": {"learner": report["costs"], "evaluation": report["evaluation_aws_cost"]},
         "model/explanation": report["model_explanation"],
+        "retraining/analysis": report.get("retraining"),
     })
