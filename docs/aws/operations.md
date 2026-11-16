@@ -241,3 +241,33 @@ scripts/aws/teardown.sh --with-cicd       # também o pipeline
 
 A stack persistente (buckets, KMS, ECR), os log groups de jobs e aquisição e o Model Registry
 são preservados. Removê-los é uma decisão manual e irreversível, fora destes scripts.
+
+## Campanhas no SageMaker Studio
+
+A stack complementar `infra/cloudformation/studio.yaml` usa os ARNs dos workflows de
+dataset e benchmark da stack de runtime. Empacote-a com `aws cloudformation package` no
+bucket de artefatos e passe `DataBucket`, `KeyArn`, `CampaignWorkflowArn` e
+`DatasetWorkflowArn` no deploy. A aplicação MLflow do runtime precisa estar ativa para o
+tracking do Batch.
+
+```bash
+scripts/aws/start_studio_campaign.sh infra/examples/campaign-social-smoke.json
+# Ou solicite a preparação do snapshot antes da campanha
+scripts/aws/start_studio_campaign.sh infra/examples/campaign-social-smoke.json infra/examples/dataset-social-smoke.json
+```
+
+No Studio, em **Pipelines -> continual-bench-campaign**, abra a execução pelo ID da
+campanha. A etapa `PrepareDataset` reutiliza o workflow de dataset quando recebe uma
+solicitação. `RunBatchCampaign` acompanha o workflow de benchmark e publica seu ARN.
+`VerifyResults` verifica a conclusão e expõe o URI do resumo no S3. O mapa da campanha
+e os estados de cada job ficam no Step Functions e no Batch. Se houver cancelamento pelo
+Studio, o callback cancela o workflow associado e o reconciliador existente encerra os
+jobs da campanha. A etapa fica como `Failed`, com motivo `Cancelled from SageMaker Studio`,
+para impedir que o SageMaker inicie etapas dependentes após o cancelamento.
+
+Para abrir os experimentos, siga **Studio → Applications → MLflow →
+continual-bench-mlflow → Open MLflow → workspace default → Experiments**.
+A aba **Experiments** do menu principal do Studio consulta os recursos **MLflow
+Tracking Server**. Neste ambiente ela exibe `No tracking server`, pois os jobs
+publicam no **MLflow App** serverless. O app contém os experimentos e o histórico
+dos runs da matriz, dos jobs nativos e das campanhas Zia.
