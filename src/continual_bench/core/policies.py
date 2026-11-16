@@ -6,7 +6,7 @@ trigger to subclasses. `PolicyStrategy(kind, ...)` remains the factory entry poi
 """
 
 import math
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, get_args
 
 from .contracts import Decision, DecisionContext
 
@@ -18,6 +18,7 @@ PERMITTED_PARAMS = SCENARIO_PARAMS | {"monitor_window"}
 BATCH_POLICY_KINDS = ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle")
 ZiaPolicy = Literal["frozen", "online", "drift", "drift_adwin", "drift_ddm",
                     "incremental", "periodic", "cara", "cara_cumulative", "cara_periodic", "upf", "oracle"]
+ZIA_POLICIES = get_args(ZiaPolicy)
 
 
 class RetrainingPolicy:

@@ -45,7 +45,7 @@ Parameters:
     AllowedValues: [FARGATE, FARGATE_SPOT]
   BenchmarkVcpus:
     Type: String
-    Default: "2"
+    Default: "1"
   BenchmarkMemoryMiB:
     Type: Number
     Default: 2048
@@ -91,6 +91,10 @@ Parameters:
     Type: String
     Default: ""
   EnableModelRegistry:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  EnableMlflowTracking:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
@@ -175,6 +179,7 @@ Resources:
         ArtifactsBucketArn: {"Fn::ImportValue": !Sub "${Project}-ArtifactsBucketArn"}
         S3PrefixListId: !Ref S3PrefixListId
         EnableModelRegistry: !Ref EnableModelRegistry
+        EnableMlflowTracking: !Ref EnableMlflowTracking
         EnableStreaming: !Ref EnableStreaming
         EnableFeatureStore: !Ref EnableFeatureStore
       Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: network}]
@@ -216,6 +221,7 @@ Resources:
         AcquisitionComputeType: !Ref AcquisitionComputeType
         AcquisitionTimeoutMinutes: !Ref AcquisitionTimeoutMinutes
         EnableModelRegistry: !Ref EnableModelRegistry
+        EnableMlflowTracking: !Ref EnableMlflowTracking
       Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: execution}]
 
   Observability:

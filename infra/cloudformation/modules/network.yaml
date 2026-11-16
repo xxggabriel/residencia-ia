@@ -36,6 +36,10 @@ Parameters:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
+  EnableMlflowTracking:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
   EnableStreaming:
     Type: String
     Default: "false"
@@ -56,6 +60,8 @@ Conditions:
     - !Condition TwoZones
     - !Equals [!Ref InterfaceEndpointAzMode, all]
   ModelRegistry: !Equals [!Ref EnableModelRegistry, "true"]
+  MlflowTracking: !Equals [!Ref EnableMlflowTracking, "true"]
+  SageMakerApi: !Or [!Condition ModelRegistry, !Condition MlflowTracking]
   Streaming: !Equals [!Ref EnableStreaming, "true"]
   FeatureStore: !Equals [!Ref EnableFeatureStore, "true"]
   KmsSecrets: !Equals [!Ref EnableKmsAndSecretsEndpoints, "true"]
@@ -246,7 +252,7 @@ Resources:
     Metadata:
       com.aws.cloudformation.Context:
         why: Allow private workers to use the model registry and tracking APIs.
-    Condition: ModelRegistry
+    Condition: SageMakerApi
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.sagemaker.api"
@@ -276,7 +282,7 @@ Resources:
     Metadata:
       com.aws.cloudformation.Context:
         why: Allow private workers to call the MLflow data plane.
-    Condition: ModelRegistry
+    Condition: MlflowTracking
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub "aws.sagemaker.${AWS::Region}.mlflow"
@@ -373,5 +379,5 @@ Outputs:
     Value: !If [InterfaceEndpointsInTwoZones, "2", "1"]
   InterfaceEndpointCount:
     Description: Sum of interface endpoints before multiplying by the billed Availability Zone count.
-    Value: !Join ["", [!If [ModelRegistry, "5", "3"], "+", !If [Streaming, "1", "0"], "+",
-                       !If [FeatureStore, "1", "0"], "+", !If [KmsSecrets, "2", "0"]]]
+    Value: !Join ["", ["3+", !If [SageMakerApi, "1", "0"], "+", !If [MlflowTracking, "1", "0"], "+",
+                       !If [Streaming, "1", "0"], "+", !If [FeatureStore, "1", "0"], "+", !If [KmsSecrets, "2", "0"]]]

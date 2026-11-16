@@ -15,7 +15,9 @@ from continual_bench.application.cloud.fixtures import (
 )
 from continual_bench.application.cloud.snapshots import verify_snapshot
 from continual_bench.application.cloud.worker import EXIT_CONTRACT, EXIT_OK, EXIT_SNAPSHOT, run_unit
+from continual_bench.core.policies import ZIA_POLICIES
 from continual_bench.infrastructure.object_store import LocalObjectStore, get_json
+from continual_bench.orchestration.zia_jobs import Job
 
 QUEUE = {"queue_state": "ENABLED", "queue_status": "VALID", "max_vcpus": 8}
 
@@ -62,9 +64,12 @@ def test_plan_is_published_once_before_submission(campaign):
         "unit_uri",
         "job_definition",
         "max_attempts",
+        "run_timeout_seconds",
         "task_timeout_seconds",
         "labels",
     }
+    assert item["run_timeout_seconds"] == request.run_timeout_seconds
+    assert item["task_timeout_seconds"] == request.run_timeout_seconds + request.queue_timeout_seconds + 300
     assert planning.publish_plan(store, plan)["plan_uri"] == published["plan_uri"]
     changed = planning.build_plan(
         request.model_copy(update={"max_attempts": 3}),
@@ -75,27 +80,30 @@ def test_plan_is_published_once_before_submission(campaign):
         planning.publish_plan(store, changed)
 
 
-def test_zia_full_examples_plan_all_eighteen_independent_jobs(campaign):
+@pytest.mark.parametrize("scope", ["smoke", "full"])
+def test_zia_examples_plan_all_thirty_six_independent_jobs(campaign, scope):
     _, _, release, _, _ = campaign
     jobs = set()
     for dataset in ("fraud", "social", "ecommerce"):
         def request(filename):
-            path = Path("infra/examples") / f"{filename}-{dataset}-full.json"
+            path = Path("infra/examples") / f"{filename}-{dataset}-{scope}.json"
             return json.loads(path.read_text())["request"]
 
-        full = CampaignRequest.model_validate(request("campaign"))
+        campaign_request = CampaignRequest.model_validate(request("campaign"))
         prepare = DatasetRequest.model_validate(request("dataset"))
-        assert full.snapshot == prepare.snapshot() and full.snapshot.scope == "full"
-        plan = planning.build_plan(full, release, snapshot_manifest={
+        assert campaign_request.snapshot == prepare.snapshot() and campaign_request.snapshot.scope == scope
+        assert campaign_request.campaign_id == f"zia-{dataset}-{scope}-v3"
+        assert campaign_request.run_timeout_seconds == (3600 if scope == "smoke" else 172800)
+        plan = planning.build_plan(campaign_request, release, snapshot_manifest={
             "manifest_sha256": "a" * 64, "manifest_uri": "s3://bucket/snapshot.json",
             "prepared": {"sha256": "b" * 64},
         })
-        assert plan["concurrency"] == len(plan["units"]) == 6
-        assert {u["params"]["policy"] for u in plan["units"]} == {
-            "frozen", "online", "drift_adwin", "drift_ddm", "incremental", "periodic",
-        }
+        assert plan["concurrency"] == 2 and len(plan["units"]) == 12
+        assert tuple(u["params"]["policy"] for u in plan["units"]) == ZIA_POLICIES
+        for unit in plan["units"]:
+            assert Job(**unit["labels"], campaign="audit").policy == unit["params"]["policy"]
         jobs.update(u["job_name"] for u in plan["units"])
-    assert len(jobs) == 18
+    assert len(jobs) == 36
 
 
 def test_cost_aware_example_plans_cara_upf_and_oracle(campaign):

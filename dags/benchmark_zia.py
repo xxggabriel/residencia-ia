@@ -8,7 +8,8 @@ from airflow.sdk import Param, dag, task
 from bench_jobs import consolidate, request_json
 from bench_readiness import require_dependencies
 
-POLICIES = ("frozen", "periodic", "drift", "incremental")
+from continual_bench.core.policies import ZIA_POLICIES
+
 WAIT_SECONDS = 2 * 24 * 3600 + 600
 
 
@@ -27,7 +28,7 @@ def build(dataset):
         def plan(params=None):
             require_dependencies()
             return [{"dataset": dataset, "scope": params["scope"], "policy": policy,
-                     "campaign": params["campaign"]} for policy in POLICIES]
+                     "campaign": params["campaign"]} for policy in ZIA_POLICIES]
 
         @task(max_active_tis_per_dagrun=3, execution_timeout=timedelta(seconds=WAIT_SECONDS + 60))
         def evaluate(config):
