@@ -295,6 +295,44 @@ continual-bench-mlflow → Open MLflow → default → Experiments**. Use
 matrizes. As tabelas `runs` e `metrics` do Athena também permitem consultar os
 resultados do benchmark.
 
+No [catálogo do SageMaker Unified Studio](https://dzd-6vrgrvxbeefk2v.sagemaker.us-east-1.on.aws/projects/dtpvnbwwrsq6xz/search?searchText=Continual%20Bench),
+abra os ativos **Continual Bench - Social (full)**, **Continual Bench - Fraud (full)**
+ou **Continual Bench - E-commerce (full)**. O formulário `SnapshotMetadata` registra
+a revisão da fonte, o URI e a versão do Parquet, o manifesto e os hashes SHA-256.
+A seção **Avaliações no MLflow** agrupa por campanha os links para os runs que
+usaram esses snapshots completos. Nos runs correspondentes, `cb-catalog-asset-url`
+aponta de volta para o ativo, e `cb-catalog-snapshot-sha256` identifica o manifesto.
+
+#### Publicação automática no catálogo
+
+O EventBridge envia os eventos `_SUCCESS.json` de Social, Fraud e E-commerce e os
+`final.json` das campanhas Batch para a fila FIFO da stack `continual-bench-studio-catalog`.
+A função valida o manifesto e a versão do Parquet no S3. Uma nova identidade de
+snapshot (dataset, revisão da fonte, versão da preparação e escopo) gera um ativo
+distinto, mantendo acessíveis os snapshots anteriores. A função reaproveita os
+ativos já cadastrados. Ao encontrar uma avaliação concluída e ativa no MLflow
+que corresponde ao snapshot, publica uma revisão dos metadados e grava o vínculo
+inverso no run.
+Até 20 avaliações recentes ficam no README do ativo. Para localizar todas as
+avaliações de um snapshot no MLflow, filtre pela tag `cb-catalog-asset-id`.
+
+Para implantar, habilite a notificação EventBridge no bucket de dados com
+`infra/cloudformation/persistent.yaml` e execute o comando abaixo no ambiente
+em que o tipo `ContinualBenchTabularSnapshot` e seu formulário já existem.
+O script inclui a função como colaboradora no projeto do catálogo.
+
+```bash
+scripts/aws/deploy_studio_catalog.sh <domain-id> <project-id>
+```
+
+Os outputs `DeliveryFailureQueueUrl` e `ProcessingFailureQueueUrl` identificam as
+filas de falhas. Depois de corrigir a causa, republique a mensagem original na
+`PublicationQueueUrl` com o grupo FIFO `catalog`, ou faça redrive a partir da fila
+de processamento. A automação confere novamente a identidade e os vínculos ao
+receber o mesmo evento. As avaliações nativas e de matriz continuam nos
+experimentos existentes do MLflow. O vínculo automático usa o `final.json` das
+campanhas Zia, que registra a identidade e os hashes do snapshot e o ID do run.
+
 ### Executar o pipeline nativo
 
 O pipeline `continual-bench-native` tem três tipos nativos de etapa. `ProfileSnapshot`

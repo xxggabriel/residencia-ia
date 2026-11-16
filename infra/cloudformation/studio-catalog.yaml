@@ -1,0 +1,267 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Publish immutable Continual Bench snapshots and finished evaluations in SageMaker Unified Studio.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+Parameters:
+  Project:
+    Type: String
+    Default: continual-bench
+    AllowedPattern: '^[a-z][a-z0-9-]{2,24}$'
+  DataBucket:
+    Type: String
+  ArtifactsBucket:
+    Type: String
+  KeyArn:
+    Type: String
+  CodeKey:
+    Type: String
+  CatalogDomainId:
+    Type: String
+  CatalogProjectId:
+    Type: String
+  CatalogPortalUrl:
+    Type: String
+  MlflowAppArn:
+    Type: String
+  MlflowUiUrl:
+    Type: String
+
+Resources:
+  Failures:
+    Type: AWS::SQS::Queue
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Retain events for replay after EventBridge delivery failures.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  ProcessingFailures:
+    Type: AWS::SQS::Queue
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Retain messages rejected by the catalog publisher for redrive.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  PendingPublications:
+    Type: AWS::SQS::Queue
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Deliver each snapshot and evaluation event to the publisher with retry.
+        must: Use one FIFO message group to serialize catalog mutations.
+    Properties:
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      VisibilityTimeout: 540
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ProcessingFailures.Arn
+        maxReceiveCount: 5
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Authenticate metadata operations independently of jobs and training.
+        must: Grant read-only access to benchmark data and use this role as a contributor only in the configured project.
+    Properties:
+      Path: /catalog/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PublishSnapshotCatalog
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${DataBucket}/datasets/social/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${DataBucket}/datasets/fraud/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${DataBucket}/datasets/ecommerce/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${DataBucket}/campaigns/*/runs/*/final.json'
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref KeyArn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 's3.${AWS::Region}.${AWS::URLSuffix}'
+              - Effect: Allow
+                Action:
+                  - datazone:Search
+                  - datazone:GetAsset
+                  - datazone:GetAssetType
+                  - datazone:GetListing
+                  - datazone:CreateAsset
+                  - datazone:CreateAssetRevision
+                  - datazone:CreateListingChangeSet
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Effect: Allow
+                Action: [sagemaker:CallMlflowAppApi, sagemaker-mlflow:GetRun, sagemaker-mlflow:LogBatch]
+                Resource: !Ref MlflowAppArn
+              - Effect: Allow
+                Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+                Resource: !GetAtt PendingPublications.Arn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt PublisherLogs.Arn
+
+  PublisherLogs:
+    Type: AWS::Logs::LogGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Preserve operational evidence of metadata publications and failures.
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-publisher'
+      RetentionInDays: 30
+
+  Publisher:
+    Type: AWS::Lambda::Function
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Read committed S3 records and reconcile catalog and MLflow links.
+        must: Serialize writes to avoid concurrent revisions of the same catalog asset.
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-publisher'
+      Role: !GetAtt FunctionRole.Arn
+      Runtime: python3.12
+      Handler: catalog.handler
+      Tags: [{Key: Project, Value: !Ref Project}]
+      MemorySize: 256
+      Timeout: 90
+      Code: {S3Bucket: !Ref ArtifactsBucket, S3Key: !Ref CodeKey}
+      Environment:
+        Variables:
+          DATA_BUCKET: !Ref DataBucket
+          DOMAIN_ID: !Ref CatalogDomainId
+          PROJECT_ID: !Ref CatalogProjectId
+          PORTAL_URL: !Ref CatalogPortalUrl
+          MLFLOW_ARN: !Ref MlflowAppArn
+          MLFLOW_UI: !Ref MlflowUiUrl
+
+  PublicationConsumer:
+    Type: AWS::Lambda::EventSourceMapping
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Process one event at a time from the FIFO publication queue.
+    Properties:
+      FunctionName: !Ref Publisher
+      EventSourceArn: !GetAtt PendingPublications.Arn
+      BatchSize: 1
+
+  PublishEvent:
+    Type: AWS::Events::Rule
+    DependsOn: [DeliveryPolicy, PublicationPolicy]
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Observe committed manifest writes in the benchmark bucket.
+        must: Target only the catalog queue and never start benchmark jobs.
+    Properties:
+      Name: !Sub '${AWS::StackName}-objects'
+      State: ENABLED
+      EventPattern:
+        source: [aws.s3]
+        detail-type: [Object Created]
+        account: [!Ref AWS::AccountId]
+        detail:
+          bucket:
+            name: [!Ref DataBucket]
+          object:
+            key:
+              - wildcard: 'datasets/*/manifests/*/_SUCCESS.json'
+              - wildcard: 'campaigns/*/runs/*/final.json'
+      Targets:
+        - Id: CatalogPublisher
+          Arn: !GetAtt PendingPublications.Arn
+          SqsParameters: {MessageGroupId: catalog}
+          DeadLetterConfig: {Arn: !GetAtt Failures.Arn}
+
+  DeliveryPolicy:
+    Type: AWS::SQS::QueueInlinePolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Require TLS and limit event delivery to the catalog rule.
+    Properties:
+      Queue: !Ref Failures
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Deny
+            Principal: "*"
+            Action: sqs:*
+            Resource: !GetAtt Failures.Arn
+            Condition:
+              Bool: {aws:SecureTransport: "false"}
+          - Effect: Allow
+            Principal: {Service: events.amazonaws.com}
+            Action: sqs:SendMessage
+            Resource: !GetAtt Failures.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-objects'
+
+  PublicationPolicy:
+    Type: AWS::SQS::QueueInlinePolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Require TLS and limit event delivery to the catalog rule.
+    Properties:
+      Queue: !Ref PendingPublications
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Deny
+            Principal: "*"
+            Action: sqs:*
+            Resource: !GetAtt PendingPublications.Arn
+            Condition:
+              Bool: {aws:SecureTransport: "false"}
+          - Effect: Allow
+            Principal: {Service: events.amazonaws.com}
+            Action: sqs:SendMessage
+            Resource: !GetAtt PendingPublications.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-objects'
+
+  ProcessingFailurePolicy:
+    Type: AWS::SQS::QueueInlinePolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Require TLS for failed processing events.
+    Properties:
+      Queue: !Ref ProcessingFailures
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Deny
+            Principal: "*"
+            Action: sqs:*
+            Resource: !GetAtt ProcessingFailures.Arn
+            Condition:
+              Bool: {aws:SecureTransport: "false"}
+
+
+Outputs:
+  PublisherName: {Value: !Ref Publisher}
+  PublisherRoleArn: {Value: !GetAtt FunctionRole.Arn}
+  RuleName: {Value: !Ref PublishEvent}
+  DeliveryFailureQueueUrl: {Value: !Ref Failures}
+  ProcessingFailureQueueUrl: {Value: !Ref ProcessingFailures}
+  PublicationQueueUrl: {Value: !Ref PendingPublications}
