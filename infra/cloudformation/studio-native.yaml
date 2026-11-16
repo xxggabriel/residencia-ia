@@ -49,10 +49,14 @@ Resources:
                 Action: s3:GetObject
                 Resource:
                   - !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/datasets/social/*/prepared/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/datasets/fraud/*/prepared/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/datasets/ecommerce/*/prepared/*"
                   - !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/sagemaker/native/*"
               - Effect: Allow
                 Action: [s3:PutObject, s3:AbortMultipartUpload]
-                Resource: !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/sagemaker/native/*"
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/sagemaker/native/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/mlflow/*"
               - Effect: Allow
                 Action: [kms:Decrypt, kms:GenerateDataKey, kms:DescribeKey, kms:CreateGrant]
                 Resource: !Ref KeyArn

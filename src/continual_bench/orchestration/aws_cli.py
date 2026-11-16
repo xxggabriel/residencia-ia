@@ -120,10 +120,13 @@ def run_unit(args):
     registry = None
     tracker = None
     if os.environ.get("BENCH_MODEL_REGISTRY", "false") == "true" and not args.local_root:
-        from continual_bench.infrastructure.aws.experiments import SageMakerExperimentsTracker
         from continual_bench.infrastructure.aws.model_registry import SageMakerModelRegistry
 
         registry = sagemaker_registrar(SageMakerModelRegistry(), os.environ["BENCH_INFERENCE_IMAGE"])
+    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    if tracking_uri and not args.local_root:
+        from continual_bench.infrastructure.aws.mlflow_tracking import SageMakerMlflowTracker
+
         model_names = {
             "social": "multinomial-logistic",
             "fraud": "fraud-booster",
@@ -134,7 +137,7 @@ def run_unit(args):
             dataset = unit.params.get("dataset", "social")
             policy = unit.params.get("policy", "frozen")
             scope = unit.params.get("scope", "smoke")
-            return SageMakerExperimentsTracker(
+            return SageMakerMlflowTracker(
                 project=os.environ.get("BENCH_STACK", "continual-bench"),
                 dataset=dataset,
                 policy=policy,
@@ -145,12 +148,15 @@ def run_unit(args):
                 job_name=unit.job_name,
                 git_sha=os.environ.get("BENCH_GIT_REVISION", unit.contract["release"]["git_sha"]),
                 stack=os.environ.get("BENCH_STACK", "continual-bench"),
-                mlflow_tracking_uri=os.environ.get("MLFLOW_TRACKING_URI"),
+                tracking_uri=tracking_uri,
             )
 
     workdir = Path(args.workdir or tempfile.mkdtemp(prefix="cb-run-"))
     workdir.mkdir(parents=True, exist_ok=True)
-    code = execute(store, args.unit_uri, workdir, registry=registry, tracker=tracker, emit=emit)
+    env = os.environ.copy()
+    if args.local_root:
+        env.pop("MLFLOW_TRACKING_URI", None)
+    code = execute(store, args.unit_uri, workdir, env=env, registry=registry, tracker=tracker, emit=emit)
     sys.exit(code)
 
 

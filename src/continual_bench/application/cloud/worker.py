@@ -44,6 +44,10 @@ class ContractError(ValueError):
     pass
 
 
+class TrackingPublicationError(RuntimeError):
+    pass
+
+
 class JsonFormatter(logging.Formatter):
     def __init__(self, context):
         super().__init__()
@@ -190,7 +194,7 @@ def verify_native_loader(directory: Path, report: dict, data_root: Path, rows: i
     }
 
 
-def execute_zia(unit: RunUnit, store, workdir: Path, log, *, tracker=None) -> dict:
+def execute_zia(unit: RunUnit, store, workdir: Path, log, *, stop_requested=None) -> dict:
     import yaml
 
     from continual_bench.config import TrackingConfig
@@ -220,7 +224,7 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log, *, tracker=None) -> di
         params["policy"],
         output,
         settings,
-        tracker=tracker,
+        stop_requested=stop_requested,
     )
     evidence = prediction_manifest(output, report)
     adapted = tracking_report(report, evidence)
@@ -232,6 +236,67 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log, *, tracker=None) -> di
         "data_root": data_root,
         "documents": run_documents,
         "snapshot": manifest,
+    }
+
+
+def restore_benchmark_evidence(store, final, directory, *, report_path="report.json"):
+    """Materialize immutable benchmark evidence after an interrupted publication."""
+    prefix = final["published"]["prefix"] + "/"
+    files = 0
+    for key in store.list(prefix):
+        relative = key.removeprefix(prefix)
+        if relative == "status.json" or relative.startswith("partial/"):
+            continue
+        store.download(key, directory / relative)
+        files += 1
+    if files != final["published"]["files"]:
+        raise TrackingPublicationError("The archived attempt has missing benchmark artifacts")
+    if sha256_path(directory / report_path) != final["report_sha256"]:
+        raise TrackingPublicationError("The archived report differs from the publication manifest")
+    return directory
+
+
+def complete_zia_tracking(tracker, store, final, output, report, adapted):
+    if hasattr(tracker, "bind_attempt"):
+        tracker.bind_attempt(final["attempt"]["attempt_key"])
+    result = tracker.publish_run_report(
+        report,
+        adapted=adapted,
+        output_dir=output,
+        store=store,
+        outputs_uri=final["outputs_uri"],
+        model_package_arn=final["model"]["model_package_arn"],
+    ) or {}
+    run_id = result.get("mlflow_run_id")
+    artifacts = result.get("artifacts_uploaded") or {}
+    children = result.get("child_runs") or []
+    expected = [fit["fit_id"] for fit in report.get("training_history", [])]
+    if (
+        result.get("published") is not True
+        or not run_id
+        or artifacts.get("files", 0) < final["published"]["files"]
+        or not expected
+        or [child["fit_id"] for child in children] != expected
+    ):
+        errors = result.get("errors") or []
+        details = ": " + " | ".join(errors[:3]) if errors else ""
+        raise TrackingPublicationError(f"Incomplete MLflow publication{details}")
+    links = final["links"]
+    links.update(
+        mlflow_run_id=run_id,
+        mlflow_experiment_id=result.get("mlflow_experiment_id"),
+        mlflow_artifact_uri=result.get("artifact_uri"),
+    )
+    links.update({key: result[key] for key in (
+        "registered_model", "registered_model_version",
+        "registered_family_model", "registered_family_version",
+    ) if result.get(key)})
+    final["tracking"] = {
+        "required": True,
+        "complete": True,
+        "mlflow_run_id": run_id,
+        "child_runs": children,
+        "artifacts": artifacts,
     }
 
 
@@ -251,7 +316,9 @@ def execute_matrix_case(store, unit: RunUnit, workdir: Path, *, progress=None) -
             store, unit.labels["dataset"], unit.params["source_sha256"], workdir / "source", config, evaluator
         )
     report = _execute_case(config, output, str(workdir / "cache"), None, source=source, progress=progress)
-    return {"report": report, "headline": _headline(report), "output": output}
+    directory = output / evaluator / report["run_key"]
+    report_path = directory / ("epoch-report.json" if evaluator == "epochs" else "report.json")
+    return {"report": report, "headline": _headline(report), "output": output, "report_path": report_path}
 
 
 def flush_partial_state(
@@ -353,8 +420,15 @@ def run_unit(
     prefix = layout.attempt_prefix(unit.campaign_id, unit.run_id, attempt_key)
     active_tracker = None
     matrix_tracker = None
+    pending_key = f"{layout.run_prefix(unit.campaign_id, unit.run_id)}/pending-publication.json"
+    tracking_uri = env.get("MLFLOW_TRACKING_URI")
+    tracking_required = bool(tracking_uri or (unit.kind == "zia" and tracker is not None))
+    publication_required = tracking_required or (unit.kind == "zia" and registry is not None)
+    resuming = False
 
     def on_terminate(_signal):
+        if unit.kind == "zia":
+            return  # Zia stops at the next training step before flushing its last recorded metrics.
         flush_partial_state(store, workdir / "run", prefix, status_key, status, started=started, clock=clock)
         if matrix_tracker is not None:
             matrix_tracker.finish("KILLED")
@@ -367,19 +441,28 @@ def run_unit(
                 raise ContractError("job runs an image other than the campaign release")
             if unit.kind == "zia":
                 active_tracker = tracker(unit) if callable(tracker) else tracker
-                outcome = execute_zia(unit, store, workdir, log, tracker=active_tracker)
+                if tracking_required and not hasattr(active_tracker, "publish_run_report"):
+                    raise TrackingPublicationError("MLflow is configured but the worker has no publisher")
+                resuming = publication_required and store.head(pending_key) is not None
+                if not resuming:
+                    outcome = execute_zia(
+                        unit, store, workdir, log, stop_requested=lambda: sigterm_handler.received
+                    )
+                    if sigterm_handler.received:
+                        raise InterruptedError("Zia evaluation stopped after SIGTERM")
             else:
-                if env.get("MLFLOW_TRACKING_URI"):
+                resuming = tracking_required and store.head(pending_key) is not None
+                if tracking_required and not resuming:
                     from continual_bench.infrastructure.aws.matrix_tracking import MatrixMlflowRun
 
-                    matrix_tracker = MatrixMlflowRun(
-                        unit, attempt_key, job_id, env["MLFLOW_TRACKING_URI"], log
-                    )
+                    matrix_tracker = MatrixMlflowRun(unit, attempt_key, job_id, tracking_uri, log)
                     matrix_tracker.start()
                     active_tracker = matrix_tracker
                     outcome = execute_matrix_case(store, unit, workdir, progress=matrix_tracker.metrics)
-                else:
+                elif not resuming:
                     outcome = execute_matrix_case(store, unit, workdir)
+                if sigterm_handler.received:
+                    raise InterruptedError("Matrix evaluation stopped after SIGTERM")
         evaluation_seconds = time.monotonic() - started
         outputs_uri = store.uri(prefix)
         final = {
@@ -396,7 +479,7 @@ def run_unit(
             "outputs_uri": outputs_uri,
             "evaluation_seconds": evaluation_seconds,
         }
-        if unit.kind == "zia":
+        if unit.kind == "zia" and not resuming:
             report, output = outcome["report"], outcome["output"]
             metadata, links, documents = outcome["documents"](report, outcome["adapted"], outputs_uri)
             for name, value in documents.items():
@@ -406,41 +489,15 @@ def run_unit(
             (output / "model" / "model.tar.gz").write_bytes(model_tarball(output, metadata))
             rows = zia_rows(_base(unit, attempt_key), report, store.uri(final_key), outputs_uri)
             (output / ROWS_FILE).write_text(json.dumps(rows, sort_keys=True, allow_nan=False))
+            if hasattr(active_tracker, "prepare_artifacts"):
+                active_tracker.prepare_artifacts(report, output)
             published = publish_directory(store, output, prefix)
-            model_package = None
-            if registry is not None:
-                model_package = registry(
-                    unit, report, metadata, f"{outputs_uri}/model/model.tar.gz", outcome["snapshot"]
-                )
-            if active_tracker is not None and hasattr(active_tracker, "publish_run_report"):
-                try:
-                    mlflow_info = active_tracker.publish_run_report(
-                        report,
-                        adapted=outcome["adapted"],
-                        output_dir=output,
-                        store=store,
-                        outputs_uri=outputs_uri,
-                        model_package_arn=(model_package or {}).get("model_package_arn"),
-                    )
-                    if isinstance(mlflow_info, dict) and mlflow_info.get("mlflow_run_id"):
-                        links["mlflow_run_id"] = mlflow_info["mlflow_run_id"]
-                        links["mlflow_experiment_id"] = mlflow_info.get("mlflow_experiment_id")
-                        links["mlflow_artifact_uri"] = mlflow_info.get("artifact_uri")
-                        if mlflow_info.get("registered_model"):
-                            links["registered_model"] = mlflow_info["registered_model"]
-                            links["registered_model_version"] = mlflow_info.get("registered_model_version")
-                            links["registered_family_model"] = mlflow_info.get("registered_family_model")
-                            links["registered_family_version"] = mlflow_info.get("registered_family_version")
-                except Exception:
-                    log.warning(
-                        "mlflow report publication failed; run evidence in S3 is unaffected",
-                        exc_info=True,
-                    )
             final.update(
                 {
                     "snapshot": unit.contract["snapshot"],
                     "report_uri": f"{outputs_uri}/report.json",
                     "report_sha256": sha256_path(output / "report.json"),
+                    "training_history_uri": f"{outputs_uri}/training-history.json",
                     "predictions_manifest_uri": f"{outputs_uri}/predictions-manifest.json",
                     "artifacts_index_uri": f"{outputs_uri}/artifacts/data/index.json",
                     "model": {
@@ -448,7 +505,7 @@ def run_unit(
                         "native_uri": f"{outputs_uri}/{metadata['native_path']}",
                         "archive_uri": f"{outputs_uri}/model/model.tar.gz",
                         "loader_check": loader,
-                        "model_package_arn": (model_package or {}).get("model_package_arn"),
+                        "model_package_arn": None,
                     },
                     "metrics": {
                         k: report["metrics"].get(k)
@@ -476,11 +533,13 @@ def run_unit(
                         for k in (
                             "accuracy",
                             "balanced_accuracy",
+                            "f1_macro",
                             "roc_auc",
                             "pr_auc",
                             "macro_roc_auc",
                             "macro_pr_auc",
                             "log_loss",
+                            "brier",
                             "n",
                         )
                     },
@@ -489,18 +548,30 @@ def run_unit(
                     "published": published,
                 }
             )
-        else:
+            adapted = outcome["adapted"]
+            final["tracking"] = {"required": tracking_required, "complete": False}
+            if publication_required:
+                try:
+                    put_json(store, pending_key, final, if_absent=True)
+                except ObjectExists:
+                    resuming = True
+        elif unit.kind != "zia" and not resuming:
             from continual_bench.models import default_model
 
+            report = outcome["report"]
+            report_path = outcome["report_path"]
+            directory = report_path.parent
+            relative_report = report_path.relative_to(outcome["output"]).as_posix()
+            relative_evidence = directory.relative_to(outcome["output"]).as_posix()
             dimensions = ("model", "mode", "detector", "seed")
             coordinates = {k: unit.labels[k] for k in dimensions if k in unit.labels}
             if "model" not in coordinates and unit.params["evaluator"] == "epochs":
-                coordinates["model"] = default_model(outcome["report"]["contract"]["source"]["task"])
+                coordinates["model"] = default_model(report["contract"]["source"]["task"])
             coordinates["seed"] = int(coordinates["seed"])
             rows = matrix_rows(
                 {**_base(unit, attempt_key), **coordinates},
                 outcome["headline"],
-                outcome["report"],
+                report,
                 store.uri(final_key),
                 outputs_uri,
             )
@@ -511,15 +582,80 @@ def run_unit(
                     "metrics": outcome["headline"],
                     "matrix_coordinates": coordinates,
                     "published": published,
-                    "run_key": outcome["report"].get("run_key"),
+                    "run_key": report["run_key"],
+                    "report_uri": f"{outputs_uri}/{relative_report}",
+                    "report_sha256": sha256_path(report_path),
+                    "report_path": relative_report,
+                    "artifacts_index_uri": f"{outputs_uri}/{relative_evidence}/artifacts/data/index.json",
+                    "tracking": {"required": tracking_required, "complete": False},
                 }
             )
-            if matrix_tracker is not None and matrix_tracker.mlflow_run_id:
-                matrix_tracker.metrics(matrix_tracker.step, outcome["headline"], prefix="final")
-                final["links"] = {
-                    "mlflow_run_id": matrix_tracker.mlflow_run_id,
-                    "mlflow_experiment_id": matrix_tracker.experiment_id,
-                }
+            if "training_history" in report:
+                final["training_history_uri"] = f"{outputs_uri}/{relative_evidence}/training-history.json"
+            if tracking_required:
+                try:
+                    put_json(store, pending_key, final, if_absent=True)
+                except ObjectExists:
+                    resuming = True
+        if unit.kind == "zia" and publication_required:
+            if resuming:
+                from continual_bench.evaluation.zia_artifacts import tracking_report
+                from continual_bench.evaluation.zia_predictions import prediction_manifest
+
+                final = get_json(store, pending_key)
+                if final["contract_sha256"] != unit.contract_sha256:
+                    raise ContractError("Archived attempt does not match the unit contract")
+                output = restore_benchmark_evidence(store, final, workdir / "publication")
+                report = json.loads((output / "report.json").read_text())
+                metadata = json.loads((output / "model-metadata.json").read_text())
+                adapted = tracking_report(report, prediction_manifest(output, report))
+                evaluation_seconds = final["evaluation_seconds"]
+            if registry is not None:
+                model_package = registry(
+                    unit, report, metadata, final["model"]["archive_uri"],
+                    {"snapshot_id": final["snapshot"]["id"]},
+                )
+                if not model_package or not model_package.get("model_package_arn"):
+                    raise RuntimeError("SageMaker registry returned no model package ARN")
+                final["model"]["model_package_arn"] = model_package["model_package_arn"]
+            if tracking_required:
+                complete_zia_tracking(active_tracker, store, final, output, report, adapted)
+        elif unit.kind != "zia" and tracking_required:
+            from continual_bench.infrastructure.aws.matrix_tracking import MatrixMlflowRun
+
+            if resuming:
+                final = get_json(store, pending_key)
+                if final["contract_sha256"] != unit.contract_sha256:
+                    raise ContractError("Archived attempt does not match the unit contract")
+                archived = final["attempt"]
+                if matrix_tracker is not None and archived["attempt_key"] != attempt_key:
+                    matrix_tracker.finish("KILLED")
+                root = restore_benchmark_evidence(
+                    store, final, workdir / "publication", report_path=final["report_path"]
+                )
+                report_path = root / final["report_path"]
+                directory = report_path.parent
+                report = json.loads(report_path.read_text())
+                evaluation_seconds = final["evaluation_seconds"]
+                matrix_tracker = MatrixMlflowRun(
+                    unit, archived["attempt_key"], archived["job_id"], tracking_uri, log
+                )
+                active_tracker = matrix_tracker
+            try:
+                receipt = matrix_tracker.publish_training_evidence(
+                    report, directory, store=store, headline=final["metrics"],
+                    outputs_uri=final["outputs_uri"],
+                )
+                matrix_tracker.finish_publication()
+            except Exception as error:
+                raise TrackingPublicationError(f"Matrix MLflow publication failed: {error}") from error
+            final["tracking"] = {"required": True, "complete": True, **receipt}
+            final["links"] = {
+                "mlflow_run_id": receipt["mlflow_run_id"],
+                "mlflow_experiment_id": receipt["mlflow_experiment_id"],
+                "mlflow_artifact_uri": receipt["artifact_uri"],
+            }
+
         try:
             put_json(store, final_key, final, if_absent=True)
             state = "SUCCEEDED"
@@ -542,9 +678,15 @@ def run_unit(
                 "analytics": analytics,
             },
         )
+        holdout_m = final.get("holdout", {})
+        stream_m = final.get("metrics", {})
+        holdout_ap = holdout_m.get("pr_auc")
+        if holdout_ap is None:
+            holdout_ap = holdout_m.get("macro_pr_auc")
+        stream_ap = stream_m.get("pr_auc")
+        if stream_ap is None:
+            stream_ap = stream_m.get("macro_pr_auc")
         if emit:
-            holdout_m = final.get("holdout", {})
-            stream_m = final.get("metrics", {})
             emit(
                 {
                     "RunSucceeded": 1,
@@ -552,10 +694,10 @@ def run_unit(
                     "PublishedBytes": final["published"]["bytes"],
                     "HoldoutAccuracy": holdout_m.get("accuracy"),
                     "HoldoutBalancedAccuracy": holdout_m.get("balanced_accuracy"),
-                    "HoldoutPRAUC": holdout_m.get("pr_auc") or holdout_m.get("macro_pr_auc"),
+                    "HoldoutPRAUC": holdout_ap,
                     "HoldoutMacroF1": holdout_m.get("f1_macro"),
                     "StreamBalancedAccuracy": stream_m.get("balanced_accuracy"),
-                    "StreamPRAUC": stream_m.get("pr_auc") or stream_m.get("macro_pr_auc"),
+                    "StreamPRAUC": stream_ap,
                     "StreamMacroF1": stream_m.get("f1_macro"),
                 },
                 {
@@ -566,8 +708,6 @@ def run_unit(
                 context,
                 units={"EvaluationSeconds": "Seconds", "PublishedBytes": "Bytes"},
             )
-        holdout_m = final.get("holdout", {})
-        stream_m = final.get("metrics", {})
         log.info(
             "run published",
             extra={
@@ -579,16 +719,14 @@ def run_unit(
                     "scope": unit.labels.get("scope"),
                     "holdout_accuracy": holdout_m.get("accuracy"),
                     "holdout_balanced_accuracy": holdout_m.get("balanced_accuracy"),
-                    "holdout_pr_auc": holdout_m.get("pr_auc") or holdout_m.get("macro_pr_auc"),
+                    "holdout_pr_auc": holdout_ap,
                     "holdout_macro_f1": holdout_m.get("f1_macro"),
                     "stream_balanced_accuracy": stream_m.get("balanced_accuracy"),
-                    "stream_pr_auc": stream_m.get("pr_auc") or stream_m.get("macro_pr_auc"),
+                    "stream_pr_auc": stream_ap,
                     "stream_macro_f1": stream_m.get("f1_macro"),
                 }
             },
         )
-        if matrix_tracker is not None:
-            matrix_tracker.finish()
         return EXIT_OK
     except Exception as error:
         code = (
@@ -605,17 +743,30 @@ def run_unit(
             "exit_code": code,
         }
         log.error("run failed", exc_info=True, extra={"fields": {"exit_code": code}})
-        if active_tracker is not None and hasattr(active_tracker, "mark_failed"):
+        if (
+            active_tracker is not None and hasattr(active_tracker, "mark_failed")
+            and not sigterm_handler.received
+        ):
             try:
                 active_tracker.mark_failed(str(error)[:1000])
             except Exception:
                 pass
+        if unit.kind == "zia" and sigterm_handler.received:
+            flush_partial_state(
+                store, workdir / "run", prefix, status_key, status, started=started, clock=clock
+            )
+            return code
+        failure_state = "FAILED"
+        if publication_required and store.head(pending_key):
+            failure_state = (
+                "TRACKING_FAILED" if isinstance(error, TrackingPublicationError) else "PUBLICATION_FAILED"
+            )
         put_json(
             store,
             status_key,
             {
                 **status,
-                "state": "FAILED",
+                "state": failure_state,
                 "finished_at": clock(),
                 "wall_seconds": time.monotonic() - started,
                 "diagnostic": diagnostic,

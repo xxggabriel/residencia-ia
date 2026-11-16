@@ -1,3 +1,6 @@
+import json
+from hashlib import sha256
+
 import pytest
 
 pytest.importorskip("matplotlib")
@@ -129,3 +132,31 @@ def test_non_arn_uri_is_rejected_so_http_servers_keep_the_rest_path(monkeypatch)
     )
     with pytest.raises(sm.LibraryPublishError):
         sm.publish_with_library(tracker, {})
+
+
+def test_mlflow_pyfunc_registry_loads_the_final_native_checkpoint(tracker, output_dir):
+    import numpy as np
+    import pandas as pd
+
+    from continual_bench.models.zia import MultinomialLogistic
+
+    learner = MultinomialLogistic(2)
+    learner.weights = np.array([[1.0, -1.0], [0.0, 0.0]])
+    payload, _ = learner.payload()
+    relative = "models/final.npy"
+    (output_dir / "models").mkdir()
+    (output_dir / relative).write_bytes(payload)
+    (output_dir / "model-metadata.json").write_text(json.dumps({
+        "model": learner.name, "dataset": "social", "classes": ["a", "b"],
+        "features": ["feature"], "payload": "final.npy", "state_sha256": sha256(payload).hexdigest(),
+    }))
+    evidence = report()
+    evidence["model_versions"][-1]["file"] = relative
+    evidence["model_versions"][-1]["sha256"] = sha256(payload).hexdigest()
+    result = sm.publish_with_library(tracker, evidence, output_dir=output_dir)
+    client = MlflowClient()
+    final = client.get_model_version_by_alias(result["registered_model"], "final")
+    assert final.tags["artifact_format"] == "mlflow_pyfunc"
+    model = mlflow.pyfunc.load_model(final.source)
+    features = pd.DataFrame({"feature": [1.0, -1.0]})
+    np.testing.assert_allclose(model.predict(features), learner.predict(features.to_numpy()))

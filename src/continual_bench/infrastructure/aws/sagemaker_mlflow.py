@@ -18,19 +18,24 @@ tracker in ``mlflow_tracking.py``, which is also the fallback when this publishe
 
 from __future__ import annotations
 
+import json
 import re
-import time
+import shutil
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
+
+from continual_bench.infrastructure.zia_model_bundle import (
+    PYFUNC_LOADER,
+    pyfunc_code_paths,
+    pyfunc_dependencies,
+)
+from continual_bench.infrastructure.zia_training_tracking import publish_sdk_training_rounds
 
 from .mlflow_tracking import _SKIP_PREFIXES, _SKIP_SUFFIXES, report_metric_items, report_params
 
-BATCH_METRICS = 1000
+BATCH_METRICS = 500
 BATCH_PARAMS = 100
-MODEL_REQUIREMENTS = ["numpy", "pandas", "scipy", "xgboost"]
-PYFUNC_LOADER = "continual_bench.models.zia"
-
-
 class LibraryPublishError(RuntimeError):
     """The library path failed; the caller falls back to the REST tracker."""
 
@@ -127,7 +132,9 @@ def _ensure_registered_model(client, name: str, description: str, tags: dict[str
             raise
 
 
-def _register_checkpoints(client, tracker, report, run, model_package_arn) -> dict[str, Any]:
+def _register_checkpoints(
+    client, tracker, report, run, model_package_arn, pyfunc_logged=False
+) -> dict[str, Any]:
     """One registry version per checkpoint (idempotent per run) plus the cross-policy family version."""
     policy_name, family_name = registry_names(tracker, report)
     contract = report.get("contract") or {}
@@ -177,14 +184,16 @@ def _register_checkpoints(client, tracker, report, run, model_package_arn) -> di
             "model_sha256": str(version.get("sha256", "")),
             "dataset_version": sha,
             "is_final": str(final).lower(),
+            "artifact_format": "mlflow_pyfunc" if final and pyfunc_logged else "zia_native_checkpoint",
             "prequential_accuracy": str(metrics.get("accuracy", "")),
             "holdout_accuracy": str(holdout.get("accuracy", "")),
         }
         if final and model_package_arn:
             tags["sagemaker_model_package_arn"] = str(model_package_arn)
+        relative = "model_pyfunc" if final and pyfunc_logged else version.get("file") or "model/model.tar.gz"
         created_version = client.create_model_version(
             policy_name,
-            f"{base}/{str(version.get('file') or 'model/model.tar.gz').lstrip('/')}",
+            f"{base}/{relative}",
             run_id=run.info.run_id,
             tags={k: v for k, v in tags.items() if v != ""},
             description=(
@@ -208,13 +217,15 @@ def _register_checkpoints(client, tracker, report, run, model_package_arn) -> di
         family_version = str(existing[0].version)
     else:
         last = versions[-1]
+        final_path = "model_pyfunc" if pyfunc_logged else last.get("file") or "model/model.tar.gz"
         fam = client.create_model_version(
             family_name,
-            f"{base}/{str(last.get('file') or 'model/model.tar.gz').lstrip('/')}",
+            f"{base}/{final_path}",
             run_id=run.info.run_id,
             tags={
                 "policy": common["policy"],
                 "ordinal": "final",
+                "artifact_format": "mlflow_pyfunc" if pyfunc_logged else "zia_native_checkpoint",
                 "dataset_version": sha,
                 "model_sha256": str(last.get("sha256", "")),
                 "prequential_accuracy": str(metrics.get("accuracy", "")),
@@ -237,17 +248,28 @@ def _log_pyfunc_model(mlflow, output_dir: Path | None, report) -> bool:
     """Log the final model as an MLflow pyfunc model so it is loadable with ``mlflow.pyfunc.load_model``."""
     if output_dir is None:
         return False
-    versions = report.get("model_versions") or []
-    relative = str((versions[-1].get("file") if versions else None) or "model/model.tar.gz")
-    path = Path(output_dir) / relative
-    if not path.is_file():
+    output_dir = Path(output_dir)
+    metadata_path = output_dir / "model-metadata.json"
+    if not metadata_path.is_file():
         return False
-    mlflow.pyfunc.log_model(
-        artifact_path="model_pyfunc",
-        loader_module=PYFUNC_LOADER,
-        data_path=str(path),
-        pip_requirements=MODEL_REQUIREMENTS,
-    )
+    metadata = json.loads(metadata_path.read_text())
+    relative = report["model_versions"][-1]["file"]
+    with TemporaryDirectory(prefix="zia-pyfunc-") as temporary:
+        staging = Path(temporary)
+        data = staging / "state"
+        data.mkdir()
+        shutil.copy2(metadata_path, data / "model-metadata.json")
+        shutil.copy2(output_dir / relative, data / metadata["payload"])
+        path = staging / "model"
+        mlflow.pyfunc.save_model(
+            path=str(path),
+            loader_module=PYFUNC_LOADER,
+            data_path=str(data),
+            code_paths=pyfunc_code_paths(staging),
+            pip_requirements=pyfunc_dependencies(metadata["model"]),
+        )
+        mlflow.pyfunc.load_model(str(path))
+        mlflow.log_artifacts(str(path), artifact_path="model_pyfunc")
     return True
 
 
@@ -255,6 +277,7 @@ def publish_with_library(
     tracker,
     report: dict[str, Any],
     *,
+    adapted: dict[str, Any] | None = None,
     output_dir: Path | None = None,
     outputs_uri: str | None = None,
     model_package_arn: str | None = None,
@@ -265,7 +288,7 @@ def publish_with_library(
     if not library_available():
         raise LibraryPublishError("mlflow and sagemaker-mlflow are not installed")
     import mlflow
-    from mlflow.entities import Metric
+    from mlflow.entities import Metric, RunTag
     from mlflow.tracking import MlflowClient
 
     from continual_bench.infrastructure.mlflow_figures import log_report_figures
@@ -277,9 +300,11 @@ def publish_with_library(
         tags = {t["key"]: t["value"] for t in tracker.mlflow_tags}
         found = client.search_runs(
             [experiment.experiment_id],
-            f"tags.zia_run_key = '{tracker.run_id}'",
+            f"tags.zia_run_key = '{tracker.run_key}'",
             max_results=2,
         )
+        if len(found) > 1:
+            raise ValueError(f"duplicate MLflow parent runs for {tracker.run_key}")
         resumed = found[0].info.run_id if found else None
         summary, holdout = report.get("metrics") or {}, report.get("holdout") or {}
         note = (
@@ -294,11 +319,14 @@ def publish_with_library(
             experiment_id=None if resumed else experiment.experiment_id,
         ) as run:
             run_id = run.info.run_id
-            mlflow.set_tags({**tags, "mlflow.note.content": note, "tracking_library": "sagemaker-mlflow"})
+            mlflow.set_tags({
+                **tags, "mlflow.note.content": note, "tracking_library": "sagemaker-mlflow",
+                "benchmark_complete": "false", "zia_artifacts_status": "publishing",
+            })
             params = report_params(tracker, report)
             for chunk in _chunks(list(params.items()), BATCH_PARAMS):
                 mlflow.log_params(dict(chunk))
-            points = report_metric_items(report, int(time.time() * 1000))
+            points = report_metric_items(report, 0, adapted)
             for chunk in _chunks(points, BATCH_METRICS):
                 client.log_batch(
                     run_id,
@@ -306,18 +334,18 @@ def publish_with_library(
                     synchronous=True,
                 )
             dataset_logged = _log_dataset(mlflow, tracker, report, outputs_uri)
+            child_runs = publish_sdk_training_rounds(client, experiment.experiment_id, run_id, report)
             figures = log_report_figures(report)  # mlflow.log_figure on this active run
             uploaded = _log_artifacts(mlflow, output_dir)
-            pyfunc_logged = False
-            try:
-                pyfunc_logged = _log_pyfunc_model(mlflow, output_dir, report)
-            except Exception as error:  # the registry checkpoints below are the source of truth
-                tracker._record_error("log_pyfunc_model", error)
+            if output_dir is not None and not uploaded:
+                raise ValueError("MLflow run has no uploaded artifacts")
+            pyfunc_logged = _log_pyfunc_model(mlflow, output_dir, report)
             run = client.get_run(run_id)  # artifact_uri is final once the run exists
-            registry = _register_checkpoints(client, tracker, report, run, model_package_arn)
+            registry = _register_checkpoints(client, tracker, report, run, model_package_arn, pyfunc_logged)
             tags_done = {
                 "benchmark_complete": "true",
                 "zia_artifacts_status": "complete",
+                "cb-training-rounds": str(len(child_runs)),
                 "figures_logged": str(len(figures)),
                 "registered_model": registry["registered_model"],
             }
@@ -325,7 +353,8 @@ def publish_with_library(
                 tags_done["registered_model_version"] = registry["registered_model_version"]
             if outputs_uri:
                 tags_done["cb-outputs-uri"] = str(outputs_uri)[:500]
-            mlflow.set_tags(tags_done)
+        tags_done = [RunTag(key, value) for key, value in tags_done.items()]
+        client.log_batch(run_id, tags=tags_done, synchronous=True)
     except Exception as error:
         raise LibraryPublishError(f"{type(error).__name__}: {error}") from error
     tracker.experiment_id = str(experiment.experiment_id)
@@ -341,6 +370,7 @@ def publish_with_library(
         "figures": figures,
         "dataset_logged": dataset_logged,
         "pyfunc_model_logged": pyfunc_logged,
+        "child_runs": child_runs,
         **registry,
     }
 

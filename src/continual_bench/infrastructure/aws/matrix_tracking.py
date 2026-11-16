@@ -3,10 +3,11 @@
 import math
 import time
 
-from .mlflow_tracking import SageMakerMlflowTracker, sanitize_mlflow_name
+from .benchmark_tracking import BenchmarkMlflowRun
+from .mlflow_tracking import sanitize_mlflow_name
 
 
-class MatrixMlflowRun(SageMakerMlflowTracker):
+class MatrixMlflowRun(BenchmarkMlflowRun):
     def __init__(self, unit, attempt_key, job_id, tracking_uri, log):
         labels = unit.labels
         super().__init__(
@@ -39,7 +40,7 @@ class MatrixMlflowRun(SageMakerMlflowTracker):
 
     @property
     def mlflow_tags(self):
-        tags = {tag["key"]: tag["value"] for tag in super().mlflow_tags if tag["key"] != "zia_run_key"}
+        tags = {tag["key"]: tag["value"] for tag in super().mlflow_tags}
         tags.update({
             "cb-unit-id": self.unit.run_id,
             "cb-batch-job-id": self.job_id,

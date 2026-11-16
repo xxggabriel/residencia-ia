@@ -70,3 +70,31 @@ def test_optional_preparation_reports_a_nonempty_result_without_submitting_work(
     assert sm.send_pipeline_execution_step_success.call_args.kwargs["OutputParameters"] == [
         {"Name": "DatasetResult", "Value": "NotRequested"}
     ]
+
+
+def test_verify_requires_the_tracking_receipt_and_reads_the_campaign_artifact_index(monkeypatch):
+    sfn, sm, s3 = clients(monkeypatch)
+    sm.describe_pipeline_execution.return_value = {"PipelineExecutionStatus": "Executing"}
+    message = {
+        **MESSAGE,
+        "arguments": {"stage": "verify", "summary_uri": "s3://data/campaigns/zia-test/summary.json"},
+    }
+    summary = {
+        "complete": True,
+        "tracking": {"required": True, "complete": False},
+        "artifacts_index_uri": "s3://data/campaigns/zia-test/artifacts/data/index.json",
+    }
+    def fetch(**args):
+        doc = summary if args["Key"].endswith("/summary.json") else {"figures": [{"plot": "test.svg"}]}
+        return {"Body": BytesIO(json.dumps(doc).encode())}
+
+    s3.get_object.side_effect = fetch
+    assert CALLBACK["tick"](message, sfn, sm, s3) == {"done": True}
+    sm.send_pipeline_execution_step_success.assert_not_called()
+    assert sm.send_pipeline_execution_step_failure.call_args.kwargs["FailureReason"].startswith(
+        "Incomplete MLflow publication"
+    )
+    summary["tracking"]["complete"] = True
+    assert CALLBACK["tick"](message, sfn, sm, s3) == {"done": True}
+    assert s3.get_object.call_args.kwargs["Key"] == "campaigns/zia-test/artifacts/data/index.json"
+    sm.send_pipeline_execution_step_success.assert_called_once()

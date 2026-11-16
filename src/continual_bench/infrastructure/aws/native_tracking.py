@@ -1,17 +1,18 @@
 """Track a SageMaker Processing job, Training job, or individual AMT trial."""
 
-import logging
 import os
 from contextlib import contextmanager
 
-from .mlflow_tracking import SageMakerMlflowTracker, sanitize_mlflow_name
+from .benchmark_tracking import BenchmarkMlflowRun
+from .mlflow_tracking import sanitize_mlflow_name
 
 
-class NativeJobRun(SageMakerMlflowTracker):
-    def __init__(self, uri, execution, stage, job_name):
+class NativeJobRun(BenchmarkMlflowRun):
+    def __init__(self, uri, execution, stage, job_name, *, dataset="social", scope=None, model_name=None):
         super().__init__(
-            tracking_uri=uri, dataset="social", policy=stage, model_name="multinomial-logistic",
-            scope=os.environ.get("BENCH_NATIVE_SCOPE", "smoke"),
+            tracking_uri=uri, dataset=dataset, policy=stage,
+            model_name=model_name or ("multinomial-logistic" if dataset == "social" else "xgboost"),
+            scope=scope or os.environ.get("BENCH_NATIVE_SCOPE", "smoke"),
             campaign_id=execution, run_id=job_name, job_name=job_name, timeout_seconds=3,
         )
         self.execution = execution
@@ -27,7 +28,7 @@ class NativeJobRun(SageMakerMlflowTracker):
 
     @property
     def mlflow_tags(self):
-        tags = [tag for tag in super().mlflow_tags if tag["key"] != "zia_run_key"]
+        tags = super().mlflow_tags
         tags.extend([
             {"key": "cb-sagemaker-job", "value": self.job_name},
             {"key": "cb-pipeline-execution-id", "value": self.execution},
@@ -39,18 +40,19 @@ class NativeJobRun(SageMakerMlflowTracker):
 
 
 @contextmanager
-def track_native_job(tracking_uri, execution, stage, job_name):
-    tracker = NativeJobRun(tracking_uri, execution, stage, job_name)
+def track_native_job(
+    tracking_uri, execution, stage, job_name, *, dataset="social", scope=None, model_name=None,
+):
+    tracker = NativeJobRun(tracking_uri, execution, stage, job_name, dataset=dataset, scope=scope,
+                           model_name=model_name)
     if not tracker.start()["run_id"]:
         raise RuntimeError("SageMaker MLflow did not create a run for this job")
     try:
         yield tracker
+        tracker.finish_publication()
     except BaseException as error:
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
             tracker.finish("KILLED")
         else:
             tracker.mark_failed(str(error))
         raise
-    else:
-        if not tracker.finish():
-            logging.getLogger(__name__).warning("Could not finalize MLflow run %s", tracker.mlflow_run_id)
