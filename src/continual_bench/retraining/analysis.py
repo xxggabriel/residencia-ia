@@ -16,6 +16,7 @@ from .rules import UPF, CaraCT, CaraP, CaraT, Frozen, Markov, Oracle, StalenessO
 from .schedule import (
     alpha_for_retrain_bound,
     alpha_max,
+    alpha_max_same_batch,
     lipschitz_bound,
     optimal_schedule,
     optimal_schedule_same_batch,
@@ -109,7 +110,11 @@ def analyze(
 ) -> dict:
     """``same_batch`` switches the CARA rules and the strategy Oracle to the paper's accounting."""
     first, last = matrix.offline, matrix.batches - 1
-    top = alpha_max(matrix.err, matrix.initial, first, last)
+    if matrix.paper_timing:
+        top = alpha_max_same_batch(matrix.err.T, matrix.initial, first, last,
+                                   retrain_errors=matrix.err.diagonal())
+    else:
+        top = alpha_max(matrix.err, matrix.initial, first, last)
     oracle_top = top
     if alpha_top is not None:  # fixed range from the paper (UPF Table 4) instead of the oracle's own
         top = float(alpha_top)
@@ -121,16 +126,17 @@ def analyze(
     for name in rules:
         for alpha in all_alphas:
             sims[name, alpha] = simulate(
-                make_rule(name, delta=delta, samples=samples, seed=seed, same_batch=same_batch),
+                make_rule(name, delta=delta, samples=samples, seed=seed,
+                          same_batch=same_batch or matrix.paper_timing),
                 matrix, alpha, same_batch=same_batch and name != "upf" and name != "oracle")
     staleness = matrix.staleness_matrix()
     stale_cost = np.nan_to_num(staleness.T, nan=0.0)
     strategy_oracle = {}
     for alpha in all_alphas:
-        if same_batch:
-            schedule, value = optimal_schedule_same_batch(stale_cost.T, matrix.initial, first, last, alpha)
+        if same_batch or matrix.paper_timing:
+            _, value = optimal_schedule_same_batch(stale_cost.T, matrix.initial, first, last, alpha)
         else:
-            schedule, value = optimal_schedule(stale_cost, matrix.initial, first, last, alpha)
+            _, value = optimal_schedule(stale_cost, matrix.initial, first, last, alpha)
         strategy_oracle[alpha] = value
     lipschitz = lipschitz_bound(matrix.err, first)
     horizon = matrix.horizon  # T of Proposition 3.1
@@ -146,7 +152,8 @@ def analyze(
             "alpha": alpha, "cost": _num(result.cost), "retrains": len(result.retrains),
             "retrain_points": result.retrains, "average_accuracy": _num(result.average_accuracy),
             "scpe": _num(scpe(result.cost, oracle.cost)),
-            "strategy_cost": _num(strategy), "oracle_strategy_cost": _num(strategy_oracle[alpha]),
+            "strategy_cost": _num(strategy),
+            "oracle_strategy_cost": _num(strategy_oracle[alpha]),
             "strategy_scpe": _num(strategy_scpe(strategy, strategy_oracle[alpha])),
             "parameters": json_parameters(result.parameters),
         }
@@ -196,11 +203,12 @@ def analyze(
     return {
         "setup": {
             "batches": matrix.batches, "offline_batches": matrix.offline, "online_batches": matrix.horizon,
-            "decision_points": matrix.horizon - 1,
+            "decision_points": matrix.horizon if matrix.paper_timing else matrix.horizon - 1,
             "oracle_alpha_max": _num(oracle_top), "initial_model": matrix.initial, "alpha_max": _num(top),
             "focus_alpha": focus, "lipschitz_L": _num(lipschitz), "delta": delta, "samples": samples,
-            "timing": ("CARA accounting: a retrain at t serves t with staleness 0" if same_batch
-                       else "retrain after batch t serves t+1 onward (test-then-train)"),
+            "timing": ("UPF decides before batch t; a retrain serves its held-out test split"
+                       if matrix.paper_timing else "CARA accounting: a retrain at t serves t with staleness 0"
+                       if same_batch else "retrain after batch t serves t+1 onward (test-then-train)"),
             "bound_alphas": {f"r<={r}": _num(alpha_for_retrain_bound(r, lipschitz, horizon))
                              for r in range(3)},
             "retrain_upper_bound": {str(a): _num(retrain_upper_bound(a, lipschitz, horizon))

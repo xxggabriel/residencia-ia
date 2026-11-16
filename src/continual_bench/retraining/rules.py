@@ -1,7 +1,8 @@
 """Retraining decision rules: CARA-T/-CT/-P (Mahadevan & Mathioudakis 2024), UPF (Regol et al. 2025)
 and the Oracle. A rule sees a :class:`MatrixView` only, so it can never read an unobserved entry.
 
-Decisions are taken after batch ``t`` is observed; a retrain takes effect from batch ``t + 1``.
+The operational replay takes decisions after batch ``t`` for batch ``t + 1``. In the UPF paper
+replay the decision for batch ``t`` is taken with history through ``t - 1``.
 ``alpha`` is the retraining cost relative to the cost of one fully misclassified batch (UPF), which is
 CARA's ``kappa`` expressed per query.
 """
@@ -223,10 +224,15 @@ class Oracle(Rule):
         self.objective, self.schedule, self.cost, self.same_batch = objective, [], 0.0, same_batch
 
     def fit_future(self, matrix, alpha):
-        if self.same_batch:
+        if self.same_batch or (matrix.paper_timing and self.objective == "staleness"):
             self.schedule, self.cost = optimal_schedule_same_batch(
                 np.nan_to_num(matrix.staleness_matrix(), nan=0.0), matrix.initial, matrix.offline,
                 matrix.batches - 1, alpha)
+            return
+        if self.objective == "error" and matrix.paper_timing:
+            self.schedule, self.cost = optimal_schedule_same_batch(
+                matrix.err.T, matrix.initial, matrix.offline, matrix.batches - 1, alpha,
+                retrain_errors=matrix.err.diagonal())
             return
         if self.objective == "error":
             cost = matrix.err
@@ -246,9 +252,8 @@ class UPF(Rule):
     """Uncertainty-Performance Forecaster: Monte-Carlo quantile test between retraining now and keeping.
 
     Features ``[i, j, j - i, z_shift]`` feed a linear ElasticNetCV mean; the entries are modelled as
-    Beta with a constant variance (the regression residual). Each Monte-Carlo realisation of the whole
-    future error matrix is solved by DP for both branches, and the ``delta``-quantiles of the branch
-    costs are compared (``delta = 0.5`` is the deterministic PF ablation).
+    Beta with a constant residual variance. For each future state, the comparison of cost quantiles
+    chooses one continuation shared by all Monte Carlo samples (paper equations 16–22).
     """
 
     name = "upf"
@@ -259,6 +264,7 @@ class UPF(Rule):
         self.delta, self.samples, self.seed = delta, samples, seed
         self.alpha = 0.0
         self.horizon = 0
+        self.paper_timing = False
         self.forecasts: list[dict] = []
         self.last_fit: dict = {}
 
@@ -270,6 +276,7 @@ class UPF(Rule):
 
     def bind(self, matrix: PerformanceMatrix):
         self.horizon = matrix.batches
+        self.paper_timing = matrix.paper_timing
 
     @staticmethod
     def _features(i, j, shift):
@@ -289,21 +296,22 @@ class UPF(Rule):
 
     def decide(self, t, deployed, view):
         size = self.horizon
-        future = size - 1 - t  # batches t+1 .. B-1
+        first = t if self.paper_timing else t + 1
+        future = size - first
         if future < 1:
             return False
         model, std = self._regressor(view)
-        shift = view.shift(t)
-        # u indexes a model trained at m = t + u (u = 0 is "retrain now"), k indexes batch j = t + k + 1.
+        shift = view.shift(view.upto)
+        # u indexes the candidate model (0 is "retrain now"), k the served batch.
         u_index, k_index = np.triu_indices(future)
-        trained, served = t + u_index, t + k_index + 1
+        trained, served = t + u_index, first + k_index
         features = np.column_stack([trained, served, served - trained, np.full(len(trained), shift)])
         mean_new = model.predict(features)
         old_features = np.column_stack([
-            np.full(future, deployed), t + 1 + np.arange(future), t + 1 + np.arange(future) - deployed,
+            np.full(future, deployed), first + np.arange(future), first + np.arange(future) - deployed,
             np.full(future, shift)])
         mean_old = model.predict(old_features)
-        rng = np.random.default_rng([self.seed, t])
+        rng = np.random.default_rng([self.seed, view.upto])
         a, b = self._beta(mean_new, std)
         new = np.zeros((self.samples, future, future))
         new[:, u_index, k_index] = rng.beta(a, b, size=(self.samples, len(a)))
@@ -320,23 +328,15 @@ class UPF(Rule):
 
     def _branch_costs(self, new: np.ndarray, old: np.ndarray):
         samples, future, _ = new.shape
-        zeros = np.zeros((samples, future, 1))
-        # cumulative[:, u, c] = sum over k < c of the sampled error of model u
-        cumulative = np.concatenate([zeros, np.cumsum(new, axis=2)], axis=2)
-        best = np.zeros((samples, future))
-        for u in range(future - 1, -1, -1):
-            stay = cumulative[:, u, future]
-            if u + 1 < future:
-                move = cumulative[:, u, u + 1:future] + self.alpha + best[:, u + 1:future]
-                stay = np.minimum(stay, move.min(axis=1))
-            best[:, u] = stay
-        retrain = self.alpha + best[:, 0]
-        old_cumulative = np.concatenate([np.zeros((samples, 1)), np.cumsum(old, axis=1)], axis=1)
-        keep = old_cumulative[:, future]
-        if future > 1:
-            move = old_cumulative[:, 1:future] + self.alpha + best[:, 1:future]
-            keep = np.minimum(keep, move.min(axis=1))
-        return retrain, keep
+        # Column 0 keeps the current model. Column u+1 keeps candidate u.
+        continuation = np.zeros((samples, future + 1))
+        for k in range(future - 1, -1, -1):
+            retrain = self.alpha + new[:, k, k] + continuation[:, k + 1]
+            errors = np.column_stack((old[:, k], new[:, :k, k]))
+            keep = errors + continuation[:, :k + 1]
+            choose_retrain = np.quantile(retrain, self.delta) < np.quantile(keep, self.delta, axis=0)
+            continuation[:, :k + 1] = np.where(choose_retrain, retrain[:, None], keep)
+        return retrain, keep[:, 0]
 
     def parameters(self):
         return {"delta": self.delta, "samples": self.samples, "alpha": self.alpha}

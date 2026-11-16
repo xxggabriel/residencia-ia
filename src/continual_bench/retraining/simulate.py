@@ -44,13 +44,15 @@ def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float, same_batch: bo
     """Replay ``rule``. By default a retrain decided after batch ``j`` serves ``j + 1`` onward.
 
     ``same_batch=True`` is CARA's accounting: the decision for batch ``j`` is taken from its queries and the
-    retrained model serves ``j`` itself (staleness 0, cost ``alpha``). The model of ``j`` has no measured
-    error on ``j``, so ``errors`` keeps the previous model's error there (pessimistic) and the error-based
-    ``cost`` is not meaningful; use :meth:`SimResult.strategy_cost`. Not available to the UPF rule.
+    retrained model serves ``j`` itself (staleness 0, cost ``alpha``). Without a held-out diagonal,
+    ``errors`` keeps the previous model's error there; use :meth:`SimResult.strategy_cost`.
+
+    A paper matrix has a held-out diagonal. UPF decides with the history through ``j - 1``
+    and the selected model serves the held-out split of ``j``.
     """
     import time
 
-    if same_batch and isinstance(rule, UPF):
+    if same_batch and isinstance(rule, UPF) and not matrix.paper_timing:
         raise ValueError("UPF forecasts the next batches; it has no same-batch accounting")
 
     started = time.perf_counter()
@@ -64,6 +66,18 @@ def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float, same_batch: bo
     deployed, models = matrix.initial, set(range(matrix.offline))
     retrains, served, errors, timings = [], [], [], []
     for j in range(matrix.offline, matrix.batches):
+        if matrix.paper_timing:
+            # UPF commits before seeing j. Query-based CARA baselines can observe its queries.
+            upto = j - 1 if isinstance(rule, UPF) else j
+            began = time.perf_counter()
+            if rule.decide(j, deployed, matrix.view(upto, models)):
+                retrains.append(j)
+                models.add(j)
+                deployed = j
+            timings.append(time.perf_counter() - began)
+            served.append(deployed)
+            errors.append(float(matrix.err[deployed, j]))
+            continue
         if same_batch:
             errors.append(float(matrix.err[deployed, j]))
             began = time.perf_counter()
@@ -85,4 +99,5 @@ def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float, same_batch: bo
             deployed = j
         timings.append(time.perf_counter() - began)
     return SimResult(rule.name, float(alpha), retrains, served, errors, rule.parameters(),
-                     list(getattr(rule, "forecasts", [])), offline_seconds, timings, same_batch)
+                     list(getattr(rule, "forecasts", [])), offline_seconds, timings,
+                     same_batch or matrix.paper_timing)

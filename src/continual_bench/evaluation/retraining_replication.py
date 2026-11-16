@@ -7,6 +7,8 @@ UPF Table 4; UPF with delta = 0.95. ADWIN/KSWIN/FHDDM baselines are not reproduc
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from continual_bench.datasets import retraining_benchmarks as data
@@ -33,7 +35,7 @@ _ARRAYS: dict = {}
 class XGBoostLearner:
     """XGBoost with the library defaults (eta 0.3, depth 6, 100 rounds, threshold 0.5); 0-1 loss.
 
-    The native API is used because the scikit-learn wrapper needs scikit-learn, which is not a dependency.
+    Use the native API to preserve the learner settings of the original benchmark.
     """
 
     def __init__(self, seed: int):
@@ -50,7 +52,8 @@ class XGBoostLearner:
         return ((state.predict(xgboost.DMatrix(x)) >= 0.5).astype(np.int64) != y).astype(np.float64)
 
 
-def trial_batches(name: str, trial: int, electricity_path=None, size=None, directory=DEFAULT_CACHE):
+def trial_batches(name: str, trial: int, electricity_path=None, size=None, directory=DEFAULT_CACHE, *,
+                  airlines_path=None):
     length = OFFLINE + ONLINE
     rng = np.random.default_rng(10_000 + trial)
     if name == "gauss":
@@ -62,11 +65,10 @@ def trial_batches(name: str, trial: int, electricity_path=None, size=None, direc
         start = int(rng.integers(0, len(every) - length + 1))
         pool = every[start:start + length]
     elif name == "airlines":
-        from pathlib import Path
-
-        if name not in _ARRAYS:
-            _ARRAYS[name] = data.airlines_arrays(Path(directory).expanduser() / "airlines.arff")
-        x, y = _ARRAYS[name]
+        path = Path(airlines_path or Path(directory).expanduser() / "airlines.arff").expanduser().resolve()
+        if path not in _ARRAYS:
+            _ARRAYS[path] = data.airlines_arrays(path)
+        x, y = _ARRAYS[path]
         size = size or 3000
         start = int(rng.integers(0, len(y) // size - length + 1))
         pool = data.windowed_batches(x, y, size, length, start)
@@ -75,16 +77,16 @@ def trial_batches(name: str, trial: int, electricity_path=None, size=None, direc
     return [data.split_batch(x, y, rng) for x, y in pool]
 
 
-def run_trial(name, trial, *, electricity_path=None, size=None, samples=100, rules=None):
-    batches = trial_batches(name, trial, electricity_path, size)
+def run_trial(name, trial, *, electricity_path=None, airlines_path=None, size=None, samples=100, rules=None):
+    batches = trial_batches(name, trial, electricity_path, size, airlines_path=airlines_path)
     matrix, _ = build_paper_matrix(batches, XGBoostLearner(trial), OFFLINE, seed=trial)
-    analysis = analyze(matrix, n_alphas=ALPHAS, alpha_top=ALPHA_MAX[name], samples=samples, seed=trial,
-                       **({"rules": tuple(rules)} if rules else {}))
-    return analysis
+    return analyze(matrix, n_alphas=ALPHAS, alpha_top=ALPHA_MAX[name], samples=samples, seed=trial,
+                   **({"rules": tuple(rules)} if rules else {}))
 
 
 def replicate(name, trials=10, **options):
     runs = [run_trial(name, trial, **options) for trial in range(trials)]
+    metrics = ("cost", "retrains", "average_accuracy")
     summary = {}
     for rule in runs[0]["rules"]:
         auc = [run["rules"][rule]["auc"] for run in runs]
@@ -94,7 +96,16 @@ def replicate(name, trials=10, **options):
     for rule in runs[0]["rules"]:
         rows = [run["rules"][rule]["curve"] for run in runs]
         curves[rule] = {key: [float(np.mean([r[i][key] for r in rows])) for i in range(len(rows[0]))]
-                        for key in ("cost", "retrains", "average_accuracy")}
+                        for key in metrics}
+    table = {}
+    for level, by_rule in runs[0]["table"].items():
+        table[level] = {}
+        for rule, row in by_rule.items():
+            stats = {}
+            for key in metrics:
+                values = [run["table"][level][rule][key] for run in runs]
+                stats[key] = {"mean": float(np.mean(values)), "std": float(np.std(values))}
+            table[level][rule] = {"alpha": row["alpha"], **stats}
     return {"dataset": name, "trials": trials, "alpha_max": ALPHA_MAX[name], "summary": summary,
-            "alphas": runs[0]["alphas"], "curves": curves,
+            "alphas": runs[0]["alphas"], "curves": curves, "table": table,
             "oracle_alpha_max_per_trial": [run["setup"]["oracle_alpha_max"] for run in runs]}

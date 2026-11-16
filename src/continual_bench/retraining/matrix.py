@@ -46,9 +46,8 @@ class PerformanceMatrix:
     feature_means: np.ndarray
     fit_seconds: np.ndarray
     rows: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
-    # Batch whose data trained the model of each decision point (paper timing: point p >= offline
-    # trains on batch p + 1). ``None`` means the model of point p was trained on batch p.
-    source: np.ndarray | None = None
+    # Paper replay has held-out errors for models serving their own online training batches.
+    paper_timing: bool = False
 
     def __post_init__(self):
         size = self.err.shape[0]
@@ -58,10 +57,14 @@ class PerformanceMatrix:
             raise ValueError("offline batches must leave at least two online batches")
         upper = np.triu_indices(size, 1)
         values = self.err[upper]
-        # The last batch trains no model, so its row stays empty; every other pair is observed.
+        # The operational matrix has no model for the last batch.
         observed = np.isfinite(values)
         if not observed.any() or np.any(values[observed] < 0) or np.any(values[observed] > 1):
             raise ValueError("matrix errors must be rates in [0, 1]")
+        if self.paper_timing:
+            diagonal = self.err.diagonal()[self.offline:]
+            if not np.all((diagonal >= 0) & (diagonal <= 1)):
+                raise ValueError("paper timing requires held-out errors for every online candidate")
 
     @property
     def batches(self) -> int:
@@ -115,8 +118,7 @@ class PerformanceMatrix:
             distance = query_norm + (data**2).sum(axis=1)[None, :] - 2 * queries @ data.T
             return float((np.exp(-gamma * np.maximum(distance, 0.0)) * loss[None, :]).mean())
 
-        own = model if self.source is None else int(self.source[model])
-        return psi(t, self.sub_loss[model, t]) - psi(own, self.sub_loss[model, model])
+        return psi(t, self.sub_loss[model, t]) - psi(model, self.sub_loss[model, model])
 
     def staleness_matrix(self) -> np.ndarray:
         """``s[t, model]`` for every observed ``model < t`` (full matrix; reporting and the Oracle only)."""
@@ -147,8 +149,11 @@ class MatrixView:
             raise ValueError("a view cannot contain models trained after its horizon")
         self._matrix, self.upto, self.models = matrix, upto, models
 
+    def _first_evaluation(self, model: int) -> int:
+        return model if self._matrix.paper_timing and model >= self._matrix.offline else model + 1
+
     def err(self, model: int, batch: int) -> float:
-        if model not in self.models or not model < batch <= self.upto:
+        if model not in self.models or not self._first_evaluation(model) <= batch <= self.upto:
             raise ValueError("error not observable at this decision time")
         return float(self._matrix.err[model, batch])
 
@@ -165,7 +170,7 @@ class MatrixView:
     def observations(self) -> list[tuple[int, int, float]]:
         """All ``(model, batch, error)`` triples visible now: the UPF regression dataset."""
         return [(i, j, float(self._matrix.err[i, j]))
-                for i in sorted(self.models) for j in range(i + 1, self.upto + 1)]
+                for i in sorted(self.models) for j in range(self._first_evaluation(i), self.upto + 1)]
 
 
 def build_matrix(
@@ -258,53 +263,37 @@ def build_paper_matrix(
     n_points: int = N_POINTS,
     n_queries: int = N_QUERIES,
 ) -> tuple[PerformanceMatrix, list[object]]:
-    """UPF protocol timing: every batch has a train and a held-out test split.
+    """Train each candidate on its own batch and score it on held-out rows.
 
-    A model of an offline point ``p < offline`` trains on batch ``p``. For an online decision point
-    ``p`` the model trains on batch ``p + 1`` (the data that arrives with the retrain, never observed
-    when deciding) and is scored on that batch's *test* split, as in the UPF paper where a retrained
-    model serves its own time step. ``err[p, j]`` is always measured on the test split of ``j``.
+    The seven offline batches contribute the strict upper triangle (21 pairs in Table 4).
+    Online candidates also have an observed diagonal after they have been deployed.
     """
     size = len(batches)
     if not 2 <= offline <= size - 2:
         raise ValueError("offline batches must leave at least two online batches")
     rng = np.random.default_rng(seed)
-    source = np.array([p if p < offline else p + 1 for p in range(size)])
-    points, queries, means = [], [], []
-    for x_train, y_train, x_test, _ in batches:
-        pool = np.concatenate([x_train, x_test])
-        points.append(pool[rng.choice(len(pool), size=min(n_points, len(pool)), replace=False)]
-                      .astype(np.float64))
-        queries.append(pool[rng.choice(len(pool), size=min(n_queries, len(pool)), replace=False)]
-                       .astype(np.float64))
-        means.append(np.concatenate([x_train, x_test]).mean(axis=0, dtype=np.float64))
+    points, queries, means, labels = [], [], [], []
     states, seconds = [], []
-    for p in range(size - 1):
+    for i, (x_train, y_train, x_test, y_test) in enumerate(batches):
+        pool = np.concatenate([x_train, x_test])
+        point_indices = rng.choice(len(pool), size=min(n_points, len(pool)), replace=False)
+        query_indices = rng.choice(len(pool), size=min(n_queries, len(pool)), replace=False)
+        points.append(pool[point_indices].astype(np.float64))
+        labels.append(np.concatenate([y_train, y_test])[point_indices])
+        queries.append(pool[query_indices].astype(np.float64))
+        means.append(pool.mean(axis=0, dtype=np.float64))
         started = time.perf_counter()
-        states.append(learner.fit(int(source[p]), batches[source[p]][0], batches[source[p]][1]))
+        states.append(learner.fit(i, x_train, y_train))
         seconds.append(time.perf_counter() - started)
-    seconds.append(float("nan"))
     err = np.full((size, size), np.nan)
     sub_loss: dict[tuple[int, int], np.ndarray] = {}
-    for p, state in enumerate(states):
-        for j in range(p + 1, size):
-            x_test, y_test = batches[j][2], batches[j][3]
-            err[p, j] = float(np.mean(learner.losses(state, x_test, y_test)))
-            sub_loss[p, j] = np.asarray(learner.losses(state, points[j], _labels_for(batches[j], points[j])),
-                                        dtype=np.float64)
-        sub_loss[p, p] = np.asarray(
-            learner.losses(state, points[source[p]], _labels_for(batches[source[p]], points[source[p]])),
-            dtype=np.float64)
+    for i, state in enumerate(states):
+        for j in range(i, size):
+            sub_loss[i, j] = np.asarray(learner.losses(state, points[j], labels[j]), dtype=np.float64)
+            if j > i or i >= offline:
+                err[i, j] = float(np.mean(learner.losses(state, batches[j][2], batches[j][3])))
     matrix = PerformanceMatrix(
         err=err, offline=offline, points=points, queries=queries, sub_loss=sub_loss,
         feature_means=np.asarray(means), fit_seconds=np.asarray(seconds),
-        rows=np.asarray([len(b[1]) + len(b[3]) for b in batches]), source=source)
+        rows=np.asarray([len(b[1]) + len(b[3]) for b in batches]), paper_timing=True)
     return matrix, states
-
-
-def _labels_for(batch, points):
-    """Labels of sampled pool rows: rebuild them by matching rows of the (train + test) pool."""
-    x = np.concatenate([batch[0], batch[2]])
-    y = np.concatenate([batch[1], batch[3]])
-    index = {row.tobytes(): k for k, row in enumerate(x.astype(np.float64))}
-    return y[[index[row.tobytes()] for row in points]]

@@ -89,7 +89,7 @@ def lipschitz_bound(err: np.ndarray, first: int) -> float:
     gaps = []
     size = err.shape[0]
     for j in range(first, size):
-        for i in range(0, j - 1):
+        for i in range(j):
             if np.isfinite(err[i, j]) and np.isfinite(err[i + 1, j]):
                 gaps.append(abs(err[i, j] - err[i + 1, j]))
     return float(max(gaps, default=0.0))
@@ -108,11 +108,13 @@ def alpha_for_retrain_bound(retrains: int, lipschitz: float, horizon: int) -> fl
 
 
 def optimal_schedule_same_batch(stale: np.ndarray, initial: int, first: int, last: int,
-                                alpha: float) -> tuple[list[int], float]:
+                                alpha: float, *, retrain_errors: np.ndarray | None = None
+                                ) -> tuple[list[int], float]:
     """CARA's accounting (Eq. 4-6, 13-14): a retrain at ``t`` costs ``alpha`` *instead of* the staleness of
     batch ``t`` (the new model is trained on it and serves it with staleness 0) and is allowed at ``last``.
 
-    ``stale[t, m]`` is the staleness of model ``m`` for batch ``t``. Returns ``(retrain batches, cost)``.
+    Pass held-out diagonal errors as ``retrain_errors`` for the UPF error objective.
+    Returns ``(retrain batches, cost)``.
     """
     if not first <= last or alpha < 0:
         raise ValueError("invalid phase or retraining cost")
@@ -122,7 +124,8 @@ def optimal_schedule_same_batch(stale: np.ndarray, initial: int, first: int, las
         step = {m: c + float(stale[t, m]) for m, c in value.items()}
         origin: dict[int, int | None] = {m: m for m in value}
         cheapest = min(value, key=value.get)
-        step[t], origin[t] = value[cheapest] + alpha, cheapest
+        fresh = 0.0 if retrain_errors is None else float(retrain_errors[t])
+        step[t], origin[t] = value[cheapest] + alpha + fresh, cheapest
         value = step
         parent.append(origin)
     node = min(value, key=value.get)
@@ -135,17 +138,23 @@ def optimal_schedule_same_batch(stale: np.ndarray, initial: int, first: int, las
     return sorted(retrains), total
 
 
-def alpha_max_same_batch(stale: np.ndarray, initial: int, first: int, last: int) -> float:
+def alpha_max_same_batch(stale: np.ndarray, initial: int, first: int, last: int,
+                         *, retrain_errors: np.ndarray | None = None) -> float:
     """Smallest ``alpha`` at which :func:`optimal_schedule_same_batch` stops retraining (bisection)."""
+    def switches(alpha):
+        schedule, _ = optimal_schedule_same_batch(stale, initial, first, last, alpha,
+                                                  retrain_errors=retrain_errors)
+        return schedule
+
     high = 1.0
-    if optimal_schedule_same_batch(stale, initial, first, last, 0.0)[0] == []:
+    if not switches(0.0):
         return 0.0
-    while optimal_schedule_same_batch(stale, initial, first, last, high)[0]:
+    while switches(high):
         high *= 2.0
     low = 0.0
     for _ in range(50):
         mid = (low + high) / 2
-        if optimal_schedule_same_batch(stale, initial, first, last, mid)[0]:
+        if switches(mid):
             low = mid
         else:
             high = mid

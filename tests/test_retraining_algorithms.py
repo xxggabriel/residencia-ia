@@ -161,11 +161,35 @@ def test_upf_quantile_is_more_conservative_than_the_median_only_in_variance(matr
     assert wide.forecasts[0]["quantile_keep"] >= median.forecasts[0]["quantile_keep"] - 1e-9
 
 
+def test_upf_uses_one_future_decision_across_samples():
+    rule = UPF(samples=100, delta=0.95)
+    rule.alpha = 0.1
+    old = np.full((100, 2), 0.05)
+    old[:, 1] = 0.2
+    old[:10, 1] = 0.9
+    new = np.zeros((100, 2, 2))
+    new[:, 0, 0] = 0.05
+    new[:, 0, 1] = 0.45
+    new[:, 1, 1] = 0.2
+    new[9:19, 1, 1] = 0.7
+    retrain, keep = rule._branch_costs(new, old)
+    np.testing.assert_allclose(retrain, 0.60)
+    # At the second step, keeping the original model has q95=.90 vs .80 for retraining.
+    # The first keep branch therefore retrains on the second step on every sample.
+    np.testing.assert_allclose(keep, old[:, 0] + rule.alpha + new[:, 1, 1])
+    assert np.quantile(retrain, rule.delta) < np.quantile(keep, rule.delta)
+
+
 def test_elastic_net_recovers_a_linear_signal():
+    from sklearn.linear_model import ElasticNetCV as SklearnElasticNetCV
+
     rng = np.random.default_rng(0)
     x = rng.normal(size=(200, 4))
     y = 0.5 + 0.8 * x[:, 0] - 0.3 * x[:, 2] + rng.normal(scale=0.01, size=200)
     model = ElasticNetCV().fit(x, y)
+    reference = SklearnElasticNetCV().fit(x, y)
+    np.testing.assert_allclose(model.predict(x), reference.predict(x))
+    assert model.alpha_ == pytest.approx(reference.alpha_)
     assert np.abs(model.predict(x) - y).mean() < 0.08
     assert abs(model.coef_[1]) < 0.05 and abs(model.coef_[3]) < 0.05
     assert ElasticNetCV().fit(np.ones((3, 2)), np.array([1.0, 2.0, 3.0])).predict(np.ones((1, 2)))[0] == \

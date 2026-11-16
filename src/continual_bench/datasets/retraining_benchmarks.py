@@ -174,10 +174,18 @@ def covertype_batches(path: str | Path, n_batches: int = 100):
 
 
 def airlines_arrays(path: str | Path):
-    """OpenML airlines (539,383 rows): 7 features, nominal ones ordinal-encoded, Delay = 1 positive.
+    """Load seven Airlines features and the binary Delay label from CSV or OpenML ARFF.
 
     UPF (Table 4) lists 7 features for XGBoost. CARA uses the separate one-hot CSV adapter.
     """
+    path = Path(path)
+    if path.suffix.lower() == ".csv":
+        # The numeric Scikit-Multiflow source used in UPF A.6 already encodes the categories.
+        rows = np.loadtxt(path, delimiter=",", skiprows=1, dtype=np.float32, ndmin=2)
+        if rows.shape[1] != 8 or not np.isin(rows[:, -1], [0, 1]).all():
+            raise ValueError("expected seven Airlines features and a binary Delay column")
+        return rows[:, :-1], rows[:, -1].astype(np.int64)
+
     from .arff import iter_arff
 
     def build():
@@ -194,7 +202,7 @@ def airlines_arrays(path: str | Path):
             rows.append(values)
         return np.asarray(rows, dtype=np.float32), np.asarray(labels, dtype=np.int64)
 
-    return _cached(Path(path).with_suffix(".npz"), build)
+    return _cached(path.with_suffix(".npz"), build)
 
 
 def airlines_batches(path: str | Path, n_batches: int = 100):

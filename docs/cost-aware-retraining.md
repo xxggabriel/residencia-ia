@@ -32,8 +32,13 @@ Os fluxos são divididos em `B` lotes (blocos do Zia). `err[i, j]` é a taxa de 
 
 A otimização offline é uma busca em grade sobre os valores observados (exata para `τ`, pois o custo é constante por partes), preferindo o maior limiar em empate. O artigo usa *dual annealing* para `τ` e `τ_cum`.
 
-**UPF**. Regressão linear **ElasticNetCV implementada em numpy** (sem dependência nova), com atributos `[i, j, j−i, z_shift]` (`z_shift` = distância L1 entre as médias de atributos de lotes consecutivos). Média prevista → Beta com variância constante igual ao resíduo (eq. 58 e 59). Para cada decisão sorteia-se `samples` (100) realizações da matriz futura. Cada realização é resolvida por DP nos dois ramos (*retrain agora* vs. *manter*), e retreina-se se o quantil `δ` (0,95) do custo do primeiro ramo for menor que o do segundo (eq. 16). `δ = 0,5` é a ablação determinística (PF).
-Desvios: o previsor treina com os pares `(modelo treinado, lote observado)` visíveis, e o ramo futuro usa o ótimo por realização em vez da regra recursiva da eq. 21.
+**UPF**. O `ElasticNetCV` do scikit-learn prevê o erro médio usando `[i, j, j−i, z_shift]`.
+O termo `z_shift` é a distância L1 entre as médias dos atributos dos dois últimos lotes observados.
+A média e a escala residual definem uma distribuição Beta (eq. 58–60). A cada decisão, o UPF amostra
+`samples` (100) realizações dos erros futuros. De trás para frente, cada estado escolhe uma
+continuação compartilhada por todas as amostras, comparando os quantis de custo de retreinar e
+manter. O UPF retreina quando o quantil `δ` (0,95) do primeiro ramo é estritamente menor
+(eq. 16–22). Com `δ = 0,5`, a comparação usa as medianas (ablação PF).
 
 **Oracle**. DP em `O(B²)` sobre `err` (objetivo `error`, padrão) ou sobre `Ψ̄` (`objective="staleness"`, o Oracle do CARA). Os testes comparam com busca exaustiva.
 
@@ -94,26 +99,32 @@ Configuração opcional (ausente por padrão) em `tracking.retraining`: `offline
 - Um dataset com menos de quatro blocos de fluxo falha com erro explícito. Em dados que o modelo já separa perfeitamente o Oracle custa 0, e `cost_scpe` fica indefinido.
 - Resultados de smoke validam algoritmo e integração, não desempenho (veja [reliability.md](reliability.md)).
 
-## Replicação da Tabela 1 do UPF
+## Benchmark das Tabelas 1 e 2 do UPF
 
-`python scripts/replicate_upf.py gauss circles electricity --electricity ~/Downloads/electricity-normalized.arff` roda o protocolo do artigo: `w = 7` lotes offline e `T = 8` online, 10 trials, XGBoost com os padrões da biblioteca (100 rodadas, `eta` 0,3, profundidade 6), `α_max` da Tabela 4, 10 valores de `α`, UPF com `δ = 0,95`. A temporização é a do artigo (`build_paper_matrix`): cada lote tem treino e teste, e o modelo de um ponto online treina no lote seguinte e é avaliado no teste dele. O resultado completo está em `docs/results/upf-table1-replication.json`.
+```bash
+python scripts/replicate_upf.py gauss circles electricity airlines \
+  --electricity ~/Downloads/electricity-normalized.arff \
+  --airlines /path/to/airlines.csv --output /path/to/upf.json
+```
 
-AUC de `Ĉα` (menor é melhor), média ± desvio em 10 trials, contra a Tabela 1:
+O benchmark divide cada lote em treino e teste. O UPF decide antes de cada um dos oito lotes
+online usando o histórico até o lote anterior. Se decidir retreinar, usa a partição de treino do
+próprio lote e avalia a partição de teste. O Oracle usa a mesma matriz de erros e contabiliza o
+erro de teste do modelo novo em cada retreino. Os sete lotes offline fornecem os 21 pares da
+Tabela 4. Os erros na diagonal online entram no histórico após a avaliação de um modelo ativado.
 
-| Dataset | Política | Aqui | Artigo |
-|---|---|---|---|
-| electricity | oracle | 2,408 ± 0,067 | 2,422 |
-| electricity | UPF | 2,566 ± 0,150 | 2,578 |
-| electricity | CARA | 2,601 ± 0,146 | 2,720 |
-| circles | oracle | 0,068 ± 0,002 | 0,063 |
-| circles | UPF | 0,078 ± 0,005 | 0,067 |
-| circles | CARA | 0,114 ± 0,006 | 0,073 |
-| gauss | oracle | 0,042 ± 0,007 | 0,372 |
-| gauss | UPF | 0,043 ± 0,007 | 0,383 |
+O comando usa 10 sementes, XGBoost com 100 rodadas, `δ = 0,95`, 100 amostras de Monte Carlo e 10
+pontos no intervalo de α da Tabela 4. O JSON contém a AUC, as curvas e as médias e desvios padrão
+nos pontos de custo baixo e alto. Para Electricity, esses pontos são exatamente α = 0,1 e 0,9.
+Use o CSV numérico do Scikit-Multiflow para preservar a codificação de Airplanes indicada em
+A.6. Sem `--airlines`, o comando usa o OpenML ARFF do cache, que codifica as categorias em
+outra ordem e permite comparar com as execuções locais anteriores.
 
-Electricity reproduz o Oracle e o UPF dentro de um desvio. Em circles a ordem Oracle < UPF < CARA se mantém, mas os valores diferem. Gauss **não reproduz**: com a regra impressa o problema é quase trivial (erro de ~4%, enquanto o artigo mostra custos de 0,55 a 0,8).
-
-Premissas que o texto dos artigos não fecha (`datasets/retraining_benchmarks.ASSUMPTIONS`): o `ε` da regra de circles, a leitura literal da regra de Gauss, a divisão treino/teste dentro de cada lote (80/20) e o uso do índice do lote como `t` nos geradores. Faltam os baselines ADWIN, KSWIN e FHDDM e os datasets airlines, yelpCHI, epicgames e iWildCam.
+O split aleatório de treino/teste (80/20), as sementes e o uso do índice do lote como `t`
+são escolhas locais. A fórmula de Gauss tem um parêntese ausente no artigo e Circles usa
+`ε = 1` por convenção local. O benchmark cobre quatro datasets e usa CARA e Frozen como
+baselines locais, além do Oracle. Os números do pipeline prequential usam a temporização
+operacional descrita acima.
 
 ## Benchmark do CARA com o protocolo dos autores
 
@@ -145,9 +156,10 @@ disponíveis. `--drift-backend river` oferece uma comparação com os detectores
 implementações diferentes. O experimento de classificação incremental dos apêndices usa outros modelos
 e fica fora desse CLI.
 
-Para gerar os gráficos, passe ao script os JSONs produzidos pelo benchmark. No exemplo,
-`/path/to/cara.json` é o arquivo salvo pelo comando anterior. O mesmo script aceita os JSONs do UPF.
+Para gerar as comparações entre os resultados locais e os artigos, passe os JSONs de cada
+benchmark ao script. Ele gera SCPE e acurácia para o CARA, AUC para o UPF e a comparação
+da Tabela 2 quando o JSON de Electricity inclui os pontos de custo baixo e alto.
 
 ```sh
-python scripts/plot_replication.py /path/to/cara.json --output docs/results/plots
+python scripts/plot_replication.py /path/to/cara.json /path/to/upf.json --output /path/to/plots
 ```

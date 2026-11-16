@@ -1,10 +1,17 @@
 """Dataset generators and the paper-timing matrix of the UPF/CARA replication."""
 
+from itertools import product
+
 import numpy as np
 import pytest
 
 from continual_bench.datasets import retraining_benchmarks as data
-from continual_bench.evaluation.retraining_replication import ALPHA_MAX, PAPER_AUC, XGBoostLearner
+from continual_bench.evaluation.retraining_replication import (
+    ALPHA_MAX,
+    PAPER_AUC,
+    XGBoostLearner,
+    replicate,
+)
 from continual_bench.retraining import build_paper_matrix, simulate
 from continual_bench.retraining.rules import UPF, Oracle
 
@@ -36,22 +43,85 @@ def test_electricity_loader_reads_chronological_batches(tmp_path):
     assert batches[0][1][0] == 0 and batches[0][1][1] == 1
 
 
-def test_paper_timing_trains_online_points_on_the_next_batch():
+def test_paper_timing_trains_own_batch_and_exposes_only_observed_errors():
     pytest.importorskip("xgboost")
     rng = np.random.default_rng(0)
     batches = [data.split_batch(x, y, rng) for x, y in data.upf_circles(9, size=300, seed=4)]
     matrix, states = build_paper_matrix(batches, XGBoostLearner(0), 4, seed=0)
-    assert list(matrix.source) == [0, 1, 2, 3, 5, 6, 7, 8, 9]  # point p >= offline trains on p + 1
-    assert len(states) == 8 and np.isfinite(matrix.err[4, 5]) and np.isnan(matrix.err[4, 4])
+    assert matrix.paper_timing
+    assert len(states) == 9 and np.isfinite(matrix.err[4, 4]) and np.isnan(matrix.err[3, 3])
+    assert matrix.err[4, 4] == XGBoostLearner(0).losses(states[4], *batches[4][2:]).mean()
+    assert len(matrix.offline_view().observations()) == 6
+    with pytest.raises(ValueError, match="not observable"):
+        matrix.offline_view().err(4, 4)
+    assert matrix.view(4, range(5)).err(4, 4) == matrix.err[4, 4]
+    with pytest.raises(ValueError, match="not observable"):
+        matrix.view(4, range(4)).err(4, 4)
     assert matrix.horizon == 5 and matrix.initial == 3
     oracle = simulate(Oracle(), matrix, 0.0)
-    assert oracle.cost <= simulate(UPF(samples=20), matrix, 0.0).cost + 1e-9
+    result = simulate(UPF(samples=20), matrix, 0.0)
+    assert oracle.cost <= result.cost + 1e-9
+    assert len(result.forecasts) == 5
+    assert result.forecasts[0]["trained"][0] == result.forecasts[0]["served"][0] == 4
+    assert result.forecasts[-1]["trained"] == result.forecasts[-1]["served"] == [8]
     assert np.isfinite(matrix.staleness(6, 4))
+
+    online = range(matrix.offline, matrix.batches)
+    for alpha in (0.0, 0.02, 0.5):
+        costs = []
+        for switches in product((False, True), repeat=matrix.horizon):
+            deployed, cost = matrix.initial, alpha * sum(switches)
+            for j, retrain in zip(online, switches, strict=True):
+                if retrain:
+                    deployed = j
+                cost += matrix.err[deployed, j]
+            costs.append(cost)
+        assert simulate(Oracle(), matrix, alpha).cost == pytest.approx(min(costs))
+
+
+def test_airlines_csv_preserves_reference_category_codes(tmp_path):
+    csv = tmp_path / "airlines.csv"
+    csv.write_text("Airline,Flight,AirportFrom,AirportTo,DayOfWeek,Time,Length,Delay\n"
+                   "4,269,253,135,3,15,205,1\n14,35,0,90,6,10,30,0\n")
+    x, y = data.airlines_arrays(str(csv))
+    np.testing.assert_array_equal(x, [[4, 269, 253, 135, 3, 15, 205], [14, 35, 0, 90, 6, 10, 30]])
+    np.testing.assert_array_equal(y, [1, 0])
 
 
 def test_paper_reference_values_cover_every_replicated_dataset():
     assert set(ALPHA_MAX) == set(PAPER_AUC) == {"gauss", "circles", "electricity", "airlines"}
     assert all(row["oracle"] < row["upf"] < row["cara_periodic"] for row in PAPER_AUC.values())
+
+
+def test_replication_exports_exact_off_grid_operating_points():
+    pytest.importorskip("xgboost")
+    report = replicate("gauss", trials=1, size=64, samples=10, rules=("upf",))
+    for level, alpha in (("low", 0.05), ("high", 0.45)):
+        assert all(point != pytest.approx(alpha) for point in report["alphas"])
+        for rule in ("upf", "oracle"):
+            row = report["table"][level][rule]
+            assert row["alpha"] == pytest.approx(alpha)
+            accuracy = row["average_accuracy"]["mean"]
+            retrains = row["retrains"]["mean"]
+            assert row["cost"]["mean"] == pytest.approx(alpha * retrains + 8 * (1 - accuracy))
+            assert row["cost"]["std"] == 0
+
+
+def test_electricity_article_figures_include_table_2():
+    from continual_bench.evaluation.replication_plots import upf_figures
+
+    metrics = {metric: {"mean": 0.2, "std": 0.01} for metric in ("cost", "retrains", "average_accuracy")}
+    report = {
+        "dataset": "electricity", "trials": 2,
+        "summary": {rule: {"auc_mean": 2.0, "auc_std": 0.1} for rule in ("upf", "oracle")},
+        "table": {level: {rule: {"alpha": alpha, **metrics} for rule in ("upf", "oracle")}
+                  for level, alpha in (("low", 0.1), ("high", 0.9))},
+    }
+    figures = dict(upf_figures([report]))
+    table = figures["upf_table2_electricity.png"]
+    assert len(table.axes) == 6
+    assert [text.get_text() for text in table.legends[0].get_texts()] == ["Resultado local", "Artigo"]
+    assert table.axes[0].lines[3].get_ydata().astype(float) == pytest.approx([2.5, 5.6])
 
 
 def test_fast_forest_prediction_matches_scikit_learn():

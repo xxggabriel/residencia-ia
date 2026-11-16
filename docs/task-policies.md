@@ -14,7 +14,7 @@ A política `performance` acionou uma decisão quando a taxa da janela atingiu `
 | Fonte e versão | Implementação | Diferenças e estado |
 | --- | --- | --- |
 | Mahadevan e Mathioudakis, CARA, Knowledge Based Systems 293, 111610, 2024; [paper original](https://ananthmahadevan.com/publication/cost-aware-retraining/cost-aware-retraining.pdf) | `cara`, `cara_cumulative`, `cara_periodic` e `oracle` (DP dos Algoritmos 2 e 3) | Retreino vale do lote seguinte; busca em grade no lugar de *dual annealing*; queries amostradas do próprio fluxo (CARA-D). |
-| Regol et al., ICML 2025, PMLR 267, 51369 a 51404; [publicação original](https://proceedings.mlr.press/v267/regol25a.html), arXiv 2505.14903 | `upf` (ElasticNetCV, Beta, quantil Monte Carlo) e `oracle` | Retreino vale do lote seguinte; o ramo futuro usa o ótimo por realização em vez da regra recursiva. |
+| Regol et al., ICML 2025, PMLR 267, 51369 a 51404; [publicação original](https://proceedings.mlr.press/v267/regol25a.html), arXiv 2505.14903 | `upf` (ElasticNetCV, Beta, quantil Monte Carlo) e `oracle` | Retreino vale a partir do lote seguinte no fluxo operacional. A recorrência compara quantis e escolhe uma continuação por estado. |
 
 As políticas só usam informação observável no instante da decisão (`MatrixView`); apenas o Oracle lê o futuro.
 

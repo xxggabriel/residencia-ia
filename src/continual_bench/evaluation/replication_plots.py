@@ -77,6 +77,41 @@ def _percent(ax, *, horizontal=False):
     axis.set_major_formatter(PercentFormatter(1, decimals=0))
 
 
+def _upf_electricity_table(result):
+    from matplotlib.lines import Line2D
+
+    # Regol et al., Table 2: (mean, SD) for UPF and Oracle at the exact operating points.
+    published = {
+        "low": (((2.5, .67), (5.6, 1.44)), ((.75, .03), (.83, .02)), ((2.24, .17), (1.93, .06))),
+        "high": (((.1, .3), (0., 0.)), ((.68, .04), (.66, .03)), ((2.69, .26), (2.68, .26))),
+    }
+    metrics = (("retrains", "Retreinos"), ("average_accuracy", "Acurácia"), ("cost", "Custo combinado"))
+    fig, axes = _subplots(2, 3, figsize=(12.5, 7.5))
+    positions = np.arange(2)
+    for level, panels in zip(("low", "high"), axes, strict=True):
+        rows = result["table"][level]
+        alpha = f"{rows['upf']['alpha']:g}".replace(".", ",")
+        for ax, (key, title), paper in zip(panels, metrics, published[level], strict=True):
+            _axes(ax)
+            local = [(rows[rule][key]["mean"], rows[rule][key]["std"]) for rule in ("upf", "oracle")]
+            for values, offset, marker, color in ((local, -.12, "o", COLORS["cara"]),
+                                                   (paper, .12, "D", COLORS["upf"])):
+                mean, spread = np.asarray(values).T
+                ax.errorbar(positions + offset, mean, yerr=spread, color=color, fmt=marker, capsize=3)
+            ax.set_xticks(positions, ["UPF", "Oracle"])
+            ax.set_xlim(-.4, 1.4)
+            ax.set_title(f"{title} · α = {alpha}", loc="left", color=INK, fontweight="bold", fontsize=11)
+            if key == "average_accuracy":
+                _percent(ax)
+    _header(fig, "UPF  /  TABELA 2", "Retreinos, acurácia e custo em Electricity",
+            f"{result['trials']} execuções locais · médias e desvios padrão nos pontos exatos de α",
+            left=.075, top=.72, right=.965, bottom=.08, hspace=.48, wspace=.37)
+    _legend(fig, [Line2D([], [], color=color, marker=marker, linestyle="none")
+                  for color, marker in ((COLORS["cara"], "o"), (COLORS["upf"], "D"))],
+            ["Resultado local", "Artigo"], x=.075, columns=2)
+    return "upf_table2_electricity.png", fig
+
+
 def upf_figures(results):
     out = []
     for result in results:
@@ -114,6 +149,11 @@ def upf_figures(results):
                     bottom=0.105, hspace=0.20)
             _legend(fig, *top.get_legend_handles_labels(), x=0.11)
             out.append((f"upf_curves_{name}.png", fig))
+        if name == "electricity" and all(
+            {"upf", "oracle"} <= result.get("table", {}).get(level, {}).keys()
+            for level in ("low", "high")
+        ):
+            out.append(_upf_electricity_table(result))
     return out
 
 
