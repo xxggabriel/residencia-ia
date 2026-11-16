@@ -105,3 +105,46 @@ def retrain_upper_bound(alpha: float, lipschitz: float, horizon: int) -> float:
 def alpha_for_retrain_bound(retrains: int, lipschitz: float, horizon: int) -> float:
     """``alpha`` above which Proposition 3.1 guarantees at most ``retrains`` retrains: ``L (T - r)^2``."""
     return lipschitz * max(0, horizon - retrains) ** 2
+
+
+def optimal_schedule_same_batch(stale: np.ndarray, initial: int, first: int, last: int,
+                                alpha: float) -> tuple[list[int], float]:
+    """CARA's accounting (Eq. 4-6, 13-14): a retrain at ``t`` costs ``alpha`` *instead of* the staleness of
+    batch ``t`` (the new model is trained on it and serves it with staleness 0) and is allowed at ``last``.
+
+    ``stale[t, m]`` is the staleness of model ``m`` for batch ``t``. Returns ``(retrain batches, cost)``.
+    """
+    if not first <= last or alpha < 0:
+        raise ValueError("invalid phase or retraining cost")
+    value = {initial: 0.0}
+    parent: list[dict[int, int | None]] = []  # parent[t - first][m] = model deployed before batch t
+    for t in range(first, last + 1):
+        step = {m: c + float(stale[t, m]) for m, c in value.items()}
+        origin: dict[int, int | None] = {m: m for m in value}
+        cheapest = min(value, key=value.get)
+        step[t], origin[t] = value[cheapest] + alpha, cheapest
+        value = step
+        parent.append(origin)
+    node = min(value, key=value.get)
+    total, retrains = value[node], []
+    for t in range(last, first - 1, -1):
+        previous = parent[t - first][node]
+        if node == t:
+            retrains.append(t)
+        node = previous
+    return sorted(retrains), total
+
+
+def alpha_max_same_batch(stale: np.ndarray, initial: int, first: int, last: int) -> float:
+    """Smallest ``alpha`` at which :func:`optimal_schedule_same_batch` stops retraining (bisection)."""
+    high = float(sum(stale[t, initial] for t in range(first, last + 1))) + 1.0
+    if optimal_schedule_same_batch(stale, initial, first, last, 0.0)[0] == []:
+        return 0.0
+    low = 0.0
+    for _ in range(50):
+        mid = (low + high) / 2
+        if optimal_schedule_same_batch(stale, initial, first, last, mid)[0]:
+            low = mid
+        else:
+            high = mid
+    return high

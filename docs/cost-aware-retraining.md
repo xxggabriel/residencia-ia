@@ -116,3 +116,39 @@ Electricity reproduz o Oracle e o UPF dentro de um desvio. Em circles a ordem Or
 Premissas que o texto dos artigos não fecha (`datasets/retraining_benchmarks.ASSUMPTIONS`): o `ε` da regra de circles, a leitura literal da regra de Gauss, a divisão treino/teste dentro de cada lote (80/20) e o uso do índice do lote como `t` nos geradores. Faltam os baselines ADWIN, KSWIN e FHDDM e os datasets airlines, yelpCHI, epicgames e iWildCam.
 
 Os geradores do CARA (`cara_gauss`, `cara_circle`, `cara_covcon`) existem e são testados, mas o experimento do CARA (Random Forest, 100 lotes, cinco sementes) não foi rodado: o ambiente não tem scikit-learn.
+
+## Replicação das Tabelas 2–4 do CARA
+
+`scripts/replicate_cara.py` (RF do scikit-learn, 100 lotes, 25 offline, 5 sementes, κ varrido em 16 pontos).
+Resultados em `docs/results/cara-*.json`, gráficos em `docs/results/plots/` (`scripts/plot_replication.py`).
+
+Auditoria do que impedia a replicação (a primeira versão dava CARA-T com SCPE 38–44 em electricity/covcon-d):
+
+1. **Contabilidade do artigo** (Eq. 4–6): um retreino em `t` custa κ *no lugar* da obsolescência de `t` (o modelo
+   treinado em `D_t` atende `t` com Ψ = 0). Antes o código cobrava a obsolescência do lote e atrasava o modelo
+   em um lote. Agora `simulate(..., same_batch=True)`, `StalenessOracle(same_batch=True)`,
+   `optimal_schedule_same_batch` e as regras CARA com `same_batch=True` (padrão do script; `--lag` volta ao
+   protocolo test-then-train das políticas do pipeline).
+2. **Faixa de κ**: as unidades de Ψ do artigo não são recuperáveis (os κ máximos das Figs. 4–7 excedem o número
+   de queries). A faixa padrão vai de 0 até o menor κ em que o Oracle de obsolescência para de retreinar
+   (`--kappa-range oracle`); `--kappa-range paper` usa os limites lidos das figuras. A média do SCPE depende
+   fortemente da faixa: com os limites das figuras, a maior parte do eixo é a região "nunca retreinar".
+3. **CARA-P** passou a ajustar também o deslocamento `a` (Eq. 10), com batches absolutos.
+
+SCPE médio (%) CARA-T / CARA-CT / CARA-P, aqui (artigo):
+
+| Dataset | CARA-T | CARA-CT | CARA-P | Markov (aqui) |
+|---|---|---|---|---|
+| covcon-d | 17,3 (17,7) | 14,2 (19,3) | 9,3 (16,3) | 19,2 |
+| airlines | 6,0 (6,1) | 5,7 (5,5) | 5,0 (5,5) | 3,5 |
+| circle-d | 13,8 (45,6) | 28,3 (47,3) | 34,6 (85,0) | 23,9 |
+| covcon-s | 12,6 (15,6) | 25,8 (22,9) | 34,6 (104,8) | 19,7 |
+| covertype | 15,2 (26,4) | 13,7 (27,9) | 20,6 (38,4) | 15,7 |
+| electricity | 19,3 (8,3) | 27,1 (40,3) | 22,0 (64,1) | 6,2 |
+| gauss-d | 20,4 (8,6) | 78,9 (59,9) | 129,2 (136,0) | 8,3 |
+
+Reproduzidos de perto: covcon-d e airlines (CARA-T/CT/P) e a ordem CARA-T < CT < P em gauss. Não
+reproduzidos: electricity e gauss (Markov ganha do CARA-T; o τ calibrado offline não generaliza) e as
+acurácias absolutas de circle/covcon/covertype (os geradores e o pré-processamento diferem do artigo; o
+Oracle daqui chega a 0,77/0,63/0,65 contra 0,97/0,76/0,76). A obsolescência normalizada pela soma das
+similaridades melhorou electricity (CARA-T 12) mas piorou covcon-d e airlines, por isso não foi adotada.

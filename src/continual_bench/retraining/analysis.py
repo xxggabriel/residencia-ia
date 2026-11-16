@@ -17,6 +17,7 @@ from .schedule import (
     alpha_max,
     lipschitz_bound,
     optimal_schedule,
+    optimal_schedule_same_batch,
     retrain_upper_bound,
 )
 from .simulate import SimResult, simulate
@@ -42,11 +43,15 @@ def json_parameters(parameters: dict) -> dict:
             for k, v in parameters.items()}
 
 
-def make_rule(name: str, *, delta: float = 0.95, samples: int = 100, seed: int = 0):
-    factories = {"cara": CaraT, "cara_cumulative": CaraCT, "cara_periodic": CaraP, "oracle": Oracle,
-                 "frozen": Frozen, "markov": Markov, "oracle_staleness": StalenessOracle,
-                 "upf": lambda: UPF(delta=delta, samples=samples, seed=seed)}
-    return factories[name]()
+def make_rule(name: str, *, delta: float = 0.95, samples: int = 100, seed: int = 0,
+              same_batch: bool = False):
+    if name == "upf":
+        return UPF(delta=delta, samples=samples, seed=seed)
+    factories = {"cara": CaraT, "cara_cumulative": CaraCT, "cara_periodic": CaraP,
+                 "oracle_staleness": StalenessOracle}
+    if name in factories:
+        return factories[name](same_batch=same_batch)
+    return {"oracle": Oracle, "frozen": Frozen, "markov": Markov}[name]()
 
 
 def trapezoid(xs, ys) -> float | None:
@@ -99,7 +104,9 @@ def analyze(
     delta: float = 0.95,
     samples: int = 100,
     seed: int = 0,
+    same_batch: bool = False,
 ) -> dict:
+    """``same_batch`` switches the CARA rules and the strategy Oracle to the paper's accounting."""
     first, last = matrix.offline, matrix.batches - 1
     top = alpha_max(matrix.err, matrix.initial, first, last)
     oracle_top = top
@@ -112,13 +119,17 @@ def analyze(
     sims: dict[tuple[str, float], SimResult] = {}
     for name in rules:
         for alpha in all_alphas:
-            sims[name, alpha] = simulate(make_rule(name, delta=delta, samples=samples, seed=seed),
-                                         matrix, alpha)
+            sims[name, alpha] = simulate(
+                make_rule(name, delta=delta, samples=samples, seed=seed, same_batch=same_batch),
+                matrix, alpha, same_batch=same_batch and name != "upf" and name != "oracle")
     staleness = matrix.staleness_matrix()
     stale_cost = np.nan_to_num(staleness.T, nan=0.0)
     strategy_oracle = {}
     for alpha in all_alphas:
-        schedule, value = optimal_schedule(stale_cost, matrix.initial, first, last, alpha)
+        if same_batch:
+            schedule, value = optimal_schedule_same_batch(stale_cost.T, matrix.initial, first, last, alpha)
+        else:
+            schedule, value = optimal_schedule(stale_cost, matrix.initial, first, last, alpha)
         strategy_oracle[alpha] = value
     lipschitz = lipschitz_bound(matrix.err, first)
     horizon = matrix.horizon  # T of Proposition 3.1
@@ -177,7 +188,8 @@ def analyze(
         running, series = 0.0, []
         retrains = set(result.retrains)
         for j, deployed in zip(range(first, matrix.batches), result.deployed, strict=True):
-            running += matrix.staleness(j, deployed) + (focus if j in retrains else 0.0)
+            stale = 0.0 if deployed == j else matrix.staleness(j, deployed)
+            running += stale + (focus if j in retrains else 0.0)
             series.append(_num(running))
         cumulative[name] = series
     return {
@@ -186,7 +198,8 @@ def analyze(
             "decision_points": matrix.horizon - 1,
             "oracle_alpha_max": _num(oracle_top), "initial_model": matrix.initial, "alpha_max": _num(top),
             "focus_alpha": focus, "lipschitz_L": _num(lipschitz), "delta": delta, "samples": samples,
-            "timing": "retrain after batch t serves t+1 onward (test-then-train)",
+            "timing": ("CARA accounting: a retrain at t serves t with staleness 0" if same_batch
+                       else "retrain after batch t serves t+1 onward (test-then-train)"),
             "bound_alphas": {f"r<={r}": _num(alpha_for_retrain_bound(r, lipschitz, horizon))
                              for r in range(3)},
             "retrain_upper_bound": {str(a): _num(retrain_upper_bound(a, lipschitz, horizon))

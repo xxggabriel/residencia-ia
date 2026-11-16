@@ -222,3 +222,58 @@ def test_every_paper_figure_builds_from_an_analysis(matrix):
     assert {"cost_vs_alpha", "retrains_vs_alpha", "wrong_alpha_upf", "staleness_matrix", "accuracy_matrix",
             "retrain_bound", "auc_by_policy"} <= {f.name for f in figures}
     assert all(f.render().startswith("<svg") for f in figures)
+
+
+def _stale(matrix):
+    return np.nan_to_num(matrix.staleness_matrix(), nan=0.0)
+
+
+def _same_batch_cost(stale, initial, first, last, retrains, alpha):
+    deployed, total = initial, 0.0
+    for t in range(first, last + 1):
+        if t in retrains:
+            total, deployed = total + alpha, t
+        else:
+            total += stale[t, deployed]
+    return total
+
+
+def test_same_batch_dp_matches_exhaustive_search(matrix):
+    from continual_bench.retraining.schedule import optimal_schedule_same_batch
+
+    stale = _stale(matrix)
+    first, last = matrix.offline, matrix.batches - 1
+    points = range(first, last + 1)
+    for alpha in (0.0, 0.05, 0.4, 3.0):
+        _, value = optimal_schedule_same_batch(stale, matrix.initial, first, last, alpha)
+        best = min(_same_batch_cost(stale, matrix.initial, first, last, set(subset), alpha)
+                   for size in range(len(points) + 1) for subset in itertools.combinations(points, size))
+        assert value == pytest.approx(best)
+
+
+def test_same_batch_accounting_is_consistent_between_rules_and_oracle(matrix):
+    from continual_bench.retraining.schedule import alpha_max_same_batch, optimal_schedule_same_batch
+    from continual_bench.retraining.simulate import simulate
+
+    stale = _stale(matrix)
+    first, last = matrix.offline, matrix.batches - 1
+    top = alpha_max_same_batch(stale, matrix.initial, first, last)
+    assert top > 0
+    assert optimal_schedule_same_batch(stale, matrix.initial, first, last, top * 1.001)[0] == []
+    assert optimal_schedule_same_batch(stale, matrix.initial, first, last, top * 0.9)[0]
+    alpha = top / 4
+    oracle = simulate(make_rule("oracle_staleness", same_batch=True), matrix, alpha, same_batch=True)
+    assert oracle.strategy_cost(matrix) == pytest.approx(
+        optimal_schedule_same_batch(stale, matrix.initial, first, last, alpha)[1])
+    for name in ("cara", "cara_cumulative", "cara_periodic", "markov", "frozen"):
+        result = simulate(make_rule(name, same_batch=True), matrix, alpha, same_batch=True)
+        assert result.strategy_cost(matrix) >= oracle.strategy_cost(matrix) - 1e-9
+        assert result.strategy_cost(matrix) == pytest.approx(
+            _same_batch_cost(stale, matrix.initial, first, last, set(result.retrains), alpha))
+
+
+def test_cara_periodic_fits_an_offset_and_fires_on_absolute_batches():
+    from continual_bench.retraining.rules import CaraP
+
+    assert [t for t in range(1, 12) if CaraP._due(t, 3, 1)] == [4, 7, 10]
+    assert not CaraP._due(5, math.inf, 0)

@@ -21,6 +21,7 @@ class SimResult:
     forecasts: list[dict] = field(default_factory=list)
     offline_seconds: float = 0.0
     decision_seconds: list[float] = field(default_factory=list)
+    same_batch: bool = False
 
     @property
     def cost(self) -> float:
@@ -33,13 +34,24 @@ class SimResult:
 
     def strategy_cost(self, matrix: PerformanceMatrix) -> float:
         """CARA's strategy cost: summed relative staleness of the deployed models plus retrain costs."""
-        stale = sum(matrix.staleness(j, m) for j, m in zip(
+        # Same-batch accounting: a retrain at ``j`` replaces the staleness of ``j`` (model ``j`` serves it).
+        stale = sum(0.0 if m == j else matrix.staleness(j, m) for j, m in zip(
             range(matrix.offline, matrix.batches), self.deployed, strict=True))
         return float(stale + self.alpha * len(self.retrains))
 
 
-def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float) -> SimResult:
+def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float, same_batch: bool = False) -> SimResult:
+    """Replay ``rule``. By default a retrain decided after batch ``j`` serves ``j + 1`` onward.
+
+    ``same_batch=True`` is CARA's accounting: the decision for batch ``j`` is taken from its queries and the
+    retrained model serves ``j`` itself (staleness 0, cost ``alpha``). The model of ``j`` has no measured
+    error on ``j``, so ``errors`` keeps the previous model's error there (pessimistic) and the error-based
+    ``cost`` is not meaningful; use :meth:`SimResult.strategy_cost`. Not available to the UPF rule.
+    """
     import time
+
+    if same_batch and isinstance(rule, UPF):
+        raise ValueError("UPF forecasts the next batches; it has no same-batch accounting")
 
     started = time.perf_counter()
     rule.fit_offline(matrix.offline_view(), alpha)
@@ -52,6 +64,16 @@ def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float) -> SimResult:
     deployed, models = matrix.initial, set(range(matrix.offline))
     retrains, served, errors, timings = [], [], [], []
     for j in range(matrix.offline, matrix.batches):
+        if same_batch:
+            errors.append(float(matrix.err[deployed, j]))
+            began = time.perf_counter()
+            if rule.decide(j, deployed, matrix.view(j, models)):
+                retrains.append(j)
+                models.add(j)
+                deployed = j
+            timings.append(time.perf_counter() - began)
+            served.append(deployed)
+            continue
         served.append(deployed)
         errors.append(float(matrix.err[deployed, j]))
         if j == matrix.batches - 1:
@@ -63,4 +85,4 @@ def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float) -> SimResult:
             deployed = j
         timings.append(time.perf_counter() - began)
     return SimResult(rule.name, float(alpha), retrains, served, errors, rule.parameters(),
-                     list(getattr(rule, "forecasts", [])), offline_seconds, timings)
+                     list(getattr(rule, "forecasts", [])), offline_seconds, timings, same_batch)

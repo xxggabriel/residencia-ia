@@ -18,6 +18,7 @@ import numpy as np
 from continual_bench.datasets import retraining_benchmarks as data
 from continual_bench.retraining import alpha_max, build_matrix, simulate
 from continual_bench.retraining.analysis import analyze, make_rule
+from continual_bench.retraining.schedule import alpha_max_same_batch
 
 BATCHES, OFFLINE = 100, 25
 RULES = ("cara", "cara_cumulative", "cara_periodic", "markov", "frozen", "oracle_staleness")
@@ -95,16 +96,29 @@ def batches_for(name: str, seed: int, directory="~/.cache/continual-bench/datase
     return batches, None, min(rows, 512), min(max(rows // 10, 1), 600)
 
 
-def run_seed(name, seed, *, kappa_points=16, samples=1, **options):
+def run_seed(name, seed, *, kappa_points=16, samples=1, same_batch=True, kappa_range="oracle", **options):
+    """One seed. ``same_batch`` uses the paper's cost accounting (a retrain replaces its batch's staleness).
+
+    ``kappa_range``: ``"oracle"`` sweeps kappa up to the smallest value at which the staleness Oracle stops
+    retraining (the range over which the trade-off exists in this code's staleness units); ``"paper"`` uses
+    the upper limits read from Figs. 4-7 where they exist (the paper's staleness units are not recoverable).
+    """
     batches, queries, n_points, n_queries = batches_for(name, seed, **options)
     matrix, _ = build_matrix(iter(batches), ForestLearner(seed), offline=OFFLINE, seed=seed,
                              n_points=n_points, n_queries=n_queries, query_stream=queries,
                              workers=os.cpu_count() or 1)
     n_q = len(queries[0][1]) if queries else n_queries
-    probe = analyze(matrix, rules=("oracle_staleness",), n_alphas=2, samples=samples, seed=seed)
-    top = KAPPA_MAX[name] / n_q if name in KAPPA_MAX else probe["setup"]["alpha_max"] * 1.0
-    # for datasets without a published range use the staleness Oracle's own alpha_max (stops retraining)
-    return analyze(matrix, rules=RULES, n_alphas=kappa_points, alpha_top=top, samples=samples, seed=seed), n_q
+    if kappa_range == "paper" and name in KAPPA_MAX:
+        top = KAPPA_MAX[name] / n_q
+    else:
+        stale = np.nan_to_num(matrix.staleness_matrix(), nan=0.0)
+        first, last = matrix.offline, matrix.batches - 1
+        if same_batch:
+            top = alpha_max_same_batch(stale, matrix.initial, first, last)
+        else:
+            top = alpha_max(stale.T, matrix.initial, first, last)
+    return analyze(matrix, rules=RULES, n_alphas=kappa_points, alpha_top=top, samples=samples, seed=seed,
+                   same_batch=same_batch), n_q
 
 
 def mean_over_kappa(analysis, rule, key):
@@ -130,8 +144,9 @@ def replicate(name, seeds=5, **options):
                   for i in range(len(runs[0][0]["alphas"]))]
             for key in ("strategy_cost", "retrains", "average_accuracy", "strategy_scpe")}
     kappa = [alpha * runs[0][1] for alpha in runs[0][0]["alphas"]]
-    return {"dataset": name, "seeds": seeds, "kappa_max": KAPPA_MAX.get(name), "summary": summary,
-            "kappa": kappa, "curves": curves}
+    return {"dataset": name, "seeds": seeds, "kappa_max": float(kappa[-1]), "summary": summary,
+            "kappa": kappa, "curves": curves, "same_batch": options.get("same_batch", True),
+            "kappa_range": options.get("kappa_range", "oracle")}
 
 
 def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fraction=0.25, rule="cara",

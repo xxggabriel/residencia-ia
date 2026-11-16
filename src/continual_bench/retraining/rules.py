@@ -15,7 +15,7 @@ import numpy as np
 
 from .forecaster import ElasticNetCV
 from .matrix import MatrixView, PerformanceMatrix
-from .schedule import optimal_schedule
+from .schedule import optimal_schedule, optimal_schedule_same_batch
 
 MAX_CANDIDATES = 400
 
@@ -57,22 +57,30 @@ def _candidates(values, extra=()):
 class _CaraRule(Rule):
     """Shared offline optimisation: CARA replays Algorithm 1 over the offline phase and keeps the best."""
 
-    def __init__(self):
+    def __init__(self, same_batch: bool = False):
         self.kappa = 0.0
         self._cumulative = 0.0
+        self.same_batch = same_batch  # CARA's accounting: a retrain replaces the staleness of its batch
 
     def _offline_matrix(self, view: MatrixView) -> dict[tuple[int, int], float]:
         return {(t, m): view.staleness(t, m) for t in range(1, view.upto + 1) for m in range(t)}
 
-    def _replay(self, psi, last, trigger, start=1) -> float:
-        """Offline strategy cost for ``trigger(u, t, stale, state) -> bool`` (u counts decisions)."""
+    def _replay(self, psi, last, trigger) -> float:
+        """Offline strategy cost for ``trigger(t, stale, state) -> bool`` (``t`` is the batch index)."""
         deployed, total, state = 0, 0.0, {"cumulative": 0.0}
         for t in range(1, last + 1):
             stale = psi[t, deployed]
-            total += stale
-            if t <= last - 1 and trigger(t - start + 1, stale, state):
-                total += self.kappa
-                deployed, state["cumulative"] = t, 0.0
+            if self.same_batch:
+                if trigger(t, stale, state):
+                    total += self.kappa
+                    deployed, state["cumulative"] = t, 0.0
+                else:
+                    total += stale
+            else:
+                total += stale
+                if t <= last - 1 and trigger(t, stale, state):
+                    total += self.kappa
+                    deployed, state["cumulative"] = t, 0.0
         return total
 
     def fit_offline(self, view, alpha):
@@ -91,8 +99,8 @@ class CaraT(_CaraRule):
     name = "cara"  # the "standard" CARA of the UPF paper: threshold on the model staleness
     label = "CARA-T"
 
-    def __init__(self, tau: float | None = None):
-        super().__init__()
+    def __init__(self, tau: float | None = None, same_batch: bool = False):
+        super().__init__(same_batch)
         self.tau, self._fixed = tau, tau is not None
 
     def _optimise(self, psi, last):
@@ -100,7 +108,7 @@ class CaraT(_CaraRule):
             return
         best = None
         for tau in _candidates(psi.values(), [math.inf]):
-            cost = self._replay(psi, last, lambda u, stale, state, tau=tau: stale >= tau)
+            cost = self._replay(psi, last, lambda t, stale, state, tau=tau: stale >= tau)
             if best is None or cost < best[0] - 1e-12 or (abs(cost - best[0]) <= 1e-12 and tau > best[1]):
                 best = (cost, tau)
         self.tau = best[1]
@@ -134,13 +142,13 @@ class CaraCT(_CaraRule):
     name = "cara_cumulative"
     label = "CARA-CT"
 
-    def __init__(self, tau_cum: float | None = None):
-        super().__init__()
+    def __init__(self, tau_cum: float | None = None, same_batch: bool = False):
+        super().__init__(same_batch)
         self.tau_cum, self._fixed = tau_cum, tau_cum is not None
 
     @staticmethod
     def _trigger(tau):
-        def trigger(u, stale, state):
+        def trigger(t, stale, state):
             state["cumulative"] += stale
             return state["cumulative"] >= tau
         return trigger
@@ -168,34 +176,35 @@ class CaraCT(_CaraRule):
 
 
 class CaraP(_CaraRule):
+    """Retrain at every batch ``t`` with ``(t - offset) % period == 0`` (Eq. 10); both are fitted offline."""
+
     name = "cara_periodic"
     label = "CARA-P"
 
-    def __init__(self, period: float | None = None):
-        super().__init__()
-        self.period, self._fixed = period, period is not None
-        self._first = 1
+    def __init__(self, period: float | None = None, offset: int = 0, same_batch: bool = False):
+        super().__init__(same_batch)
+        self.period, self.offset, self._fixed = period, offset, period is not None
+
+    @staticmethod
+    def _due(t, period, offset):
+        return math.isfinite(period) and t > offset and (t - offset) % period == 0
 
     def _optimise(self, psi, last):
         if self._fixed:
             return
         best = None
-        for period in [*range(1, max(2, last)), math.inf]:
-            cost = self._replay(psi, last, lambda u, stale, state, p=period: u % p == 0)
+        candidates = [(p, a) for p in range(1, max(2, last)) for a in range(p)] + [(math.inf, 0)]
+        for period, offset in candidates:
+            cost = self._replay(psi, last, lambda t, stale, state, p=period, a=offset: self._due(t, p, a))
             if best is None or cost < best[0] - 1e-12 or (abs(cost - best[0]) <= 1e-12 and period > best[1]):
-                best = (cost, period)
-        self.period = best[1]
-
-    def begin_online(self):
-        self._first = None
+                best = (cost, period, offset)
+        self.period, self.offset = best[1], best[2]
 
     def decide(self, t, deployed, view):
-        if self._first is None:
-            self._first = t
-        return math.isfinite(self.period) and (t - self._first + 1) % self.period == 0
+        return self._due(t, self.period, self.offset)
 
     def parameters(self):
-        return {"period": self.period, "kappa": self.kappa}
+        return {"period": self.period, "offset": self.offset, "kappa": self.kappa}
 
 
 class Oracle(Rule):
@@ -204,12 +213,19 @@ class Oracle(Rule):
     name = "oracle"
     needs_future = True
 
-    def __init__(self, objective: str = "error"):
+    def __init__(self, objective: str = "error", same_batch: bool = False):
         if objective not in ("error", "staleness"):
             raise ValueError("oracle objective must be 'error' or 'staleness'")
-        self.objective, self.schedule, self.cost = objective, [], 0.0
+        if same_batch and objective != "staleness":
+            raise ValueError("same-batch accounting is defined for the staleness objective only")
+        self.objective, self.schedule, self.cost, self.same_batch = objective, [], 0.0, same_batch
 
     def fit_future(self, matrix, alpha):
+        if self.same_batch:
+            self.schedule, self.cost = optimal_schedule_same_batch(
+                np.nan_to_num(matrix.staleness_matrix(), nan=0.0), matrix.initial, matrix.offline,
+                matrix.batches - 1, alpha)
+            return
         if self.objective == "error":
             cost = matrix.err
         else:
@@ -329,8 +345,8 @@ class StalenessOracle(Oracle):
 
     name = "oracle_staleness"
 
-    def __init__(self):
-        super().__init__("staleness")
+    def __init__(self, same_batch: bool = False):
+        super().__init__("staleness", same_batch)
 
 
 RULES = {cls.name: cls for cls in (Frozen, CaraT, CaraCT, CaraP, Markov, Oracle, StalenessOracle, UPF)}
