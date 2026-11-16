@@ -116,8 +116,11 @@ def campaign_command(args):
 
 
 @command("typed", lambda p: (p.add_argument("config"),
-                             p.add_argument("--state", default="state/task_evaluation-typed")))
+                             p.add_argument("--state", default="state/task_evaluation-typed"),
+                             p.add_argument("--services", action="store_true", help="publish to MLflow")))
 def typed_command(args):
+    from pathlib import Path
+
     from .application.components import default_registry, make_source
     from .config import TypedConfig, load_model
     from .evaluation.typed import run_typed
@@ -125,7 +128,14 @@ def typed_command(args):
     specification = load_model(TypedConfig, args.config)
     source = make_source(default_registry(), specification.dataset)
     result = run_typed(source, args.state, **specification.model_dump(exclude={"dataset"}))
-    emit({k: result[k] for k in ("run_key", "metrics", "complete")})
+    output = {k: result[k] for k in ("run_key", "metrics", "complete")}
+    if args.services:
+        from .infrastructure.benchmark_tracking import publish_local_benchmark
+
+        output["tracking"] = publish_local_benchmark(
+            Path(args.state) / result["run_key"], result, experiment_name="continual-bench/typed",
+        )
+    emit(output)
 
 
 def _datasets_options(parser):
@@ -256,6 +266,7 @@ def _matrix_options(parser):
     parser.add_argument("--cache", default="state/datasets")
     parser.add_argument("--real-directory")
     parser.add_argument("--dry-run", action="store_true", help="only print the expanded plan")
+    parser.add_argument("--services", action="store_true", help="publish local matrix cases to MLflow")
 
 
 @command("matrix", _matrix_options)
@@ -270,7 +281,8 @@ def matrix_command(args):
               "planned": [{"case": case_key(c), **describe(c)} for c in plan["cases"]],
               "skipped": plan["skipped"]})
         return
-    journal = execute_matrix(matrix, args.state, cache=args.cache, real_directory=args.real_directory)
+    journal = execute_matrix(matrix, args.state, cache=args.cache, real_directory=args.real_directory,
+                             services=args.services)
     emit({"complete": journal["complete"], "cases": len(journal["cases"]),
           "skipped": len(journal["skipped"])})
 

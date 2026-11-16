@@ -12,7 +12,6 @@ import copy
 import gc
 import json
 import math
-import pickle
 import random
 import time
 from pathlib import Path
@@ -21,6 +20,8 @@ from continual_bench.core.tasks import REGRESSION, task_kind
 from continual_bench.infrastructure.storage import atomic_write
 from continual_bench.models import MODELS, default_model
 
+from .environment import environment
+from .epoch_history import epoch_fit, pickle_state, write_state
 from .iterative_scores import ClassificationScorer, RegressionScorer, argmax_label, score_rows
 
 CLASSIFIER_PARAMS = {"grace_period": 50, "max_depth": 8, "max_size": 8,
@@ -99,8 +100,7 @@ def make_model(dataset, task, name=None):
 
 
 def _epoch_metrics(prefix, scorer):
-    names = {"log_loss", "accuracy", "balanced_accuracy", "f1_macro", "pr_auc", "mae", "rmse", "r2"}
-    return {f"{prefix}:{k}": v for k, v in scorer.result().items() if k in names}
+    return {f"{prefix}:{key}": value for key, value in scorer.result().items()}
 
 
 def _eval_loss(scorer, is_regression):
@@ -146,7 +146,12 @@ def run_iterative(data, out_dir, *, max_epochs=100, patience=10, min_delta=0.0, 
     from .artifacts import write_artifacts
     from .costs import account
     from .system_metrics import SystemMetricsSampler
+    from .training_evidence import write_training_artifacts
 
+    if not len(data) or max_epochs < 1 or patience < 1 or train_probe < 1:
+        raise ValueError("iterative training requires positive samples, epochs, patience and probe size")
+    if not 0.0 < validation_fraction < 0.5:
+        raise ValueError("validation_fraction must be between 0 and 0.5")
     guard = guard or MemoryGuard()
     is_regression = data.task == REGRESSION
     kind, task = task_kind(data.task), data.task
@@ -156,13 +161,15 @@ def run_iterative(data, out_dir, *, max_epochs=100, patience=10, min_delta=0.0, 
     rng = random.Random(seed)
     started = time.monotonic()
     updates, windows, versions, history, peak = [], [], [], [], 0
+    fits = []
+    bounds = update_bounds(data.tasks, len(data))
     overall = RegressionScorer() if is_regression else ClassificationScorer()
     totals = {"errors": 0.0, "presentations": 0, "train_seconds": 0.0, "predict_seconds": 0.0}
     costs_config = CostConfig(train_sample=0.001, update=0.05).model_dump()
     sampler = SystemMetricsSampler(out)
     sampler.__enter__()
     try:
-        for number, (start, stop) in enumerate(update_bounds(data.tasks, len(data)), 1):
+        for number, (start, stop) in enumerate(bounds, 1):
             scores = RegressionScorer() if is_regression else ClassificationScorer()
             before = time.perf_counter()
             for index in range(start, stop):
@@ -182,12 +189,14 @@ def run_iterative(data, out_dir, *, max_epochs=100, patience=10, min_delta=0.0, 
                     peak = max(peak, guard.check())
             totals["predict_seconds"] += time.perf_counter() - before
             size = stop - start
-            val_start = stop - max(1, int(size * validation_fraction))
-            train_ids = list(range(start, val_start)) or [start]
+            val_start = stop - max(1, int(size * validation_fraction)) if size > 1 else stop
+            train_ids = list(range(start, val_start))
             validation = [data.row(i) for i in range(val_start, stop)]
             stride = max(1, len(train_ids) // train_probe)
             probe_ids = train_ids[::stride][:train_probe]
             best, best_state, best_epoch, wait, epochs, stopped = math.inf, None, 0, 0, [], False
+            rows = []
+            fit_train_seconds = 0.0
             began = time.monotonic()
             for epoch in range(1, max_epochs + 1):
                 rng.shuffle(train_ids)
@@ -198,13 +207,14 @@ def run_iterative(data, out_dir, *, max_epochs=100, patience=10, min_delta=0.0, 
                     if count % 2000 == 0:
                         peak = max(peak, guard.check())
                 train_duration = time.perf_counter() - tick
+                fit_train_seconds += train_duration
                 totals["train_seconds"] += train_duration
                 totals["presentations"] += len(train_ids)
                 tick = time.perf_counter()
-                val_scores = score_rows(model, is_regression, validation)
-                val_duration = time.perf_counter() - tick
+                val_scores = score_rows(model, is_regression, validation) if validation else None
+                val_duration = time.perf_counter() - tick if validation else 0.0
                 train_scores = score_rows(model, is_regression, (data.row(i) for i in probe_ids))
-                loss = _eval_loss(val_scores, is_regression)
+                loss = _eval_loss(val_scores if validation else train_scores, is_regression)
                 improved = loss < best - min_delta
                 if improved:
                     best, best_epoch, wait = loss, epoch, 0
@@ -213,19 +223,24 @@ def run_iterative(data, out_dir, *, max_epochs=100, patience=10, min_delta=0.0, 
                     wait += 1
                 stopped = wait >= patience
                 row = {"epoch": epoch, **_epoch_metrics("train", train_scores),
-                       **_epoch_metrics("validation", val_scores),
+                       **(_epoch_metrics("validation", val_scores) if validation else {}),
                        "early_stopped": int(stopped), "best_epoch": best_epoch, "patience_consumed": wait,
                        "training_duration_seconds": train_duration,
                        "validation_duration_seconds": val_duration,
-                       "peak_rss_mb": guard.usage() / 2**20, "best_validation_loss": best}
-                if is_regression:
-                    row["validation:log_loss"] = loss
+                       "train_samples": len(train_ids), "validation_samples": len(validation),
+                       "train_probe_samples": len(probe_ids),
+                       "peak_rss_mb": guard.usage() / 2**20,
+                       "best_validation_loss": best if validation else None, "best_score": best}
+                rows.append(row)
                 history.append({"global_epoch": len(history) + 1, "update": number, **row})
-                epochs.append({"epoch": epoch, "validation_loss": loss, "best": improved})
+                epochs.append({
+                    "epoch": epoch, "validation_loss": loss if validation else None, "best": improved,
+                })
                 if tracker is not None:
                     tracker.log_epoch(row)
+                scope = "val" if validation else "train"
                 log(f"[{data.name}] update {number} epoch {epoch} "
-                    f"val_loss={loss:.5f} best_epoch={best_epoch}")
+                    f"{scope}_loss={loss:.5f} best_epoch={best_epoch}")
                 if stopped:
                     break
                 gc.collect()
@@ -234,45 +249,62 @@ def run_iterative(data, out_dir, *, max_epochs=100, patience=10, min_delta=0.0, 
             prequential = scores.result()
             windows.append({"scope": "prequential", "end_seq": stop, **prequential,
                             "update_count": number, "epochs_run": len(epochs), "best_epoch": best_epoch})
+            filename = "model.pkl" if number == len(bounds) else f"models/fit-{number:06d}.pkl"
+            checkpoint = write_state(out, filename, pickle_state(model), format="pickle")
+            summary_round = {
+                "epochs_trained": len(epochs), "best_epoch": best_epoch, "early_stopped": int(stopped),
+                "best_validation_loss": best if validation else None, "best_score": best,
+            }
+            selection_metric = "mae" if is_regression else "log_loss"
+            selection_scope = "validation" if validation else "train"
+            fit = epoch_fit(
+                rows, number=number, action="initial" if number == 1 else "continue",
+                previous_steps=len(history) - len(rows), start_seq=start, end_seq=stop,
+                block_index=number - 1, train_samples=len(train_ids), validation_samples=len(validation),
+                train_seconds=fit_train_seconds, checkpoint=checkpoint, deployed_version=number - 1,
+                summary={
+                    **summary_round, "selection_scope": selection_scope, "selection_metric": selection_metric,
+                },
+            )
+            fits.append(fit)
             versions.append({"update": number, "end_seq": stop, "train_samples": len(train_ids),
                              "train_seconds": time.monotonic() - began, "iterations": len(epochs),
-                             "bytes": len(pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL))})
-            summary_round = {"epochs_trained": len(epochs), "best_epoch": best_epoch,
-                             "early_stopped": int(stopped), "best_validation_loss": best}
+                             "fit_id": fit["fit_id"], **checkpoint})
             if tracker is not None:
                 tracker.finalize_round(summary_round)
             updates.append({"update": number, "range": [start, stop], "samples": size,
                             "train": len(train_ids), "validation": len(validation),
                             "prequential": prequential, "epochs_run": len(epochs), "best_epoch": best_epoch,
-                            "best_validation_loss": best, "early_stopped": stopped,
+                            "best_validation_loss": best if validation else None, "early_stopped": stopped,
                             "patience_consumed": wait, "seconds": time.monotonic() - began,
                             "epochs": epochs})
             atomic_write(out / "progress.json", json.dumps({"updates": updates}).encode())
             peak = max(peak, guard.check())
     finally:
         sampler.__exit__(None, None, None)
-    (out / "model.pkl").write_bytes(pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL))
     summary = {**overall.result(), "update_count": len(updates), "retrain_count": len(updates),
                "epochs_total": len(history),
                "early_stopped_updates": sum(u["early_stopped"] for u in updates)}
     report = {"dataset": data.name, "task": task, "samples": len(data), "model": descriptor,
+              "dataset_manifest": getattr(data, "meta", None), "environment": environment(),
               "config": {"max_epochs": max_epochs, "patience": patience, "min_delta": min_delta,
                          "validation_fraction": validation_fraction, "seed": seed,
                          "eval_metric": "validation:mae" if is_regression else "validation:log_loss",
                          "train_metrics_probe_rows": train_probe},
               "updates": updates, "windows": windows,
               "model_versions": versions, "summary": summary, "class_metrics": overall.per_class(),
-              "epoch_history": history, "seconds": time.monotonic() - started,
+              "epoch_history": history, "training_history": fits, "seconds": time.monotonic() - started,
               "peak_memory_bytes": peak, "memory_limit_bytes": guard.limit, "complete": True}
     report["costs"] = account(costs_config, errors=totals["errors"], presentations=totals["presentations"],
                               updates=len(updates), train_seconds=totals["train_seconds"],
                               predict_seconds=totals["predict_seconds"],
-                              model_storage_bytes=versions[-1]["bytes"] if versions else 0)
+                              model_storage_bytes=sum(version["bytes"] for version in versions))
     report["system_metrics"] = sampler.report()
     report["artifacts"] = write_artifacts(
         out, _figures(report),
         {"summary/epochs": history, "summary/prequential": windows, "costs/scenario": report["costs"],
          "system/samples": report["system_metrics"]})
+    report["artifacts"] = write_training_artifacts(out, report)
     atomic_write(out / "result.json", json.dumps(report, default=str).encode())
     if tracker is not None:
         try:

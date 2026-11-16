@@ -16,13 +16,16 @@ from continual_bench.config import EpochConfig
 from continual_bench.core.tasks import MULTICLASS, REGRESSION, task_kind
 from continual_bench.datasets.catalog import DATASETS, load_dataset
 from continual_bench.infrastructure.storage import atomic_write, run_lock
+from continual_bench.infrastructure.training_tracking import HISTORY_FILE, training_checkpoint_paths
 from continual_bench.models import MODELS
 
 from .artifacts import epoch_figures, system_figures, write_artifacts
 from .costs import account
 from .environment import dataset_fingerprint, encoded, environment, peak_rss_bytes
+from .epoch_history import epoch_fit, holdout_epoch_rows, pickle_state, write_state
 from .scoring import metric_set
 from .system_metrics import SystemMetricsSampler
+from .training_evidence import write_training_artifacts
 from .typed import resolve_model
 
 __all__ = ["EpochConfig", "dataset_fingerprint", "run_epochs", "smoke_all", "split_records",
@@ -86,7 +89,8 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
     task = manifest["task"]
     if task not in {MULTICLASS, REGRESSION}:
         raise ValueError("unsupported epoch target type")
-    if model_factory is None:
+    custom_factory = model_factory is not None
+    if not custom_factory:
         model_factory, _ = resolve_model(task, config.model, models=models)
     validate_records(records, task)
     train, test, split = split_records(records, manifest)
@@ -108,27 +112,43 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
                 raise ValueError("completed epoch contract changed")
             if (directory / "samples.jsonl").read_bytes() != payload:
                 raise ValueError("completed epoch sample artifact checksum changed")
+            if report.get("training_history"):
+                expected = {"version": 1, "fits": report["training_history"]}
+                if json.loads((directory / HISTORY_FILE).read_bytes()) != expected:
+                    raise ValueError("completed epoch training history differs from the report")
+                training_checkpoint_paths(directory, report)
             return report
         costs = config.costs.model_dump()
+        model = model_factory()
         with SystemMetricsSampler(root) as sampler:
             epochs, totals = _train_epochs(
-                config, model_factory(), task, train, test, costs, started, progress=progress
+                config, model, task, train, test, costs, started, progress=progress,
             )
+        state = pickle_state(model, optional=custom_factory)
+        checkpoint = write_state(directory, "model.pkl", state, format="pickle") if state else None
+        history = [epoch_fit(
+            holdout_epoch_rows(epochs), action="initial", train_samples=len(train), validation_samples=0,
+            train_seconds=totals["train_seconds"], checkpoint=checkpoint,
+            deployed_version=0 if checkpoint else None, summary={"holdout_examples": len(test)},
+        )]
         report = {"version": "semana09-epochs-v1", "run_key": key, "complete": True,
                   "dataset": config.dataset, "unique_examples": len(records), "epochs": epochs,
                   "train_ids": [r.sample_id for r in train], "test_ids": [r.sample_id for r in test],
+                  "training_history": history,
                   "contract": contract, "seconds": time.monotonic() - started,
                   "peak_rss_bytes_process": peak_rss_bytes(),
                   "scope": "train-only passes; frozen holdout after each epoch, no prequential claim"}
         report["costs"] = account(costs, errors=totals["errors"],
                                   presentations=len(train) * config.epochs, updates=config.epochs,
                                   train_seconds=totals["train_seconds"],
-                                  predict_seconds=totals["predict_seconds"], model_storage_bytes=0)
+                                  predict_seconds=totals["predict_seconds"],
+                                  model_storage_bytes=checkpoint["bytes"] if checkpoint else 0)
         report["system_metrics"] = sampler.report()
         report["artifacts"] = write_artifacts(
             directory, epoch_figures(report) + system_figures(report["system_metrics"]),
             {"summary/epochs": epochs, "costs/scenario": report["costs"],
              "system/samples": report["system_metrics"]})
+        report["artifacts"] = write_training_artifacts(directory, report)
         atomic_write(directory / "samples.jsonl", payload)
         atomic_write(report_path, encoded(report))
         return report
