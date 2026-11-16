@@ -276,3 +276,48 @@ No app MLflow, filtre o experimento `continual-bench-matrix` por `cb-campaign-id
 Cada tentativa do Batch registra um run com o ID do job, a revisão e o contrato da
 unidade. As métricas `progress/*` usam a janela ou época do avaliador, e `final/*`
 registra as métricas finais. O manifesto final da unidade aponta para o run MLflow.
+
+## Jobs nativos no SageMaker Studio
+
+### Onde localizar datasets e avaliações
+
+O menu **Assets -> Datasets / Evaluators** do SageMaker Studio lista ativos
+registrados para customização de modelos generativos. O formulário de datasets
+espera JSONL no esquema da técnica escolhida. O de evaluators registra funções
+ou prompts de recompensa. Veja os [tipos de ativos na documentação da AWS](https://docs.aws.amazon.com/sagemaker/latest/dg/model-customize-open-weight-create-assets-ui.html).
+
+Para localizar os snapshots tabulares do projeto, abra o prefixo `datasets/` do
+bucket de dados. Cada manifesto fica em `datasets/<dataset>/<revisão>/manifests/<versão>/<escopo>/`.
+O marcador `_SUCCESS.json` indica que o snapshot foi publicado, e `snapshot.json`
+referencia o Parquet preparado. Para as avaliações, abra **Applications → MLflow →
+continual-bench-mlflow → Open MLflow → default → Experiments**. Use
+`continual-bench-native` para os jobs nativos ou `continual-bench-matrix` para as
+matrizes. As tabelas `runs` e `metrics` do Athena também permitem consultar os
+resultados do benchmark.
+
+### Executar o pipeline nativo
+
+O pipeline `continual-bench-native` tem três tipos nativos de etapa. `ProfileSnapshot`
+valida o hash e a contagem de linhas do snapshot Social, grava o perfil e publica o
+canal de treinamento. `TrainBaseline` treina o modelo com esse canal.
+`TuneHyperparameters` usa o mesmo canal e procura valores de regularização e de
+`max_epochs`, minimizando `validation:log_loss` na validação temporal.
+
+Para publicar outra revisão, construa as duas imagens AWS a partir da mesma revisão
+e passe os seus digests ao script. A implantação usa a stack complementar
+`continual-bench-studio-native` e a aplicação MLflow da stack de runtime.
+
+```bash
+scripts/aws/deploy_native_pipeline.sh "$RUNTIME_IMAGE" "$ML_IMAGE" "$GIT_SHA"
+
+aws sagemaker start-pipeline-execution --region us-east-1 --pipeline-name continual-bench-native \
+  --pipeline-parameters Name=MaxEpochs,Value=24 Name=TuningMaxEpochs,Value=24 \
+    Name=MaxTuningJobs,Value=2 Name=MaxParallelTuningJobs,Value=1
+```
+
+Os padrões de entrada apontam para o snapshot `smoke`. Para outra revisão ou escopo,
+informe juntos `PreparedParquetUri`, `PreparedManifestUri` e `Scope`. No Studio, o grafo
+mostra o status e os detalhes de cada job nativo. No MLflow, use o experimento
+`continual-bench-native` e filtre pela tag `cb-pipeline-execution-id`. O processamento
+registra o progresso por lote de linhas, o treinamento publica métricas por época e
+cada trial de tuning tem seu próprio run com os hiperparâmetros e o objetivo medido.
