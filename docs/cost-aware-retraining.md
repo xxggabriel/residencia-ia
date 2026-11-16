@@ -115,40 +115,32 @@ Electricity reproduz o Oracle e o UPF dentro de um desvio. Em circles a ordem Or
 
 Premissas que o texto dos artigos não fecha (`datasets/retraining_benchmarks.ASSUMPTIONS`): o `ε` da regra de circles, a leitura literal da regra de Gauss, a divisão treino/teste dentro de cada lote (80/20) e o uso do índice do lote como `t` nos geradores. Faltam os baselines ADWIN, KSWIN e FHDDM e os datasets airlines, yelpCHI, epicgames e iWildCam.
 
-Os geradores do CARA (`cara_gauss`, `cara_circle`, `cara_covcon`) existem e são testados, mas o experimento do CARA (Random Forest, 100 lotes, cinco sementes) não foi rodado: o ambiente não tem scikit-learn.
+## Benchmark do CARA com o protocolo dos autores
 
-## Replicação das Tabelas 2–4 do CARA
+O benchmark em `scripts/replicate_cara.py` segue o repositório fornecido com o artigo, revisão
+`ac2a600a3bbc5729087318087c9def96104c9023`. O fluxo do laboratório que compara CARA e UPF continua com a
+contabilidade descrita acima. Os JSONs e gráficos de execuções antigas em `docs/results/` registram o
+protocolo usado na época. Os JSONs novos incluem o campo `reference` com a revisão de referência.
 
-`scripts/replicate_cara.py` (RF do scikit-learn, 100 lotes, 25 offline, 5 sementes, κ varrido em 16 pontos).
-Resultados em `docs/results/cara-*.json`, gráficos em `docs/results/plots/` (`scripts/plot_replication.py`).
+| Código dos autores | Implementação do benchmark |
+|---|---|
+| `datasets/*.py`, `config/dataset/` | Geradores com seed zero fixa, CSVs originais de Electricity e Airlines, e Covertype binário escalado do LIBSVM. Airlines usa *one-hot* esparso e MaxAbsScaler. |
+| `utils.get_online_offline_data_dict`, `qdm.py` | Fases de 25 e 75 lotes com modelos independentes, split de 10% por lote com seed zero, perda 0–1 e obsolescência relativa somada nas queries. RBF com `gamma=20` ou `1/n_features` em Airlines. |
+| `algorithms/threshold.py`, `cum_threshold.py`, `markov.py` | Comparação estrita `>`. CARA-T e CARA-CT usam os limites dos autores no *dual annealing*. O benchmark fixa a seed do otimizador à do Random Forest. |
+| `algorithms/periodic.py`, `dp.py` | Períodos inteiros, menor período em empate e fase preservada no início online. Oracle por programação dinâmica, com decisão também no último lote. |
+| `find_max_retraining_cost.py`, `analyse.py` | Grade de 100 custos sobre o menor limite do Oracle **offline** entre as seeds, elevado ao próximo inteiro. A busca local delimita a fronteira por bisseção, pois a função usada com `fsolve` no original tem um platô. |
+| `utils.py`, `plotting.py` | Custo inclui o treino inicial de cada fase. A contagem dos algoritmos CARA exclui esse treino. A acurácia usa a avaliação prequential do repositório, incluindo o recorte do deslocamento no último lote. O SCPE usa referência com sinal, exclui referência zero e preserva resultados iguais a zero. O resumo sobre a grade exclui `κ=0`. |
 
-Auditoria do que impedia a replicação (a primeira versão dava CARA-T com SCPE 38–44 em electricity/covcon-d):
+Execute com o extra `replication` do projeto e informe os arquivos de dados originais quando necessário.
 
-1. **Contabilidade do artigo** (Eq. 4–6): um retreino em `t` custa κ *no lugar* da obsolescência de `t` (o modelo
-   treinado em `D_t` atende `t` com Ψ = 0). Antes o código cobrava a obsolescência do lote e atrasava o modelo
-   em um lote. Agora `simulate(..., same_batch=True)`, `StalenessOracle(same_batch=True)`,
-   `optimal_schedule_same_batch` e as regras CARA com `same_batch=True` (padrão do script; `--lag` volta ao
-   protocolo test-then-train das políticas do pipeline).
-2. **Faixa de κ**: as unidades de Ψ do artigo não são recuperáveis (os κ máximos das Figs. 4–7 excedem o número
-   de queries). A faixa padrão vai de 0 até o menor κ em que o Oracle de obsolescência para de retreinar
-   (`--kappa-range oracle`); `--kappa-range paper` usa os limites lidos das figuras. A média do SCPE depende
-   fortemente da faixa: com os limites das figuras, a maior parte do eixo é a região "nunca retreinar".
-3. **CARA-P** passou a ajustar também o deslocamento `a` (Eq. 10), com batches absolutos.
+```sh
+python scripts/replicate_cara.py covcon-d circle-s electricity --seeds 5 \
+  --electricity /path/to/elec.csv --output /path/to/cara.json
+```
 
-SCPE médio (%) CARA-T / CARA-CT / CARA-P, aqui (artigo):
-
-| Dataset | CARA-T | CARA-CT | CARA-P | Markov (aqui) |
-|---|---|---|---|---|
-| covcon-d | 17,3 (17,7) | 14,2 (19,3) | 9,3 (16,3) | 19,2 |
-| airlines | 6,0 (6,1) | 5,7 (5,5) | 5,0 (5,5) | 3,5 |
-| circle-d | 13,8 (45,6) | 28,3 (47,3) | 34,6 (85,0) | 23,9 |
-| covcon-s | 12,6 (15,6) | 25,8 (22,9) | 34,6 (104,8) | 19,7 |
-| covertype | 15,2 (26,4) | 13,7 (27,9) | 20,6 (38,4) | 15,7 |
-| electricity | 19,3 (8,3) | 27,1 (40,3) | 22,0 (64,1) | 6,2 |
-| gauss-d | 20,4 (8,6) | 78,9 (59,9) | 129,2 (136,0) | 8,3 |
-
-Reproduzidos de perto: covcon-d e airlines (CARA-T/CT/P) e a ordem CARA-T < CT < P em gauss. Não
-reproduzidos: electricity e gauss (Markov ganha do CARA-T; o τ calibrado offline não generaliza) e as
-acurácias absolutas de circle/covcon/covertype (os geradores e o pré-processamento diferem do artigo; o
-Oracle daqui chega a 0,77/0,63/0,65 contra 0,97/0,76/0,76). A obsolescência normalizada pela soma das
-similaridades melhorou electricity (CARA-T 12) mas piorou covcon-d e airlines, por isso não foi adotada.
+O CLI aceita `--airlines` para `airlines.csv` e `--covertype` para o arquivo
+`covtype.libsvm.binary.scale`, também em `.bz2`. A opção `--kappa-max` define um teto explícito para
+comparações na mesma grade. `--drift-backend skmultiflow` usa os detectores do ambiente original, quando
+disponíveis. `--drift-backend river` oferece uma comparação com os detectores deste projeto, que têm
+implementações diferentes. O experimento de classificação incremental dos apêndices usa outros modelos
+e fica fora desse CLI.

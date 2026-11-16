@@ -1,13 +1,14 @@
 """Datasets of the UPF (Regol et al. 2025) and CARA (Mahadevan & Mathioudakis 2024) papers.
 
-Each function returns a list of batches ``(x, y)`` (one per time step). Synthetic generators follow
-the formulas printed in the papers; the sentence "``<= 0.5 eps``" of UPF's *circles* rule does not
+Each function returns a list of batches ``(x, y)`` (one per time step). CARA generators follow the
+authors' experiment configuration. For UPF, the sentence "``<= 0.5 eps``" of UPF's *circles* rule does not
 define ``eps``, so it is a parameter (default 1, squared radius 0.5) and the choice is recorded in
 :data:`ASSUMPTIONS`. Real datasets are split in temporal order; this module never downloads anything.
 """
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from pathlib import Path
 
 import numpy as np
@@ -42,69 +43,67 @@ def upf_circles(n_datasets: int, size: int = 5000, seed: int = 0, start: int = 0
     return batches
 
 
-def _cara_concept(name: str):
-    """``(sample(t, rng, size) -> x, label(t, x) -> y)`` of a CARA synthetic dataset."""
+def _cara_labels(name, points, seed):
     if name == "gauss":
-        def sample(t, rng, size):
-            centre = ((t + 1) % 15) / 30
-            return rng.normal([centre, 0.5 - centre], 0.1, size=(size, 2))
-
-        def label(t, x):
-            return (x[:, 1] > 4 * (x[:, 0] - 0.5) ** 2).astype(np.int64)
-    elif name == "circle":
-        def sample(t, rng, size):
-            return rng.uniform(0, 1, size=(size, 2))
-
-        def label(t, x):
-            centre, radius2 = 0.2 + 0.02 * (t % 25), (0.2 + 0.01 * (t % 25)) ** 2
-            return (((x - centre) ** 2).sum(axis=1) <= radius2).astype(np.int64)
-    elif name == "covcon":
-        def sample(t, rng, size):
-            mean = ((t + 1) % 7) / 10
-            return rng.normal([mean, mean], 0.1, size=(size, 2))
-
-        def label(t, x):
-            above = x[:, 0] * np.sin(np.pi * x[:, 0]) > x[:, 1]
-            return (~above if (t // 10) % 2 == 1 else above).astype(np.int64)
-    else:
+        return [(4 * (x[:, 0] - 0.5) ** 2 > x[:, 1]).astype(int) for x in points]
+    if name == "covcon":
+        labels = []
+        for t, x in enumerate(points):
+            boundary = 0.6 * np.sin(np.pi * x[:, 0])
+            below = boundary < x[:, 1] if (t // 10) % 2 == 0 else boundary > x[:, 1]
+            labels.append(below.astype(int))
+        return labels
+    if name != "circle":
         raise ValueError(f"unknown CARA dataset {name}")
-    return sample, label
-
-
-def _cara_batches(name, n_batches, size, seed):
-    sample, label = _cara_concept(name)
     rng = np.random.default_rng(seed)
-    batches = []
-    for t in range(n_batches):
-        x = sample(t, rng, size)
-        batches.append((x, label(t, x)))
-    return batches
+    drifts = (15, 45, 85)
+    centres = (0.2, 0.4, 0.6, 0.8)
+    radii = (0.15, 0.2, 0.25, 0.3)
+
+    def inside(x, concept):
+        return ((x[:, 0] - centres[concept]) ** 2 + (x[:, 1] - 0.5) ** 2 <= radii[concept] ** 2)
+
+    labels = []
+    for t, x in enumerate(points):
+        concept = bisect_right(drifts, t)
+        since_drift = t - drifts[concept - 1] + 1 if concept else 5
+        if since_drift < 5:
+            y = inside(x, concept - 1)
+            switched = rng.choice(len(x), size=int((since_drift / 5) * len(x)), replace=False)
+            y[switched] = inside(x[switched], concept)
+        else:
+            y = inside(x, concept)
+        labels.append(y.astype(int))
+    return labels
 
 
 def cara_gauss(n_batches: int = 100, size: int = 1000, seed: int = 0):
-    """CARA Gauss: gradual covariate shift, fixed parabolic boundary ``x2 > 4 (x1 - 0.5)^2``."""
-    return _cara_batches("gauss", n_batches, size, seed)
+    """Gauss stream with the reference repository's seed and standard deviation."""
+    rng = np.random.default_rng(seed)
+    centres = [((t + 1) % 15) / 30 for t in range(n_batches)]
+    points = [rng.normal([c, 0.5 - c], 0.05, size=(size, 2)) for c in centres]
+    return list(zip(points, _cara_labels("gauss", points, seed), strict=True))
 
 
 def cara_circle(n_batches: int = 100, size: int = 1000, seed: int = 0):
-    """CARA Circle: uniform points, circle whose centre and radius drift (gradual concept drift)."""
-    return _cara_batches("circle", n_batches, size, seed)
+    """Circles stream with mixtures of old and new concepts at the three drifts."""
+    rng = np.random.default_rng(seed)
+    points = [rng.random(size=(size, 2)) for _ in range(n_batches)]
+    return list(zip(points, _cara_labels("circle", points, seed), strict=True))
 
 
 def cara_covcon(n_batches: int = 100, size: int = 1000, seed: int = 0):
-    """CARA CovCon: moving Gaussian (covariate drift); the boundary inequality flips every 10 batches."""
-    return _cara_batches("covcon", n_batches, size, seed)
+    """CovCon stream with covariate shift and a concept flip every ten batches."""
+    rng = np.random.default_rng(seed)
+    points = [rng.normal(((t + 1) % 7) / 10, 0.1, size=(size, 2)) for t in range(n_batches)]
+    return list(zip(points, _cara_labels("covcon", points, seed), strict=True))
 
 
 def cara_static_queries(name: str, n_batches: int = 100, n_queries: int = 100, seed: int = 0):
-    """CARA "-S" query stream: static Gaussian at (0.5, 0.5), sigma 0.015, labelled by the batch concept."""
-    _, label = _cara_concept(name)
-    rng = np.random.default_rng(seed + 7919)
-    batches = []
-    for t in range(n_batches):
-        x = rng.normal(0.5, 0.015, size=(n_queries, 2))
-        batches.append((x, label(t, x)))
-    return batches
+    """Static queries with standard deviation 0.01 in the reference configuration."""
+    rng = np.random.default_rng(seed)
+    points = [rng.normal((0.5, 0.5), 0.01, size=(n_queries, 2)) for _ in range(n_batches)]
+    return list(zip(points, _cara_labels(name, points, seed), strict=True))
 
 
 def split_batch(x, y, rng, train_fraction: float = 0.8):
@@ -177,8 +176,7 @@ def covertype_batches(path: str | Path, n_batches: int = 100):
 def airlines_arrays(path: str | Path):
     """OpenML airlines (539,383 rows): 7 features, nominal ones ordinal-encoded, Delay = 1 positive.
 
-    UPF (Table 4) lists 7 features for XGBoost. CARA one-hot encodes the nominals (7,198 columns); this
-    adapter does not, which is a recorded deviation for the CARA experiment.
+    UPF (Table 4) lists 7 features for XGBoost. CARA uses the separate one-hot CSV adapter.
     """
     from .arff import iter_arff
 
@@ -208,3 +206,49 @@ def windowed_batches(x, y, size: int, count: int, start: int):
     """``count`` consecutive batches of ``size`` rows beginning at batch ``start`` (UPF trial windows)."""
     return [(x[(start + i) * size:(start + i + 1) * size], y[(start + i) * size:(start + i + 1) * size])
             for i in range(count)]
+
+
+def cara_real_batches(name: str, path: str | Path, n_batches: int = 100):
+    """Load and preprocess the source files named in the CARA repository."""
+    import csv
+
+    from scipy.sparse import hstack
+    from sklearn.datasets import load_svmlight_file
+    from sklearn.preprocessing import MaxAbsScaler, MinMaxScaler, OneHotEncoder
+
+    path = Path(path)
+    if name == "covertype":
+        # load_svmlight_file opens .bz2 transparently when given a filename.
+        x, y = load_svmlight_file(str(path))
+        return list(zip(np.array_split(x.toarray(), n_batches), np.array_split(y - 1, n_batches),
+                        strict=True))
+    with path.open(newline="") as source:
+        reader = csv.reader(source)
+        header = next(reader)
+        rows = list(reader)
+    def column(index):
+        values = [row[index] for row in rows]
+        try:
+            return np.asarray(values, dtype=np.int64)
+        except ValueError:
+            return np.asarray(values)
+
+    y = column(-1)
+    if name == "electricity":
+        x = np.asarray([row[:-1] for row in rows], dtype=float)
+        x = MinMaxScaler().fit_transform(x)
+        return list(zip(np.array_split(x, n_batches), np.array_split(y, n_batches), strict=True))
+    if name != "airlines":
+        raise ValueError(f"unknown CARA dataset {name}")
+    airline, flight, origin, destination, day, time, length = (
+        header.index(column)
+        for column in ("Airline", "Flight", "AirportFrom", "AirportTo", "DayOfWeek", "Time", "Length")
+    )
+    categories = np.empty((len(rows), 5), dtype=object)
+    for j, index in enumerate((airline, flight, origin, destination, day)):
+        categories[:, j] = column(index)
+    numerical = np.asarray([(row[time], row[length]) for row in rows], dtype=float)
+    x = hstack([OneHotEncoder().fit_transform(categories), numerical]).tocsr()
+    x = MaxAbsScaler().fit_transform(x)
+    size = len(y) // n_batches + 1
+    return [(x[i * size:(i + 1) * size], y[i * size:(i + 1) * size]) for i in range(n_batches)]

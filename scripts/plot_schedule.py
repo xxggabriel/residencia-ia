@@ -1,4 +1,4 @@
-"""Compute and draw the CARA Fig. 1 plot (accuracy of each model per batch + retraining schedule).
+"""Draw candidate models and the CARA-T schedule for a short reference stream.
 
 python scripts/plot_schedule.py covcon-d electricity --seeds 5 --output docs/results
 """
@@ -18,10 +18,14 @@ def main():
     parser.add_argument("--batches", type=int, default=11)
     parser.add_argument("--offline", type=int, default=4)
     parser.add_argument("--fraction", type=float, default=0.25)
-    parser.add_argument("--electricity")
+    parser.add_argument("--electricity", help="original elec.csv")
+    parser.add_argument("--airlines")
+    parser.add_argument("--covertype")
     parser.add_argument("--output", type=Path, default=Path("docs/results"))
     args = parser.parse_args()
-    options = {"electricity_path": args.electricity} if args.electricity else {}
+    options = dict(electricity_path=args.electricity, airlines_path=args.airlines,
+                   covertype_path=args.covertype)
+    args.output.mkdir(parents=True, exist_ok=True)
     for name in args.datasets:
         showcase = schedule_showcase(
             name, args.seeds, batches=args.batches, offline=args.offline, fraction=args.fraction, **options

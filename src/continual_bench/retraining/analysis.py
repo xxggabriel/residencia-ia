@@ -10,6 +10,7 @@ import math
 
 import numpy as np
 
+from .cara_reference import strategy_scpe
 from .matrix import PerformanceMatrix
 from .rules import UPF, CaraCT, CaraP, CaraT, Frozen, Markov, Oracle, StalenessOracle
 from .schedule import (
@@ -146,7 +147,7 @@ def analyze(
             "retrain_points": result.retrains, "average_accuracy": _num(result.average_accuracy),
             "scpe": _num(scpe(result.cost, oracle.cost)),
             "strategy_cost": _num(strategy), "oracle_strategy_cost": _num(strategy_oracle[alpha]),
-            "strategy_scpe": _num(scpe(strategy, strategy_oracle[alpha])),
+            "strategy_scpe": _num(strategy_scpe(strategy, strategy_oracle[alpha])),
             "parameters": json_parameters(result.parameters),
         }
 

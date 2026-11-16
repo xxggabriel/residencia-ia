@@ -74,6 +74,7 @@ def cara_figures(results):
     for k, (rule, label, column) in enumerate((("cara", "CARA-T", 0), ("cara_cumulative", "CARA-CT", 1),
                                                ("cara_periodic", "CARA-P", 2))):
         ours = [r["summary"][rule]["strategy_scpe"] for r in results]
+        ours = [float("nan") if value is None else value for value in ours]
         ax.bar([x + (k - 1) * width for x in xs], ours, width, label=f"{label} (aqui)", color=COLORS[rule])
         ax.scatter([x + (k - 1) * width for x in xs], [PAPER["scpe"][n][column] for n in names], marker="_",
                    s=220, color="black", zorder=3, label="artigo" if k == 0 else None)

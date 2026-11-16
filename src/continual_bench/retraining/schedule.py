@@ -137,9 +137,11 @@ def optimal_schedule_same_batch(stale: np.ndarray, initial: int, first: int, las
 
 def alpha_max_same_batch(stale: np.ndarray, initial: int, first: int, last: int) -> float:
     """Smallest ``alpha`` at which :func:`optimal_schedule_same_batch` stops retraining (bisection)."""
-    high = float(sum(stale[t, initial] for t in range(first, last + 1))) + 1.0
+    high = 1.0
     if optimal_schedule_same_batch(stale, initial, first, last, 0.0)[0] == []:
         return 0.0
+    while optimal_schedule_same_batch(stale, initial, first, last, high)[0]:
+        high *= 2.0
     low = 0.0
     for _ in range(50):
         mid = (low + high) / 2

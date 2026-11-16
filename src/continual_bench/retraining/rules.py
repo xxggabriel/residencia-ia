@@ -50,7 +50,9 @@ class Frozen(Rule):
 def _candidates(values, extra=()):
     unique = np.unique(np.asarray(list(values) + list(extra), dtype=np.float64))
     if len(unique) > MAX_CANDIDATES:
-        unique = np.unique(np.quantile(unique, np.linspace(0, 1, MAX_CANDIDATES)))
+        finite = unique[np.isfinite(unique)]
+        sampled = np.quantile(finite, np.linspace(0, 1, MAX_CANDIDATES))
+        unique = np.unique(np.concatenate((sampled, unique[~np.isfinite(unique)])))
     return [float(v) for v in unique]
 
 
