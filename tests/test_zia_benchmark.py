@@ -71,9 +71,11 @@ def test_zia_detectors_receive_the_same_binary_errors(policy):
             self.drift_detected = len(self.errors) == 2
 
     detector = Recorder()
+    offsets = []
     assert drift_alarms(detector, policy, np.array([[0.5, 0.5], [0.8, 0.2], [0.1, 0.9]]),
-                        np.array([1, 1, 0]), {}) == 1
+                        np.array([1, 1, 0]), {}, on_alarm=offsets.append) == 1
     assert detector.errors == [0, 1, 1]
+    assert offsets == [1]
 
 
 def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
@@ -114,10 +116,34 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
         assert sum((output / version["file"]).stat().st_size
                    for version in report["model_versions"]) == summary["model_storage_bytes"]
         assert summary["aws_cost_total_usd"] > 0
+        fits = json.loads((output / "training-history.json").read_text())["fits"]
+        assert fits == report["training_history"]
+        steps = [point for fit in fits for point in fit["steps"]]
+        assert [point["global_step"] for point in steps] == list(range(1, len(steps) + 1))
+        assert all([point["step"] for point in fit["steps"]] == list(range(1, len(fit["steps"]) + 1))
+                   and fit["training_presentations"] == sum(point["metrics"]["train_samples"]
+                                                            for point in fit["steps"]) for fit in fits)
+        assert summary["training_presentations"] == sum(
+            fit["training_presentations"] for fit in fits if fit["deployed_version"] is not None
+        )
+        for fit in fits:
+            if fit["deployed_version"] is not None:
+                version = report["model_versions"][fit["deployed_version"]]
+                assert version["fit_id"] == fit["fit_id"]
+                assert version["sha256"] == fit["checkpoint"]["sha256"]
+                assert version["sha256"] == sha256_file(output / version["file"])
+            else:
+                assert fit["action"] == "candidate" and fit["checkpoint"]["file"] is None
     assert reports["frozen"]["metrics"]["update_count"] == 0
     assert reports["periodic"]["metrics"]["retrain_count"] == 2
-    assert reports["incremental"]["metrics"]["training_unique_examples"] == 8996
-    assert reports["online"]["metrics"]["training_unique_examples"] == 8996
+    for name in ("incremental", "online"):
+        report = reports[name]
+        assert report["metrics"]["training_unique_examples"] == 8996 - sum(
+            fit["validation_samples"] for fit in report["training_history"]
+        )
+        assert {point["kind"] for fit in report["training_history"][1:] for point in fit["steps"]} == {
+            "epoch" if name == "incremental" else "minibatch"
+        }
     assert reports["online"]["metrics"]["retrain_count"] == 0
     assert reports["online"]["model"] == reports["frozen"]["model"]
     online_warmup = reports["online"]["model_versions"][0]

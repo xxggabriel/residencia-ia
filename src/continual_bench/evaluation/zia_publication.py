@@ -1,6 +1,6 @@
 """Publish standard Zia run artifacts from retained reports and native weights."""
 
-import importlib.metadata
+import json
 import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,6 +12,11 @@ from continual_bench.evaluation.zia_predictions import INDEX, PredictionArchive,
 from continual_bench.infrastructure.metric_tracking import log_metric_points, publish_tracking
 from continual_bench.infrastructure.run_artifacts import publish_run_artifacts
 from continual_bench.infrastructure.storage import atomic_write, publication_lock
+from continual_bench.infrastructure.zia_model_bundle import (
+    PYFUNC_LOADER,
+    pyfunc_code_paths,
+    pyfunc_dependencies,
+)
 from continual_bench.infrastructure.zia_tracking import publish_run_metrics
 from continual_bench.models.zia import ZiaPredictor, make_zia_model
 
@@ -28,6 +33,7 @@ def run_documents(report, adapted, base_uri):
     source = manifest["source"]
     final = versions[-1]
     metadata = {
+        "dataset": report["dataset"],
         "model": report["model"], "model_params": report["model_params"], "features": manifest["features"],
         "classes": source["classes"], "dataset_version": manifest["sha256"],
         "code_sha256": env["code_sha256"], "state_sha256": final["sha256"],
@@ -46,6 +52,8 @@ def run_documents(report, adapted, base_uri):
         "model_states_uri": f"{base_uri}/models", "model_index_uri": f"{base_uri}/model-versions.json",
         "model_state_sha256": final["sha256"], "model_versions_count": len(versions),
     }
+    if "training_history" in report:
+        links["training_history_uri"] = f"{base_uri}/training-history.json"
     files = {
         "manifest.json": manifest, "environment.json": env, "model-metadata.json": metadata,
         "model-versions.json": {"versions": versions, "final_version_id": final["sha256"],
@@ -146,20 +154,12 @@ def publish_model(client, run, directory, report, metadata, root):
             shutil.copy2(directory / metadata["native_path"], data / metadata["payload"])
             predictor = ZiaPredictor(data)
             prediction = predictor.predict(example)
-            requirements = [f"{p}=={importlib.metadata.version(p)}"
-                            for p in ("numpy", "scipy", "mlflow-skinny", "pandas")]
-            if report["model"] == "xgboost":
-                version = predictor.model.xgb.__version__
-                marker = "sys_platform == 'linux' and platform_machine == 'x86_64'"
-                requirements.extend([
-                    f"xgboost-cpu=={version}; {marker}",
-                    f"xgboost=={version}; sys_platform != 'linux' or platform_machine != 'x86_64'",
-                ])
             target = staging / "model"
             mlflow.pyfunc.save_model(
-                path=str(target), loader_module="zia", data_path=str(data), code_paths=[str(
-                    Path(__file__).resolve().parents[1] / "models" / "zia.py"
-                )], pip_requirements=requirements, signature=infer_signature(example, prediction),
+                path=str(target), loader_module=PYFUNC_LOADER, data_path=str(data),
+                code_paths=pyfunc_code_paths(staging),
+                pip_requirements=pyfunc_dependencies(report["model"]),
+                signature=infer_signature(example, prediction),
                 input_example=example, metadata={k: metadata[k] for k in (
                     "dataset_version", "state_sha256", "code_sha256", "classes"
                 )},
@@ -175,6 +175,12 @@ def publish_model(client, run, directory, report, metadata, root):
 
 def publish_artifacts(client, directory, run_id, report, root, *, derived=False, elapsed_seconds=None):
     directory = Path(directory)
+    with publication_lock(directory.parent, f"zia-run-{run_id}"):
+        return _publish_artifacts(client, directory, run_id, report, root, derived, elapsed_seconds)
+
+
+def _publish_artifacts(client, directory, run_id, report, root, derived=False, elapsed_seconds=None):
+    directory = Path(directory)
     run = client.get_run(run_id)
     if run.data.tags.get("zia_run_key") != directory.name:
         raise ValueError("MLflow run does not match the retained Zia evidence")
@@ -183,6 +189,11 @@ def publish_artifacts(client, directory, run_id, report, root, *, derived=False,
         path = directory / version["file"]
         if path.stat().st_size != version["bytes"] or sha256_file(path) != version["sha256"]:
             raise ValueError("retained model file differs from the Zia report")
+    history = directory / "training-history.json"
+    if "training_history" in report:
+        if json.loads(history.read_bytes()) != {"version": 1, "fits": report["training_history"]}:
+            raise ValueError("retained training history differs from the Zia report")
+    client.set_tag(run_id, "zia_artifacts_status", "publishing")
     evidence = publish_predictions(client, run, directory, report, root)
     adapted = tracking_report(report, evidence)
     if elapsed_seconds is not None:
@@ -194,7 +205,7 @@ def publish_artifacts(client, directory, run_id, report, root, *, derived=False,
             "status": "available", "reason": None, "scope": EXECUTION_SCOPE,
         }
     write_zia_artifacts(directory, report, adapted)
-    artifacts = publish_run_artifacts(client, run_id, directory, report)
+    artifacts = publish_run_artifacts(client, run_id, directory, report, include_checkpoints=False)
     metadata, links, files = run_documents(report, adapted, run.info.artifact_uri.rstrip("/"))
     for name, value in files.items():
         path = directory / name
@@ -205,16 +216,24 @@ def publish_artifacts(client, directory, run_id, report, root, *, derived=False,
     client.set_tag(run_id, "registered_model_version", str(version.version))
     log_metric_points(client, run_id, [("training_used", 0, report["metrics"]["training_used_post_warmup"])])
     tracking = publish_tracking(client, run_id, adapted, directory, derived=derived)
+    training_rounds = artifacts.get("training_rounds", [])
+    client.set_tag(run_id, "cb-training-round-count", str(len(training_rounds)))
     client.set_tag(run_id, "zia_artifacts_status", "complete")
-    return {"run_artifacts": artifacts, "tracking": tracking, "registered_model": version.name,
+    return {"run_artifacts": artifacts, "tracking": tracking, "training_rounds": training_rounds,
+            "registered_model": version.name,
             "registered_model_version": str(version.version), **links}
 
 
 def publish(client, directory, run_id, experiment_id, report, root):
-    publish_run_metrics(client, directory, run_id, report)
-    artifacts = publish_artifacts(client, directory, run_id, report, root)
-    client.set_tag(run_id, "benchmark_complete", "true")
-    client.set_terminated(run_id, "FINISHED")
-    receipt = {"mlflow_run_id": run_id, "mlflow_experiment_id": experiment_id, "complete": True, **artifacts}
-    atomic_write(directory / "receipt.json", encoded(receipt))
-    return receipt
+    directory = Path(directory)
+    with publication_lock(directory.parent, f"zia-run-{run_id}"):
+        client.set_tag(run_id, "benchmark_complete", "false")
+        publish_run_metrics(client, directory, run_id, report)
+        artifacts = _publish_artifacts(client, directory, run_id, report, root)
+        client.set_tag(run_id, "benchmark_complete", "true")
+        client.set_terminated(run_id, "FINISHED")
+        receipt = {
+            "mlflow_run_id": run_id, "mlflow_experiment_id": experiment_id, "complete": True, **artifacts,
+        }
+        atomic_write(directory / "receipt.json", encoded(receipt))
+        return receipt

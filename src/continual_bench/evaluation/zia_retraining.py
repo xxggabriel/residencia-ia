@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from hashlib import sha256
 
 import numpy as np
 
 from continual_bench.retraining import PerformanceMatrix, SimResult, build_matrix, simulate
 from continual_bench.retraining.analysis import analyze, deployed_metrics, json_parameters
+from continual_bench.retraining.matrix import POLICY_MISSING_FEATURES
 from continual_bench.retraining.rules import Oracle
 
 from .zia_metrics import decide
@@ -34,38 +36,52 @@ def settings(tracking_settings: dict) -> dict:
 class ZiaLearner:
     """Model trained at the end of block ``i`` on the last ``replay`` blocks (block 0 stands alone)."""
 
-    def __init__(self, model, threshold, config, replay: int):
+    def __init__(self, model, threshold, config, replay: int, history, scratch, tracker):
         self.model, self.threshold, self.config = model, threshold, config
+        self.history, self.scratch, self.tracker = history, scratch, tracker
         self.window: deque = deque(maxlen=replay)
         self.rows = 0
 
-    def fit(self, index, x, y):
+    def fit(self, index, x, y, timestamps):
         start = self.rows
         self.rows += len(y)
         if index:
-            self.window.append((start, x, y))
+            self.window.append((start, x, y, timestamps))
             fit_start = self.window[0][0]
             fit_x = np.concatenate([w[1] for w in self.window])
             fit_y = np.concatenate([w[2] for w in self.window])
+            fit_timestamps = np.concatenate([w[3] for w in self.window])
         else:
-            fit_start, fit_x, fit_y = start, x, y
+            fit_start, fit_x, fit_y, fit_timestamps = start, x, y, timestamps
+        self.history.check_interrupted()
         timer = time.monotonic()
-        iterations = self.model.fit(fit_x, fit_y, False, config=self.config, tracker=None)
-        seconds = time.monotonic() - timer
+        self.model.fit(
+            fit_x, fit_y, False, config=self.config, tracker=self.tracker, timestamps=fit_timestamps,
+            capture_sigterm=self.history.stop_requested is None, stop_requested=self.history.stop_requested,
+        )
+        fit = self.history.capture(
+            self.model.training_summary, action="candidate", block_index=index, start=fit_start,
+            timestamps=fit_timestamps, seconds=time.monotonic() - timer,
+        )
         payload, extension = self.model.payload()
-        return {"payload": payload, "extension": extension, "seconds": seconds, "iterations": iterations,
-                "start": fit_start, "rows": len(fit_y), "index": index}
+        path = self.scratch / f"{fit['fit_id']}.{extension}"
+        path.write_bytes(payload)
+        fit["checkpoint"] = {"file": None, "sha256": sha256(payload).hexdigest(), "bytes": len(payload)}
+        self.history.save_partial(fit)
+        self.history.check_interrupted()
+        return {"path": path, "fit": fit, "rows": len(fit_y)}
 
     def losses(self, state, x, y):
-        self.model.load(state["payload"])
+        self.history.check_interrupted()
+        self.model.load(state["path"].read_bytes())
         return (decide(self.model.predict(x), self.threshold) != y).astype(np.float64)
 
 
-def stream_matrix(blocks, model, threshold, config, replay, options) -> tuple[PerformanceMatrix, list[dict]]:
-    matrix, states = build_matrix(
-        ((x, y) for x, y in blocks), ZiaLearner(model, threshold, config, replay),
-        offline=options["offline_blocks"], seed=options["seed"])
-    return matrix, states
+def stream_matrix(
+    blocks, model, threshold, config, replay, options, *, history, scratch, tracker=None,
+) -> tuple[PerformanceMatrix, list[dict]]:
+    learner = ZiaLearner(model, threshold, config, replay, history, scratch, tracker)
+    return build_matrix(blocks, learner, offline=options["offline_blocks"], seed=options["seed"])
 
 
 def verify_realised(matrix: PerformanceMatrix, windows: list[dict], policy) -> None:
@@ -99,6 +115,7 @@ def finalize(policy, matrix: PerformanceMatrix, states: list[dict], options: dic
     analysis = analyze(matrix, rules=tuple(options["comparison_rules"]), n_alphas=options["n_alphas"],
                        focus_alpha=policy.alpha, delta=options["delta"], samples=options["mc_samples"],
                        seed=options["seed"])
+    analysis["setup"]["policy_missing_features"] = POLICY_MISSING_FEATURES
     result = simulation_of(policy, matrix)
     oracle = simulate(Oracle(), matrix, policy.alpha)
     metrics = deployed_metrics(analysis, policy.kind if policy.kind in analysis["rules"] else "oracle",

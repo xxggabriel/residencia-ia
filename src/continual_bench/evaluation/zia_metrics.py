@@ -2,7 +2,12 @@
 
 import numpy as np
 
-SCORE_BINS = 4096
+from continual_bench.models.classification_metrics import (
+    SCORE_BINS,
+    average_precision,
+    decide,
+    ranking_histograms,
+)
 
 
 def ratio(a, b):
@@ -14,13 +19,6 @@ def decision_threshold(costs):
     false_positive, false_negative = float(costs["false_positive"]), float(costs["false_negative"])
     total = false_positive + false_negative
     return false_positive / total if total else 0.5
-
-
-def decide(probabilities, threshold=0.5):
-    """Binary: p_1 >= threshold. Multiclass: argmax, ties favor the lower class ID."""
-    if probabilities.shape[1] == 2:
-        return (probabilities[:, 1] >= threshold).astype(np.int32)
-    return probabilities.argmax(axis=1)
 
 
 class ClassificationMetrics:
@@ -47,11 +45,11 @@ class ClassificationMetrics:
         self.absolute_error += float((1 - observed).sum())
         squared = np.square(probabilities, dtype=np.float64).sum() - 2 * observed.sum() + len(labels)
         self.squared_error += max(0.0, float(squared)) / (2 if self.classes == 2 else 1)
-        bins = np.minimum((probabilities * SCORE_BINS).astype(np.int32), SCORE_BINS - 1)
         for i in range(self.classes):
             mask = labels == i
-            self.positive[i] += np.bincount(bins[mask, i], minlength=SCORE_BINS)
-            self.negative[i] += np.bincount(bins[~mask, i], minlength=SCORE_BINS)
+            positive, negative = ranking_histograms(probabilities[:, i], mask)
+            self.positive[i] += positive
+            self.negative[i] += negative
             calibration_bin = np.minimum((probabilities[:, i] * 10).astype(np.int32), 9)
             self.calibration[i, 0] += np.bincount(calibration_bin, minlength=10)
             self.calibration[i, 1] += np.bincount(calibration_bin, weights=probabilities[:, i], minlength=10)
@@ -81,13 +79,12 @@ class ClassificationMetrics:
             tp = p[::-1].cumsum()
             fp = n[::-1].cumsum()
             recall_curve = tp / actual[i] if actual[i] else np.zeros_like(tp)
-            precision_curve = np.divide(tp, tp + fp, out=np.zeros_like(tp, dtype=float), where=tp + fp > 0)
             rows.append({
                 "support": int(actual[i]),
                 "precision": ratio(correct[i], predicted[i]),
                 "recall": ratio(correct[i], actual[i]),
                 "f1": ratio(2 * correct[i], predicted[i] + actual[i]),
-                "pr_auc": ratio(np.dot(p[::-1], precision_curve), actual[i]),
+                "pr_auc": average_precision(p, n),
                 "roc_auc": ratio(np.dot(p, n.cumsum() - n / 2), actual[i] * n.sum()),
                 "ece": ratio(gaps.sum(), total),
                 "mce": float(np.max(np.divide(gaps, counts, out=np.zeros(10), where=counts > 0))) if total

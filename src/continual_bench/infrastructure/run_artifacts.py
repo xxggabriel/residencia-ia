@@ -9,6 +9,7 @@ Republishing is idempotent: existing metric points are checked, not duplicated.
 from pathlib import Path
 
 from .metric_tracking import missing_metric_points
+from .training_tracking import publish_training_history
 
 SYSTEM_PREFIX = "system/"
 
@@ -23,7 +24,7 @@ def system_metric_points(system) -> tuple[list[tuple[str, int, float]], dict]:
     return points, stamps
 
 
-def publish_run_artifacts(client, run_id, directory, report) -> dict:
+def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoints=True) -> dict:
     from mlflow.entities import Metric
 
     points, stamps = system_metric_points(report.get("system_metrics"))
@@ -48,7 +49,14 @@ def publish_run_artifacts(client, run_id, directory, report) -> dict:
     client.set_tag(run_id, "detailed_figures", str(len(figures)))
     client.set_tag(run_id, "system_metrics_collector", system.get("collector", "absent"))
     client.set_tag(run_id, "run_artifacts", f"{uploaded} files; plots/ and data/")
-    return {"system_metric_points": len(points), "artifact_files": uploaded, "detailed_figures": len(figures)}
+    result = {
+        "system_metric_points": len(points), "artifact_files": uploaded, "detailed_figures": len(figures),
+    }
+    if "training_history" in report:
+        result["training_rounds"] = publish_training_history(
+            client, run_id, directory, report, include_checkpoints=include_checkpoints,
+        )
+    return result
 
 
 def log_detailed_figures(report, run_id) -> list[str]:

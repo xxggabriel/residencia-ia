@@ -43,16 +43,27 @@ def nice_ticks(low: float, high: float, count: int = 5) -> list[float]:
     if not math.isfinite(low) or not math.isfinite(high):
         return [0.0]
     if high == low:
-        low, high = low - 0.5, high + 0.5
-    raw = (high - low) / max(count, 1)
+        padding = max(0.5, abs(low) * 0.05)
+        low, high = low - padding, high + padding
+    count = max(count, 1)
+    raw = (high - low) / count
+    if raw <= 0 or not math.isfinite(raw):
+        return [low, high]
     power = 10 ** math.floor(math.log10(raw))
+    if power == 0:
+        return [low, high]
     step = next(m * power for m in (1, 2, 2.5, 5, 10) if m * power >= raw)
     start = math.floor(low / step) * step
-    ticks, value = [], start
-    while value <= high + step * 1e-9:
-        ticks.append(round(value, 12))
-        value += step
-    return ticks
+    ticks = []
+    # Adding a sub-ULP step to the previous tick can leave it unchanged indefinitely.
+    for index in range(count + 2):
+        value = start + index * step
+        if value > high + step * 1e-9:
+            break
+        tick = round(value, 12) if step >= 1e-12 else value
+        if not ticks or tick > ticks[-1]:
+            ticks.append(tick)
+    return ticks if len(ticks) >= 2 else [low, high]
 
 
 def _text(x, y, content, *, size=12, anchor="start", weight="normal", rotate=None, fill="#222222"):

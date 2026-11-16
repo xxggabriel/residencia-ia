@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import gc
 import io
+import os
+import time
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -12,6 +15,7 @@ from scipy.optimize import minimize
 from scipy.special import expit, logsumexp, softmax
 
 from continual_bench.config.iterative import IterativeTrainingConfig
+from continual_bench.models.classification_metrics import average_precision, decide, ranking_histograms
 from continual_bench.models.training.loop import (
     TrainingResult,
     enforce_single_thread_env,
@@ -45,10 +49,9 @@ def compute_classification_metrics(
     labels: np.ndarray,
     probabilities: np.ndarray,
     classes: int,
-) -> dict[str, float]:
-    """Compute log_loss, accuracy, balanced_accuracy, pr_auc and f1_macro
-    without allocating large histograms.
-    """
+    threshold: float = 0.5,
+) -> dict[str, float | None]:
+    """Score a training split with the same decision rule and AP estimator as the Zia evaluation."""
     total = int(len(labels))
     if total == 0:
         return {
@@ -56,14 +59,11 @@ def compute_classification_metrics(
             "accuracy": 0.0,
             "balanced_accuracy": 0.0,
             "f1_macro": 0.0,
-            "pr_auc": 0.0,
+            "macro_pr_auc": None,
+            **({"pr_auc": None} if classes == 2 else {}),
         }
     labels_i32 = labels.astype(np.int32, copy=False)
-    predicted = (
-        (probabilities[:, 1] >= 0.5).astype(np.int32)
-        if classes == 2
-        else probabilities.argmax(axis=1).astype(np.int32)
-    )
+    predicted = decide(probabilities, threshold).astype(np.int32, copy=False)
     correct = int(np.sum(predicted == labels_i32))
     accuracy = float(correct / total)
 
@@ -91,23 +91,65 @@ def compute_classification_metrics(
     ]
     balanced_accuracy = float(sum(recalls) / len(recalls)) if recalls else 0.0
 
-    pos_count = int(actual[1]) if classes == 2 else 0
-    if classes == 2 and 0 < pos_count < total:
-        scores = probabilities[:, 1]
-        order = np.argsort(-scores)
-        y_sorted = labels_i32[order]
-        precisions = np.cumsum(y_sorted == 1) / np.arange(1, total + 1)
-        pr_auc = float(np.sum(precisions * (y_sorted == 1)) / pos_count)
-    else:
-        pr_auc = 0.0
+    class_ap = [
+        average_precision(*ranking_histograms(probabilities[:, label], labels_i32 == label))
+        if actual[label] else None
+        for label in range(classes)
+    ]
+    valid_ap = [score for score in class_ap if score is not None]
 
-    return {
+    scores = {
         "log_loss": log_loss,
         "accuracy": accuracy,
         "balanced_accuracy": balanced_accuracy,
         "f1_macro": f1_macro,
-        "pr_auc": pr_auc,
+        "macro_pr_auc": float(sum(valid_ap) / len(valid_ap)) if valid_ap else None,
     }
+    if classes == 2:
+        scores["pr_auc"] = class_ap[1]
+    return scores
+
+
+def _log_minibatch(history, tracker, metrics, rows, optimizer_steps, seconds):
+    step = len(history) + 1
+    point = {
+        "minibatch_step": step,
+        "train_samples": rows,
+        "validation_samples": 0,
+        "optimizer_steps": optimizer_steps,
+        "training_duration_seconds": seconds,
+        **{f"train:{key}": value for key, value in metrics.items()},
+    }
+    history.append(point)
+    if tracker is not None and hasattr(tracker, "log_minibatch_metrics"):
+        try:
+            tracker.log_minibatch_metrics(point, step=step)
+        except Exception:
+            # The recorded point remains available for final publication.
+            pass
+
+
+def _online_result(history, tracker, *, interrupted, **metadata):
+    rows = sum(point["train_samples"] for point in history)
+    summary = {
+        "epochs_run": 0,
+        "epochs_trained": 0,
+        "iterations": len(history),
+        "train_rows": rows,
+        "validation_rows": 0,
+        "training_presentations": rows,
+        "optimizer_steps": sum(point["optimizer_steps"] for point in history),
+        "training_duration_seconds": sum(point["training_duration_seconds"] for point in history),
+        "validation_duration_seconds": 0.0,
+        "stopped_by_signal": interrupted,
+        **metadata,
+    }
+    if tracker is not None and hasattr(tracker, "finalize"):
+        try:
+            tracker.finalize(summary)
+        except Exception:
+            pass
+    return TrainingResult(**summary, history=history)
 
 
 class FraudOrReturnBooster:
@@ -135,6 +177,7 @@ class FraudOrReturnBooster:
         config: IterativeTrainingConfig | dict[str, Any] | None = None,
         dataset: str | None = None,
         classes: int | list[str] | None = None,
+        decision_threshold: float | None = None,
     ):
         enforce_single_thread_env()
         import xgboost
@@ -143,8 +186,11 @@ class FraudOrReturnBooster:
         self.model = None
         self.params = dict(self.params)
         self.dataset = dataset
+        self.decision_threshold = 0.5 if decision_threshold is None else decision_threshold
+        self.params["nthread"] = int(os.environ["OMP_NUM_THREADS"])
+        self.iterative_config = IterativeTrainingConfig.from_params(config)
+        cfg = self.iterative_config
         if config is not None:
-            cfg = IterativeTrainingConfig.from_params(config)
             self.params["eta"] = cfg.learning_rate
             self.params["reg_lambda"] = cfg.l2_regularization
             self.params["seed"] = cfg.seed
@@ -169,8 +215,17 @@ class FraudOrReturnBooster:
         self._cached_dmatrix_key: tuple[int, tuple[int, ...], int, tuple[int, ...]] | None = None
         self.last_training_result: TrainingResult | None = None
 
-    def fit_online(self, x, y):
+    def fit_online(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        *,
+        tracker: Any | None = None,
+        decision_threshold: float | None = None,
+        stop_requested: Callable[[], bool] | None = None,
+    ) -> int:
         """Update the leaves of the existing booster with River's logistic gradient."""
+        threshold = self.decision_threshold if decision_threshold is None else decision_threshold
         loss = optim.losses.Log()
         weight = float(self.params.get("scale_pos_weight", 1.0))
 
@@ -194,11 +249,16 @@ class FraudOrReturnBooster:
         }
         rounds = self.model.num_boosted_rounds()
         size = self.online_params["minibatch_rows"]
-        steps = 0
+        history = []
         for start in range(0, len(y), size):
+            if stop_requested is not None and stop_requested():
+                break
             stop = start + size
+            features, labels = x[start:stop], y[start:stop]
+            metrics = compute_classification_metrics(labels, self.predict(features), 2, threshold)
+            timer = time.perf_counter()
             nthread = int(self.params.get("nthread", 2))
-            matrix = self.xgb.DMatrix(x[start:stop], label=y[start:stop], nthread=nthread)
+            matrix = self.xgb.DMatrix(features, label=labels, nthread=nthread)
             self.model = self.xgb.train(
                 params,
                 matrix,
@@ -206,8 +266,12 @@ class FraudOrReturnBooster:
                 xgb_model=self.model,
                 obj=objective,
             )
-            steps += rounds
-        return steps
+            _log_minibatch(history, tracker, metrics, len(labels), rounds, time.perf_counter() - timer)
+        self.last_training_result = _online_result(
+            history, tracker, interrupted=stop_requested is not None and stop_requested(),
+            booster_rounds=rounds,
+        )
+        return int(self.last_training_result.optimizer_steps)
 
     def _xgb_params(self) -> dict[str, Any]:
         clean = {k: v for k, v in self.params.items() if k in _XGB_ALLOWED_PARAMS}
@@ -239,22 +303,26 @@ class FraudOrReturnBooster:
         self._cached_dmatrix = None
         self._cached_dmatrix_key = None
 
-    def train_epoch(self, train_data: Any) -> dict[str, float]:
+    def train_epoch(self, train_data: Any) -> dict[str, float | None]:
         x, y = unpack_split(train_data)
         matrix = self._dmatrix(x, y)
+        params = self._xgb_params()
+        if self.model is None and y.min() == y.max():
+            # XGBoost's estimated logistic intercept can hit 0 or 1 on a single-class startup.
+            params["base_score"] = 0.5
         self.model = self.xgb.train(
-            self._xgb_params(),
+            params,
             matrix,
             num_boost_round=1,
             xgb_model=self.model,
         )
         probabilities = self.predict(x)
-        return compute_classification_metrics(y, probabilities, 2)
+        return compute_classification_metrics(y, probabilities, 2, self.decision_threshold)
 
-    def evaluate_split(self, val_data: Any) -> dict[str, float]:
+    def evaluate_split(self, val_data: Any) -> dict[str, float | None]:
         vx, vy = unpack_split(val_data)
         probabilities = self.predict(vx)
-        return compute_classification_metrics(vy, probabilities, 2)
+        return compute_classification_metrics(vy, probabilities, 2, self.decision_threshold)
 
     def get_state(self) -> bytes:
         if self.model is None:
@@ -277,21 +345,29 @@ class FraudOrReturnBooster:
         config: IterativeTrainingConfig | dict[str, Any] | None = None,
         tracker: Any | None = None,
         emit_stdout: bool = False,
+        timestamps: np.ndarray | None = None,
+        decision_threshold: float | None = None,
+        capture_sigterm: bool = True,
+        stop_requested: Callable[[], bool] | None = None,
     ) -> int:
+        if decision_threshold is not None:
+            self.decision_threshold = decision_threshold
         if not continuation:
             self.model = None
         rounds = self.continued_rounds if continuation else self.initial_rounds
+        defaults = self.iterative_config
         merged_params = {
             "max_epochs": min(100, max(1, int(rounds))),
-            "patience": int(self.params.get("patience", 100)),
-            "min_delta": float(self.params.get("min_delta", 0.0)),
+            "patience": int(self.params.get("patience", defaults.patience)),
+            "min_delta": float(self.params.get("min_delta", defaults.min_delta)),
+            "eval_metric": defaults.eval_metric,
             "learning_rate": float(self.params.get("eta", self.params.get("learning_rate", 0.01))),
             "l2_regularization": float(
                 self.params.get("reg_lambda", self.params.get("l2_regularization", 0.001))
             ),
-            "validation_fraction": float(self.params.get("validation_fraction", 0.1)),
+            "validation_fraction": self.params.get("validation_fraction", defaults.validation_fraction),
             "seed": int(self.params.get("seed", 42)),
-            "restore_best_weights": bool(self.params.get("restore_best_weights", True)),
+            "restore_best_weights": self.params.get("restore_best_weights", defaults.restore_best_weights),
         }
         if isinstance(config, dict):
             merged_params.update(config)
@@ -322,7 +398,11 @@ class FraudOrReturnBooster:
             config=iter_cfg,
             tracker=tracker,
             emit_stdout=emit_stdout,
+            timestamps=timestamps,
+            capture_sigterm=capture_sigterm,
+            stop_requested=stop_requested,
         )
+        result["booster_rounds"] = self.rounds
         self.last_training_result = result
         return int(self.model.num_boosted_rounds()) if self.model is not None else int(result.epochs_run)
 
@@ -375,14 +455,17 @@ class MultinomialLogistic:
         self,
         classes: int,
         config: IterativeTrainingConfig | dict[str, Any] | None = None,
+        decision_threshold: float | None = None,
     ):
         enforce_single_thread_env()
         self.classes = int(classes)
+        self.decision_threshold = 0.5 if decision_threshold is None else decision_threshold
         self.weights: np.ndarray | None = None
         self._online_optimizer = optim.SGD(self.online_params["learning_rate"])
         self.params = dict(self.params)
+        self.iterative_config = IterativeTrainingConfig.from_params(config)
+        cfg = self.iterative_config
         if config is not None:
-            cfg = IterativeTrainingConfig.from_params(config)
             self.params["l2"] = cfg.l2_regularization
             self.params["l2_regularization"] = cfg.l2_regularization
             self.params["learning_rate"] = cfg.learning_rate
@@ -391,20 +474,38 @@ class MultinomialLogistic:
             self.continued_rounds = cfg.max_epochs
         self.last_training_result: TrainingResult | None = None
 
-    def fit_online(self, x: np.ndarray, y: np.ndarray) -> int:
+    def fit_online(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        *,
+        tracker: Any | None = None,
+        decision_threshold: float | None = None,
+        stop_requested: Callable[[], bool] | None = None,
+    ) -> int:
         """Apply River SGD to the same softmax weights and intercept fitted at warm-up."""
+        threshold = self.decision_threshold if decision_threshold is None else decision_threshold
         size = self.online_params["minibatch_rows"]
+        history = []
         for start in range(0, len(y), size):
+            if stop_requested is not None and stop_requested():
+                break
             labels = y[start : start + size]
             features = x[start : start + size]
             residuals = self.predict(features)
+            metrics = compute_classification_metrics(labels, residuals, self.classes, threshold)
+            timer = time.perf_counter()
             residuals[np.arange(len(labels)), labels] -= 1
             gradient = np.empty_like(self.weights)
             gradient[:-1] = features.T @ residuals / len(labels)
             gradient[:-1] += self.params["l2"] * self.weights[:-1]
             gradient[-1] = residuals.mean(axis=0)
             self.weights = self._online_optimizer.step(self.weights, gradient)
-        return (len(y) + size - 1) // size
+            _log_minibatch(history, tracker, metrics, len(labels), 1, time.perf_counter() - timer)
+        self.last_training_result = _online_result(
+            history, tracker, interrupted=stop_requested is not None and stop_requested(),
+        )
+        return int(self.last_training_result.iterations)
 
     def _objective_and_grad(
         self,
@@ -428,7 +529,7 @@ class MultinomialLogistic:
         gradient[-1] = residuals.mean(axis=0)
         return loss, gradient.ravel()
 
-    def train_epoch(self, train_data: Any) -> dict[str, float]:
+    def train_epoch(self, train_data: Any) -> dict[str, float | None]:
         x, y = unpack_split(train_data)
         shape = (x.shape[1] + 1, self.classes)
         regularization = float(
@@ -468,12 +569,12 @@ class MultinomialLogistic:
             self.weights = np.array(candidate, dtype=np.float64, copy=True).reshape(shape)
 
         probabilities = self.predict(x)
-        return compute_classification_metrics(y, probabilities, self.classes)
+        return compute_classification_metrics(y, probabilities, self.classes, self.decision_threshold)
 
-    def evaluate_split(self, val_data: Any) -> dict[str, float]:
+    def evaluate_split(self, val_data: Any) -> dict[str, float | None]:
         vx, vy = unpack_split(val_data)
         probabilities = self.predict(vx)
-        return compute_classification_metrics(vy, probabilities, self.classes)
+        return compute_classification_metrics(vy, probabilities, self.classes, self.decision_threshold)
 
     def get_state(self) -> bytes:
         if self.weights is None:
@@ -496,21 +597,29 @@ class MultinomialLogistic:
         config: IterativeTrainingConfig | dict[str, Any] | None = None,
         tracker: Any | None = None,
         emit_stdout: bool = False,
+        timestamps: np.ndarray | None = None,
+        decision_threshold: float | None = None,
+        capture_sigterm: bool = True,
+        stop_requested: Callable[[], bool] | None = None,
     ) -> int:
+        if decision_threshold is not None:
+            self.decision_threshold = decision_threshold
         if not continuation:
             self.weights = None
         rounds = self.continued_rounds if continuation else self.initial_rounds
+        defaults = self.iterative_config
         merged_params = {
             "max_epochs": min(100, max(1, int(rounds))),
-            "patience": int(self.params.get("patience", 100)),
-            "min_delta": float(self.params.get("min_delta", 0.0)),
+            "patience": int(self.params.get("patience", defaults.patience)),
+            "min_delta": float(self.params.get("min_delta", defaults.min_delta)),
+            "eval_metric": defaults.eval_metric,
             "learning_rate": float(self.params.get("learning_rate", 0.01)),
             "l2_regularization": float(
                 self.params.get("l2", self.params.get("l2_regularization", 0.001))
             ),
-            "validation_fraction": float(self.params.get("validation_fraction", 0.1)),
+            "validation_fraction": self.params.get("validation_fraction", defaults.validation_fraction),
             "seed": int(self.params.get("seed", 42)),
-            "restore_best_weights": bool(self.params.get("restore_best_weights", True)),
+            "restore_best_weights": self.params.get("restore_best_weights", defaults.restore_best_weights),
         }
         if isinstance(config, dict):
             merged_params.update(config)
@@ -532,6 +641,9 @@ class MultinomialLogistic:
             config=iter_cfg,
             tracker=tracker,
             emit_stdout=emit_stdout,
+            timestamps=timestamps,
+            capture_sigterm=capture_sigterm,
+            stop_requested=stop_requested,
         )
         self.last_training_result = result
         return int(result.epochs_run)
@@ -567,12 +679,16 @@ def make_zia_model(
     classes: int | list[str],
     config: IterativeTrainingConfig | dict[str, Any] | None = None,
     dataset: str | None = None,
+    *,
+    decision_threshold: float | None = None,
 ):
     num_classes = len(classes) if isinstance(classes, list) else int(classes)
     if name == "xgboost":
-        return FraudOrReturnBooster(config=config, dataset=dataset, classes=num_classes)
+        return FraudOrReturnBooster(
+            config=config, dataset=dataset, classes=num_classes, decision_threshold=decision_threshold,
+        )
     if name == "multinomial_logistic":
-        return MultinomialLogistic(num_classes, config=config)
+        return MultinomialLogistic(num_classes, config=config, decision_threshold=decision_threshold)
     raise ValueError(f"unknown Zia model: {name}")
 
 

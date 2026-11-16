@@ -1,10 +1,21 @@
 """Canonical iterative training hyperparameters for Zia batch/iterative learners."""
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .benchmark import Strict
+
+METRIC_DIRECTIONS: dict[str, Literal["min", "max"]] = {
+    "log_loss": "min",
+    "mae": "min",
+    "accuracy": "max",
+    "balanced_accuracy": "max",
+    "f1_macro": "max",
+    "macro_f1": "max",
+    "pr_auc": "max",
+    "macro_pr_auc": "max",
+}
 
 
 class IterativeTrainingConfig(Strict):
@@ -19,6 +30,15 @@ class IterativeTrainingConfig(Strict):
     validation_fraction: float = Field(default=0.1, gt=0.0, lt=0.5, allow_inf_nan=False)
     seed: int = Field(default=42, ge=0, le=2**31 - 1)
     restore_best_weights: bool = True
+
+    @field_validator("eval_metric")
+    @classmethod
+    def known_eval_metric(cls, value: str) -> str:
+        scope, separator, name = value.partition(":")
+        metric = name if separator else scope
+        if (separator and scope not in ("train", "validation")) or metric not in METRIC_DIRECTIONS:
+            raise ValueError(f"unknown early stopping metric: {value}")
+        return value
 
     @model_validator(mode="after")
     def patience_within_max_epochs(self):

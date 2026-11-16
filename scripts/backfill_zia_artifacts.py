@@ -24,6 +24,8 @@ def main():
         if not experiment.name.startswith("continual-bench/zia-"):
             raise ValueError(f"not a Zia experiment: {experiment_id}")
         for run in client.search_runs([experiment_id], filter_string="attributes.status = 'FINISHED'"):
+            if run.data.tags.get("mlflow.parentRunId"):
+                continue
             key = run.data.tags["zia_run_key"]
             if len(key) != 24 or any(c not in "0123456789abcdef" for c in key):
                 raise ValueError("invalid Zia run key")

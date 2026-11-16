@@ -63,6 +63,38 @@ def test_matrix_is_triangular_and_complete(matrix):
     assert matrix.initial == 4 and matrix.horizon == 9
 
 
+def test_policy_geometry_fills_missing_features_from_warmup_only():
+    class MissingAwareLearner(ThresholdLearner):
+        trained_on_missing = False
+        scored_on_missing = False
+
+        def fit(self, index, x, y):
+            self.trained_on_missing |= np.isnan(x).any()
+            return super().fit(index, x, y)
+
+        def losses(self, state, x, y):
+            self.scored_on_missing |= np.isnan(x).any()
+            return super().losses(state, x, y)
+
+    batches = []
+    for index, (signal, labels) in enumerate(drifting_stream(batches=7, rows=40)):
+        missing = np.full((len(labels), 2), np.nan)
+        missing[0, 0] = 5 if index == 0 else 5 + index
+        if index > 0:
+            missing[1, 1] = 40
+        batches.append((np.column_stack((signal[:, 0], missing)), labels))
+    learner = MissingAwareLearner()
+    result, _ = build_matrix(batches, learner, offline=3, seed=1)
+
+    assert learner.trained_on_missing and learner.scored_on_missing
+    assert np.isnan(batches[0][0][1, 1:]).all()
+    np.testing.assert_allclose(result.feature_means[:, 1], 5 + np.arange(7) / 40)
+    np.testing.assert_allclose(result.feature_means[:, 2], [0, 1, 1, 1, 1, 1, 1])
+    assert all(np.isfinite(rows).all() for rows in result.points + result.queries)
+    assert math.isfinite(result.staleness(3, 0))
+    assert math.isfinite(simulate(UPF(samples=10), result, alpha=0.1).cost)
+
+
 def test_views_mask_the_future(matrix):
     view = matrix.view(7, {0, 1, 2, 3, 4, 6})
     assert view.err(6, 7) == matrix.err[6, 7]

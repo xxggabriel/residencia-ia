@@ -1,6 +1,7 @@
 """Check native pipeline inputs, tuning parameters and SageMaker job tracking."""
 
 import signal
+from importlib import import_module
 from pathlib import Path
 from runpy import run_path
 from unittest.mock import Mock
@@ -53,6 +54,7 @@ def test_interrupted_native_training_is_killed_before_publishing_results(monkeyp
     monkeypatch.setenv("BENCH_NATIVE_STAGE", "tuning")
     monkeypatch.setenv("TRAINING_JOB_NAME", "trial")
     monkeypatch.setattr(signal, "signal", Mock())
+    import_module("continual_bench.models.zia")  # Bind learner imports before substituting the loop.
     monkeypatch.setattr(loop, "train_iterative", Mock(return_value={"stopped_by_signal": True}))
     tracker = Mock()
     tracker.start.return_value = {"run_id": "run"}
