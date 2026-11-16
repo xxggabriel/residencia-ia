@@ -84,7 +84,7 @@ def _admit(source, task, max_samples, max_seconds, started):
 
 def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, window=128,
               max_samples=1000, max_seconds=60, training_budget=None, costs=None, model=None,
-              model_factory=None, models=MODELS):
+              model_factory=None, models=MODELS, progress=None):
     """Evaluate a deterministic prefix; never learn validation/test labels.
 
     `source` exposes samples_iter() of TaskSample plus manifest(); binary Event
@@ -193,7 +193,7 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
                                         "action": "reset_retrain" if reset else "learn_one",
                                         "seconds": seconds})
 
-            for sample in records:
+            for step, sample in enumerate(records, 1):
                 if time.monotonic() - started > max_seconds:
                     raise TimeoutError("typed evaluation deadline exceeded")
                 before = time.perf_counter()
@@ -208,6 +208,11 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
                                     "training_labels_available": released_train})
                 pending.append((sample, prediction, index))
                 release(sample.timestamp)
+                if progress is not None and (step == 1 or step % window == 0):
+                    observed = {f"{split}/{name}": metric.get()
+                                for split, metrics in metric_sets.items() if counts[split]
+                                for name, metric in metrics.items()}
+                    progress(step, {"observed": step, **observed})
             if pending:
                 release(pending[-1][0].available_at)
             report = {"schema_version": "task_evaluation-typed-v1", "identity": identity,

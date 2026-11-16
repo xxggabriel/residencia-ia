@@ -271,3 +271,8 @@ A aba **Experiments** do menu principal do Studio consulta os recursos **MLflow
 Tracking Server**. Neste ambiente ela exibe `No tracking server`, pois os jobs
 publicam no **MLflow App** serverless. O app contém os experimentos e o histórico
 dos runs da matriz, dos jobs nativos e das campanhas Zia.
+
+No app MLflow, filtre o experimento `continual-bench-matrix` por `cb-campaign-id`.
+Cada tentativa do Batch registra um run com o ID do job, a revisão e o contrato da
+unidade. As métricas `progress/*` usam a janela ou época do avaliador, e `final/*`
+registra as métricas finais. O manifesto final da unidade aponta para o run MLflow.

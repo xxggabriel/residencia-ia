@@ -235,7 +235,7 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log, *, tracker=None) -> di
     }
 
 
-def execute_matrix_case(store, unit: RunUnit, workdir: Path) -> dict:
+def execute_matrix_case(store, unit: RunUnit, workdir: Path, *, progress=None) -> dict:
     from continual_bench.application.matrix import _execute_case, _headline
     from continual_bench.config import Config, EpochConfig, TypedConfig
 
@@ -250,7 +250,7 @@ def execute_matrix_case(store, unit: RunUnit, workdir: Path) -> dict:
         source = materialize_source(
             store, unit.labels["dataset"], unit.params["source_sha256"], workdir / "source", config, evaluator
         )
-    report = _execute_case(config, output, str(workdir / "cache"), None, source=source)
+    report = _execute_case(config, output, str(workdir / "cache"), None, source=source, progress=progress)
     return {"report": report, "headline": _headline(report), "output": output}
 
 
@@ -351,12 +351,15 @@ def run_unit(
     put_json(store, status_key, {**status, "state": "RUNNING"})
     started = time.monotonic()
     prefix = layout.attempt_prefix(unit.campaign_id, unit.run_id, attempt_key)
-    sigterm_handler = GracefulTerminationHandler(
-        on_terminate=lambda _sig: flush_partial_state(
-            store, workdir / "run", prefix, status_key, status, started=started, clock=clock
-        )
-    )
     active_tracker = None
+    matrix_tracker = None
+
+    def on_terminate(_signal):
+        flush_partial_state(store, workdir / "run", prefix, status_key, status, started=started, clock=clock)
+        if matrix_tracker is not None:
+            matrix_tracker.finish("KILLED")
+
+    sigterm_handler = GracefulTerminationHandler(on_terminate=on_terminate)
     try:
         with sigterm_handler:
             expected_image = unit.contract["release"]["runtime_image"]
@@ -366,7 +369,17 @@ def run_unit(
                 active_tracker = tracker(unit) if callable(tracker) else tracker
                 outcome = execute_zia(unit, store, workdir, log, tracker=active_tracker)
             else:
-                outcome = execute_matrix_case(store, unit, workdir)
+                if env.get("MLFLOW_TRACKING_URI"):
+                    from continual_bench.infrastructure.aws.matrix_tracking import MatrixMlflowRun
+
+                    matrix_tracker = MatrixMlflowRun(
+                        unit, attempt_key, job_id, env["MLFLOW_TRACKING_URI"], log
+                    )
+                    matrix_tracker.start()
+                    active_tracker = matrix_tracker
+                    outcome = execute_matrix_case(store, unit, workdir, progress=matrix_tracker.metrics)
+                else:
+                    outcome = execute_matrix_case(store, unit, workdir)
         evaluation_seconds = time.monotonic() - started
         outputs_uri = store.uri(prefix)
         final = {
@@ -501,6 +514,12 @@ def run_unit(
                     "run_key": outcome["report"].get("run_key"),
                 }
             )
+            if matrix_tracker is not None and matrix_tracker.mlflow_run_id:
+                matrix_tracker.metrics(matrix_tracker.step, outcome["headline"], prefix="final")
+                final["links"] = {
+                    "mlflow_run_id": matrix_tracker.mlflow_run_id,
+                    "mlflow_experiment_id": matrix_tracker.experiment_id,
+                }
         try:
             put_json(store, final_key, final, if_absent=True)
             state = "SUCCEEDED"
@@ -568,6 +587,8 @@ def run_unit(
                 }
             },
         )
+        if matrix_tracker is not None:
+            matrix_tracker.finish()
         return EXIT_OK
     except Exception as error:
         code = (
