@@ -130,6 +130,31 @@ def test_worker_roles_reach_s3_only_through_the_gateway_endpoint():
             assert "iam:PassRole" not in actions
 
 
+def test_gateway_serves_all_worker_subnets_independent_of_interface_endpoint_placement():
+    root = template("root.yaml")
+    network = template("modules/network.yaml")
+    resources = network["Resources"]
+    gateway = resources["S3GatewayEndpoint"]
+    assert "Condition" not in gateway
+    assert gateway["Properties"]["VpcEndpointType"] == "Gateway"
+    route_table, = gateway["Properties"]["RouteTableIds"]
+    for association in ("SubnetARoutes", "SubnetBRoutes"):
+        assert resources[association]["Properties"]["RouteTableId"] == route_table
+    assert network["Outputs"]["PrivateSubnets"]["Value"]["Fn::If"][0] == "TwoZones"
+    assert root["Resources"]["Execution"]["Properties"]["Parameters"]["S3GatewayEndpointId"] == {
+        "Fn::GetAtt": "Network.Outputs.S3GatewayEndpointId"
+    }
+    assert root["Resources"]["Network"]["Properties"]["Parameters"]["InterfaceEndpointAzMode"] == {
+        "Ref": "InterfaceEndpointAzMode"
+    }
+    for resource in resources.values():
+        props = resource["Properties"]
+        if props.get("VpcEndpointType") == "Interface":
+            condition, _, single_az = props["SubnetIds"]["Fn::If"]
+            assert condition == "InterfaceEndpointsInTwoZones"
+            assert single_az == [{"Ref": "PrivateSubnetA"}]
+
+
 def test_roles_that_check_absent_keys_can_list_the_bucket():
     """HeadObject on an absent key returns 404 only with s3:ListBucket; otherwise 403 breaks idempotency."""
     resources = template("modules/execution.yaml")["Resources"]
