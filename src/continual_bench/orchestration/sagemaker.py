@@ -11,6 +11,7 @@
 import gc
 import json
 import os
+import signal
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -109,6 +110,8 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tra
         tracker=tracker,
         emit_stdout=True,
     )
+    if loop_result["stopped_by_signal"]:
+        raise SystemExit(128 + signal.SIGTERM)
     del x, y
     gc.collect()
     metrics = ClassificationMetrics(len(classes))
@@ -206,7 +209,6 @@ def native_pipeline_job(command):
     """Profile and stage verified inputs, or run native training with per-job MLflow tracking."""
     import hashlib
     import shutil
-    import signal
 
     from continual_bench.infrastructure.aws.native_tracking import track_native_job
 
@@ -219,8 +221,8 @@ def native_pipeline_job(command):
     if not job_name:
         raise RuntimeError("Missing SageMaker job name")
 
-    def stopped(_signal, _frame):
-        raise SystemExit(143)
+    def stopped(signum, _frame):
+        raise SystemExit(128 + signum)
 
     signal.signal(signal.SIGTERM, stopped)
     with track_native_job(uri, execution, stage, job_name) as tracker:
