@@ -87,4 +87,4 @@ def test_schedule_figure_draws_models_and_retrain_marks():
     assert name == "cara_schedule_toy.png"
     axis = figure.axes[0]
     assert len(axis.lines) == size  # size - 1 models + the schedule
-    assert any(text.get_text() == "retrain" for text in axis.texts)
+    assert any(text.get_text() == "Retreino" for text in axis.texts)

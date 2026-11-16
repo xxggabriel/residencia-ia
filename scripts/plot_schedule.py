@@ -34,7 +34,7 @@ def main():
         plots = args.output / "plots"
         plots.mkdir(parents=True, exist_ok=True)
         file, figure = schedule_figure(showcase)
-        figure.savefig(plots / file, dpi=130, bbox_inches="tight")
+        figure.savefig(plots / file, dpi=170, bbox_inches="tight")
         print(plots / file, "retrains at", showcase["retrain_batches"])
 
 

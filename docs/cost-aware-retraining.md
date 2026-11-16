@@ -144,3 +144,10 @@ comparações na mesma grade. `--drift-backend skmultiflow` usa os detectores do
 disponíveis. `--drift-backend river` oferece uma comparação com os detectores deste projeto, que têm
 implementações diferentes. O experimento de classificação incremental dos apêndices usa outros modelos
 e fica fora desse CLI.
+
+Para gerar os gráficos, passe ao script os JSONs produzidos pelo benchmark. No exemplo,
+`/path/to/cara.json` é o arquivo salvo pelo comando anterior. O mesmo script aceita os JSONs do UPF.
+
+```sh
+python scripts/plot_replication.py /path/to/cara.json --output docs/results/plots
+```

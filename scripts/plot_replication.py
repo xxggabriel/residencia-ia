@@ -30,7 +30,7 @@ def main():
     if cara:
         figures += cara_figures(list(cara.values()))
     for name, figure in figures:
-        figure.savefig(args.output / name, dpi=130, bbox_inches="tight")
+        figure.savefig(args.output / name, dpi=170, bbox_inches="tight")
         print(args.output / name)
 
 
