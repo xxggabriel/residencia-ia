@@ -5,6 +5,42 @@ No homelab, os publicadores registram no MLflow as métricas e os artefatos prod
 No perfil AWS, o MLflow gerenciado recebe as campanhas Zia, as matrizes e os jobs
 nativos do SageMaker.
 
+## Histórico por ajuste em todos os benchmarks
+
+O arquivo `training-history.json` reúne os ajustes do run. O índice em
+`artifacts/data/index.json` aponta para as séries e gráficos de cada ajuste em
+`data/training/<fit_id>/` e `plots/training/<fit_id>/`. Onde houver checkpoint,
+o histórico inclui seu caminho e SHA-256. Nos modelos binários com um diário
+de checkpoints compartilhado, inclui também o deslocamento e o tamanho.
+
+Cada ajuste tem um step local que começa em 1. O `global_step` acompanha a
+ordem no run pai. O step representa uma época quando o algoritmo percorre
+o conjunto de treino por épocas, um minibatch no treino online da Zia, ou
+uma atualização nos demais fluxos contínuos. Atualizações contínuas podem ser
+agregadas em janelas com a contagem de apresentações. A avaliação no
+holdout permanece identificada como holdout.
+
+O MLflow registra um run pai por execução ou tentativa e um run filho por
+ajuste, com `cb-fit-id`, `cb-fit-action` e `cb-step-kind`. A publicação é
+opt-in na CLI local. Use `--services` em `run`, `typed`, `epoch-job` ou
+`matrix`. O worker iterativo publica quando `MLFLOW_TRACKING_URI` está
+configurado. Na AWS, o worker do Batch e os jobs nativos do SageMaker Studio
+publicam no MLflow configurado e retêm as evidências nos respectivos
+artefatos. Runs de preparação de dados registram progresso de processamento.
+
+Para runs antigas, inspecione o relatório retido antes de aplicar o backfill:
+
+```bash
+python scripts/backfill_training_history.py /caminho/dos/resultados
+python scripts/backfill_training_history.py --run-id ID_DO_RUN_PAI
+python scripts/backfill_training_history.py s3://BUCKET/campaigns/CAMPANHA/runs/RUN/final.json
+```
+
+Use `--apply --output-dir /caminho/novo` para exportar a evidência derivada
+separadamente. Uma origem vinculada ao run pai permite publicar o backfill
+no MLflow com `--apply`. O comando preserva os relatórios originais e
+informa quais épocas, métricas ou checkpoints ficaram indisponíveis.
+
 ## Métricas coletadas por padrão
 
 Sem a seção `tracking`, a execução binária usa o perfil completo `DEFAULT_TRACKING`: métricas
@@ -86,7 +122,8 @@ A publicação é idempotente: pontos `system/*` já existentes são conferidos 
 artefatos de mesmo caminho são sobrescritos com o mesmo conteúdo. A marca
 `tracking_v1_status=complete` continua sendo a última escrita antes de encerrar o run.
 
-A CLI local de avaliação typed e de matriz grava os resultados em diretórios de estado.
+A CLI local de avaliação typed e de matriz grava os resultados em diretórios de estado
+e pode publicar esses resultados no MLflow com `--services`.
 O tracking AWS de matrizes é configurado no worker do Batch e aceita casos binários, typed e
 de épocas.
 

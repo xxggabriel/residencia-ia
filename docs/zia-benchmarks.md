@@ -1,8 +1,8 @@
 # Benchmarks temporais Zia Data Labs
 
-Cada dataset tem uma DAG do Airflow com quatro runs. Na AWS, os exemplos de
-campanha integral do Batch definem seis runs por dataset e podem ser iniciados
-pelo SageMaker Pipelines. Cada campanha fixa o modelo, os dados, os limites e o
+Cada dataset tem uma DAG do Airflow com 12 runs. Na AWS, os exemplos de
+campanha do Batch também definem 12 runs por dataset nos escopos `full` e `smoke`
+e podem ser iniciados pelo SageMaker Pipelines. Cada campanha fixa o modelo, os dados, os limites e o
 protocolo. As fontes são sintéticas, publicadas
 pela Zia Data Labs sob CC BY-NC 4.0. As revisões e os SHA-256 estão fixados no
 [contrato de entrada](../src/continual_bench/datasets/zia.py).
@@ -46,12 +46,11 @@ representa o status observado e depende da maturação dos pedidos.
 | `drift_adwin`, `drift_ddm` | ADWIN e DDM sobre a sequência de erros binários de cada predição. Um alarme aciona retreino com até quatro blocos recentes. |
 | `incremental` | Continua o ajuste iterativo em cada bloco a partir do modelo vigente. O XGBoost acrescenta rodadas ao booster e a logística parte dos pesos anteriores. |
 | `online` | Atualiza após cada bloco, em minibatches. Em Social, SGD do River ajusta a logística multinomial. Em Fraud e E-commerce, o gradiente da perda logística do River atualiza as folhas das árvores existentes do XGBoost. |
+| `cara`, `cara_cumulative`, `cara_periodic`, `upf`, `oracle` | Usam a matriz de desempenho para as [políticas por custo e o Oracle](cost-aware-retraining.md). |
 
-As DAGs do Airflow executam `frozen`, `periodic`, `drift` e `incremental`.
-Os exemplos Batch `campaign-{social,fraud,ecommerce}-full.json` executam
-`frozen`, `online`, `drift_adwin`, `drift_ddm`, `incremental` e `periodic`.
-A campanha Batch `campaign-social-full-cost-aware.json` agrupa as [políticas
-por custo e o Oracle](cost-aware-retraining.md).
+As DAGs do Airflow e os exemplos Batch `campaign-{fraud,social,ecommerce}-{full,smoke}.json`
+usam as mesmas 12 políticas. O exemplo dedicado `campaign-social-full-cost-aware.json`
+permite planejar só as cinco políticas por custo para Social.
 
 ## Telemetria
 
@@ -66,14 +65,23 @@ e agregações macro. Métricas do catálogo que dependem de drift anotado,
 contrafactuais, medições de CI ou custos de negócio têm disponibilidade
 explícita no relatório.
 
+Cada ajuste produz uma run filha no MLflow, vinculada ao ajuste inicial, à
+atualização `online`, ao retreinamento ou ao candidato treinado para a matriz.
+O eixo local começa em 1 e indica épocas nos ajustes iterativos ou minibatches
+nas atualizações `online`. O eixo global, o intervalo de dados, o hash do
+checkpoint e a versão usada para inferência constam em `training-history.json`.
+As curvas de perda, classificação e duração que tiverem dados ficam em
+`plots/training/<fit-id>/`, com seus pontos em `data/training/<fit-id>/`.
+
 ### Limiar de decisão
 
 Nas tarefas binárias, a classe positiva é prevista quando `p >= c_FP / (c_FP + c_FN)`,
 com `false_positive` e `false_negative` do perfil de tracking da campanha. Essa é a regra
 de Bayes para probabilidades calibradas e minimiza o custo de cenário que o relatório já
 contabiliza. O mesmo limiar vale para a matriz de confusão, as métricas derivadas dela, o
-sinal de erro dos detectores ADWIN e DDM e a coluna `prediction` do arquivo de predições.
-O perfil base usa custos 1 e 1, o que mantém `p >= 0,5`. O relatório grava o valor em
+sinal de erro dos detectores ADWIN e DDM, as métricas de classificação por época
+e a coluna `prediction` do arquivo de predições. O perfil base usa custos 1 e 39,
+o que dá `p >= 0,025`. O relatório grava o valor em
 `contract.decision_threshold`, e o `final.json` e o `summary.json` o repetem por unidade.
 
 Acurácia, acurácia balanceada, F1 e kappa dependem desse limiar. Com prevalência baixa e
@@ -136,13 +144,14 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python -m continual_bench.eva
   state/zia-v1 fraud smoke incremental state/zia-smoke/fraud/incremental
 ```
 
-Depois do teste local, repetir a preparação no homelab com `full` e iniciar
-o stack com `compose.zia.yaml` após os arquivos Compose do ambiente.
+Para validar o smoke nas DAGs, iniciar o stack com `compose.zia.yaml` após
+os arquivos Compose do ambiente.
 Exportar `BENCH_ZIA_DATA_DIR` com o caminho dos Parquets e
 `BENCH_GIT_REVISION` com a revisão implantada. O volume de dados fica
 somente leitura nos oito workers, cada um com 1 vCPU e 2 GiB. Ativar as
-três DAGs e dispará-las manualmente com `scope: full` e um nome de campanha
-distinto. O nome do experimento segue
+três DAGs e dispará-las manualmente com `scope: smoke` e um nome de campanha
+distinto. O escopo integral também é manual e exige escolher `scope: full`.
+O nome do experimento segue
 `continual-bench/zia-<dataset>-<scope>-<campaign>`. O worker mantém
 `progress.json`, `report.json` e `receipt.json` no estado da run. Uma
 publicação incompleta pode ser repetida usando a mesma campanha. Uma
@@ -151,8 +160,9 @@ interrupção anterior ao relatório final pode refazer o treinamento.
 Na AWS, publique o snapshot e confira seu marcador `_SUCCESS.json` antes de
 iniciar as campanhas, ou envie também a solicitação de preparação ao Pipeline.
 O Batch guarda o relatório, as predições e o modelo final no S3. Quando o tracking
-está configurado, publica métricas no MLflow App e inclui o ID desse run no manifesto
-final. Uma falha na publicação MLflow fica no log e preserva a evidência no S3. Abra a
+está configurado, o manifesto final inclui o ID da run e o recibo de publicação
+no MLflow App. Os gráficos comparativos da campanha ficam no S3 e o
+`summary.json` indica o URI do índice. Abra a
 execução de `continual-bench-campaign` no SageMaker Studio para acompanhar as
 etapas e consulte os resultados por job no Batch e no MLflow. Os snapshots
 publicados e suas avaliações Zia podem ser localizados pelo [catálogo do

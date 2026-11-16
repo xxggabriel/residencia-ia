@@ -115,8 +115,8 @@ estiver ausente (`missing`), sem marcador (`incomplete`) ou divergente (`incompa
 ## 4. Campanhas (manual)
 
 ```bash
+# RELEASE_SHA contém o SHA publicado da release escolhida.
 scripts/aws/start_campaign.sh infra/examples/campaign-social-smoke.json
-scripts/aws/start_campaign.sh infra/examples/campaign-social-full.json      # após verificar memória, disco, quotas e orçamento
 scripts/aws/start_campaign.sh infra/examples/campaign-binary-matrix.json    # matriz existente, Distributed Map
 ```
 
@@ -135,8 +135,9 @@ publicação. Uma saída 0 sem manifesto final conta como `FAILED_PUBLICATION`. 
 só termina jobs cujo nome é exatamente `cb-<campanha>-<run_id de 20 hex>`, para não alcançar
 campanhas cujo ID começa com o mesmo prefixo.
 
-Timeouts: `jobStateTimeLimitActions` da fila cancela jobs presos em `RUNNABLE` (espera na fila).
-`AttemptDurationSeconds` limita a execução. `TimeoutSecondsPath` do `.sync` limita espera mais
+As regras de `jobStateTimeLimitActions` da fila cancelam jobs presos em `RUNNABLE`.
+O pedido `run_timeout_seconds` chega ao Batch em `Timeout.AttemptDurationSeconds`
+nos dois modos do Map. O `TimeoutSecondsPath` do `.sync` limita espera mais
 execução por item. Códigos de saída: 0 sucesso ou reaproveitamento, 1 falha de execução,
 2 contrato (imagem ou perfil divergente do plano), 3 snapshot.
 
@@ -146,16 +147,19 @@ Os exemplos `dataset-{fraud,social,ecommerce}-full.json` preparam 50, 100 e 50 m
 de eventos, respectivamente. Aguarde os três marcadores `_SUCCESS.json` no escopo `full`
 e confira as contagens no manifesto antes de iniciar as campanhas.
 
-Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem seis jobs independentes
-por dataset, com `max_parallel=6` e uma tentativa por job. Fixe o mesmo SHA de release nos
-três arquivos. Para ter os 18 jobs ativos juntos, confira a fila, o compute environment,
-a quota regional e as reservas da job definition da release. Com 1 vCPU por job, são
-necessárias 18 vCPUs livres no ambiente compartilhado. Com 2 vCPU por job, são 36.
-Reduza `max_parallel` ou rode as campanhas em sequência se a capacidade for menor.
-Use um novo `campaign_id` ao alterar o plano de um exemplo que já foi executado na conta.
+Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem 12 jobs independentes
+por dataset, 36 no total. Os três exemplos `*-smoke.json` usam a mesma matriz e snapshots
+de 10 mil linhas. Os scripts exigem um SHA de release publicado para Zia. Defina o mesmo
+`RELEASE_SHA` nas três submissões ou grave o SHA em `request.release` em cada arquivo.
+Use `CAMPAIGN_ID` ou edite o campo `request.campaign_id` quando mudar um plano já publicado.
+Cada plano reserva até duas execuções simultâneas. Com 1 vCPU e 2 GiB por job, as três
+campanhas em conjunto podem ocupar até 6 das 8 vCPUs configuradas por padrão. Se a
+reserva da release ou a capacidade livre da fila mudar, ajuste a concorrência antes
+da submissão. O prazo por tentativa é de 1 hora no smoke e 48 horas no full.
 
-As variantes são `frozen`, `online`, `drift_adwin`, `drift_ddm`, `incremental` e
-`periodic`. Todas usam o mesmo modelo por dataset, o mesmo warm-up e
+As variantes são `frozen`, `online`, `drift`, `drift_adwin`, `drift_ddm`, `incremental`,
+`periodic`, `cara`, `cara_cumulative`, `cara_periodic`, `upf` e `oracle`.
+Todas usam o mesmo modelo por dataset, o mesmo warm-up e
 as mesmas fronteiras temporais. O modo `online` atualiza em minibatches após a predição
 do bloco. Em Social, River SGD atualiza os coeficientes da regressão logística multinomial.
 Em Fraud e E-commerce, a perda logística do River fornece os gradientes e o XGBoost
@@ -164,11 +168,10 @@ atualiza os pesos das folhas das árvores existentes. O holdout usa o último ch
 Os dois detectores recebem o mesmo sinal binário de erro de cada predição e podem acionar
 um retreino por bloco. O relatório registra os parâmetros de decisão e o método de atualização.
 
-As políticas com custo (`cara`, `cara_cumulative`, `cara_periodic`, `upf` e `oracle`, veja
-[cost-aware-retraining.md](../cost-aware-retraining.md)) têm campanha própria,
-`campaign-social-full-cost-aware.json` (`make aws-campaign-full-cost-aware`, cinco jobs). Cada
-job mede a matriz de desempenho (um ajuste por bloco e O(B²) predições), então dimensione o
-`run_timeout_seconds` para esse custo adicional.
+As [políticas com custo](../cost-aware-retraining.md) fazem um ajuste por bloco e medem pares de
+modelos e blocos da matriz de desempenho (O(B²)). Para dimensionar o full, use medições de tempo,
+memória e disco em um volume intermediário representativo. Para planejar somente as cinco
+políticas por custo de Social, use `campaign-social-full-cost-aware.json`.
 
 ### Suíte de todos os datasets
 
@@ -245,13 +248,16 @@ complementares do Studio. Elas usam os workflows, buckets e app MLflow do ambien
 A stack complementar `infra/cloudformation/studio.yaml` usa os ARNs dos workflows de
 dataset e benchmark da stack de runtime. Empacote-a com `aws cloudformation package` no
 bucket de artefatos e passe `DataBucket`, `KeyArn`, `CampaignWorkflowArn` e
-`DatasetWorkflowArn` no deploy. A aplicação MLflow do runtime precisa estar ativa para o
-tracking do Batch.
+`DatasetWorkflowArn` no deploy. O parâmetro `EnableMlflowTracking` do runtime habilita o
+MLflow App e o acesso da rede privada. O parâmetro `EnableModelRegistry` controla o
+registro de modelos no SageMaker.
 
 ```bash
+# RELEASE_SHA contém o SHA publicado da release escolhida.
 scripts/aws/start_studio_campaign.sh infra/examples/campaign-social-smoke.json
 # Ou solicite a preparação do snapshot antes da campanha
-scripts/aws/start_studio_campaign.sh infra/examples/campaign-social-smoke.json infra/examples/dataset-social-smoke.json
+scripts/aws/start_studio_campaign.sh \
+  infra/examples/campaign-social-smoke.json infra/examples/dataset-social-smoke.json
 ```
 
 No Studio, em **Pipelines -> continual-bench-campaign**, abra a execução pelo ID da

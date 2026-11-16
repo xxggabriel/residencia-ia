@@ -283,7 +283,8 @@ definem seis políticas por dataset.
 2. Executar o workflow de deploy. Conferir os quatro jobs, o digest no ECR e
    `releases/<sha>/release.json`.
 3. `start_dataset.sh infra/examples/dataset-social-smoke.json`. Conferir `_SUCCESS.json`.
-4. `start_campaign.sh infra/examples/campaign-social-smoke.json` e registrar:
+4. Definir `RELEASE_SHA` com o SHA verificado no passo 2, executar
+   `start_campaign.sh infra/examples/campaign-social-smoke.json` e registrar:
    - os IDs dos jobs Batch e os ARNs das tasks em `analytics/attempts/`;
    - `describe-jobs` com `SUCCEEDED` e `describe-tasks` com `STOPPED`;
    - a sobreposição de `startedAt`/`stoppedAt` das tasks esperadas;

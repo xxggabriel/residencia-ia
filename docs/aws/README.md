@@ -93,7 +93,7 @@ analytics/<tabela>/<campanha>__<run_id>[__<job>].json              JSON Lines pa
 |---|---|---|
 | `continual-bench-persistent` | `infra/cloudformation/persistent.yaml` | Bootstrap. KMS, buckets de dados, artefatos, billing e logs de acesso, ECR. Tudo com `Retain` e proteção contra término. |
 | `continual-bench-cicd` | `infra/cloudformation/cicd.yaml` | Bootstrap. Provedor OIDC do GitHub Actions e roles de deploy. |
-| `continual-bench-runtime` | `infra/cloudformation/root.yaml` | GitHub Actions. Aninha `network`, `execution`, `observability`, `analytics` (Core) e `billing`, `streaming`, `features`, `ml`, `bi` (ativáveis). O módulo de execução cria o MLflow App com `EnableModelRegistry=true`. |
+| `continual-bench-runtime` | `infra/cloudformation/root.yaml` | GitHub Actions. Aninha `network`, `execution`, `observability`, `analytics` (Core) e `billing`, `streaming`, `features`, `ml`, `bi` (ativáveis). O módulo de execução cria o MLflow App com `EnableMlflowTracking=true`. |
 | `continual-bench-studio` | `infra/cloudformation/studio.yaml` | Pipeline de campanhas com callbacks para Step Functions, implantado separadamente. |
 | `continual-bench-studio-native` | `infra/cloudformation/studio-native.yaml` | Pipeline nativo para perfil, treinamento e tuning do Social, implantado separadamente. |
 | `continual-bench-studio-catalog` | `infra/cloudformation/studio-catalog.yaml` | Publicação de snapshots Zia e links para avaliações no catálogo, implantada separadamente. |
@@ -109,8 +109,8 @@ release depois do deploy.
   `AssignPublicIp=DISABLED`. Não há Internet Gateway, NAT, Elastic IP nem load balancer.
   O S3 é acessado pelo gateway endpoint, cuja política inclui o bucket de camadas do ECR. ECR
   API, ECR Docker e CloudWatch Logs passam por endpoints de interface com DNS privado e política
-  restrita à conta. SageMaker API e MLflow usam endpoints de interface quando
-  `EnableModelRegistry=true`. Kinesis e Feature Store runtime usam endpoints quando os
+  restrita à conta. `EnableMlflowTracking=true` habilita os endpoints SageMaker API
+  e MLflow. O registro de modelos também exige o endpoint SageMaker API. Kinesis e Feature Store runtime usam endpoints quando os
   módulos correspondentes estão ativos. A rede admite duas sub-redes do Batch com os
   endpoints de interface em uma AZ (`InterfaceEndpointAzMode=single`), mantendo a rota
   compartilhada para o gateway do S3. O security group dos workers só sai por HTTPS para os
