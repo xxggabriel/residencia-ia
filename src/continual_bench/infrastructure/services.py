@@ -9,6 +9,7 @@ from continual_bench.core.contracts import Event
 
 from .catalog import experiment_name, publish_catalog, register_final_model, strategy_name
 from .metric_tracking import log_metric_points, publish_tracking
+from .observation_tracking import parent_observation_points
 from .run_artifacts import publish_run_artifacts
 
 
@@ -260,6 +261,7 @@ class MLflowTracker:
         ]
         used = sum(update["train_samples"] for update in report.get("candidates", report["updates"]))
         summaries.append(("training_used", 0, used))
+        summaries.extend(parent_observation_points(report))
         log_metric_points(client, run_id, summaries)
         client.log_batch(
             run_id,

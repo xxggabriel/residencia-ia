@@ -5,7 +5,8 @@ import json
 import math
 from pathlib import Path
 
-from .metric_tracking import log_metric_points
+from .metric_tracking import log_metric_points, metric_points
+from .observation_tracking import observation_tags, parent_observation_points
 from .run_artifacts import publish_run_artifacts
 from .storage import atomic_write, publication_lock
 from .training_tracking import sanitize_mlflow_name
@@ -120,7 +121,15 @@ def publish_local_benchmark(directory, report, *, experiment_name, client=None):
         run_id = run.info.run_id
         client.set_tag(run_id, "benchmark_complete", "false")
         try:
-            log_metric_points(client, run_id, benchmark_metric_points(report))
+            points = benchmark_metric_points(report)
+            points.extend(parent_observation_points(report))
+            if (tracking := report.get("tracking")) and tracking.get("version"):
+                points.extend(
+                    (key, step, value) for key, step, value in metric_points(tracking) if value is not None
+                )
+            log_metric_points(client, run_id, points)
+            for tag_key, tag_value in observation_tags(report).items():
+                client.set_tag(run_id, tag_key, tag_value)
             client.log_artifact(run_id, str(path))
             artifacts = publish_run_artifacts(client, run_id, directory, report)
             client.set_tag(run_id, "benchmark_complete", "true")

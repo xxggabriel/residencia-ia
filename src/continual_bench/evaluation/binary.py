@@ -22,21 +22,53 @@ def read_events(path, start=0):
             yield Event(**json.loads(line))
 
 
-def continual_evaluation(source, factory, settings):
-    """Episode probes exist only for sources declaring synthetic generators and boundaries."""
-    if not hasattr(source, "generator") or not hasattr(source, "boundaries"):
+def continual_evaluation(source, factory, settings, *, events=None, events_path=None):
+    """Build episode-level continual evaluation for synthetic or general binary streams."""
+    if hasattr(source, "generator") and hasattr(source, "boundaries"):
+        probes = {}
+        for task, function in enumerate(source.functions):
+            generator = source.generator(function, source.seed + 2_000_000 + task)
+            probes[task] = [
+                ({str(k): v for k, v in x.items()}, bool(y))
+                for x, y in itertools.islice(generator, settings["probe_samples"])
+            ]
+        return ContinualEvaluation(
+            factory,
+            probes,
+            source.boundaries + [source.samples],
+            reference_budget=settings["reference_budget"],
+            references_enabled=settings["continual_references"],
+        )
+
+    if events is not None:
+        event_list = list(events)
+    elif events_path is not None:
+        event_list = list(read_events(events_path))
+    elif hasattr(source, "events"):
+        event_list = list(source.events())
+    else:
         return None
+
+    total = len(event_list)
+    if total < 4:
+        return None
+    episodes = 3 if total >= 6 else 2
+    task_ends = [total * i // episodes for i in range(1, episodes)] + [total]
+    probe_count = max(1, int(settings.get("probe_samples", 32)))
     probes = {}
-    for task, function in enumerate(source.functions):
-        generator = source.generator(function, source.seed + 2_000_000 + task)
-        probes[task] = [
-            ({str(k): v for k, v in x.items()}, bool(y))
-            for x, y in itertools.islice(generator, settings["probe_samples"])
-        ]
+    for task, end in enumerate(task_ends):
+        start = task_ends[task - 1] if task else 0
+        segment = event_list[start:end]
+        if len(segment) <= probe_count:
+            chosen = segment
+        else:
+            step = len(segment) / probe_count
+            chosen = [segment[int(i * step)] for i in range(probe_count)]
+        probes[task] = [(dict(e.x), bool(e.y)) for e in chosen]
     return ContinualEvaluation(
         factory,
         probes,
-        source.boundaries + [source.samples],
+        task_ends,
         reference_budget=settings["reference_budget"],
         references_enabled=settings["continual_references"],
     )

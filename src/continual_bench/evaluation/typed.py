@@ -4,6 +4,7 @@ Any dataset (binary streams are adapted to two explicit classes) can be paired
 with any model family that supports the dataset's target type.
 """
 
+import copy
 import hashlib
 import json
 import math
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from river.base import Classifier
 
+from continual_bench.core.evaluation_metrics import task_matrix_metrics
 from continual_bench.core.tasks import BINARY, MULTICLASS, REGRESSION, task_kind
 from continual_bench.datasets.base import as_sample_source
 from continual_bench.infrastructure.storage import atomic_write, run_lock
@@ -169,6 +171,67 @@ class TypedState:
     initial_fit: dict | None = None
     model_version: str | None = None
     finished: bool = False
+    retention_matrix: list = field(default_factory=list)
+    retention_checkpoints: list = field(default_factory=list)
+    retention_steps: list = field(default_factory=list)
+
+
+def _sample_probes(segment, count):
+    if len(segment) <= count:
+        chosen = segment
+    else:
+        step = len(segment) / count
+        chosen = [segment[int(i * step)] for i in range(count)]
+    return [(dict(s.x), s.y) for s in chosen]
+
+
+def _typed_episodes(train_records, probe_samples=32):
+    if len(train_records) < 4:
+        return [], [], []
+    groups = []
+    if all(s.task_id is not None for s in train_records):
+        current_id, start = train_records[0].task_id, 0
+        for idx, sample in enumerate(train_records):
+            if sample.task_id != current_id:
+                groups.append((str(current_id), start, idx))
+                current_id, start = sample.task_id, idx
+        groups.append((str(current_id), start, len(train_records)))
+    if len(groups) < 2:
+        episodes = 3 if len(train_records) >= 6 else 2
+        bounds = [0] + [len(train_records) * i // episodes for i in range(1, episodes)] + [len(train_records)]
+        groups = [(f"period_{i}", bounds[i], bounds[i + 1]) for i in range(episodes)]
+    labels = [label for label, _, _ in groups]
+    ends = [end for _, _, end in groups]
+    probes = [_sample_probes(train_records[start:end], probe_samples) for _, start, end in groups]
+    return labels, ends, probes
+
+
+def _build_typed_retention(state, episode_labels):
+    matrix = getattr(state, "retention_matrix", [])
+    if not matrix:
+        return None
+    checkpoints = getattr(state, "retention_checkpoints", [])
+    steps = getattr(state, "retention_steps", [])
+    series = []
+    for index, (step, _row) in enumerate(zip(steps, matrix, strict=True)):
+        result = task_matrix_metrics(matrix[: index + 1])["metrics"]
+        series.append(
+            {
+                "step": step,
+                "model_version": checkpoints[index] if index < len(checkpoints) else None,
+                "absolute_retention": result["past_task_retention_accuracy"],
+                "gem_bwt": result["gem_backward_transfer"],
+                "post_learning_fm": result["postlearning_forgetting"],
+            }
+        )
+    return {
+        "matrix": matrix,
+        "periods": episode_labels,
+        "checkpoints": checkpoints,
+        "metric": "accuracy",
+        **{key: series[-1][key] for key in ("absolute_retention", "gem_bwt", "post_learning_fm")},
+        "series": series,
+    }
 
 
 def run_typed(
@@ -273,6 +336,11 @@ def run_typed(
             predictions, updates, versions = state.predictions, state.updates, state.versions
             replay, pending = state.replay, state.pending
             captured, labeled, trained_seqs = state.captured, state.labeled, state.trained_seqs
+            if task != REGRESSION:
+                train_records = [s for s in records if s.split == "train"]
+                episode_labels, episode_ends, episode_probes = _typed_episodes(train_records)
+            else:
+                episode_labels, episode_ends, episode_probes = [], [], []
 
             def save(*, force=False):
                 if checkpoint is None or not (force or checkpoint.due()):
@@ -310,6 +378,7 @@ def run_typed(
                 replay.append(sample)
                 initial, reset, learn = schedule.plan(train_index, state.released_train)
                 if not learn:
+                    _maybe_record_retention(sample)
                     return
                 selected = list(replay) if reset else [sample]
                 if (
@@ -370,6 +439,25 @@ def run_typed(
                     )
                     if reset or (policy == "online" and state.released_train == online_last):
                         _record_model(directory, versions, state.model, action, sample.seq)
+                _maybe_record_retention(sample)
+
+            def _maybe_record_retention(sample):
+                if not episode_ends:
+                    return
+                next_ep = len(state.retention_matrix)
+                if next_ep < len(episode_ends) and state.released_train >= episode_ends[next_ep]:
+                    frozen = copy.deepcopy(state.model)
+                    row = [
+                        sum(
+                            kind.normalize_prediction(_predict(frozen, dict(x), positive_class)[0]) == y
+                            for x, y in ep_samples
+                        )
+                        / len(ep_samples)
+                        for ep_samples in episode_probes
+                    ]
+                    state.retention_matrix.append(row)
+                    state.retention_checkpoints.append(state.model_version or f"trained-through-{sample.seq}")
+                    state.retention_steps.append(sample.seq)
 
             def release(now):
                 state.release_at = now
@@ -528,6 +616,7 @@ def run_typed(
             labeled,
             unique_training=len(trained_seqs),
             tracking_seconds=state.tracking_seconds + time.perf_counter() - tick,
+            retention=_build_typed_retention(state, episode_labels),
         )
         timeline = [(r.seq, r.split, r.y, p["prediction"]) for r, p in zip(records, predictions)]
         report["artifacts"] = write_artifacts(

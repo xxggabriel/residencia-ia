@@ -257,10 +257,43 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
 
     observer = OnlineObservability(
         settings,
-        continual_evaluation(run.source, run.model_factory, settings),
+        continual_evaluation(run.source, run.model_factory, settings, events=events),
         current_rss_bytes,
         warmup=sum(len(b) for b in blocks[: matrix.offline]),
     )
+
+    has_source_probes = hasattr(run.source, "probes")
+    probes = run.source.probes() if has_source_probes else {}
+    seen_concepts: set[int] = set()
+    best_probe: dict[int, float] = {}
+    retention_probes: list[dict[str, Any]] = []
+
+    def _record_probes(observed_seq: int) -> None:
+        if has_source_probes:
+            active_probes, active_concepts = probes, sorted(seen_concepts)
+        elif observer.continual is not None:
+            active_probes = observer.continual.probes
+            task_ends = observer.continual.task_ends
+            active_concepts = [
+                idx for idx in range(len(task_ends)) if observed_seq + 1 > (task_ends[idx - 1] if idx else 0)
+            ]
+        else:
+            return
+        frozen = copy.deepcopy(deployed_model)
+        for concept in active_concepts:
+            samples = active_probes.get(concept, [])
+            if not samples:
+                continue
+            accuracy = sum((frozen.predict(dict(x)) >= 0.5) == y for x, y in samples) / len(samples)
+            best_probe[concept] = max(best_probe.get(concept, 0.0), accuracy)
+            retention_probes.append(
+                {
+                    "observed_seq": observed_seq,
+                    "concept": concept,
+                    "accuracy": accuracy,
+                    "drop_from_best_probe": best_probe[concept] - accuracy,
+                }
+            )
 
     total = Metrics()
     windows: list[dict[str, Any]] = []
@@ -287,6 +320,8 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
                 total.add(event.y, prob)
                 current.add(event.y, prob)
             labeled += 1
+            if event.concept is not None:
+                seen_concepts.add(event.concept)
             observer.after_label(event, prob, trace, event.available_at, deployed_model, is_online)
 
         end_seq = block[-1].seq
@@ -303,6 +338,7 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
                 observer.recorded_model_version(version)
             if current.n:
                 windows.append({"end_seq": end_seq, **current.values()})
+            _record_probes(end_seq)
             continue
 
         window = {"end_seq": end_seq, **current.values()}
@@ -352,6 +388,7 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
                 },
             )
             observer.recorded_model_version(ver)
+        _record_probes(end_seq)
 
     observer.sample_memory()
     sim_result = _simulation_of(policy, matrix)
@@ -391,7 +428,7 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
             "blocked_decisions": 0,
             "excludes_warmup": True,
         },
-        "retention_probes": [],
+        "retention_probes": retention_probes,
         "prediction_digest": audit,
         "compute_seconds": compute_seconds,
         "retraining": analysis,
