@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from continual_bench.application.runner import run
+from continual_bench.config import Config
 from continual_bench.datasets.openml import REAL_SOURCES, RealSource, iter_arff, validate_source
 
 ELECTRICITY_HEADER = """@relation fixture
@@ -40,6 +42,38 @@ def admitted_fixture(tmp_path, monkeypatch):
 
 def source(directory, samples=2, seed=42):
     return RealSource("electricity", samples, seed, 3, 1000, directory=directory)
+
+
+def test_binary_run_uses_materialized_openml_source_outside_default_directory(tmp_path, monkeypatch):
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    path = materialized / "electricity.arff"
+    rows = [f"0,2,0,.1,.2,.3,.4,.5,{'UP' if i % 2 else 'DOWN'}\n" for i in range(100)]
+    path.write_text(ELECTRICITY_HEADER + "".join(rows))
+    monkeypatch.setitem(
+        REAL_SOURCES,
+        "electricity",
+        {
+            **REAL_SOURCES["electricity"],
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "rows": len(rows),
+            "bytes": path.stat().st_size,
+        },
+    )
+    monkeypatch.setenv("BENCH_DATASETS", str(tmp_path / "missing"))
+    cfg = Config.model_validate(
+        {
+            "mode": "offline",
+            "dataset": {"name": "electricity", "samples": len(rows), "label_delay": 3, "epoch": 1000},
+            "warmup": 20,
+            "metric_window": 20,
+            "policy": {"name": "none"},
+            "tracking": {"continual_references": False},
+        }
+    )
+    report = run(cfg, tmp_path / "run", source=source(materialized, samples=len(rows)))
+    assert report["complete"] and report["observed"] == len(rows)
+    assert report["dataset"]["raw_sha256"] == REAL_SOURCES["electricity"]["sha256"]
 
 
 def test_real_prefix_is_reproducible_across_seeds_and_keeps_nominal_fields(admitted_fixture):
