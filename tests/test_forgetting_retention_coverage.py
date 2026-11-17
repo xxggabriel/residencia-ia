@@ -113,3 +113,54 @@ def test_local_benchmark_publication_logs_retention_and_forgetting_to_mlflow(tmp
     assert "absolute_retention" in html
     artifact_paths = {item.path for item in client.list_artifacts(receipt["mlflow_run_id"])}
     assert "dashboard.html" in artifact_paths
+
+
+def test_probes_are_independent_of_training_samples_and_unavailable_without_independent_source(tmp_path):
+    from continual_bench.core.contracts import TaskSample
+    from continual_bench.datasets.synthetic import MovingSyntheticSource
+
+    for name in ("hyperplane", "rbf_drift"):
+        src = MovingSyntheticSource(name, 30, 42, 0, 0)
+        train_x = [e.x for e in src.events()]
+        probes = src.episode_probes([10, 20, 30], 8)
+        probe_x = [x for ep in probes.values() for x, _ in ep]
+        assert probe_x
+        assert not any(px in train_x for px in probe_x)
+
+    class _TrainOnlySource:
+        def samples_iter(self):
+            for i in range(12):
+                yield TaskSample(f"s{i}", i, i, i, {"a": float(i)}, "0" if i % 2 == 0 else "1", split="train")
+
+        def manifest(self):
+            return {"name": "train-only", "task": "multiclass", "labels": ["0", "1"]}
+
+    report = run_typed(
+        _TrainOnlySource(),
+        tmp_path / "train-only",
+        model={"name": "logistic"},
+        policy="online",
+        warmup=2,
+        window=4,
+    )
+    assert report["tracking_observations"]["retention"]["absolute_retention"] is None
+
+
+def test_typed_records_retention_even_when_training_budget_blocks_updates(tmp_path):
+    from continual_bench.datasets.synthetic import SyntheticSource
+
+    src = SyntheticSource("sea", 12, 42, 0, 0)
+    report = run_typed(
+        src,
+        tmp_path / "budget-zero",
+        model={"name": "logistic"},
+        policy="online",
+        warmup=2,
+        window=4,
+        training_budget=0,
+    )
+    retention = report["tracking_observations"]["retention"]
+    assert len(retention["matrix"]) == 3
+    assert retention["absolute_retention"] is not None
+    assert retention["gem_bwt"] is not None
+    assert retention["post_learning_fm"] is not None

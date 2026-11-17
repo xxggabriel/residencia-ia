@@ -185,25 +185,59 @@ def _sample_probes(segment, count):
     return [(dict(s.x), s.y) for s in chosen]
 
 
-def _typed_episodes(train_records, probe_samples=32):
+def _typed_episodes(source, records, train_records, probe_samples=32):
     if len(train_records) < 4:
         return [], [], []
-    groups = []
-    if all(s.task_id is not None for s in train_records):
+    raw = getattr(source, "source", source)
+    adapted = raw is not source
+
+    if hasattr(raw, "generator") and hasattr(raw, "boundaries"):
+        ends = [b for b in raw.boundaries if 0 < b < len(train_records)] + [len(train_records)]
+        if len(ends) < 2:
+            return [], [], []
+        labels = [f"ep_{i}" for i in range(len(ends))]
+        probes = []
+        for task in range(len(ends)):
+            fn = raw.functions[min(task, len(raw.functions) - 1)]
+            gen = raw.generator(fn, raw.seed + 2_000_000 + task)
+            probes.append(
+                [
+                    ({str(k): v for k, v in x.items()}, ("1" if y else "0") if adapted else y)
+                    for x, y in islice(gen, probe_samples)
+                ]
+            )
+        return labels, ends, probes
+
+    if hasattr(raw, "episode_probes"):
+        episodes = 3 if len(train_records) >= 6 else 2
+        ends = [len(train_records) * i // episodes for i in range(1, episodes)] + [len(train_records)]
+        ep_map = raw.episode_probes(ends, probe_samples)
+        labels = [f"period_{i}" for i in range(len(ends))]
+        probes = [
+            [(x, ("1" if y else "0") if adapted else y) for x, y in ep_map[i]] for i in range(len(ends))
+        ]
+        return labels, ends, probes
+
+    heldout = [s for s in records if s.split in ("validation", "test")]
+    if heldout and all(s.task_id is not None for s in train_records):
+        groups = []
         current_id, start = train_records[0].task_id, 0
         for idx, sample in enumerate(train_records):
             if sample.task_id != current_id:
-                groups.append((str(current_id), start, idx))
+                groups.append((current_id, start, idx))
                 current_id, start = sample.task_id, idx
-        groups.append((str(current_id), start, len(train_records)))
-    if len(groups) < 2:
-        episodes = 3 if len(train_records) >= 6 else 2
-        bounds = [0] + [len(train_records) * i // episodes for i in range(1, episodes)] + [len(train_records)]
-        groups = [(f"period_{i}", bounds[i], bounds[i + 1]) for i in range(episodes)]
-    labels = [label for label, _, _ in groups]
-    ends = [end for _, _, end in groups]
-    probes = [_sample_probes(train_records[start:end], probe_samples) for _, start, end in groups]
-    return labels, ends, probes
+        groups.append((current_id, start, len(train_records)))
+        by_task = {}
+        for s in heldout:
+            if s.task_id is not None:
+                by_task.setdefault(s.task_id, []).append(s)
+        if len(groups) >= 2 and all(tid in by_task for tid, _, _ in groups):
+            labels = [str(tid) for tid, _, _ in groups]
+            ends = [end for _, _, end in groups]
+            probes = [_sample_probes(by_task[tid], probe_samples) for tid, _, _ in groups]
+            return labels, ends, probes
+
+    return [], [], []
 
 
 def _build_typed_retention(state, episode_labels):
@@ -338,7 +372,7 @@ def run_typed(
             captured, labeled, trained_seqs = state.captured, state.labeled, state.trained_seqs
             if task != REGRESSION:
                 train_records = [s for s in records if s.split == "train"]
-                episode_labels, episode_ends, episode_probes = _typed_episodes(train_records)
+                episode_labels, episode_ends, episode_probes = _typed_episodes(source, records, train_records)
             else:
                 episode_labels, episode_ends, episode_probes = [], [], []
 
@@ -387,6 +421,7 @@ def run_typed(
                     and state.training_used + len(selected) > training_budget
                 ):
                     state.budget_blocked += 1
+                    _maybe_record_retention(sample)
                     return
                 before = time.perf_counter()
                 if reset:

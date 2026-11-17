@@ -6,6 +6,7 @@ Synthetic timestamps are simulated (`epoch + seq`), never real event time.
 
 import hashlib
 import json
+import random
 from itertools import islice
 
 from river.datasets import synth
@@ -146,6 +147,44 @@ class MovingSyntheticSource:
                 bool(y),
                 None,
             )
+
+    def episode_probes(self, task_ends, count=32):
+        """Generate independent, never-trained probe samples matched to each episode."""
+        probes = {task: [] for task in range(len(task_ends))}
+        if self.name == "rbf_drift":
+            probe_params = {**self.params, "seed_sample": self.params["seed_sample"] + 2_000_000}
+            stream = islice(self.constructor(**probe_params), task_ends[-1])
+            task = 0
+            for seq, (x, y) in enumerate(stream):
+                while task < len(task_ends) and seq >= task_ends[task]:
+                    task += 1
+                if task >= len(task_ends):
+                    break
+                start = task_ends[task - 1] if task else 0
+                end = task_ends[task]
+                stride = max(1, (end - start) // count)
+                if len(probes[task]) < count and (seq - start) % stride == 0:
+                    probes[task].append(({str(k): v for k, v in x.items()}, bool(y)))
+            return probes
+
+        gen = self.constructor(**self.params)
+        midpoints = {((task_ends[t - 1] if t else 0) + task_ends[t]) // 2: t for t in range(len(task_ends))}
+        for seq, _ in enumerate(islice(gen, task_ends[-1])):
+            if seq in midpoints:
+                task = midpoints[seq]
+                weights = list(gen._weights)
+                sum_weights = sum(weights)
+                rng = random.Random(self.seed + 2_000_000 + task)
+                noise = self.params["noise_percentage"]
+                n_feat = self.params["n_features"]
+                for _ in range(count):
+                    x = {str(i): rng.random() for i in range(n_feat)}
+                    val = sum(weights[i] * x[str(i)] for i in range(n_feat))
+                    y = val >= sum_weights * 0.5
+                    if 0.01 + rng.random() <= noise:
+                        y = not y
+                    probes[task].append((x, y))
+        return probes
 
     def manifest(self):
         return {
