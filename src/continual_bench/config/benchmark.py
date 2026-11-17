@@ -21,7 +21,7 @@ class Component(Strict):
 
 class DatasetConfig(Strict):
     name: str = Field(default="sea", pattern=r"^[a-z][a-z0-9_]*$")
-    samples: int = Field(default=1200, ge=100, le=100_000)
+    samples: int = Field(default=1200, ge=100, le=100_000_000)
     seed: int = Field(default=42, ge=0, le=2**31 - 1)
     label_delay: int = Field(default=0, ge=0, le=10_000)
     epoch: int = Field(default=1_735_689_600, ge=0)

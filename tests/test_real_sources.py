@@ -177,3 +177,21 @@ def test_prep_copies_verified_source_atomically_and_rejects_bad_cache(admitted_f
 def test_lock_matches_packaged_source_pins():
     lock = json.loads((Path(__file__).parents[1] / "configs/contracts/real-sources.lock.json").read_text())
     assert lock["sources"] == REAL_SOURCES
+
+
+def test_samples_ceiling_allows_up_to_100m():
+    from pydantic import ValidationError
+
+    from continual_bench.application.cloud.contracts import BenchmarkWorkload
+    from continual_bench.application.matrix import MatrixDataset
+    from continual_bench.datasets.base import validate_bounds
+
+    airlines_rows = REAL_SOURCES["airlines"]["rows"]
+    cfg = Config.model_validate({"dataset": {"name": "airlines", "samples": airlines_rows}})
+    assert cfg.dataset.samples == airlines_rows
+    workload = BenchmarkWorkload(datasets=("airlines",), samples=100_000_000)
+    assert workload.samples == 100_000_000
+    assert MatrixDataset(name="airlines", samples=100_000_000).samples == 100_000_000
+    validate_bounds(100_000_000, 42, 3, 1000)
+    with pytest.raises(ValidationError):
+        BenchmarkWorkload(datasets=("airlines",), samples=100_000_001)

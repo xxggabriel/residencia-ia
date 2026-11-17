@@ -11,7 +11,7 @@ def stable_identity(value):
 
 
 def validate_bounds(samples, seed, label_delay, epoch):
-    if not 1 <= samples <= 100_000 or not 0 <= seed < 2**31 or label_delay < 0 or epoch < 0:
+    if not 1 <= samples <= 100_000_000 or not 0 <= seed < 2**31 or label_delay < 0 or epoch < 0:
         raise ValueError("invalid bounded source parameters")
 
 

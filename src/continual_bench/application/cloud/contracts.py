@@ -137,7 +137,7 @@ class ExperimentMatrixRef(Strict):
 
 class ProjectSuite(Strict):
     kind: Literal["project_suite"] = "project_suite"
-    samples: int = Field(default=3000, ge=300, le=100_000)
+    samples: int = Field(default=3000, ge=300, le=100_000_000)
     dataset_examples: int = Field(default=100, ge=100, le=1000)
     epochs: int = Field(default=2, ge=1, le=20)
     label_delay: int = Field(default=3, ge=0, le=100)
@@ -156,7 +156,7 @@ class BenchmarkWorkload(Strict):
     modes: tuple[Literal["streaming", "incremental", "offline"], ...] = ("streaming",)
     metrics: tuple[str, ...] = Field(default_factory=tuple)
     seeds: tuple[int, ...] = Field(default=(42,), min_length=1)
-    samples: int | None = Field(default=None, ge=10, le=100_000)
+    samples: int | None = Field(default=None, ge=10, le=100_000_000)
     label_delay: int | None = Field(default=None, ge=0, le=10_000)
     base: dict = Field(default_factory=dict)
     dataset_params: dict = Field(default_factory=dict)
