@@ -104,12 +104,38 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
         yaml.safe_load(Path("configs/base/tracking.yaml").read_text())
     ).model_dump()
     reports = {}
+    cost_aware = ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle")
     for policy in POLICIES:
         output = tmp_path / policy
-        report = run(tmp_path, "social", "smoke", policy, output, tracking)
+        progress = []
+        report = run(tmp_path, "social", "smoke", policy, output, tracking,
+                     progress=lambda step, metrics: progress.append((step, metrics)))
         reports[policy] = report
         summary, holdout = report["metrics"], report["holdout"]
         assert summary["initial_train_rows"] + summary["n"] + holdout["n"] == 10_000
+        assert progress[0] == (0, {"rows_processed": 0, "rows_total": 10_000, "evaluated": 0})
+        coordinates = [step for step, _ in progress]
+        assert coordinates == sorted(set(coordinates))
+        matrix_points = [metrics for _, metrics in progress if "matrix/rows_processed" in metrics]
+        if policy in cost_aware:
+            final_matrix = matrix_points[-1]
+            assert final_matrix["matrix/rows_processed"] == report["contract"]["holdout_start"]
+            assert final_matrix["matrix/candidate_models"] == len(report["training_history"])
+        else:
+            assert not matrix_points
+        assert progress[-1][0] == 10_000 + (report["contract"]["holdout_start"] if matrix_points else 0)
+        latest_online = next(
+            metrics for _, metrics in reversed(progress) if "prequential/accuracy" in metrics
+        )
+        assert latest_online["prequential/n"] == summary["n"]
+        assert latest_online["prequential/accuracy"] == summary["accuracy"]
+        assert latest_online["prequential/log_loss"] == summary["log_loss"]
+        final_progress = progress[-1][1]
+        assert final_progress["rows_processed"] == 10_000
+        assert final_progress["evaluated"] == summary["n"] + holdout["n"]
+        assert final_progress["holdout/n"] == holdout["n"]
+        assert final_progress["holdout/accuracy"] == holdout["accuracy"]
+        assert final_progress["updates"] == summary["update_count"]
         windows = report["windows"]
         assert all(a["end_time_ms"] < b["start_time_ms"] for a, b in zip(windows, windows[1:]))
         assert report["contract"]["holdout_start"] == 8996
@@ -168,7 +194,7 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
     online_warmup = reports["online"]["model_versions"][0]
     assert online_warmup["sha256"] == reports["frozen"]["model_versions"][0]["sha256"]
     assert {v["action"] for v in reports["online"]["model_versions"]} == {"initial", "online"}
-    for name in ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle"):
+    for name in cost_aware:
         metrics, retraining = reports[name]["metrics"], reports[name]["retraining"]
         assert retraining["setup"]["offline_batches"] >= 2
         assert metrics["retraining_online_retrains"] == len(retraining["deployed"]["retrain_points"])

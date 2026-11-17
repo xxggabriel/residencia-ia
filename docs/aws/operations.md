@@ -281,6 +281,18 @@ Cada tentativa do Batch registra um run com o ID do job, a revisão e o contrato
 unidade. As métricas `progress/*` usam a janela ou época do avaliador, e `final/*`
 registra as métricas finais. O manifesto final da unidade aponta para o run MLflow.
 
+Para Zia, use o experimento `<sha-curto>-continual-bench-zia-experiments` e filtre por
+`cb-campaign-id`. Ao iniciar uma tentativa de avaliação, o worker abre a run pai
+como `RUNNING`. A série `progress/*` registra exemplos processados e avaliados,
+atualizações, retreinamentos e métricas acumuladas com prefixos `prequential/` e
+`holdout/`. As políticas por custo também publicam `progress/matrix/*` durante a
+construção da matriz. Nelas, a coordenada de step inclui as linhas lidas nessa fase.
+Use `progress/rows_processed` e `progress/rows_total` para acompanhar a cobertura da
+avaliação. O worker agrupa os pontos de cada série em intervalos de cinco segundos
+quando há blocos concluídos e publica os pontos pendentes antes do relatório final.
+A publicação final usa a mesma run pai e registra as runs filhas, os checkpoints
+e os artefatos. Uma retomada só de publicação reutiliza a tentativa arquivada.
+
 ## Jobs nativos no SageMaker Studio
 
 ### Onde localizar datasets e avaliações

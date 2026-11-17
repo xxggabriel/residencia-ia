@@ -122,15 +122,31 @@ def run(
     tracker=None,
     iterative_config=None,
     stop_requested=None,
+    progress=None,
 ):
+    """Evaluate the stream and optionally report live metrics after completed blocks.
+
+    The callback step counts rows visited across matrix construction (if used)
+    and evaluation. The evaluation's ``rows_processed`` excludes the matrix pass.
+    """
     if policy not in POLICIES:
         raise ValueError(f"unknown Zia policy: {policy}")
     started = time.monotonic()
+    tracking_seconds = 0.0
+
+    def publish_progress(step, metrics):
+        nonlocal tracking_seconds
+        mark = time.monotonic()
+        progress(step, metrics)
+        tracking_seconds += time.monotonic() - mark
+
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     path, manifest = load_manifest(root, dataset, scope)
     if sha256_file(path) != manifest["sha256"]:
         raise ValueError("prepared dataset checksum differs from its manifest")
+    if progress is not None:
+        publish_progress(0, {"rows_processed": 0, "rows_total": manifest["rows"], "evaluated": 0})
     spec = DATASETS[dataset]
     classes = len(spec["classes"])
     iter_config = IterativeTrainingConfig.from_params(iterative_config)
@@ -175,7 +191,6 @@ def run(
     windows, versions, alarm_events = [], [], []
     observed_windows = []
     probes = TemporalHoldoutProbes()
-    tracking_seconds = 0.0
     class_counts = np.zeros(classes, dtype=np.int64)
     train_seconds = predict_seconds = 0.0
     resets = rows = stream_blocks = 0
@@ -183,6 +198,7 @@ def run(
     warmup = 0
     split = manifest["rows"] - int(manifest["rows"] * HOLDOUT_FRACTION)
     candidate_dir = TemporaryDirectory(prefix="zia-candidates-") if batch_policy else nullcontext()
+    progress_offset = 0
     with monitoring, candidate_dir as scratch, PredictionArchive(
         output, spec["classes"], manifest["sha256"], "native", tracking_settings["fading_factor"],
         threshold=threshold,
@@ -194,7 +210,10 @@ def run(
                                decision_threshold=threshold),
                 threshold, iter_config, REPLAY_BLOCKS, retraining_options,
                 history=history, scratch=Path(scratch), tracker=tracker,
+                progress=publish_progress if progress is not None else None,
             )
+            # Matrix construction reads the training prefix before the evaluation pass.
+            progress_offset = int(matrix.rows.sum())
             batch_policy.prepare(matrix)
             policy_settings["offline_blocks"] = matrix.offline
         for step, (timestamps, x, y, is_holdout) in enumerate(batches(path, block_rows, split)):
@@ -333,6 +352,24 @@ def run(
                     "rows": rows, "total_rows": manifest["rows"], "model_versions_count": len(versions),
                     "elapsed_seconds": time.monotonic() - started,
                 }))
+            if progress is not None:
+                mark = time.monotonic()
+                live = {
+                    "rows_processed": rows, "rows_total": manifest["rows"], "evaluated": rows - warmup,
+                    "updates": len(versions) - 1, "retrain_count": resets,
+                    "train_seconds": train_seconds, "prediction_seconds": predict_seconds,
+                }
+                if detector is not None:
+                    live["drift_alarms"] = len(alarm_events)
+                if step:
+                    current = holdout if is_holdout else online
+                    cumulative, _ = current.metrics()
+                    scope_name = windows[-1]["scope"]
+                    for key in ("n", "accuracy", "macro_f1", "log_loss", "average_precision"):
+                        if cumulative.get(key) is not None:
+                            live[f"{scope_name}/{key}"] = cumulative[key]
+                tracking_seconds += time.monotonic() - mark
+                publish_progress(progress_offset + rows, live)
     history.check_interrupted()
     if rows != manifest["rows"] or not online.confusion.sum() or not holdout.confusion.sum():
         raise ValueError("dataset coverage or temporal split is incomplete")

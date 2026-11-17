@@ -15,6 +15,7 @@ import sys
 import tarfile
 import time
 import traceback
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 
 from continual_bench.infrastructure.object_store import (
@@ -92,9 +93,11 @@ def ecs_task_arn(env) -> str | None:
         return None
 
 
-def publish_directory(store, directory: Path, prefix: str) -> dict:
+def publish_directory(store, directory: Path, prefix: str, *, check_stop=None) -> dict:
     files, total = 0, 0
     for path in sorted(directory.rglob("*")):
+        if check_stop is not None:
+            check_stop()
         relative = path.relative_to(directory)
         if (
             not path.is_file()
@@ -194,7 +197,7 @@ def verify_native_loader(directory: Path, report: dict, data_root: Path, rows: i
     }
 
 
-def execute_zia(unit: RunUnit, store, workdir: Path, log, *, stop_requested=None) -> dict:
+def execute_zia(unit: RunUnit, store, workdir: Path, log, *, stop_requested=None, progress=None) -> dict:
     import yaml
 
     from continual_bench.config import TrackingConfig
@@ -215,6 +218,8 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log, *, stop_requested=None
         raise ContractError("tracking profile differs from the campaign plan")
     settings = TrackingConfig.model_validate(yaml.safe_load(tracking_path.read_text())).model_dump()
     data_root = materialize(store, manifest, workdir / "data")
+    if stop_requested is not None and stop_requested():
+        raise InterruptedError("Zia stopped before evaluation after SIGTERM")
     output = workdir / "run"
     log.info("evaluation starting", extra={"fields": {"rows": manifest["rows"], "policy": params["policy"]}})
     report = run(
@@ -225,7 +230,10 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log, *, stop_requested=None
         output,
         settings,
         stop_requested=stop_requested,
+        progress=progress,
     )
+    if stop_requested is not None and stop_requested():
+        raise InterruptedError("Zia evaluation stopped after SIGTERM")
     evidence = prediction_manifest(output, report)
     adapted = tracking_report(report, evidence)
     write_zia_artifacts(output, report, adapted)
@@ -239,11 +247,13 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log, *, stop_requested=None
     }
 
 
-def restore_benchmark_evidence(store, final, directory, *, report_path="report.json"):
+def restore_benchmark_evidence(store, final, directory, *, report_path="report.json", check_stop=None):
     """Materialize immutable benchmark evidence after an interrupted publication."""
     prefix = final["published"]["prefix"] + "/"
     files = 0
     for key in store.list(prefix):
+        if check_stop is not None:
+            check_stop()
         relative = key.removeprefix(prefix)
         if relative == "status.json" or relative.startswith("partial/"):
             continue
@@ -254,6 +264,31 @@ def restore_benchmark_evidence(store, final, directory, *, report_path="report.j
     if sha256_path(directory / report_path) != final["report_sha256"]:
         raise TrackingPublicationError("The archived report differs from the publication manifest")
     return directory
+
+
+def start_zia_tracking(tracker, attempt_key, log):
+    start_live = getattr(tracker, "start_live", None)
+    if not callable(start_live):
+        return False
+    bind_attempt = getattr(tracker, "bind_attempt", None)
+    if callable(bind_attempt):
+        bind_attempt(attempt_key)
+    try:
+        start_live()
+    except Exception:
+        log.warning("could not start live Zia MLflow tracking", exc_info=True)
+    return True
+
+
+def stop_zia_tracking(tracker, log):
+    mark_killed = getattr(tracker, "mark_killed", None)
+    try:
+        if callable(mark_killed):
+            mark_killed()
+        elif callable(finish := getattr(tracker, "finish", None)):
+            finish("KILLED")
+    except Exception:
+        log.warning("could not mark Zia MLflow run as killed", exc_info=True)
 
 
 def complete_zia_tracking(tracker, store, final, output, report, adapted):
@@ -425,6 +460,7 @@ def run_unit(
     tracking_required = bool(tracking_uri or (unit.kind == "zia" and tracker is not None))
     publication_required = tracking_required or (unit.kind == "zia" and registry is not None)
     resuming = False
+    live_attempt = None
 
     def on_terminate(_signal):
         if unit.kind == "zia":
@@ -434,8 +470,16 @@ def run_unit(
             matrix_tracker.finish("KILLED")
 
     sigterm_handler = GracefulTerminationHandler(on_terminate=on_terminate)
+    zia_signal_scope = ExitStack()
+
+    def check_zia_stop():
+        if sigterm_handler.received:
+            raise InterruptedError("Zia execution stopped after SIGTERM")
+
     try:
-        with sigterm_handler:
+        if unit.kind == "zia":
+            zia_signal_scope.enter_context(sigterm_handler)
+        with nullcontext() if unit.kind == "zia" else sigterm_handler:
             expected_image = unit.contract["release"]["runtime_image"]
             if env.get("BENCH_IMAGE_DIGEST") and env["BENCH_IMAGE_DIGEST"] != expected_image:
                 raise ContractError("job runs an image other than the campaign release")
@@ -445,11 +489,24 @@ def run_unit(
                     raise TrackingPublicationError("MLflow is configured but the worker has no publisher")
                 resuming = publication_required and store.head(pending_key) is not None
                 if not resuming:
+                    if start_zia_tracking(active_tracker, attempt_key, log):
+                        live_attempt = attempt_key
+                    callback = getattr(active_tracker, "progress", None)
+
+                    def live_progress(step, metrics):
+                        if sigterm_handler.received:
+                            return
+                        try:
+                            callback(step, metrics)
+                        except Exception:
+                            log.warning("could not publish Zia progress to MLflow", exc_info=True)
+
+                    check_zia_stop()
                     outcome = execute_zia(
-                        unit, store, workdir, log, stop_requested=lambda: sigterm_handler.received
+                        unit, store, workdir, log, stop_requested=lambda: sigterm_handler.received,
+                        progress=live_progress if callable(callback) else None,
                     )
-                    if sigterm_handler.received:
-                        raise InterruptedError("Zia evaluation stopped after SIGTERM")
+                    check_zia_stop()
             else:
                 resuming = tracking_required and store.head(pending_key) is not None
                 if tracking_required and not resuming:
@@ -484,6 +541,7 @@ def run_unit(
             metadata, links, documents = outcome["documents"](report, outcome["adapted"], outputs_uri)
             for name, value in documents.items():
                 (output / name).write_text(json.dumps(value, sort_keys=True, indent=2))
+            check_zia_stop()
             loader = verify_native_loader(output, report, outcome["data_root"])
             (output / "model").mkdir(exist_ok=True)
             (output / "model" / "model.tar.gz").write_bytes(model_tarball(output, metadata))
@@ -491,7 +549,8 @@ def run_unit(
             (output / ROWS_FILE).write_text(json.dumps(rows, sort_keys=True, allow_nan=False))
             if hasattr(active_tracker, "prepare_artifacts"):
                 active_tracker.prepare_artifacts(report, output)
-            published = publish_directory(store, output, prefix)
+            check_zia_stop()
+            published = publish_directory(store, output, prefix, check_stop=check_zia_stop)
             final.update(
                 {
                     "snapshot": unit.contract["snapshot"],
@@ -598,6 +657,7 @@ def run_unit(
                 except ObjectExists:
                     resuming = True
         if unit.kind == "zia" and publication_required:
+            check_zia_stop()
             if resuming:
                 from continual_bench.evaluation.zia_artifacts import tracking_report
                 from continual_bench.evaluation.zia_predictions import prediction_manifest
@@ -605,11 +665,21 @@ def run_unit(
                 final = get_json(store, pending_key)
                 if final["contract_sha256"] != unit.contract_sha256:
                     raise ContractError("Archived attempt does not match the unit contract")
-                output = restore_benchmark_evidence(store, final, workdir / "publication")
+                archived_attempt = final["attempt"]["attempt_key"]
+                if live_attempt != archived_attempt:
+                    if live_attempt is not None:
+                        stop_zia_tracking(active_tracker, log)
+                        if callable(tracker):
+                            active_tracker = tracker(unit)
+                    start_zia_tracking(active_tracker, archived_attempt, log)
+                output = restore_benchmark_evidence(
+                    store, final, workdir / "publication", check_stop=check_zia_stop
+                )
                 report = json.loads((output / "report.json").read_text())
                 metadata = json.loads((output / "model-metadata.json").read_text())
                 adapted = tracking_report(report, prediction_manifest(output, report))
                 evaluation_seconds = final["evaluation_seconds"]
+                check_zia_stop()
             if registry is not None:
                 model_package = registry(
                     unit, report, metadata, final["model"]["archive_uri"],
@@ -619,7 +689,9 @@ def run_unit(
                     raise RuntimeError("SageMaker registry returned no model package ARN")
                 final["model"]["model_package_arn"] = model_package["model_package_arn"]
             if tracking_required:
+                check_zia_stop()
                 complete_zia_tracking(active_tracker, store, final, output, report, adapted)
+                check_zia_stop()
         elif unit.kind != "zia" and tracking_required:
             from continual_bench.infrastructure.aws.matrix_tracking import MatrixMlflowRun
 
@@ -752,6 +824,7 @@ def run_unit(
             except Exception:
                 pass
         if unit.kind == "zia" and sigterm_handler.received:
+            stop_zia_tracking(active_tracker, log)
             flush_partial_state(
                 store, workdir / "run", prefix, status_key, status, started=started, clock=clock
             )
@@ -783,6 +856,8 @@ def run_unit(
                 context,
             )
         return code
+    finally:
+        zia_signal_scope.close()
 
 
 def _base(unit: RunUnit, attempt_key: str) -> dict:

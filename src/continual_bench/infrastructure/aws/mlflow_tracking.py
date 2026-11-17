@@ -38,6 +38,7 @@ EMPTY_SHA256_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b785
 MLFLOW_LOG_BATCH_MAX_METRICS = 500
 MLFLOW_LOG_BATCH_MAX_PARAMS = 100
 MLFLOW_LOG_BATCH_MAX_TAGS = 100
+PROGRESS_INTERVAL_SECONDS = 30
 _SKIP_SUFFIXES = (".lock",)
 _SKIP_PREFIXES = (".pending-", ".predictions-", ".model-", ".prepare-")
 
@@ -369,6 +370,9 @@ class SageMakerMlflowTracker:
         self.recorded_epochs: list[dict[str, Any]] = []
         self.api_errors: list[str] = []
         self._meta: dict[str, Any] | None = None
+        self._progress_step = -1
+        self._progress_attempted_at: float | None = None
+        self._pending_progress: dict[str, dict[str, Any]] = {}
 
     @property
     def tracking_uri(self) -> str | None:
@@ -723,6 +727,40 @@ class SageMakerMlflowTracker:
         info = self.start(hyperparameters)
         return bool(info.get("run_id"))
 
+    def start_live(self) -> bool:
+        """Expose the Zia attempt before training or dataset materialization."""
+        return self.log_batch(tags=[
+            {"key": "benchmark_complete", "value": "false"},
+            {"key": "zia_artifacts_status", "value": "running"},
+        ])
+
+    def progress(self, step: int, metrics: dict[str, float]) -> None:
+        """Coalesce each live series between requests and keep final metric keys separate."""
+        if step <= self._progress_step:
+            return
+        stamp = int(time.time() * 1000)
+        points = [
+            {"key": sanitize_mlflow_name(f"progress/{key}"), "value": float(value), "step": step,
+             "timestamp": stamp}
+            for key, value in metrics.items()
+            if type(value) in (int, float) and math.isfinite(value)
+        ]
+        if not points:
+            return
+        self._progress_step = step
+        self._pending_progress.update((point["key"], point) for point in points)
+        if (self._progress_attempted_at is None
+                or time.monotonic() - self._progress_attempted_at >= PROGRESS_INTERVAL_SECONDS):
+            self._flush_progress()
+
+    def _flush_progress(self) -> None:
+        if self._pending_progress:
+            points = list(self._pending_progress.values())
+            self._pending_progress.clear()
+            # Avoid replaying a batch that may already have been accepted after a connection failure.
+            self.log_batch(metrics=points)
+            self._progress_attempted_at = time.monotonic()
+
     def log_batch(
         self,
         *,
@@ -890,6 +928,14 @@ class SageMakerMlflowTracker:
             self.log_batch(tags=[{"key": "cb-error", "value": str(error_message)[:1000]}])
         return self.finish("FAILED")
 
+    def mark_killed(self) -> bool:
+        if not self.finish("KILLED"):
+            return False
+        return self.log_batch(tags=[
+            {"key": "benchmark_complete", "value": "false"},
+            {"key": "zia_artifacts_status", "value": "interrupted"},
+        ])
+
     def get_metric_history(self, run_id, key):
         params = {"run_id": run_id, "metric_key": key, "max_results": 10_000}
         while True:
@@ -1021,6 +1067,7 @@ class SageMakerMlflowTracker:
         Uses the official `mlflow` + `sagemaker-mlflow` libraries when installed (opt-in
         `aws-mlflow` extra) and falls back to the REST/SigV4 client below otherwise or on failure.
         """
+        self._flush_progress()
         library = self._publish_with_library(
             report, adapted=adapted, output_dir=output_dir, outputs_uri=outputs_uri,
             model_package_arn=model_package_arn,

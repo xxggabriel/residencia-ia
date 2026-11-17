@@ -18,7 +18,7 @@ import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Iterable, Protocol
+from typing import Callable, Iterable, Protocol
 
 import numpy as np
 
@@ -194,6 +194,7 @@ def build_matrix(
     n_queries: int = N_QUERIES,
     query_stream: Iterable[tuple[np.ndarray, np.ndarray]] | None = None,
     workers: int = 1,
+    on_block_complete: Callable[[int, int, int], None] | None = None,
 ) -> tuple[PerformanceMatrix, list[object]]:
     """Single pass over ordered batches; returns the matrix and every trained model state.
 
@@ -202,6 +203,8 @@ def build_matrix(
     sample of the batch, and ``err`` is measured on them. ``workers > 1`` scores the trained models of
     one batch in threads (``learner.losses`` must be thread-safe). An optional third array in a
     batch (such as timestamps) is forwarded to the learner's fit only.
+    The optional callback receives the number of completed blocks, processed rows
+    and candidate models after each block, including the last scoring-only block.
 
     The RBF samples and feature means used by the policies fill missing values with
     the observed column mean in the warm-up batch, or zero when that column has no
@@ -217,6 +220,7 @@ def build_matrix(
     query_iterator = None if query_stream is None else iter(query_stream)
     pending = next(iterator, None)
     j = 0
+    processed_rows = 0
     feature_fill = None
     while pending is not None:
         x, y, *fit_context = pending
@@ -263,6 +267,9 @@ def build_matrix(
         else:
             seconds.append(float("nan"))
         j += 1
+        if on_block_complete is not None:
+            processed_rows += len(y)
+            on_block_complete(j, processed_rows, len(states))
     size = j
     err = np.full((size, size), np.nan)
     for i, row in enumerate(errs):

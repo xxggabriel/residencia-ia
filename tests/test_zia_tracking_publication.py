@@ -1,4 +1,5 @@
 import json
+import signal
 from pathlib import Path
 
 import pytest
@@ -131,6 +132,7 @@ def test_worker_retries_failed_tracking_from_archived_output(tmp_path, monkeypat
     )
     planning.publish_plan(store, plan)
     unit = plan["units"][0]
+    events = []
 
     class Tracker:
         def __init__(self, failing):
@@ -138,6 +140,15 @@ def test_worker_retries_failed_tracking_from_archived_output(tmp_path, monkeypat
 
         def bind_attempt(self, attempt_key):
             assert attempt_key == "initial-1"
+
+        def start_live(self):
+            events.append("started")
+            raise OSError("MLflow unavailable at startup")
+
+        def progress(self, step, _values):
+            events.append(step)
+            if step == 0:
+                raise OSError("MLflow unavailable for the first progress point")
 
         def publish_run_report(self, report, *, adapted, output_dir, **_kwargs):
             if self.failing:
@@ -159,11 +170,21 @@ def test_worker_retries_failed_tracking_from_archived_output(tmp_path, monkeypat
     def registry_error(*_args, **_kwargs):
         raise RuntimeError("registry unavailable")
 
+    materialize = worker.materialize
+
+    def read_data(*args, **kwargs):
+        assert events == ["started"]
+        events.append("downloading")
+        return materialize(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "materialize", read_data)
     assert worker.run_unit(
         store, unit["unit_key"], tmp_path / "first", tracker=Tracker(True),
         registry=registry_error,
         env={"AWS_BATCH_JOB_ID": "initial", "AWS_BATCH_JOB_ATTEMPT": "1"},
     ) == worker.EXIT_FAILED
+    assert events[:3] == ["started", "downloading", 0]
+    assert events[-1] > 0
     assert store.head(final_key) is None
     failed = get_json(store, layout.attempt_status_key(request.campaign_id, unit["run_id"], "initial-1"))
     assert failed["state"] == "PUBLICATION_FAILED"
@@ -177,7 +198,15 @@ def test_worker_retries_failed_tracking_from_archived_output(tmp_path, monkeypat
         assert verified_snapshot["snapshot_id"] == snapshot.snapshot_id
         return {"model_package_arn": "arn:batch-package"}
 
+    restore = worker.restore_benchmark_evidence
+
+    def restore_after_live_start(*args, **kwargs):
+        assert events[-1] == "started"
+        events.append("restoring")
+        return restore(*args, **kwargs)
+
     monkeypatch.setattr(worker, "execute_zia", unexpected_training)
+    monkeypatch.setattr(worker, "restore_benchmark_evidence", restore_after_live_start)
     assert worker.run_unit(
         store, unit["unit_key"], tmp_path / "second", tracker=Tracker(True), registry=registry,
         env={"AWS_BATCH_JOB_ID": "retry-tracking", "AWS_BATCH_JOB_ATTEMPT": "1"},
@@ -195,5 +224,116 @@ def test_worker_retries_failed_tracking_from_archived_output(tmp_path, monkeypat
     assert final["attempt"]["attempt_key"] == "initial-1"
     assert final["model"]["model_package_arn"] == "arn:batch-package"
     assert final["tracking"]["complete"] and final["tracking"]["child_runs"][0]["fit_id"] == "fit-000001"
+    assert events.count("started") == 3
+    assert events[-4:] == ["started", "restoring", "started", "restoring"]
     archived = Path(final["training_history_uri"].removeprefix("file://"))
     assert json.loads(archived.read_text())["fits"][0]["fit_id"] == "fit-000001"
+
+
+@pytest.mark.parametrize("interrupted", [False, True], ids=["failure", "sigterm"])
+def test_worker_closes_live_zia_run_on_failure(tmp_path, monkeypatch, interrupted):
+    store = LocalObjectStore(tmp_path / "store")
+    snapshot = publish_fixture_snapshot(store, tmp_path, "social")
+    request = CampaignRequest(
+        campaign_id="zia-live-failure-test",
+        snapshot=snapshot.model_dump(),
+        matrix={"kind": "zia", "policies": ["frozen"]},
+    )
+    plan = planning.build_plan(
+        request, publish_fixture_release(store), snapshot_manifest=verify_snapshot(store, snapshot),
+    )
+    planning.publish_plan(store, plan)
+    [unit] = plan["units"]
+    events = []
+
+    class Tracker:
+        def bind_attempt(self, key):
+            events.append(key)
+
+        def start_live(self):
+            events.append("RUNNING")
+
+        def progress(self, step, values):
+            assert step == 10 and values == {"rows": 10}
+            events.append("progress")
+
+        def finish(self, status):
+            events.append(status)
+
+        def mark_failed(self, message):
+            assert message == "benchmark error"
+            events.append("FAILED")
+
+        def publish_run_report(self, *_args, **_kwargs):
+            pytest.fail("failed evaluation cannot publish a final report")
+
+    def abort(_unit, _store, _path, _log, *, stop_requested, progress):
+        assert not stop_requested()
+        progress(10, {"rows": 10})
+        if interrupted:
+            signal.raise_signal(signal.SIGTERM)
+            assert stop_requested()
+            raise InterruptedError("benchmark was interrupted")
+        raise RuntimeError("benchmark error")
+
+    flush = worker.flush_partial_state
+
+    def verify_before_flush(*args, **kwargs):
+        assert events[-1] == "KILLED"
+        return flush(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "execute_zia", abort)
+    monkeypatch.setattr(worker, "flush_partial_state", verify_before_flush)
+    assert worker.run_unit(
+        store, unit["unit_key"], tmp_path / "work", tracker=Tracker(),
+        env={"AWS_BATCH_JOB_ID": "live", "AWS_BATCH_JOB_ATTEMPT": "3"},
+    ) == worker.EXIT_FAILED
+    assert events == ["live-3", "RUNNING", "progress", "KILLED" if interrupted else "FAILED"]
+    status = get_json(store, layout.attempt_status_key(request.campaign_id, unit["run_id"], "live-3"))
+    assert status["state"] == ("INTERRUPTED" if interrupted else "FAILED")
+    assert store.head(layout.final_key(request.campaign_id, unit["run_id"])) is None
+
+
+def test_worker_stops_after_sigterm_during_zia_publication(tmp_path):
+    store = LocalObjectStore(tmp_path / "store")
+    snapshot = publish_fixture_snapshot(store, tmp_path, "social")
+    request = CampaignRequest(
+        campaign_id="zia-live-publication-interrupted",
+        snapshot=snapshot.model_dump(),
+        matrix={"kind": "zia", "policies": ["frozen"]},
+    )
+    plan = planning.build_plan(
+        request, publish_fixture_release(store), snapshot_manifest=verify_snapshot(store, snapshot),
+    )
+    planning.publish_plan(store, plan)
+    [unit] = plan["units"]
+    events = []
+
+    class Tracker:
+        def start_live(self):
+            events.append("RUNNING")
+
+        def mark_killed(self):
+            events.append("KILLED")
+
+        def publish_run_report(self, report, *, output_dir, **_kwargs):
+            events.append("publishing")
+            signal.raise_signal(signal.SIGTERM)
+            children = [{"fit_id": fit["fit_id"], "run_id": "child"} for fit in report["training_history"]]
+            return {
+                "published": True,
+                "mlflow_run_id": "parent",
+                "child_runs": children,
+                "artifacts_uploaded": {"files": sum(path.is_file() for path in output_dir.rglob("*"))},
+            }
+
+    assert worker.run_unit(
+        store, unit["unit_key"], tmp_path / "work", tracker=Tracker(),
+        env={"AWS_BATCH_JOB_ID": "live", "AWS_BATCH_JOB_ATTEMPT": "1"},
+    ) == worker.EXIT_FAILED
+    assert events == ["RUNNING", "publishing", "KILLED"]
+    status = get_json(store, layout.attempt_status_key(request.campaign_id, unit["run_id"], "live-1"))
+    assert status["state"] == "INTERRUPTED"
+    assert store.head(layout.final_key(request.campaign_id, unit["run_id"])) is None
+    pending = f"{layout.run_prefix(request.campaign_id, unit['run_id'])}/pending-publication.json"
+    assert get_json(store, pending)["attempt"]["attempt_key"] == "live-1"
