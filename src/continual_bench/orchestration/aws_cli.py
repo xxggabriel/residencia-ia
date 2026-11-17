@@ -170,6 +170,8 @@ def selftest(args):
     modules = {
         "runtime": [
             "continual_bench.evaluation.zia",
+            "continual_bench.evaluation.stream_benchmark",
+            "continual_bench.infrastructure.tracking",
             "continual_bench.application.cloud.worker",
             "continual_bench.infrastructure.aws.s3",
             "continual_bench.infrastructure.aws.experiments",

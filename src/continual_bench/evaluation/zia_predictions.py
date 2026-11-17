@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from scipy.signal import lfilter
 
-from continual_bench.datasets.zia import sha256_file
+from continual_bench.datasets.streams import sha256_file
 from continual_bench.evaluation.environment import encoded
 from continual_bench.evaluation.zia_metrics import decide
 from continual_bench.infrastructure.storage import atomic_write

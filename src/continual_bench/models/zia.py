@@ -230,6 +230,7 @@ class FraudOrReturnBooster:
         dataset: str | None = None,
         classes: int | list[str] | None = None,
         decision_threshold: float | None = None,
+        model_params: dict[str, Any] | None = None,
     ):
         enforce_single_thread_env()
         import xgboost
@@ -238,6 +239,7 @@ class FraudOrReturnBooster:
         self.model = None
         self.params = dict(self.params)
         self.dataset = dataset
+        self.model_params = None if model_params is None else dict(model_params)
         self.class_labels = list(classes) if isinstance(classes, list) else [0, 1]
         self.decision_threshold = 0.5 if decision_threshold is None else decision_threshold
         self.params["nthread"] = int(os.environ["OMP_NUM_THREADS"])
@@ -257,16 +259,20 @@ class FraudOrReturnBooster:
                 if "dataset" in config and not self.dataset:
                     self.dataset = str(config["dataset"])
 
-        if "scale_pos_weight" not in self.params:
-            if self.dataset == "fraud":
-                self.params["scale_pos_weight"] = 39.0
-            elif self.dataset == "ecommerce":
-                self.params["scale_pos_weight"] = 10.0
+        for key, value in self._dataset_params().items():
+            self.params.setdefault(key, value)
 
         self.params.setdefault("nthread", 2)
         self._cached_dmatrix = None
         self._cached_dmatrix_key: tuple[int, tuple[int, ...], int, tuple[int, ...]] | None = None
         self.last_training_result: TrainingResult | None = None
+
+    def _dataset_params(self) -> dict[str, Any]:
+        """Dataset defaults (e.g. class imbalance) injected by the caller from the stream provider.
+
+        The model layer never resolves datasets itself; see ``datasets.streams``.
+        """
+        return self.model_params or {}
 
     def fit_online(
         self,
@@ -439,11 +445,8 @@ class FraudOrReturnBooster:
         self.params["reg_lambda"] = iter_cfg.l2_regularization
         self.params["seed"] = iter_cfg.seed
         self.params["nthread"] = int(self.params.get("nthread", 2))
-        if "scale_pos_weight" not in self.params:
-            if self.dataset == "fraud":
-                self.params["scale_pos_weight"] = 39.0
-            elif self.dataset == "ecommerce":
-                self.params["scale_pos_weight"] = 10.0
+        for key, value in self._dataset_params().items():
+            self.params.setdefault(key, value)
 
         result = train_iterative(
             self,
@@ -757,10 +760,13 @@ def make_zia_model(
     dataset: str | None = None,
     *,
     decision_threshold: float | None = None,
+    model_params: dict[str, Any] | None = None,
 ):
+    """Build a stream model; ``model_params`` are the dataset defaults from its stream provider."""
     if name == "xgboost":
         return FraudOrReturnBooster(
             config=config, dataset=dataset, classes=classes, decision_threshold=decision_threshold,
+            model_params=model_params,
         )
     if name == "multinomial_logistic":
         return MultinomialLogistic(classes, config=config, decision_threshold=decision_threshold)

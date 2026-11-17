@@ -5,7 +5,8 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from continual_bench.datasets.zia import load_manifest, sha256_file
+from continual_bench.datasets.streams import load_stream_manifest as load_manifest
+from continual_bench.datasets.streams import sha256_file
 from continual_bench.evaluation.environment import encoded
 from continual_bench.evaluation.zia_artifacts import tracking_report, write_zia_artifacts
 from continual_bench.evaluation.zia_predictions import INDEX, PredictionArchive, prediction_manifest
@@ -22,6 +23,9 @@ from continual_bench.models.zia import ZiaPredictor, make_zia_model
 
 
 def dataset_source_uri(source):
+    """Provenance URI of a prepared stream: the pinned Hugging Face file or the catalog entry."""
+    if "repo" not in source:
+        return f"catalog://{source.get('catalog', 'unknown')}"
     return (f"https://huggingface.co/datasets/ziadatalabs/{source['repo']}"
             f"/resolve/{source['revision']}/{source['file']}")
 
