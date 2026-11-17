@@ -5827,5 +5827,232 @@
         "tracking_source"
       ]
     }
-  }
+  },
+    "benchmark_observations": {
+      "version": "benchmark-observations-v1",
+      "mlflow_namespace": "observations_v1",
+      "report_field": "tracking_observations",
+      "artifact_path": "tracking-observations/observations.json",
+      "availability": "Valores indisponíveis ficam null com motivo; matrizes e séries não escalares ficam em artefatos",
+      "families": {
+        "quality": {
+          "scopes": "run, window, fit, step, epoch por split",
+          "metrics": {
+            "evaluated_examples": {
+              "unit": "examples",
+              "formula": "Contagem de pares rótulo e predição admitidos"
+            },
+            "macro_f1": {
+              "unit": "fraction",
+              "formula": "Média aritmética de 2 TP / (suporte real + suporte previsto) sobre as classes alvo do protocolo; classe alvo ausente em ambos recebe zero; escopo vazio é null"
+            },
+            "accuracy": {
+              "unit": "fraction",
+              "formula": "Diagonal da matriz de confusão dividida pelos pares avaliados"
+            },
+            "positive_precision": {
+              "unit": "fraction",
+              "formula": "TP/(TP+FP) para a classe positiva declarada; denominador vazio é null"
+            },
+            "positive_recall": {
+              "unit": "fraction",
+              "formula": "TP/(TP+FN) para a classe positiva declarada; denominador vazio é null"
+            },
+            "average_precision": {
+              "unit": "fraction",
+              "formula": "Soma de precisão vezes incremento de recall por grupo de escores empatados; Zia agrupa por bin"
+            },
+            "recall_at_fpr_0_01": {
+              "unit": "fraction",
+              "formula": "Máximo TPR nos pontos observados com FPR <= 0.01, sem interpolar"
+            },
+            "confusion_matrix": {
+              "unit": "examples",
+              "formula": "Contagens por classe real (linha) e prevista (coluna), com eixos em classes"
+            },
+            "class_support": {
+              "unit": "examples",
+              "formula": "Soma da linha da classe real"
+            },
+            "class_recall": {
+              "unit": "fraction",
+              "formula": "Diagonal/suporte da classe real; classe sem suporte é null"
+            },
+            "pr_curve": {
+              "unit": "fraction",
+              "formula": "Precisão e recall por grupo de escore"
+            },
+            "roc_curve": {
+              "unit": "fraction",
+              "formula": "TPR e FPR por grupo de escore com ambas as classes"
+            },
+            "mae": {
+              "unit": "target_unit",
+              "formula": "Média de |y - predição| no escopo completo"
+            },
+            "rmse": {
+              "unit": "target_unit",
+              "formula": "Raiz da média de (y - predição)² no escopo completo"
+            },
+            "residuals": {
+              "unit": "target_unit",
+              "formula": "y - predição por predição alinhada quando recuperável"
+            }
+          }
+        },
+        "effort": {
+          "scopes": "run, fit",
+          "metrics": {
+            "examples_observed": {
+              "unit": "examples",
+              "formula": "Exemplos admitidos do dataset no escopo"
+            },
+            "evaluated_examples": {
+              "unit": "examples",
+              "formula": "Pares rótulo/predição nas avaliações indicadas"
+            },
+            "unique_training_examples": {
+              "unit": "unique_examples",
+              "formula": "União dos IDs ou intervalos exatos efetivamente treinados"
+            },
+            "training_presentations": {
+              "unit": "presentations",
+              "formula": "Soma de exemplos apresentados ao learner a cada operação, inclusive repetições"
+            },
+            "replay_presentations": {
+              "unit": "presentations",
+              "formula": "Apresentações oriundas de replay observado; revisitas por época contam em apresentações de treino"
+            },
+            "steps": {
+              "unit": "steps",
+              "formula": "Operações de treino observadas segundo a definição local do treinador"
+            },
+            "epochs": {
+              "unit": "epochs",
+              "formula": "Passagens naturais completas ou rodadas nativas segundo a definição do protocolo"
+            },
+            "updates": {
+              "unit": "fits",
+              "formula": "Ajustes posteriores à inicialização, segundo o status e escopo registrados"
+            },
+            "initial_*": {
+              "unit": "by_metric",
+              "formula": "Esforço de inicialização separado dos ajustes posteriores"
+            },
+            "update_*": {
+              "unit": "by_metric",
+              "formula": "Esforço dos ajustes posteriores separado da inicialização"
+            }
+          }
+        },
+        "resources": {
+          "scopes": "run, fit",
+          "metrics": {
+            "duration_seconds": {
+              "unit": "seconds",
+              "formula": "Tempo decorrido no intervalo instrumentado"
+            },
+            "training_seconds": {
+              "unit": "seconds",
+              "formula": "Soma dos tempos de treino monitorados"
+            },
+            "inference_seconds": {
+              "unit": "seconds",
+              "formula": "Soma dos tempos de geração das predições medidas"
+            },
+            "predictions_per_second": {
+              "unit": "predictions_per_second",
+              "formula": "Volume de predições no escopo dividido pelo tempo correspondente de inferência"
+            },
+            "peak_rss_bytes": {
+              "unit": "bytes",
+              "formula": "Maior RSS com escopo e método em rss_scope"
+            },
+            "cost_total": {
+              "unit": "cost_currency",
+              "formula": "Soma dos componentes monetários atribuíveis segundo o contrato da execução; cost_kind indica base"
+            },
+            "cost_per_1000_evaluated": {
+              "unit": "cost_currency_per_1000_examples",
+              "formula": "1000 × custo total / pares avaliados no escopo atribuível"
+            },
+            "tracking_overhead_seconds": {
+              "unit": "seconds",
+              "formula": "Tempo adicional medido para coleta de evidências, no escopo declarado"
+            }
+          }
+        },
+        "retention": {
+          "scopes": "checkpoint comparável",
+          "metrics": {
+            "absolute_retention": {
+              "unit": "fraction",
+              "formula": "Média dos desempenhos atuais nos conjuntos históricos reservados"
+            },
+            "gem_bwt": {
+              "unit": "fraction",
+              "formula": "Média de R[k,j] - R[j,j], j < k, com a baseline GEM"
+            },
+            "post_learning_fm": {
+              "unit": "fraction",
+              "formula": "Média de max(R[i,j], j <= i < k) - R[k,j], j < k"
+            },
+            "matrix": {
+              "unit": "fraction",
+              "formula": "Qualidade por checkpoint e conjunto reservado, com suporte e medida declarados quando disponíveis"
+            }
+          }
+        },
+        "drift": {
+          "scopes": "run, janela anotada",
+          "metrics": {
+            "alarm_count": {
+              "unit": "alarms",
+              "formula": "Alarmes emitidos pelo detector instrumentado"
+            },
+            "precision": {
+              "unit": "fraction",
+              "formula": "Mudanças acompanhadas com match / alarmes elegíveis"
+            },
+            "recall": {
+              "unit": "fraction",
+              "formula": "Mudanças acompanhadas com match / mudanças elegíveis"
+            },
+            "f1": {
+              "unit": "fraction",
+              "formula": "Média harmônica da precisão e da revocação de detecção"
+            },
+            "delays": {
+              "unit": "delay_unit",
+              "formula": "Diferenças entre índice ou tempo do primeiro alarme correspondente e a mudança anotada"
+            }
+          }
+        },
+        "fit": {
+          "scopes": "step, epoch",
+          "metrics": {
+            "step": {
+              "unit": "index",
+              "formula": "Contador local monotônico indexado desde 1; tipo identificado na run filha"
+            },
+            "epoch": {
+              "unit": "index",
+              "formula": "Contador local monotônico desde 1 com intervalo de steps quando observado"
+            },
+            "training/batch_size": {
+              "unit": "examples",
+              "formula": "Exemplos efetivamente apresentados na operação, inclusive o último lote parcial"
+            },
+            "training/presentations_cumulative": {
+              "unit": "presentations",
+              "formula": "Soma local de apresentações até a operação ou época indicada"
+            },
+            "training/native_loss": {
+              "unit": "native_loss",
+              "formula": "Perda observada conforme objetivo e protocolo do treinador"
+            }
+          }
+        }
+      }
+    }
 }

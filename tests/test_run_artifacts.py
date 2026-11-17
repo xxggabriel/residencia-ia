@@ -176,8 +176,9 @@ class ArtifactClient:
 def test_publication_logs_timestamped_system_metrics_and_segmented_artifacts_idempotently(tmp_path):
     pytest.importorskip("mlflow")
     report = run(small(), tmp_path)
-    # Exercise the historical system-only path. The grouped MLflow client is tested separately.
+    # A retained system-only report predates both fit history and observations.
     report.pop("training_history")
+    report.pop("tracking_observations")
     client = ArtifactClient()
     first = publish_run_artifacts(client, "run", tmp_path / report["run_key"], report)
     assert first["system_metric_points"] > 0 and set(client.artifacts) == {"plots", "data"}

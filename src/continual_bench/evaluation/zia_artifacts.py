@@ -13,6 +13,7 @@ from continual_bench.evaluation.artifacts import (
 )
 from continual_bench.evaluation.tracking import VERSION, metric_catalog
 from continual_bench.evaluation.training_evidence import training_figures
+from continual_bench.infrastructure.observation_tracking import write_observation_evidence
 from continual_bench.infrastructure.storage import atomic_write
 
 
@@ -139,6 +140,7 @@ def write_zia_artifacts(directory, report, adapted):
         ))}],
         "x_label": "seq", "y_label": "bytes",
     }))
+    write_observation_evidence(directory, report)
     return write_artifacts(directory, figures, {
         "summary/metrics": {"metrics": tracking["metrics"], "availability": tracking["availability"],
                             "report_metrics": report["metrics"], "holdout": report["holdout"]},

@@ -39,6 +39,7 @@ from continual_bench.evaluation.zia_metrics import (  # noqa: E402
     decision_threshold,
     ratio,
 )
+from continual_bench.evaluation.zia_observations import TemporalHoldoutProbes, run_observations  # noqa: E402
 from continual_bench.evaluation.zia_predictions import (  # noqa: E402
     PredictionArchive,
     prediction_manifest,
@@ -135,7 +136,7 @@ def run(
     iter_config = IterativeTrainingConfig.from_params(iterative_config)
     costs = profile(tracking_settings["costs"])
     threshold = decision_threshold(costs) if classes == 2 else None
-    model = make_zia_model(spec["model"], classes, config=iter_config, dataset=dataset,
+    model = make_zia_model(spec["model"], spec["classes"], config=iter_config, dataset=dataset,
                            decision_threshold=threshold)
     history = TrainingHistory(output, stop_requested)
     monitoring = SystemMetricsSampler(output, interval=0.5 if scope == "smoke" else 5)
@@ -172,6 +173,9 @@ def run(
 
     online, holdout = scores(), scores()
     windows, versions, alarm_events = [], [], []
+    observed_windows = []
+    probes = TemporalHoldoutProbes()
+    tracking_seconds = 0.0
     class_counts = np.zeros(classes, dtype=np.int64)
     train_seconds = predict_seconds = 0.0
     resets = rows = stream_blocks = 0
@@ -186,7 +190,7 @@ def run(
         if batch_policy is not None:
             matrix, states = zia_retraining.stream_matrix(
                 ((x, y, ts) for ts, x, y, held_out in batches(path, block_rows, split) if not held_out),
-                make_zia_model(spec["model"], classes, config=iter_config, dataset=dataset,
+                make_zia_model(spec["model"], spec["classes"], config=iter_config, dataset=dataset,
                                decision_threshold=threshold),
                 threshold, iter_config, REPLAY_BLOCKS, retraining_options,
                 history=history, scratch=Path(scratch), tracker=tracker,
@@ -196,7 +200,7 @@ def run(
         for step, (timestamps, x, y, is_holdout) in enumerate(batches(path, block_rows, split)):
             history.check_interrupted()
             if ((last_timestamp is not None and timestamps[0] < last_timestamp)
-                    or np.any(timestamps[1:] < timestamps[:-1]) or np.any(y >= classes)):
+                    or np.any(timestamps[1:] < timestamps[:-1]) or np.any((y < 0) | (y >= classes))):
                 raise ValueError("unordered timestamps or invalid labels")
             last_timestamp = int(timestamps[-1])
             start, rows = rows, rows + len(y)
@@ -223,6 +227,18 @@ def run(
                     "prediction_seconds": elapsed, "prediction_throughput_per_second": len(y) / elapsed,
                     **metrics,
                 })
+                mark = time.monotonic()
+                serving = versions[-1]
+                observed_windows.append({
+                    "step": rows, "start_seq": start, "scope": windows[-1]["scope"],
+                    "quality": window.quality(spec["classes"]), "model_version": len(versions) - 1,
+                    "fit_id": serving["fit_id"], "checkpoint": serving["sha256"],
+                    "inference_seconds": elapsed, "start_time_ms": int(timestamps[0]),
+                    "end_time_ms": last_timestamp,
+                })
+                if is_holdout:
+                    probes.add(start, timestamps, x, y)
+                tracking_seconds += time.monotonic() - mark
                 if not is_holdout:
                     stream_blocks += 1
                     if policy == "periodic" or detector is not None:
@@ -280,6 +296,9 @@ def run(
                     fit = history.capture(
                         model.training_summary, action=action, block_index=step, start=train_start,
                         timestamps=fit_timestamps, seconds=time.monotonic() - timer,
+                        current_block_start=start, source_model_version=(
+                            len(versions) - 1 if action in ("continue", "online") else None
+                        ),
                     )
                     payload, extension = model.payload()
                     del fit_x, fit_y, fit_timestamps
@@ -291,6 +310,8 @@ def run(
                 atomic_write(output / filename, payload)
                 fit["deployed_version"] = len(versions)
                 fit["deployment_action"] = action
+                fit["promotion_status"] = "promoted"
+                fit["replaces_model_version"] = len(versions) - 1 if versions else None
                 fit["checkpoint"] = {
                     "file": filename, "sha256": sha256(payload).hexdigest(), "bytes": len(payload),
                 }
@@ -320,6 +341,10 @@ def run(
         zia_retraining.verify_realised(matrix, windows, batch_policy)
         retraining, retraining_metrics = zia_retraining.finalize(
             batch_policy, matrix, states, retraining_options)
+        for fit in history.fits:
+            if fit["deployed_version"] is None:
+                fit["promotion_status"] = "rejected"
+                fit["checkpoint_unavailable_reason"] = "matrix_candidate_checkpoint_is_transient"
     summary, by_class = online.metrics()
     final, final_by_class = holdout.metrics()
     errors = int(online.confusion.sum() - online.confusion.trace())
@@ -345,8 +370,12 @@ def run(
                    for sample in system["samples"] if "process_memory_rss_megabytes" in sample["values"]]
     rss_integral = sum((end - start) * (before + after) / 2
                        for (start, before), (end, after) in zip(rss_samples, rss_samples[1:]))
-    wall_cost = aws_account(costs["aws"], train_seconds=compute_seconds, predict_seconds=0,
-                            model_storage_bytes=model_bytes)
+    wall_cost = (
+        aws_account(
+            costs["aws"], train_seconds=compute_seconds, predict_seconds=0, model_storage_bytes=model_bytes,
+        )
+        if costs["aws"] is not None else None
+    )
     summary.update(
         dataset_rows=rows, initial_train_rows=warmup, holdout_rows=final["n"],
         training_presentations=presentations, training_used_post_warmup=after_warmup,
@@ -373,8 +402,9 @@ def run(
         ),
         scenario_total_cost=cost_report["metrics"]["cost_total"],
         **retraining_metrics,
-        **cost_report["metrics"], **{"aws_" + k: v for k, v in cost_report["aws"]["metrics"].items()},
-        **{"aws_evaluation_" + k: v for k, v in wall_cost["metrics"].items()},
+        **cost_report["metrics"],
+        **{"aws_" + k: v for k, v in cost_report.get("aws", {}).get("metrics", {}).items()},
+        **{"aws_evaluation_" + k: v for k, v in (wall_cost or {}).get("metrics", {}).items()},
     )
     error_sum = sum(w["error_rate"] for w in windows if w["scope"] == "prequential")
     alpha = tracking_settings["upf_alpha"]
@@ -416,6 +446,16 @@ def run(
         "availability": availability, "system_metrics": system,
         **({"retraining": retraining} if retraining is not None else {}),
     }
+    mark = time.monotonic()
+    prequential_observation = online.quality(spec["classes"], curves=True)
+    holdout_observation = holdout.quality(spec["classes"], curves=True)
+    retention = probes.evaluate(model, output, versions, threshold)
+    tracking_seconds += time.monotonic() - mark
+    report["tracking_observations"] = run_observations(
+        report=report, history=history, windows=observed_windows,
+        prequential=prequential_observation, holdout=holdout_observation, retention=retention,
+        has_detector=detector is not None, overhead=tracking_seconds, started=started,
+    )
     history.check_interrupted()
     history.save()
     atomic_write(output / "report.json", encoded(report))

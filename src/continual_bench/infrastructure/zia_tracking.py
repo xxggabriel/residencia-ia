@@ -37,8 +37,9 @@ def publish_run_metrics(client, directory, run_id, report):
         "samples": contract["input"]["rows"], "holdout_start": contract["holdout_start"],
         "block_rows": contract["block_rows"], "model_params": json.dumps(report["model_params"]),
         "code_sha256": env["code_sha256"], "git_revision": env["git_revision"],
-        "aws_region": report["costs"]["aws"]["settings"]["region"],
     }
+    if aws := report["costs"].get("aws"):
+        params["aws_region"] = aws["settings"]["region"]
     client.log_batch(
         run_id, params=[Param(name, str(value)) for name, value in params.items()], synchronous=True,
     )

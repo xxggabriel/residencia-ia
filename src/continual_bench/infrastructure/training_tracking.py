@@ -7,6 +7,8 @@ import re
 import time
 from pathlib import Path, PurePosixPath
 
+from .observation_tracking import fit_observation_points
+
 HISTORY_FILE = "training-history.json"
 STEP_KINDS = {"epoch", "minibatch", "update", "example"}
 _INVALID_NAME = re.compile(r"[^/\w.\- ]")
@@ -23,7 +25,7 @@ def training_round_mlflow(parent_run_id, report, now_ms=0):
     """Yield the tags, parameters and metric points of each completed fit."""
     fit_ids = set()
     last_global = 0
-    for fit in report.get("training_history", []):
+    for position, fit in enumerate(report.get("training_history", []), 1):
         fit_id = fit["fit_id"]
         if not _FIT_ID.fullmatch(fit_id) or fit_id in fit_ids:
             raise ValueError(f"invalid or duplicate fit: {fit_id}")
@@ -94,6 +96,25 @@ def training_round_mlflow(parent_run_id, report, now_ms=0):
         tags["cb-fit-evidence-sha256"] = hashlib.sha256(
             json.dumps(evidence, sort_keys=True, allow_nan=False).encode()
         ).hexdigest()
+        if report.get("tracking_observations") is not None:
+            tags["cb-fit-status"] = str(fit.get("status", "complete"))
+            tags["cb-fit-promotion"] = str(fit.get("promotion_status") or (
+                "promoted" if fit.get("deployed_version") is not None else "unrecorded"
+            ))
+            tags["cb-observed-step-kind"] = str(fit.get("observed_step_kind") or "unavailable")[:500]
+            tags["cb-fit-observations-sha256"] = hashlib.sha256(
+                json.dumps(fit, sort_keys=True, allow_nan=False).encode()
+            ).hexdigest()
+            params["fit_position"] = str(position)
+            for key in ("source_model_version", "best_epoch", "last_epoch", "checkpoint_epoch"):
+                value = fit.get(key, fit["summary"].get(key))
+                if value is not None:
+                    params[key] = str(value)[:500]
+            for axis in ("step", "epoch"):
+                rows = fit.get(f"observation_{axis}s")
+                params[f"observed_{axis}_count"] = str(len(rows)) if rows else "unavailable"
+            for key, index, value in fit_observation_points(fit):
+                add(key, value, index)
         yield tags, params, list(metrics.values())
 
 
@@ -149,7 +170,7 @@ def publish_training_history(client, run_id, directory, report, *, include_check
 
 def publish_sdk_training_rounds(client, experiment_id, parent_run_id, report, now_ms=None):
     """Synchronously publish one child run per fit, keyed by parent attempt and fit ID."""
-    from mlflow.entities import Metric, Param
+    from mlflow.entities import Metric, Param, RunTag
 
     from .metric_tracking import missing_metric_points
 
@@ -176,10 +197,17 @@ def publish_sdk_training_rounds(client, experiment_id, parent_run_id, report, no
         fit_id = tags["cb-fit-id"]
         run = existing.get(fit_id) or client.create_run(experiment_id, tags=tags)
         run_id = run.info.run_id
-        remote_evidence = run.data.tags.get("cb-fit-evidence-sha256")
-        if remote_evidence is not None and remote_evidence != tags["cb-fit-evidence-sha256"]:
-            raise ValueError(f"MLflow child {fit_id} already tracks different training evidence")
-        if run.info.status != "FINISHED":
+        evidence_keys = ("cb-fit-evidence-sha256", "cb-fit-observations-sha256")
+        extending = False
+        for key in evidence_keys:
+            expected = tags.get(key)
+            if expected is None:
+                continue
+            remote_evidence = run.data.tags.get(key)
+            if remote_evidence is not None and remote_evidence != expected:
+                raise ValueError(f"MLflow child {fit_id} already tracks different training evidence")
+            extending |= remote_evidence is None
+        if run.info.status != "FINISHED" or extending:
             missing = missing_metric_points(
                 client, run_id, [(p["key"], p["step"], p["value"]) for p in metrics],
                 known_keys=set(run.data.metrics),
@@ -192,6 +220,9 @@ def publish_sdk_training_rounds(client, experiment_id, parent_run_id, report, no
                     params=[Param(k, v) for k, v in params.items()] if offset == 0 else (),
                     synchronous=True,
                 )
+            client.log_batch(
+                run_id, tags=[RunTag(key, val) for key, val in tags.items()], synchronous=True,
+            )
             client.set_terminated(run_id, "FINISHED")
         receipts.append({"fit_id": fit_id, "run_id": run_id, "metric_points": len(metrics)})
     return receipts

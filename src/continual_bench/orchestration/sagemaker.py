@@ -13,6 +13,7 @@ import json
 import os
 import signal
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -89,12 +90,14 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tra
     from continual_bench.datasets.zia import DATASETS
     from continual_bench.evaluation.environment import encoded, environment
     from continual_bench.evaluation.epoch_history import epoch_fit, write_state
+    from continual_bench.evaluation.tracking_observations import observations
     from continual_bench.evaluation.training_evidence import write_training_artifacts
     from continual_bench.evaluation.zia_metrics import ClassificationMetrics
     from continual_bench.infrastructure.storage import atomic_write
     from continual_bench.models.training.loop import train_iterative
     from continual_bench.models.zia import make_zia_model
 
+    started = time.perf_counter()
     params = params if params is not None else hyperparameters()
     iter_config = IterativeTrainingConfig.from_params(params)
     channel = Path(channel or PREFIX / "input" / "data" / "train")
@@ -149,10 +152,17 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tra
     del x, y
     gc.collect()
     metrics = ClassificationMetrics(len(classes), threshold)
-    metrics.add(vy, model.predict(vx))
+    prediction_started = time.perf_counter()
+    predicted = model.predict(vx)
+    prediction_seconds = time.perf_counter() - prediction_started
+    metrics.add(vy, predicted)
+    del predicted
     del vx, vy
     gc.collect()
     summary, _ = metrics.metrics()
+    tracking_started = time.perf_counter()
+    checkpoint_quality = metrics.quality(classes, curves=True)
+    tracking_seconds = time.perf_counter() - tracking_started
     payload, extension = model.payload()
     model_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = write_state(model_dir, f"model.{extension}", payload, format=extension)
@@ -185,16 +195,74 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tra
         },
     }
     atomic_write(model_dir / "model-metadata.json", encoded(metadata))
+    train_rows, val_rows = train_stop - train_start, val_stop - val_start
+    loop_effort = loop_result["observation_effort"]
+    loop_resources = loop_result["observation_resources"]
+    loop_inference_seconds = loop_resources["inference_seconds"]
+    scored = val_rows + (loop_effort["evaluated_examples"] or 0)
+    inference_seconds = prediction_seconds + (loop_inference_seconds or 0.0)
+    effort = {
+        **loop_effort,
+        "examples_observed": train_rows + val_rows,
+        "evaluated_examples": scored,
+        "checkpoint_validation_examples": val_rows,
+        "evaluation_scope": "epoch_train_validation_and_packaged_checkpoint_validation",
+        "replay_presentations": 0,
+        "updates": 0,
+        "initial_unique_training_examples": train_rows,
+        "initial_training_presentations": loop_result["training_presentations"],
+        "initial_steps": loop_result["epochs_run"],
+        "initial_epochs": loop_result["epochs_run"],
+        "update_training_presentations": 0,
+        "update_steps": 0,
+        "update_epochs": 0,
+        "promoted_versions": 1,
+    }
+    resources = {
+        **loop_resources,
+        "duration_seconds": time.perf_counter() - started,
+        "inference_seconds": inference_seconds,
+        "inference_scope": effort["evaluation_scope"],
+        "checkpoint_validation_inference_seconds": prediction_seconds,
+        "predictions_per_second": scored / inference_seconds if inference_seconds and (
+            loop_resources["predictions_per_second"] is not None or scored == val_rows
+        ) else None,
+        "tracking_overhead_seconds": loop_resources["tracking_overhead_seconds"] + tracking_seconds,
+    }
+    scopes = {**loop_result["observation_scopes"], "validation": checkpoint_quality}
+    fit = epoch_fit(
+        loop_result["history"], action="initial", start_seq=train_start, end_seq=val_stop,
+        train_samples=train_rows, validation_samples=val_rows,
+        train_seconds=loop_result["training_duration_seconds"], checkpoint=checkpoint, deployed_version=0,
+        summary={
+            **metadata["training"], "selection_scope": loop_result["selection_scope"],
+            "selection_metric": loop_result["selection_metric"], "last_epoch": loop_result["last_epoch"],
+            "checkpoint_epoch": loop_result["checkpoint_epoch"],
+        },
+        observation_steps=loop_result["observation_steps"],
+        observation_epochs=loop_result["observation_epochs"],
+        observed_step_kind=loop_result["observed_step_kind"], promotion_status="promoted",
+        observation_effort=effort, observation_resources=resources, observation_scopes=scopes,
+        data_scope={"train": [train_start, train_stop], "validation": [val_start, val_stop]},
+    )
     report = {
         "version": "sagemaker-native-training-v1", "complete": True, "dataset": dataset, "scope": scope,
         "validation": summary, "metadata": metadata, "training": dict(loop_result), "environment": env,
-        "training_history": [epoch_fit(
-            loop_result["history"], action="initial", start_seq=train_start, end_seq=val_stop,
-            train_samples=train_stop - train_start, validation_samples=val_stop - val_start,
-            train_seconds=loop_result["training_duration_seconds"], checkpoint=checkpoint, deployed_version=0,
-            summary={**metadata["training"], "selection_scope": loop_result["selection_scope"],
-                     "selection_metric": loop_result["selection_metric"]},
-        )],
+        "training_history": [fit],
+        "tracking_observations": observations(
+            "binary" if len(classes) == 2 else "multiclass", scopes,
+            effort=effort, resources=resources,
+            windows=[{
+                "step": row["epoch"], "scope": "validation", "coordinate": "epoch",
+                "quality": row["scopes"]["validation"],
+            } for row in loop_result["observation_epochs"] if "validation" in row["scopes"]],
+            lineage={
+                "dataset": dataset, "dataset_version": manifest["sha256"], "model": model.name,
+                "policy": str(params.get("policy", "frozen")), "seed": iter_config.seed,
+                "environment": env, "checkpoint": checkpoint, "protocol": "native_chronological_validation",
+                "code_revision": env["code_sha256"],
+            },
+        ),
     }
     report["artifacts"] = write_training_artifacts(model_dir, report)
     atomic_write(model_dir / "report.json", encoded(report))

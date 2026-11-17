@@ -105,3 +105,9 @@ O validador temporal exigiu features e rótulos de treino anteriores ao cutoff,
 features de teste a partir dele, ordem crescente e IDs disjuntos. Duplicatas de
 conteúdo, grupos de pacientes/usuários/objetos, transformações de imagem e ordem
 temporal natural exigiram verificações específicas nos adaptadores e manifestos.
+
+## Evidência por step e época
+
+O [tracking por run e ajuste](benchmark-observations.md) publica em eixos
+distintos os steps observáveis e as épocas naturais. Retenção e métricas de
+detecção seguem os conjuntos reservados e as anotações do protocolo de cada run.

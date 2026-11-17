@@ -5,6 +5,7 @@ from pathlib import Path
 
 from continual_bench.evaluation.artifacts import Figure, write_artifacts
 from continual_bench.evaluation.environment import encoded
+from continual_bench.infrastructure.observation_tracking import write_observation_evidence
 from continual_bench.infrastructure.storage import atomic_write
 from continual_bench.infrastructure.training_tracking import HISTORY_FILE, training_round_mlflow
 
@@ -46,7 +47,10 @@ def training_figures(fits):
         if not steps:
             continue
         kind = steps[0]["kind"]
-        context = {key: value for key, value in fit.items() if key not in ("summary", "steps")}
+        context = {
+            key: value for key, value in fit.items()
+            if key not in ("summary", "steps") and not key.startswith("observation_")
+        }
         keys = sorted({key for row in steps for key, value in row["metrics"].items() if _finite(value)})
         for group, (label, unit) in descriptions.items():
             series = []
@@ -77,6 +81,7 @@ def write_training_artifacts(directory, report):
         pass
     document = {"version": 1, "fits": fits}
     atomic_write(Path(directory) / HISTORY_FILE, encoded(document))
+    write_observation_evidence(directory, report)
     return write_artifacts(
         directory, training_figures(fits), {"training/history": document}, preserve_existing=True,
     )

@@ -5,8 +5,9 @@ import importlib.metadata
 import json
 import os
 import platform
-import resource
 from pathlib import Path
+
+from continual_bench.core.observability import peak_rss_bytes as peak_rss_bytes
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 DATASET_LOCKS = ("image-datasets.lock.json", "real-streams.lock.json", "temporal-vision.lock.json")
@@ -15,7 +16,8 @@ DATASET_LOCKS = ("image-datasets.lock.json", "real-streams.lock.json", "temporal
 def environment():
     versions = {}
     for package in ("continual-bench", "river", "pydantic", "zenml", "mlflow-skinny", "confluent-kafka",
-                    "pandas", "numpy", "scipy", "pillow", "pyarrow"):
+                    "pandas", "numpy", "scipy", "pillow", "pyarrow", "scikit-learn", "matplotlib", "xgboost",
+                    "psutil"):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -24,7 +26,16 @@ def environment():
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
         digest.update(str(path.relative_to(PACKAGE_ROOT)).encode())
         digest.update(path.read_bytes())
+    execution = os.environ.get("BENCH_EXECUTION_ENV")
+    if not execution:
+        if os.environ.get("SM_TRAINING_ENV"):
+            execution = "aws_sagemaker"
+        elif job := os.environ.get("AWS_BATCH_JOB_ID"):
+            execution = "local_batch" if job.startswith("local-") else "aws_batch"
+        else:
+            execution = "local"
     return {
+        "execution": execution,
         "python": platform.python_version(),
         "platform": platform.platform(),
         "packages": versions,
@@ -61,8 +72,3 @@ def current_rss_bytes():
         return int(path.read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE")
     except (OSError, ValueError, IndexError):
         return None
-
-
-def peak_rss_bytes():
-    """Process-lifetime high-water mark; ru_maxrss is bytes on macOS, KiB on Linux."""
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if platform.system() == "Darwin" else 1024)

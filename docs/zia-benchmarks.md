@@ -169,3 +169,10 @@ publicados e suas avaliações Zia podem ser localizados pelo [catálogo do
 SageMaker Unified Studio](aws/operations.md#onde-localizar-datasets-e-avaliações).
 O [runbook AWS](aws/operations.md#campanhas-no-sagemaker-studio) cobre a
 submissão e o acompanhamento.
+
+## Observações adicionais
+
+O [contrato comum](benchmark-observations.md) adiciona séries distintas para
+steps e épocas, disponibilidade e resultados sobre o universo fixo de classes.
+As curvas usam evidência registrada na execução. A versão de inferência de
+cada janela e o checkpoint de cada ajuste acompanham o relatório e os plots.

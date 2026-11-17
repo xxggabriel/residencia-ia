@@ -8,6 +8,7 @@ from pathlib import Path
 from continual_bench.infrastructure.benchmark_tracking import benchmark_metric_points
 from continual_bench.infrastructure.metric_tracking import metric_points
 from continual_bench.infrastructure.object_store import split_uri
+from continual_bench.infrastructure.observation_tracking import observation_tags, parent_observation_points
 from continual_bench.infrastructure.training_tracking import HISTORY_FILE, training_checkpoint_paths
 
 from .mlflow_tracking import (
@@ -20,6 +21,7 @@ from .mlflow_tracking import (
 def aws_metric_points(report, headline=None):
     """Extend the common report coordinates with the managed run's live and supplemental evidence."""
     points = benchmark_metric_points(report)
+    points.extend(parent_observation_points(report))
     if (tracking := report.get("tracking")) and tracking.get("version"):
         points.extend((key, step, value) for key, step, value in metric_points(tracking) if value is not None)
     points.extend((f"final/{key}", 0, value) for key, value in (headline or {}).items()
@@ -52,9 +54,10 @@ class BenchmarkMlflowRun(SageMakerMlflowTracker):
         run_id = self.ensure_run()
         if run_id is None:
             raise RuntimeError("MLflow did not create the benchmark run")
-        if not self.log_batch(tags=[{"key": "benchmark_complete", "value": "false"}]):
+        tags = {"benchmark_complete": "false", **observation_tags(report)}
+        if not self.log_batch(tags=[{"key": key, "value": val} for key, val in tags.items()]):
             raise RuntimeError("MLflow did not mark benchmark publication started")
-        if not self.log_batch(metrics=aws_metric_points(report, headline)):
+        if not self.log_completed_metrics(aws_metric_points(report, headline)):
             raise RuntimeError("MLflow did not publish benchmark metrics")
         child_runs = self.publish_training_rounds(report)
         if store is None and self.artifact_uri and self.artifact_uri.startswith("s3://"):
@@ -62,6 +65,7 @@ class BenchmarkMlflowRun(SageMakerMlflowTracker):
 
             bucket, _ = split_uri(self.artifact_uri)
             store = S3ObjectStore(bucket, kms_key_id=os.environ.get("BENCH_KMS_KEY_ID"))
+        self.stage_observation_artifacts(directory, report, child_runs, store)
         artifacts = upload_directory_to_mlflow_artifacts(store, directory, self.artifact_uri)
         if not artifacts["files"]:
             raise RuntimeError("MLflow did not publish benchmark artifacts")

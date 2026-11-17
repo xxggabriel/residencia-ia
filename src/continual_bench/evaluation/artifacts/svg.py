@@ -7,18 +7,8 @@ and stays vector-quality for papers. Missing values (None) break a line.
 import math
 from xml.sax.saxutils import escape
 
-PALETTE = (
-    "#0072B2",
-    "#D55E00",
-    "#009E73",
-    "#CC79A7",
-    "#E69F00",
-    "#56B4E9",
-    "#F0E442",
-    "#000000",
-    "#999999",
-    "#882255",
-)
+from continual_bench.infrastructure.mlflow_figures import PALETTE
+
 MARKER_STYLE = {
     "alarm": ("#D55E00", "4 3"),
     "changepoint": ("#000000", "8 4"),

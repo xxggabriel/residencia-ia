@@ -215,6 +215,13 @@ def iterative_worker_command(args):
         try:
             (out / "claims" / name).mkdir()
         except FileExistsError:
+            if os.environ.get("MLFLOW_TRACKING_URI"):
+                target = out / "results" / name
+                try:
+                    _resume_iterative_publication(target, name, args.campaign)
+                except Exception as error:
+                    print(f"{args.worker} [{name}] TRACKING RETRY FAILED {type(error).__name__}: {error}",
+                          flush=True)
             continue
         target = out / "results" / name
         target.mkdir(parents=True, exist_ok=True)
@@ -244,6 +251,24 @@ def iterative_worker_command(args):
             print(f"{args.worker} [{name}] FAILED {type(error).__name__}: {error}", flush=True)
             if isinstance(error, (KeyboardInterrupt, SystemExit)):
                 raise
+
+
+def _resume_iterative_publication(directory, dataset, campaign):
+    import json
+    import os
+
+    from .infrastructure.iterative_tracking import IterativeMlflowTracker
+
+    result = directory / "result.json"
+    if not result.is_file():
+        return
+    report = json.loads(result.read_bytes())
+    if report.get("complete") is not True or (report.get("mlflow") or {}).get("mlflow_run_id"):
+        return
+    model = report["model"]["family"]
+    tracker = IterativeMlflowTracker(os.environ["MLFLOW_TRACKING_URI"], dataset=dataset, task=report["task"],
+                                     model=model, campaign=campaign)
+    tracker.resume_publication(directory)
 
 
 @command("components", lambda p: p.add_argument("--plugin", action="append", default=[]))

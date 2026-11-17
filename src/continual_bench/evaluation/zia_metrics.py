@@ -3,10 +3,17 @@
 import numpy as np
 
 from continual_bench.models.classification_metrics import (
-    SCORE_BINS,
+    SCORE_BINS as SCORE_BINS,
+)
+from continual_bench.models.classification_metrics import (
+    ClassificationCounts,
     average_precision,
-    decide,
-    ranking_histograms,
+)
+from continual_bench.models.classification_metrics import (
+    decide as decide,
+)
+from continual_bench.models.classification_metrics import (
+    ranking_histograms as ranking_histograms,
 )
 
 
@@ -21,48 +28,27 @@ def decision_threshold(costs):
     return false_positive / total if total else 0.5
 
 
-class ClassificationMetrics:
+class ClassificationMetrics(ClassificationCounts):
     def __init__(self, classes, threshold=0.5):
-        self.classes = classes
-        self.threshold = threshold
-        self.confusion = np.zeros((classes, classes), dtype=np.int64)
-        self.positive = np.zeros((classes, SCORE_BINS), dtype=np.int64)
-        self.negative = np.zeros_like(self.positive)
+        super().__init__(classes, threshold)
         self.calibration = np.zeros((classes, 3, 10))
-        self.loss = self.squared_error = self.absolute_error = 0.0
+        self.squared_error = self.absolute_error = 0.0
 
     def add(self, labels, probabilities):
-        if (probabilities.shape != (len(labels), self.classes)
-                or not np.isfinite(probabilities).all()
-                or np.any((probabilities < 0) | (probabilities > 1))):
-            raise ValueError("invalid classification probabilities")
-        predicted = decide(probabilities, self.threshold)
-        self.confusion += np.bincount(
-            self.classes * labels.astype(np.int32) + predicted, minlength=self.classes**2
-        ).reshape(self.confusion.shape)
-        observed = probabilities[np.arange(len(labels)), labels].astype(np.float64)
-        self.loss -= float(np.log(observed.clip(1e-15, 1)).sum())
+        observed = super().add(labels, probabilities)
         self.absolute_error += float((1 - observed).sum())
         squared = np.square(probabilities, dtype=np.float64).sum() - 2 * observed.sum() + len(labels)
         self.squared_error += max(0.0, float(squared)) / (2 if self.classes == 2 else 1)
         for i in range(self.classes):
             mask = labels == i
-            positive, negative = ranking_histograms(probabilities[:, i], mask)
-            self.positive[i] += positive
-            self.negative[i] += negative
             calibration_bin = np.minimum((probabilities[:, i] * 10).astype(np.int32), 9)
             self.calibration[i, 0] += np.bincount(calibration_bin, minlength=10)
             self.calibration[i, 1] += np.bincount(calibration_bin, weights=probabilities[:, i], minlength=10)
             self.calibration[i, 2] += np.bincount(calibration_bin, weights=mask, minlength=10)
 
     def merge(self, other):
-        if other.threshold != self.threshold:
-            raise ValueError("cannot merge metrics computed with different decision thresholds")
-        self.confusion += other.confusion
-        self.positive += other.positive
-        self.negative += other.negative
+        super().merge(other)
         self.calibration += other.calibration
-        self.loss += other.loss
         self.squared_error += other.squared_error
         self.absolute_error += other.absolute_error
 

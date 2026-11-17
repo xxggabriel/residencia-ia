@@ -2,7 +2,18 @@
 
 import copy
 import math
+import sys
 import time
+
+
+def peak_rss_bytes():
+    """Process-lifetime high-water mark; ru_maxrss is bytes on macOS, KiB on Linux."""
+    if sys.platform not in {"darwin", "linux"}:
+        return None
+    import resource
+
+    value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return int(value * (1024 if sys.platform == "linux" else 1))
 
 
 def quantile(values, fraction):
@@ -27,6 +38,11 @@ class OnlineObservability:
         self.instrumentation_seconds = 0.0
         self.warmup_train_seconds = 0.0
         self.warmup_train_samples = 0
+        self.learning_steps = {"initial": [], "updates": {}}
+        self.prediction_count = 0
+        self.inference_seconds = 0.0
+        self.current_model_version = None
+        self.continual_versions = []
         self.fading_correct = self.fading_weight = 0.0
         self.fading_series = []
         self.memory_samples = []
@@ -44,6 +60,12 @@ class OnlineObservability:
         self.start_memory_segment = True
         if "near_future" not in state:
             self.near_future = None
+        if "learning_steps" not in state:
+            self.learning_steps = None
+            self.prediction_count = None
+            self.inference_seconds = None
+            self.current_model_version = None
+            self.continual_versions = []
 
     def before_prediction(self, event, model, labeled, prediction_seconds):
         started = time.perf_counter()
@@ -56,6 +78,10 @@ class OnlineObservability:
             "comparison_id": self.shadow_id,
             "previous_probability": old_probability,
         }
+        if self.prediction_count is not None:
+            self.prediction_count += 1
+            self.inference_seconds += prediction_seconds
+            trace["model_version"] = self.current_model_version
         self.instrumentation_seconds += time.perf_counter() - started
         return trace
 
@@ -114,8 +140,32 @@ class OnlineObservability:
                 point["old_weighted_loss"] += weight * (old != event.y)
                 point["new_weighted_loss"] += weight * (new != event.y)
         if self.continual is not None:
+            before = len(self.continual.matrix)
             self.continual.after_label(event.seq, event.x, event.y, model)
+            if len(self.continual.matrix) > before:
+                self.continual_versions.append(self.current_model_version)
         self.instrumentation_seconds += time.perf_counter() - started
+
+    def record_learning(self, seq, seconds, size, *, initial=False, prediction=None, validation=None,
+                        checkpoint=None):
+        if self.learning_steps is None:
+            return
+        started = time.perf_counter()
+        row = {"seq": seq, "seconds": seconds, "size": size}
+        if prediction is not None:
+            row["prediction"] = prediction
+        if validation is not None:
+            row["validation"] = validation
+        if checkpoint is not None:
+            row["checkpoint"] = checkpoint
+        if initial:
+            self.learning_steps["initial"].append(row)
+        else:
+            self.learning_steps["updates"][str(seq)] = row
+        self.instrumentation_seconds += time.perf_counter() - started
+
+    def recorded_model_version(self, version):
+        self.current_model_version = version
 
     def sample_memory(self):
         if self.memory_sampler is not None:

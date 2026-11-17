@@ -9,6 +9,7 @@ Republishing is idempotent: existing metric points are checked, not duplicated.
 from pathlib import Path
 
 from .metric_tracking import missing_metric_points
+from .observation_tracking import publish_sdk_observations
 from .training_tracking import publish_training_history
 
 SYSTEM_PREFIX = "system/"
@@ -56,6 +57,9 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
         result["training_rounds"] = publish_training_history(
             client, run_id, directory, report, include_checkpoints=include_checkpoints,
         )
+    manifest = publish_sdk_observations(client, run_id, directory, report, result.get("training_rounds", []))
+    if manifest:
+        result["observation_plots"] = manifest
     return result
 
 

@@ -291,7 +291,9 @@ def publish_with_library(
     from mlflow.entities import Metric, RunTag
     from mlflow.tracking import MlflowClient
 
+    from continual_bench.infrastructure.metric_tracking import missing_metric_points
     from continual_bench.infrastructure.mlflow_figures import log_report_figures
+    from continual_bench.infrastructure.observation_tracking import publish_sdk_observations
 
     try:
         mlflow.set_tracking_uri(tracker.tracking_uri)
@@ -326,8 +328,10 @@ def publish_with_library(
             params = report_params(tracker, report)
             for chunk in _chunks(list(params.items()), BATCH_PARAMS):
                 mlflow.log_params(dict(chunk))
-            points = report_metric_items(report, 0, adapted)
-            for chunk in _chunks(points, BATCH_METRICS):
+            points = report_metric_items(report, 0, adapted, include_observations=output_dir is None)
+            desired = {(p["key"], p["step"], p["value"]): p for p in points}
+            missing = missing_metric_points(client, run_id, desired)
+            for chunk in _chunks([desired[key] for key in missing], BATCH_METRICS):
                 client.log_batch(
                     run_id,
                     metrics=[Metric(p["key"], p["value"], p["timestamp"], p["step"]) for p in chunk],
@@ -335,6 +339,8 @@ def publish_with_library(
                 )
             dataset_logged = _log_dataset(mlflow, tracker, report, outputs_uri)
             child_runs = publish_sdk_training_rounds(client, experiment.experiment_id, run_id, report)
+            if output_dir is not None:
+                publish_sdk_observations(client, run_id, output_dir, report, child_runs)
             figures = log_report_figures(report)  # mlflow.log_figure on this active run
             uploaded = _log_artifacts(mlflow, output_dir)
             if output_dir is not None and not uploaded:

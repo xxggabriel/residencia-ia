@@ -65,7 +65,7 @@ def confusion_metrics(summary, positives):
     return values
 
 
-def detector_metrics(report, settings):
+def detector_metrics(report, settings, change_timestamps=None):
     points = report["dataset"].get("changepoints")
     enabled = report["config"]["detector"]["name"] != "none"
     names = (
@@ -87,6 +87,7 @@ def detector_metrics(report, settings):
         "drift_observed_detections",
     )
     metrics = dict.fromkeys(names)
+    change_timestamps = change_timestamps or {}
     details = {
         "matching": "earliest alarm in [change,min(change+tolerance,next_change)); complete followup only",
         "tolerance_samples": settings["detection_window"],
@@ -131,6 +132,9 @@ def detector_metrics(report, settings):
                 delays.append(seq - point)
                 if "released_at" in alarms[i]:
                     released.append(alarms[i]["released_at"] - report["config"]["dataset"]["epoch"] - point)
+                    if point in change_timestamps:
+                        released_at = alarms[i]["released_at"]
+                        row["release_delay_source_clock"] = released_at - change_timestamps[point]
                 row["delay"] = seq - point
             details["matches"].append(row)
         considered = len(alarms) - len(excluded)
@@ -244,7 +248,8 @@ def validate_learning_curve(curve):
     return curve
 
 
-def build_tracking(report, settings, observation=None, continual=None, predictions=None):
+def build_tracking(report, settings, observation=None, continual=None, predictions=None,
+                   *, change_timestamps=None):
     settings = copy.deepcopy(settings)
     observation = observation or {}
     metrics = dict(report["metrics"])
@@ -394,7 +399,7 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
             "cl_forward_transfer",
         ):
             available(key, None, "task_boundary_matrix_and_references_not_captured")
-    detection, detection_details, reason = detector_metrics(report, settings)
+    detection, detection_details, reason = detector_metrics(report, settings, change_timestamps)
     for key, value in detection.items():
         available(key, value, reason or detection_details.get("unavailable_reasons", {}).get(
             key, "no_evaluated_exposure"))
@@ -695,7 +700,12 @@ def save_tracking_files(directory, report, settings, observer=None, events=None)
         observer.continual.report() if observer is not None and observer.continual is not None else None
     )
     predictions = observer.predictions if observer is not None else None
-    tracking = build_tracking(report, settings, observation, continual, predictions)
+    changes = set(report["dataset"].get("changepoints") or ())
+    timestamps = ({event.seq: event.timestamp for event in events if event.seq in changes}
+                  if events is not None and changes else None)
+    tracking = build_tracking(
+        report, settings, observation, continual, predictions, change_timestamps=timestamps,
+    )
     _, definitions_raw = metric_catalog()
     atomic_write(directory / "metric-definitions.json", definitions_raw)
     report["tracking"] = tracking

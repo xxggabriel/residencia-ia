@@ -4,6 +4,8 @@ Tabular sources keep their (small) feature dicts; image sources keep one uint8 m
 River feature dict of a single row on demand, so 10k CIFAR images cost ~30 MB instead of ~3 GB.
 """
 
+import hashlib
+import json
 from pathlib import Path
 
 from continual_bench.core.tasks import MULTICLASS, REGRESSION  # noqa: F401
@@ -56,7 +58,9 @@ def _tabular(name, cache, real_directory, download):
         tasks.append(sample.task_id)
     if len(ys) != limit:
         raise ValueError(f"{name}: expected {limit} samples, got {len(ys)}")
-    manifest = {k: manifest[k] for k in ("name", "task", "version", "samples") if k in manifest}
+    manifest = {k: manifest[k] for k in (
+        "name", "task", "version", "samples", "labels", "class_order", "target_conversion", "target_unit",
+    ) if k in manifest}
     return ListDataset(name, manifest.get("task", MULTICLASS), xs, ys, tasks, manifest)
 
 
@@ -73,9 +77,17 @@ def _image(name, cache, download):
         from .temporal_vision import prepare_temporal_arrays
         arrays = prepare_temporal_arrays(name, Path(cache), IMAGE_LIMIT, download=download)
     tasks = [int(t) for t in arrays["task"]]
-    return ImageDataset(name, arrays["x"], arrays["y"], tasks,
-                        {"name": name, "task": MULTICLASS, "samples": int(len(tasks)),
-                         "features": int(arrays["x"].shape[1]), "dtype": str(np.asarray(arrays["x"]).dtype)})
+    images = np.asarray(arrays["x"])
+    labels = [str(label) for label in arrays["y"]]
+    schema = {"dataset": name, "shape": list(images.shape), "dtype": images.dtype.str,
+              "tasks": tasks, "labels": labels}
+    fingerprint = hashlib.sha256(json.dumps(schema, sort_keys=True, separators=(",", ":")).encode())
+    for row in images:
+        fingerprint.update(row.tobytes())
+    return ImageDataset(name, images, labels, tasks,
+                        {"name": name, "task": MULTICLASS, "samples": len(tasks),
+                         "features": int(images.shape[1]), "dtype": str(images.dtype),
+                         "version": fingerprint.hexdigest()})
 
 
 def _mnist(name, cache, download):

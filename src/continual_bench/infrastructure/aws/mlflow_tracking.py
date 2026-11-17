@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import boto3
@@ -20,8 +21,14 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
 from continual_bench.config.iterative import IterativeTrainingConfig
-from continual_bench.infrastructure.metric_tracking import metric_points
+from continual_bench.infrastructure.metric_tracking import metric_points, missing_metric_points
 from continual_bench.infrastructure.object_store import split_uri
+from continual_bench.infrastructure.observation_tracking import (
+    ARTIFACT_ROOT,
+    observation_tags,
+    parent_observation_points,
+    write_observation_evidence,
+)
 from continual_bench.infrastructure.zia_training_tracking import sanitize_mlflow_name, training_round_mlflow
 
 from .session import DEFAULT_REGION as REGION
@@ -253,7 +260,9 @@ def report_params(tracker: "SageMakerMlflowTracker", report: dict[str, Any]) -> 
     }
 
 
-def report_metric_items(report: dict[str, Any], now_ms: int, adapted=None) -> list[dict[str, Any]]:
+def report_metric_items(
+    report: dict[str, Any], now_ms: int, adapted=None, *, include_observations=True,
+) -> list[dict[str, Any]]:
     """Finite metric points (key, value, timestamp, step) shared by both publishers."""
     metric_items: list[dict[str, Any]] = []
 
@@ -301,6 +310,9 @@ def report_metric_items(report: dict[str, Any], now_ms: int, adapted=None) -> li
             _add_metric(f"system/{k}", v, step_idx, sample_ts)
     if adapted and adapted.get("tracking"):
         for key, step, value in metric_points(adapted["tracking"]):
+            _add_metric(key, value, step)
+    if include_observations:
+        for key, step, value in parent_observation_points(report):
             _add_metric(key, value, step)
     return metric_items
 
@@ -878,6 +890,37 @@ class SageMakerMlflowTracker:
             self.log_batch(tags=[{"key": "cb-error", "value": str(error_message)[:1000]}])
         return self.finish("FAILED")
 
+    def get_metric_history(self, run_id, key):
+        params = {"run_id": run_id, "metric_key": key, "max_results": 10_000}
+        while True:
+            result = self._request("GET", "/api/2.0/mlflow/metrics/get-history", params=params)
+            for point in result.get("metrics") or ():
+                yield SimpleNamespace(step=int(point.get("step", 0)), value=float(point["value"]))
+            if not (token := result.get("next_page_token")):
+                break
+            params["page_token"] = token
+
+    def _missing_completed_metrics(self, run_id, metrics, known_keys):
+        desired = [(point["key"], point["step"], point["value"]) for point in metrics]
+        missing = missing_metric_points(self, run_id, desired, known_keys=known_keys)
+        missing_coordinates = {(key, step) for key, step, _ in missing}
+        result = []
+        for point in metrics:
+            identity = point["key"], point["step"]
+            if identity in missing_coordinates:
+                result.append(point)
+                missing_coordinates.remove(identity)
+        return result
+
+    def log_completed_metrics(self, metrics):
+        """Preflight snapshots so retries also work on servers with an append-only metric store."""
+        run_id = self.ensure_run()
+        if run_id is None:
+            return False
+        run = self._request("GET", "/api/2.0/mlflow/runs/get", params={"run_id": run_id}).get("run") or {}
+        known_keys = {metric["key"] for metric in run.get("data", {}).get("metrics") or ()}
+        return self.log_batch(metrics=self._missing_completed_metrics(run_id, metrics, known_keys))
+
     def publish_training_rounds(self, report) -> list[dict]:
         """Use fit-local steps inside one child run per round of this parent attempt."""
         if not report.get("training_history"):
@@ -895,7 +938,8 @@ class SageMakerMlflowTracker:
                 if fit_id := tags.get("cb-fit-id"):
                     if fit_id in existing:
                         raise ValueError(f"duplicate MLflow child runs for {self.mlflow_run_id}/{fit_id}")
-                    existing[fit_id] = run["info"]
+                    known_keys = {metric["key"] for metric in run.get("data", {}).get("metrics") or ()}
+                    existing[fit_id] = (run["info"], tags, known_keys)
             page = found.get("next_page_token")
             if not page:
                 break
@@ -903,7 +947,7 @@ class SageMakerMlflowTracker:
         receipts = []
         for tags, params, metrics in training_round_mlflow(self.mlflow_run_id, report):
             fit_id = tags["cb-fit-id"]
-            info = existing.get(fit_id)
+            info, remote_tags, known_keys = existing.get(fit_id, (None, {}, set()))
             if info is None:
                 info = self._request(
                     "POST",
@@ -916,19 +960,51 @@ class SageMakerMlflowTracker:
                     },
                 )["run"]["info"]
             child_id = info["run_id"]
-            if info.get("status") != "FINISHED":
-                for offset in range(0, len(metrics), MLFLOW_LOG_BATCH_MAX_METRICS):
-                    batch = metrics[offset:offset + MLFLOW_LOG_BATCH_MAX_METRICS]
+            evidence_keys = ("cb-fit-evidence-sha256", "cb-fit-observations-sha256")
+            extending = False
+            for key in evidence_keys:
+                expected = tags.get(key)
+                if expected is None:
+                    continue
+                if key in remote_tags and remote_tags[key] != expected:
+                    raise ValueError(f"MLflow child {fit_id} already tracks different training evidence")
+                extending |= key not in remote_tags
+            if info.get("status") != "FINISHED" or extending:
+                missing = self._missing_completed_metrics(child_id, metrics, known_keys)
+                for offset in range(0, max(1, len(missing)), MLFLOW_LOG_BATCH_MAX_METRICS):
+                    batch = missing[offset:offset + MLFLOW_LOG_BATCH_MAX_METRICS]
                     payload = {"run_id": child_id, "metrics": batch}
                     if offset == 0:
                         payload["params"] = [{"key": k, "value": v} for k, v in params.items()]
+                        if extending:
+                            payload["tags"] = [{"key": k, "value": v} for k, v in tags.items()]
                     self._request("POST", "/api/2.0/mlflow/runs/log-batch", payload=payload)
                 self._request(
                     "POST", "/api/2.0/mlflow/runs/update",
                     payload={"run_id": child_id, "status": "FINISHED", "end_time": int(time.time() * 1000)},
                 )
-            receipts.append({"fit_id": fit_id, "run_id": child_id, "metric_points": len(metrics)})
+            receipt = {"fit_id": fit_id, "run_id": child_id, "metric_points": len(metrics)}
+            if report.get("tracking_observations"):
+                receipt["artifact_uri"] = info.get("artifact_uri")
+            receipts.append(receipt)
         return receipts
+
+    def stage_observation_artifacts(self, directory, report, children, store):
+        root = write_observation_evidence(directory, report, self.mlflow_run_id, children)
+        if root is None:
+            return
+        for child in children:
+            fit_root = root / "fits" / child["fit_id"]
+            if not fit_root.is_dir():
+                continue
+            target = child.get("artifact_uri")
+            if not target:
+                raise RuntimeError("MLflow child did not provide an artifact URI")
+            uploaded = upload_directory_to_mlflow_artifacts(
+                store, fit_root, f"{target.rstrip('/')}/{ARTIFACT_ROOT}",
+            )
+            if not uploaded["files"]:
+                raise RuntimeError("MLflow did not publish fit observation artifacts")
 
     def publish_run_report(
         self,
@@ -995,6 +1071,7 @@ class SageMakerMlflowTracker:
         if model_package_arn:
             tags_payload.append({"key": "cb-model-package-arn", "value": str(model_package_arn)[:500]})
 
+        tags_payload.extend({"key": k, "value": v} for k, v in observation_tags(report).items())
         if not self.log_batch(params=params_payload, tags=tags_payload):
             return {"published": False, "errors": list(self.api_errors)}
 
@@ -1042,10 +1119,11 @@ class SageMakerMlflowTracker:
         uploaded = {"files": 0, "bytes": 0, "artifact_uri": self.artifact_uri}
         try:
             # Deterministic timestamps keep replay of the same evidence idempotent.
-            if not self.log_batch(metrics=report_metric_items(report, 0, adapted)):
+            if not self.log_completed_metrics(report_metric_items(report, 0, adapted)):
                 return {"published": False, "errors": list(self.api_errors)}
             child_runs = self.publish_training_rounds(report)
             if output_dir is not None:
+                self.stage_observation_artifacts(output_dir, report, child_runs, store)
                 uploaded = upload_directory_to_mlflow_artifacts(store, output_dir, self.artifact_uri)
                 if not uploaded["files"]:
                     raise ValueError("MLflow run has no uploaded artifacts")

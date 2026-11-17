@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from continual_bench.config.iterative import METRIC_DIRECTIONS, IterativeTrainingConfig
+from continual_bench.models.observations import quality_scope, training_step
 
 from .callbacks import (
     EarlyStoppingStrategy,
@@ -218,10 +219,17 @@ class IterativeTrainingLoop:
         train_rows, val_rows = _row_count(train_split), _row_count(val_split)
         selection_scope, selection_metric = _selection_coordinates(self.config.eval_metric, val_rows)
         history: list[dict[str, float | int | None]] = []
+        observation_steps = []
+        observation_epochs = []
+        inference_seconds = []
+        evaluation_counts = []
+        tracking_overhead_seconds = 0.0
+        started = time.perf_counter()
         total_train_seconds = 0.0
         total_val_seconds = 0.0
         best_train_metrics: dict[str, float | None] = {}
         best_val_metrics: dict[str, float | None] = {}
+        best_score_counts, last_score_counts = {}, {}
 
         sigterm = GracefulTerminationHandler()
 
@@ -257,9 +265,17 @@ class IterativeTrainingLoop:
                 should_stop = target is not None and self.strategy.step(
                     epoch, float(target), state=model.get_state,
                 )
+                # A scorer belongs to this epoch's observed predictions. Only retain
+                # the most recent and best-checkpoint score histograms for curves.
+                last_score_counts = {
+                    scope: scores
+                    for scope in (("train", "validation") if val_rows != 0 else ("train",))
+                    if (scores := getattr(model, f"last_{scope}_scores", None)) is not None
+                }
                 if self.strategy.best_epoch != prev_best_epoch:
                     best_train_metrics = dict(train_metrics)
                     best_val_metrics = dict(val_metrics)
+                    best_score_counts = last_score_counts
 
                 rss_mb = current_peak_rss_mb()
                 epoch_metrics: dict[str, float | int | None] = {
@@ -280,6 +296,55 @@ class IterativeTrainingLoop:
                     if "macro_f1" in metrics and "f1_macro" not in metrics:
                         epoch_metrics[f"{scope}:f1_macro"] = metrics["macro_f1"]
                 history.append(epoch_metrics)
+                tracking_started = time.perf_counter()
+                train_overhead = getattr(model, "last_train_quality_seconds", 0.0)
+                validation_overhead = (
+                    getattr(model, "last_validation_quality_seconds", 0.0) if val_rows != 0 else 0.0
+                )
+                train_prediction = getattr(model, "last_train_prediction_seconds", None)
+                val_prediction = (
+                    getattr(model, "last_validation_prediction_seconds", None) if val_rows != 0 else None
+                )
+                scopes = {}
+                if train_quality := getattr(model, "last_train_quality", None):
+                    scopes["train"] = train_quality
+                if val_rows != 0 and (val_quality := getattr(model, "last_validation_quality", None)):
+                    scopes["validation"] = val_quality
+                inference_seconds.extend(
+                    value for value in (train_prediction, val_prediction) if value is not None
+                )
+                evaluation_counts.extend(scope["evaluated_examples"] for scope in scopes.values())
+                learner_seconds = max(0.0, train_duration - train_overhead - (train_prediction or 0.0))
+                train_values = {f"train/{key}": value for key, value in train_metrics.items()}
+                observation_steps.append(training_step(
+                    epoch, examples=train_rows,
+                    cumulative=epoch * train_rows if train_rows is not None else None,
+                    duration_seconds=learner_seconds,
+                    native_loss=train_metrics.get("native_loss"), metrics=train_values,
+                ))
+                if "train" in scopes:
+                    observation_steps[-1]["scopes"] = {"train": scopes["train"]}
+                observation_epochs.append({
+                    "epoch": epoch,
+                    "first_step": epoch,
+                    "last_step": epoch,
+                    "metrics": {
+                        **train_values,
+                        **{f"validation/{key}": value for key, value in val_metrics.items()},
+                        "training/examples_processed": train_rows,
+                        "training/duration_seconds": learner_seconds,
+                        "validation/duration_seconds": max(0.0, val_duration - validation_overhead),
+                        "epoch/duration_seconds": max(0.0, train_duration + val_duration
+                                                       - train_overhead - validation_overhead),
+                        "train/inference_seconds": train_prediction,
+                        "validation/inference_seconds": val_prediction,
+                        "resources/peak_rss_bytes": int(rss_mb * 2**20),
+                    },
+                    "scopes": scopes,
+                })
+                tracking_overhead_seconds += (
+                    time.perf_counter() - tracking_started + train_overhead + validation_overhead
+                )
 
                 if self.emit_stdout:
                     emit_cloudwatch_metrics(epoch_metrics)
@@ -324,6 +389,16 @@ class IterativeTrainingLoop:
         gc.collect()
 
         epochs_run = len(history)
+        checkpoint_epoch = self.strategy.best_epoch if restored else epochs_run
+        summary_scopes = dict(observation_epochs[checkpoint_epoch - 1]["scopes"]) if checkpoint_epoch else {}
+        curve_started = time.perf_counter()
+        score_counts = best_score_counts if restored else last_score_counts
+        for scope, scores in score_counts.items():
+            label_order = summary_scopes[scope]["classes"]
+            summary_scopes[scope] = quality_scope("binary", scores.quality(label_order, curves=True))
+        tracking_overhead_seconds += time.perf_counter() - curve_started
+        measured_inference = sum(inference_seconds) if inference_seconds else None
+        evaluated_examples = sum(evaluation_counts) if evaluation_counts else None
         result = TrainingResult(
             epochs_run=epochs_run,
             epochs_trained=epochs_run,
@@ -348,6 +423,32 @@ class IterativeTrainingLoop:
             validation_metrics=best_val_metrics,
             validation=best_val_metrics,
             history=history,
+            observation_steps=observation_steps,
+            observation_epochs=observation_epochs,
+            observed_step_kind=getattr(model, "training_step_kind", "train_epoch_call"),
+            observation_effort={
+                "unique_training_examples": train_rows,
+                "evaluated_examples": evaluated_examples,
+                "training_presentations": epochs_run * train_rows if train_rows is not None else None,
+                "steps": epochs_run,
+                "epochs": epochs_run,
+            },
+            observation_resources={
+                "duration_seconds": time.perf_counter() - started,
+                "training_seconds": sum(s["metrics"]["training/duration_seconds"] for s in observation_steps),
+                "inference_seconds": measured_inference,
+                "inference_scope": "training_and_validation_split_predictions",
+                "predictions_per_second": (
+                    evaluated_examples / measured_inference if evaluated_examples is not None
+                    and measured_inference and len(inference_seconds) == len(evaluation_counts) else None
+                ),
+                "peak_rss_bytes": int(current_peak_rss_mb() * 2**20),
+                "rss_scope": "process_lifetime_high_water_mark",
+                "tracking_overhead_seconds": tracking_overhead_seconds,
+            },
+            observation_scopes=summary_scopes,
+            checkpoint_epoch=checkpoint_epoch,
+            last_epoch=epochs_run,
         )
         if self.tracker is not None and hasattr(self.tracker, "finalize"):
             try:

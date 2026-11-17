@@ -17,6 +17,18 @@ from contextlib import contextmanager
 
 from .retraining_figures import RETRAINING_BUILDERS
 
+PALETTE = (
+    "#0072B2",
+    "#D55E00",
+    "#009E73",
+    "#CC79A7",
+    "#E69F00",
+    "#56B4E9",
+    "#F0E442",
+    "#000000",
+    "#999999",
+    "#882255",
+)
 MARKER_STYLE = {
     "alarm": ("#d62728", "--", "Alarme do detector"),
     "changepoint": ("#7f7f7f", ":", "Mudança de conceito"),

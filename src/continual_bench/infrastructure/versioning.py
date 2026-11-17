@@ -105,6 +105,14 @@ class ModelVersions:
             with self.journal.open("rb") as stream:
                 os.fsync(stream.fileno())
 
+    def record_candidate(self, model, seq):
+        """Retain rejected states independently of the promoted-model journal."""
+        blob = pickle.dumps(model, protocol=5)
+        path = f"candidates/rejected-{seq:08d}.pkl"
+        atomic_write(self.directory / path, blob)
+        return {"file": path, "sha256": hashlib.sha256(blob).hexdigest(),
+                "bytes": len(blob), "format": "pickle"}
+
     def finish(self, model, probe):
         if not self.entries:
             raise ValueError("trained model has no version")

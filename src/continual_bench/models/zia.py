@@ -15,7 +15,9 @@ from scipy.optimize import minimize
 from scipy.special import expit, logsumexp, softmax
 
 from continual_bench.config.iterative import IterativeTrainingConfig
-from continual_bench.models.classification_metrics import average_precision, decide, ranking_histograms
+from continual_bench.core.observability import peak_rss_bytes as process_peak_rss_bytes
+from continual_bench.models.classification_metrics import ClassificationCounts, average_precision
+from continual_bench.models.observations import quality_scope, training_step
 from continual_bench.models.training.loop import (
     TrainingResult,
     enforce_single_thread_env,
@@ -52,108 +54,158 @@ def compute_classification_metrics(
     threshold: float = 0.5,
 ) -> dict[str, float | None]:
     """Score a training split with the same decision rule and AP estimator as the Zia evaluation."""
-    total = int(len(labels))
-    if total == 0:
-        return {
-            "log_loss": 0.0,
-            "accuracy": 0.0,
-            "balanced_accuracy": 0.0,
-            "f1_macro": 0.0,
-            "macro_pr_auc": None,
-            **({"pr_auc": None} if classes == 2 else {}),
-        }
-    labels_i32 = labels.astype(np.int32, copy=False)
-    predicted = decide(probabilities, threshold).astype(np.int32, copy=False)
-    correct = int(np.sum(predicted == labels_i32))
-    accuracy = float(correct / total)
+    counts = ClassificationCounts(classes, threshold)
+    if len(labels):
+        counts.add(labels, probabilities)
+    return _training_values(counts)
 
-    observed = probabilities[np.arange(total), labels_i32].astype(np.float64, copy=False)
-    log_loss = float(-np.log(np.clip(observed, 1e-15, 1.0)).mean())
 
-    confusion = np.bincount(
-        classes * labels_i32 + predicted,
-        minlength=classes * classes,
-    ).reshape((classes, classes))
-    actual = confusion.sum(axis=1)
-    pred_counts = confusion.sum(axis=0)
-    diag = confusion.diagonal()
-    f1_values = [
-        float(2 * diag[i] / (pred_counts[i] + actual[i]))
-        for i in range(classes)
-        if (pred_counts[i] + actual[i]) > 0
-    ]
-    f1_macro = float(sum(f1_values) / len(f1_values)) if f1_values else 0.0
-
-    recalls = [
-        float(diag[i] / actual[i])
-        for i in range(classes)
-        if actual[i] > 0
-    ]
-    balanced_accuracy = float(sum(recalls) / len(recalls)) if recalls else 0.0
-
+def _training_values(counts):
+    """Preserve the observed-class legacy F1 and the original early-stopping inputs."""
+    actual = counts.confusion.sum(axis=1)
+    present = counts.confusion.sum(axis=0) + actual
+    correct = counts.confusion.diagonal()
+    total = int(actual.sum())
     class_ap = [
-        average_precision(*ranking_histograms(probabilities[:, label], labels_i32 == label))
-        if actual[label] else None
-        for label in range(classes)
+        average_precision(counts.positive[i], counts.negative[i]) if actual[i] else None
+        for i in range(counts.classes)
     ]
     valid_ap = [score for score in class_ap if score is not None]
-
+    f1_values = [float(2 * c / n) for c, n in zip(correct, present, strict=True) if n]
+    recalls = [float(c / n) for c, n in zip(correct, actual, strict=True) if n]
     scores = {
-        "log_loss": log_loss,
-        "accuracy": accuracy,
-        "balanced_accuracy": balanced_accuracy,
-        "f1_macro": f1_macro,
+        "log_loss": counts.loss / total if total else 0.0,
+        "accuracy": float(correct.sum() / total) if total else 0.0,
+        "balanced_accuracy": float(sum(recalls) / len(recalls)) if recalls else 0.0,
+        "f1_macro": float(sum(f1_values) / len(f1_values)) if f1_values else 0.0,
         "macro_pr_auc": float(sum(valid_ap) / len(valid_ap)) if valid_ap else None,
     }
-    if classes == 2:
+    if counts.classes == 2:
         scores["pr_auc"] = class_ap[1]
     return scores
 
 
-def _log_minibatch(history, tracker, metrics, rows, optimizer_steps, seconds):
-    step = len(history) + 1
-    point = {
-        "minibatch_step": step,
-        "train_samples": rows,
-        "validation_samples": 0,
-        "optimizer_steps": optimizer_steps,
-        "training_duration_seconds": seconds,
-        **{f"train:{key}": value for key, value in metrics.items()},
-    }
-    history.append(point)
-    if tracker is not None and hasattr(tracker, "log_minibatch_metrics"):
-        try:
-            tracker.log_minibatch_metrics(point, step=step)
-        except Exception:
-            # The recorded point remains available for final publication.
-            pass
+def _split_scores(model, scope, features, labels, threshold):
+    timer = time.perf_counter()
+    probabilities = model.predict(features)
+    setattr(model, f"last_{scope}_prediction_seconds", time.perf_counter() - timer)
+    counts = ClassificationCounts(len(model.class_labels), threshold)
+    counts.add(labels, probabilities)
+    metrics = _training_values(counts)
+    timer = time.perf_counter()
+    setattr(model, f"last_{scope}_quality", counts.quality(model.class_labels))
+    if counts.classes == 2:
+        setattr(model, f"last_{scope}_scores", counts)
+    setattr(model, f"last_{scope}_quality_seconds", time.perf_counter() - timer)
+    return metrics
 
 
-def _online_result(history, tracker, *, interrupted, **metadata):
-    rows = sum(point["train_samples"] for point in history)
-    summary = {
-        "epochs_run": 0,
-        "epochs_trained": 0,
-        "iterations": len(history),
-        "train_rows": rows,
-        "validation_rows": 0,
-        "training_presentations": rows,
-        "optimizer_steps": sum(point["optimizer_steps"] for point in history),
-        "training_duration_seconds": sum(point["training_duration_seconds"] for point in history),
-        "validation_duration_seconds": 0.0,
-        "stopped_by_signal": interrupted,
-        **metadata,
-    }
-    if tracker is not None and hasattr(tracker, "finalize"):
-        try:
-            tracker.finalize(summary)
-        except Exception:
-            pass
-    return TrainingResult(**summary, history=history)
+class OnlineHistory:
+    """Track the prediction immediately preceding each minibatch's update."""
+
+    def __init__(self, classes, threshold, tracker):
+        self.classes = classes
+        self.tracker = tracker
+        self.counts = ClassificationCounts(len(classes), threshold)
+        self.history, self.steps = [], []
+        self.examples = 0
+        self.started = time.perf_counter()
+        self.inference_seconds = self.overhead_seconds = 0.0
+        self.task = "binary" if len(classes) == 2 else "multiclass"
+
+    def score(self, labels, probabilities):
+        counts = ClassificationCounts(len(self.classes), self.counts.threshold)
+        counts.add(labels, probabilities)
+        return counts, _training_values(counts)
+
+    def record(self, counts, values, optimizer_steps, seconds, inference_seconds, native_loss):
+        step = len(self.history) + 1
+        rows = int(counts.confusion.sum())
+        point = {
+            "minibatch_step": step,
+            "train_samples": rows,
+            "validation_samples": 0,
+            "optimizer_steps": optimizer_steps,
+            "training_duration_seconds": seconds,
+            **{f"train:{key}": value for key, value in values.items()},
+        }
+        self.history.append(point)
+        timer = time.perf_counter()
+        self.examples += rows
+        self.inference_seconds += inference_seconds
+        self.counts.merge(counts)
+        observation = training_step(
+            step, examples=rows, cumulative=self.examples, duration_seconds=seconds, native_loss=native_loss,
+            metrics={
+                "batch/log_loss": values["log_loss"],
+                "batch/inference_seconds": inference_seconds,
+                "training/optimizer_steps": optimizer_steps,
+            },
+        )
+        quality = counts.quality(self.classes)
+        # Fit metadata supplies the fixed class order, score method and availability rules.
+        observation["scopes"] = {"training_pre_update": {
+            key: quality[key] for key in (
+                "evaluated_examples", "macro_f1", "accuracy", "positive_precision", "positive_recall",
+                "average_precision", "recall_at_fpr_0_01", "confusion_matrix", "class_support",
+                "class_recall",
+            ) if key in quality
+        }}
+        self.steps.append(observation)
+        self.overhead_seconds += time.perf_counter() - timer
+        if self.tracker is not None and hasattr(self.tracker, "log_minibatch_metrics"):
+            try:
+                self.tracker.log_minibatch_metrics(point, step=step)
+            except Exception:
+                # The recorded point remains available for final publication.
+                pass
+
+    def finalize(self, *, interrupted, kind, **metadata):
+        optimizer_seconds = sum(point["training_duration_seconds"] for point in self.history)
+        summary = {
+            "epochs_run": 0,
+            "epochs_trained": 0,
+            "iterations": len(self.history),
+            "train_rows": self.examples,
+            "validation_rows": 0,
+            "training_presentations": self.examples,
+            "optimizer_steps": sum(point["optimizer_steps"] for point in self.history),
+            "training_duration_seconds": optimizer_seconds,
+            "validation_duration_seconds": 0.0,
+            "stopped_by_signal": interrupted,
+            **metadata,
+        }
+        if self.tracker is not None and hasattr(self.tracker, "finalize"):
+            try:
+                self.tracker.finalize(summary)
+            except Exception:
+                pass
+        timer = time.perf_counter()
+        quality = quality_scope(self.task, self.counts.quality(self.classes, curves=True))
+        self.overhead_seconds += time.perf_counter() - timer
+        throughput = self.examples / self.inference_seconds if self.inference_seconds else None
+        return TrainingResult(
+            **summary, history=self.history, observation_steps=self.steps, observation_epochs=[],
+            observed_step_kind=kind, observation_scopes={"training_pre_update": quality},
+            observation_effort={
+                "examples_observed": self.examples, "evaluated_examples": self.examples,
+                "unique_training_examples": self.examples, "training_presentations": self.examples,
+                "replay_presentations": 0, "steps": len(self.steps), "epochs": None,
+            },
+            observation_resources={
+                "duration_seconds": time.perf_counter() - self.started,
+                "training_seconds": optimizer_seconds,
+                "inference_seconds": self.inference_seconds,
+                "predictions_per_second": throughput,
+                "peak_rss_bytes": process_peak_rss_bytes(), "rss_scope": "process_lifetime_high_water_mark",
+                "tracking_overhead_seconds": self.overhead_seconds,
+            },
+        )
 
 
 class FraudOrReturnBooster:
     name = "xgboost"
+    training_step_kind = "xgboost_boosting_round"
     params = {
         "objective": "binary:logistic",
         "tree_method": "hist",
@@ -186,6 +238,7 @@ class FraudOrReturnBooster:
         self.model = None
         self.params = dict(self.params)
         self.dataset = dataset
+        self.class_labels = list(classes) if isinstance(classes, list) else [0, 1]
         self.decision_threshold = 0.5 if decision_threshold is None else decision_threshold
         self.params["nthread"] = int(os.environ["OMP_NUM_THREADS"])
         self.iterative_config = IterativeTrainingConfig.from_params(config)
@@ -249,13 +302,16 @@ class FraudOrReturnBooster:
         }
         rounds = self.model.num_boosted_rounds()
         size = self.online_params["minibatch_rows"]
-        history = []
+        history = OnlineHistory(self.class_labels, threshold, tracker)
         for start in range(0, len(y), size):
             if stop_requested is not None and stop_requested():
                 break
             stop = start + size
             features, labels = x[start:stop], y[start:stop]
-            metrics = compute_classification_metrics(labels, self.predict(features), 2, threshold)
+            timer = time.perf_counter()
+            probabilities = self.predict(features)
+            inference_seconds = time.perf_counter() - timer
+            counts, metrics = history.score(labels, probabilities)
             timer = time.perf_counter()
             nthread = int(self.params.get("nthread", 2))
             matrix = self.xgb.DMatrix(features, label=labels, nthread=nthread)
@@ -266,10 +322,10 @@ class FraudOrReturnBooster:
                 xgb_model=self.model,
                 obj=objective,
             )
-            _log_minibatch(history, tracker, metrics, len(labels), rounds, time.perf_counter() - timer)
-        self.last_training_result = _online_result(
-            history, tracker, interrupted=stop_requested is not None and stop_requested(),
-            booster_rounds=rounds,
+            history.record(counts, metrics, rounds, time.perf_counter() - timer, inference_seconds, None)
+        self.last_training_result = history.finalize(
+            interrupted=stop_requested is not None and stop_requested(),
+            kind="xgboost_tree_refresh_minibatch", booster_rounds=rounds,
         )
         return int(self.last_training_result.optimizer_steps)
 
@@ -316,13 +372,11 @@ class FraudOrReturnBooster:
             num_boost_round=1,
             xgb_model=self.model,
         )
-        probabilities = self.predict(x)
-        return compute_classification_metrics(y, probabilities, 2, self.decision_threshold)
+        return _split_scores(self, "train", x, y, self.decision_threshold)
 
     def evaluate_split(self, val_data: Any) -> dict[str, float | None]:
         vx, vy = unpack_split(val_data)
-        probabilities = self.predict(vx)
-        return compute_classification_metrics(vy, probabilities, 2, self.decision_threshold)
+        return _split_scores(self, "validation", vx, vy, self.decision_threshold)
 
     def get_state(self) -> bytes:
         if self.model is None:
@@ -440,6 +494,7 @@ class FraudOrReturnBooster:
 
 class MultinomialLogistic:
     name = "multinomial_logistic"
+    training_step_kind = "multinomial_full_batch_solver_call"
     params = {
         "solver": "L-BFGS-B",
         "l2": 0.001,
@@ -453,12 +508,13 @@ class MultinomialLogistic:
 
     def __init__(
         self,
-        classes: int,
+        classes: int | list[str],
         config: IterativeTrainingConfig | dict[str, Any] | None = None,
         decision_threshold: float | None = None,
     ):
         enforce_single_thread_env()
-        self.classes = int(classes)
+        self.class_labels = list(classes) if isinstance(classes, list) else list(range(classes))
+        self.classes = len(self.class_labels)
         self.decision_threshold = 0.5 if decision_threshold is None else decision_threshold
         self.weights: np.ndarray | None = None
         self._online_optimizer = optim.SGD(self.online_params["learning_rate"])
@@ -486,14 +542,23 @@ class MultinomialLogistic:
         """Apply River SGD to the same softmax weights and intercept fitted at warm-up."""
         threshold = self.decision_threshold if decision_threshold is None else decision_threshold
         size = self.online_params["minibatch_rows"]
-        history = []
+        history = OnlineHistory(self.class_labels, threshold, tracker)
         for start in range(0, len(y), size):
             if stop_requested is not None and stop_requested():
                 break
             labels = y[start : start + size]
             features = x[start : start + size]
+            timer = time.perf_counter()
             residuals = self.predict(features)
-            metrics = compute_classification_metrics(labels, residuals, self.classes, threshold)
+            inference_seconds = time.perf_counter() - timer
+            counts, metrics = history.score(labels, residuals)
+            timer = time.perf_counter()
+            observed = residuals[np.arange(len(labels)), labels]
+            native_loss = None
+            if np.all(observed > 0):
+                regularization = self.params["l2"] * np.square(self.weights[:-1]).sum() / 2
+                native_loss = float(-np.log(observed).mean() + regularization)
+            history.overhead_seconds += time.perf_counter() - timer
             timer = time.perf_counter()
             residuals[np.arange(len(labels)), labels] -= 1
             gradient = np.empty_like(self.weights)
@@ -501,9 +566,9 @@ class MultinomialLogistic:
             gradient[:-1] += self.params["l2"] * self.weights[:-1]
             gradient[-1] = residuals.mean(axis=0)
             self.weights = self._online_optimizer.step(self.weights, gradient)
-            _log_minibatch(history, tracker, metrics, len(labels), 1, time.perf_counter() - timer)
-        self.last_training_result = _online_result(
-            history, tracker, interrupted=stop_requested is not None and stop_requested(),
+            history.record(counts, metrics, 1, time.perf_counter() - timer, inference_seconds, native_loss)
+        self.last_training_result = history.finalize(
+            interrupted=stop_requested is not None and stop_requested(), kind="river_sgd_minibatch",
         )
         return int(self.last_training_result.iterations)
 
@@ -546,8 +611,8 @@ class MultinomialLogistic:
 
         start = self.weights.ravel()
         if solver.upper() in ("SGD", "GD"):
-            loss, grad = objective(start)
-            if not np.isfinite(loss):
+            native_loss, grad = objective(start)
+            if not np.isfinite(native_loss):
                 raise ValueError("logistic optimization produced non-finite loss")
             self.weights = (start - learning_rate * grad).reshape(shape)
         else:
@@ -561,20 +626,20 @@ class MultinomialLogistic:
             if not np.isfinite(result.fun) or (not result.success and result.status != 1):
                 raise ValueError(f"logistic optimization failed: {result.message}")
             candidate = result.x
+            native_loss = result.fun
             if result.nit == 0:
                 step_candidate = start - learning_rate * result.jac
                 step_loss, _ = objective(step_candidate)
                 if np.isfinite(step_loss) and step_loss < result.fun:
-                    candidate = step_candidate
+                    candidate, native_loss = step_candidate, step_loss
             self.weights = np.array(candidate, dtype=np.float64, copy=True).reshape(shape)
 
-        probabilities = self.predict(x)
-        return compute_classification_metrics(y, probabilities, self.classes, self.decision_threshold)
+        metrics = _split_scores(self, "train", x, y, self.decision_threshold)
+        return {**metrics, "native_loss": float(native_loss)}
 
     def evaluate_split(self, val_data: Any) -> dict[str, float | None]:
         vx, vy = unpack_split(val_data)
-        probabilities = self.predict(vx)
-        return compute_classification_metrics(vy, probabilities, self.classes, self.decision_threshold)
+        return _split_scores(self, "validation", vx, vy, self.decision_threshold)
 
     def get_state(self) -> bytes:
         if self.weights is None:
@@ -682,13 +747,12 @@ def make_zia_model(
     *,
     decision_threshold: float | None = None,
 ):
-    num_classes = len(classes) if isinstance(classes, list) else int(classes)
     if name == "xgboost":
         return FraudOrReturnBooster(
-            config=config, dataset=dataset, classes=num_classes, decision_threshold=decision_threshold,
+            config=config, dataset=dataset, classes=classes, decision_threshold=decision_threshold,
         )
     if name == "multinomial_logistic":
-        return MultinomialLogistic(num_classes, config=config, decision_threshold=decision_threshold)
+        return MultinomialLogistic(classes, config=config, decision_threshold=decision_threshold)
     raise ValueError(f"unknown Zia model: {name}")
 
 

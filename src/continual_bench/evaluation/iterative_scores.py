@@ -1,8 +1,12 @@
 """Streaming classification/regression scores for the iterative runner (single pass, bounded memory)."""
 
 import math
+import time
+from collections import Counter
 
 from continual_bench.core.tasks import UNTRAINED
+
+from .tracking_observations import binary_ranking, classification_quality
 
 LOSS_FLOOR = 1e-9
 
@@ -32,13 +36,17 @@ def average_precision(labels, scores):
 
 
 class ClassificationScorer:
-    def __init__(self, positive="1"):
+    def __init__(self, positive="1", *, observed_positive_class=None):
         self.positive = positive
         self.n = self.correct = 0
         self.loss = 0.0
         self.tp, self.fp, self.fn = {}, {}, {}
         self.truth, self.scores, self.binary = [], [], True
         self.labels = set()
+        self.confusion = Counter()
+        self.observed_positive_class = observed_positive_class
+        self.ranked_labels, self.ranked_scores = [], []
+        self.tracking_seconds = 0.0
 
     def update(self, y, probabilities):
         prediction = argmax_label(probabilities)
@@ -57,6 +65,27 @@ class ClassificationScorer:
             else:
                 self.truth.append(1 if y == self.positive else 0)
                 self.scores.append(float(probabilities.get(self.positive, 0.0)))
+        tick = time.perf_counter()
+        self.confusion[y, prediction] += 1
+        if self.observed_positive_class is not None and probabilities:
+            score = float(probabilities.get(self.observed_positive_class, 0.0))
+            if math.isfinite(score) and 0 <= score <= 1:
+                self.ranked_labels.append(y == self.observed_positive_class)
+                self.ranked_scores.append(score)
+        self.tracking_seconds += time.perf_counter() - tick
+
+    def quality(self, classes, *, curves=False):
+        labels = list(dict.fromkeys((*classes, UNTRAINED, *sorted({p for _, p in self.confusion}))))
+        ranking = binary_ranking(self.ranked_labels, self.ranked_scores, curves=curves)
+        result = classification_quality(
+            [[self.confusion[actual, predicted] for predicted in labels] for actual in labels],
+            labels, target_classes=classes, positive_class=self.observed_positive_class, **ranking,
+        )
+        if self.observed_positive_class is not None:
+            result.update(ranking_evaluated_examples=len(self.ranked_labels),
+                          ranking_positive_examples=sum(self.ranked_labels),
+                          ranking_scope="examples_with_observed_positive_probability")
+        return result
 
     def per_class(self):
         rows = {}
@@ -87,16 +116,27 @@ class ClassificationScorer:
 
 
 class RegressionScorer:
-    def __init__(self):
-        self.n, self.abs, self.sq, self.sum_y, self.sum_y2 = 0, 0.0, 0.0, 0.0, 0.0
+    def __init__(self, *, retain_residuals=False):
+        self.n, self.abs, self.sq, self.mean_y, self.m2 = 0, 0.0, 0.0, 0.0, 0.0
+        self.residuals = {"prediction": [], "error": []} if retain_residuals else None
+        self.tracking_seconds = 0.0
 
     def update(self, y, prediction):
-        error = float(y) - (0.0 if prediction is None else float(prediction))
+        value = float(y)
+        prediction = 0.0 if prediction is None else float(prediction)
+        error = value - prediction
         self.n += 1
         self.abs += abs(error)
         self.sq += error * error
-        self.sum_y += float(y)
-        self.sum_y2 += float(y) ** 2
+        # Welford's second central moment avoids cancellation for a large target offset.
+        delta = value - self.mean_y
+        self.mean_y += delta / self.n
+        self.m2 += delta * (value - self.mean_y)
+        if self.residuals is not None:
+            tick = time.perf_counter()
+            self.residuals["prediction"].append(prediction)
+            self.residuals["error"].append(error)
+            self.tracking_seconds += time.perf_counter() - tick
 
     def per_class(self):
         return {}
@@ -104,9 +144,13 @@ class RegressionScorer:
     def result(self):
         if not self.n:
             return {"n": 0}
-        variance = self.sum_y2 / self.n - (self.sum_y / self.n) ** 2
         return {"n": self.n, "mae": self.abs / self.n, "rmse": math.sqrt(self.sq / self.n),
-                "r2": 1 - (self.sq / self.n) / variance if variance > 0 else 0.0}
+                "r2": 1 - self.sq / self.m2 if self.m2 > 0 else 0.0}
+
+    def quality(self, target_unit):
+        result = self.result()
+        return {"evaluated_examples": self.n, "mae": result.get("mae"), "rmse": result.get("rmse"),
+                "target_unit": target_unit, "residuals": self.residuals}
 
 
 def score_rows(model, task_is_regression, rows, scorer=None):

@@ -61,7 +61,7 @@ class ZiaLearner:
         )
         fit = self.history.capture(
             self.model.training_summary, action="candidate", block_index=index, start=fit_start,
-            timestamps=fit_timestamps, seconds=time.monotonic() - timer,
+            timestamps=fit_timestamps, seconds=time.monotonic() - timer, current_block_start=start,
         )
         payload, extension = self.model.payload()
         path = self.scratch / f"{fit['fit_id']}.{extension}"
