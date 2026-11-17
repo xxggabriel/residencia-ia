@@ -314,3 +314,45 @@ def deployed_metrics(analysis: dict, rule: str, result: SimResult, oracle: SimRe
     out["performance_forecast_mae"] = forecast["mae"] if rule == "upf" and forecast else None
     out["performance_forecast_bias"] = forecast["bias"] if rule == "upf" and forecast else None
     return out
+
+
+def retraining_reference_metrics(
+    analysis: dict,
+    matrix: PerformanceMatrix | None = None,
+    *,
+    focus_alpha: float | None = None,
+    rules: tuple[str, ...] = ("cara", "upf", "oracle"),
+) -> dict[str, float | int | None]:
+    """Per-policy CARA, UPF, and Oracle reference metrics extracted from ``analyze()``."""
+    setup = analysis.get("setup") or {}
+    target_alpha = setup.get("focus_alpha") if focus_alpha is None else focus_alpha
+    out: dict[str, float | int | None] = {
+        "retraining_alpha_max": setup.get("alpha_max"),
+        "retraining_lipschitz_L": setup.get("lipschitz_L"),
+    }
+    if matrix is not None:
+        out["retraining_offline_batches"] = matrix.offline
+        out["retraining_online_batches"] = matrix.horizon
+    analysis_rules = analysis.get("rules") or {}
+    for name in rules:
+        rule = analysis_rules.get(name)
+        if not rule:
+            continue
+        out[f"retraining_{name}_auc"] = rule.get("auc")
+        out[f"retraining_{name}_mean_scpe"] = rule.get("mean_scpe")
+        curve = rule.get("curve") or []
+        if curve:
+            focus_row = (
+                min(curve, key=lambda row: abs(row["alpha"] - target_alpha))
+                if target_alpha is not None
+                else curve[len(curve) // 2]
+            )
+            out[f"retraining_{name}_c_hat"] = focus_row.get("cost")
+            out[f"retraining_{name}_retrains"] = focus_row.get("retrains")
+            out[f"retraining_{name}_average_accuracy"] = focus_row.get("average_accuracy")
+            out[f"retraining_{name}_scpe"] = focus_row.get("scpe")
+    forecast = analysis.get("forecast")
+    if forecast:
+        out["retraining_upf_forecast_mae"] = forecast.get("mae")
+        out["retraining_upf_forecast_bias"] = forecast.get("bias")
+    return out

@@ -7,7 +7,7 @@ Plugins receive the registry and call `register(kind, name, factory)`.
 
 import importlib
 
-from continual_bench.core.policies import POLICIES
+from continual_bench.core.policies import BATCH_POLICY_KINDS, POLICIES, PolicyStrategy
 from continual_bench.core.registry import Registry, Spec
 from continual_bench.core.tasks import BINARY
 from continual_bench.datasets.catalog import CATALOG, DatasetSpec
@@ -23,6 +23,8 @@ class ComponentRegistry:
             policies = Registry("policy")
             for name, policy in POLICIES.items():
                 policies.add(Spec(name, policy))
+            for name in BATCH_POLICY_KINDS:
+                policies.add(Spec(name, lambda _kind=name, **kw: PolicyStrategy(_kind, **kw)))
         self.catalogs = {
             "source": sources.copy(),
             "model": models.copy(),

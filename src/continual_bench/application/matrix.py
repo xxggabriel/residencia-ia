@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import Field, ValidationError, model_validator
 
 from continual_bench.config import Component, Config, EpochConfig, PolicyConfig, Strict, TypedConfig
+from continual_bench.core.policies import BATCH_POLICY_KINDS
 from continual_bench.core.tasks import BINARY, MULTICLASS
 from continual_bench.datasets.catalog import CATALOG
 from continual_bench.infrastructure.storage import atomic_write, run_lock
@@ -104,6 +105,8 @@ class ExperimentMatrix(Strict):
         for mode, strategy in product(self.modes, self.strategies):
             if mode == "offline" and strategy.policy.name != "none":
                 continue  # Offline is a frozen holdout; adaptive strategies do not apply.
+            if mode == "streaming" and strategy.policy.name in BATCH_POLICY_KINDS:
+                continue  # Batch policies decide per batch in incremental mode.
             yield (
                 {
                     **deepcopy(self.base),
@@ -271,7 +274,14 @@ def _publish_local_case(directory, name, config, report=None, *, run_key=None):
     if report is None:
         report_path = run_dir / ("epoch-report.json" if evaluator == "epochs" else "report.json")
         report = json.loads(report_path.read_bytes())
-    return publish_local_benchmark(run_dir, report, experiment_name=f"continual-bench/local-matrix/{name}")
+    policy_cfg = (report.get("config") or {}).get("policy")
+    if isinstance(policy_cfg, dict):
+        policy = policy_cfg.get("name") or report.get("policy") or "none"
+    else:
+        policy = policy_cfg or report.get("policy") or "none"
+    return publish_local_benchmark(
+        run_dir, report, experiment_name=f"continual-bench/local-matrix/{name}/policy-{policy}"
+    )
 
 
 def execute_matrix(

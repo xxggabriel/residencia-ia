@@ -9,6 +9,7 @@ import time
 
 from continual_bench.core.engine import Engine
 from continual_bench.core.observability import OnlineObservability
+from continual_bench.core.policies import BATCH_POLICY_KINDS
 
 from .binary import BinaryProtocol, BinaryRun, Outcome, Progress, continual_evaluation
 from .environment import current_rss_bytes
@@ -47,6 +48,10 @@ class Prequential(BinaryProtocol):
 
     def execute(self, run: BinaryRun) -> Outcome | Progress:
         config = run.config
+        if config.policy.name in BATCH_POLICY_KINDS:
+            from .binary_retraining import run_batch_retraining
+
+            return run_batch_retraining(run)
         engine = run.snapshot["state"] if run.snapshot else self.build_engine(run)
         # EC2 retries recreate the output tree at a new absolute path.
         engine.versions.directory = run.versions.directory

@@ -22,9 +22,15 @@ class BatchPolicy(RetrainingPolicy):
     requires_batches: ClassVar[bool] = True
     permitted: ClassVar[frozenset[str]] = frozenset({"alpha"})
 
-    def __init__(self, params: dict | None = None, objective: str = "error", **guards):
+    def __init__(
+        self,
+        params: dict | None = None,
+        objective: str = "error",
+        action: str = "reset_retrain",
+        **guards,
+    ):
         self.objective = objective
-        super().__init__(params=params, action="reset_retrain", **guards)
+        super().__init__(params=params, action=action, **guards)
         self.alpha = float(self.params.get("alpha", 1.0))
         self.rule: Rule | None = None
         self.matrix: PerformanceMatrix | None = None

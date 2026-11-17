@@ -155,21 +155,93 @@ def _matrix_units(request, release, project_root):
         typed_policies = tuple(p for p in workload.policies if p in ("none", "online", "periodic")) or (
             "online",
         )
-        plan = ExperimentMatrix.model_validate(
-            {
-                "name": request.campaign_id,
-                "evaluator": workload.evaluator,
-                "datasets": datasets,
-                "models": models,
-                "strategies": strategies,
-                "modes": workload.modes,
-                "typed_policies": typed_policies,
-                "seeds": workload.seeds,
-                "base": workload.base,
-                "on_incompatible": workload.on_incompatible,
-            }
-        ).plan()
-        configs, matrix_id = plan["cases"], plan["matrix"]
+        if workload.evaluator == "binary":
+            configs, seen_keys = [], set()
+            all_strategies = []
+            for mode in workload.modes:
+                if mode == "streaming":
+                    mode_strategies = [
+                        {"detector": {"name": "none"}, "policy": {"name": "online", "action": "learn_one"}}
+                    ]
+                elif mode == "offline":
+                    mode_strategies = [{"detector": {"name": "none"}, "policy": {"name": "none"}}]
+                else:
+                    mode_strategies = []
+                    for policy in workload.policies:
+                        if policy == "online":
+                            mode_strategies.append(
+                                {
+                                    "detector": {"name": "none"},
+                                    "policy": {"name": "online", "action": "learn_one"},
+                                }
+                            )
+                        elif policy == "drift":
+                            for detector in workload.detectors:
+                                mode_strategies.append(
+                                    {
+                                        "detector": {"name": detector},
+                                        "policy": {"name": "drift", **dict(workload.policy_params)},
+                                    }
+                                )
+                        else:
+                            mode_strategies.append(
+                                {
+                                    "detector": {"name": "none"},
+                                    "policy": {"name": policy, **dict(workload.policy_params)},
+                                }
+                            )
+                for strategy in mode_strategies:
+                    if strategy not in all_strategies:
+                        all_strategies.append(strategy)
+                mode_plan = ExperimentMatrix.model_validate(
+                    {
+                        "name": request.campaign_id,
+                        "evaluator": workload.evaluator,
+                        "datasets": datasets,
+                        "models": models,
+                        "strategies": mode_strategies,
+                        "modes": (mode,),
+                        "typed_policies": typed_policies,
+                        "seeds": workload.seeds,
+                        "base": workload.base,
+                        "on_incompatible": workload.on_incompatible,
+                    }
+                ).plan()
+                for cfg in mode_plan["cases"]:
+                    k = case_key(cfg)
+                    if k not in seen_keys:
+                        seen_keys.add(k)
+                        configs.append(cfg)
+            matrix_id = ExperimentMatrix.model_validate(
+                {
+                    "name": request.campaign_id,
+                    "evaluator": workload.evaluator,
+                    "datasets": datasets,
+                    "models": models,
+                    "strategies": all_strategies,
+                    "modes": workload.modes,
+                    "typed_policies": typed_policies,
+                    "seeds": workload.seeds,
+                    "base": workload.base,
+                    "on_incompatible": workload.on_incompatible,
+                }
+            ).identity()
+        else:
+            plan = ExperimentMatrix.model_validate(
+                {
+                    "name": request.campaign_id,
+                    "evaluator": workload.evaluator,
+                    "datasets": datasets,
+                    "models": models,
+                    "strategies": strategies,
+                    "modes": workload.modes,
+                    "typed_policies": typed_policies,
+                    "seeds": workload.seeds,
+                    "base": workload.base,
+                    "on_incompatible": workload.on_incompatible,
+                }
+            ).plan()
+            configs, matrix_id = plan["cases"], plan["matrix"]
     else:
         plan = load_model(ExperimentMatrix, str(Path(project_root) / request.matrix.path)).plan()
         configs, matrix_id = plan["cases"], plan["matrix"]
