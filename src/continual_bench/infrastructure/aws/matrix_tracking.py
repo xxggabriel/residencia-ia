@@ -39,7 +39,8 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
     def experiment_name(self):
         short = self.short_sha
         prefix = f"{short}-" if short else ""
-        raw = f"{prefix}{self.project}-matrix" if self.project else f"{prefix}matrix"
+        policy = self.policy or "none"
+        raw = f"{prefix}{self.project}-matrix-{policy}" if self.project else f"{prefix}matrix-{policy}"
         return sanitize_mlflow_name(raw)
 
     @property

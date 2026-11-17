@@ -177,6 +177,24 @@ def finalize(outcome, run, protocol, contract, env, started) -> dict:
         }
     )
     tick = time.perf_counter()
+    if "retraining" not in report and config.mode != "offline":
+        from continual_bench.evaluation.binary_retraining import compute_binary_retraining
+
+        events_for_matrix = list(read_events(run.events_path))
+        if run.stop_after is not None:
+            events_for_matrix = events_for_matrix[: run.stop_after]
+        computed = compute_binary_retraining(
+            events_for_matrix,
+            run.model_factory,
+            batch_size=config.batch_size,
+            replay_window=config.replay_window,
+            seed=config.dataset.seed,
+            upf_alpha=float(settings.get("upf_alpha", 1.0)),
+        )
+        if computed is not None:
+            _, _, _, analysis, ref_metrics = computed
+            report["retraining"] = analysis
+            report["metrics"].update(ref_metrics)
     events = run.events() if config.detector.name != "none" and run.manifest.get("changepoints") else None
     save_tracking_files(directory, report, settings, outcome.observer, events=events)
     report["training_history"] = stream_training_history(

@@ -358,7 +358,7 @@ def test_matrix_mlflow_run_uses_short_sha_experiment_and_strategy_run_name():
         },
     )
     run = matrix_tracking.MatrixMlflowRun(unit, "job-1", "job", "http://fake", log=Mock())
-    assert run.experiment_name == "075a88c-continual-bench-matrix"
+    assert run.experiment_name == "075a88c-continual-bench-matrix-drift"
     assert (
         run.run_name == "energy-airlines-1117-0912-1424bfc8-electricity-logistic-streaming-drift-adwin-job-1"
     )
@@ -375,6 +375,7 @@ def test_matrix_mlflow_run_uses_short_sha_experiment_and_strategy_run_name():
         }
     )
     run_online = matrix_tracking.MatrixMlflowRun(unit_online, "job-1", "job", "http://fake", log=Mock())
+    assert run_online.experiment_name == "075a88c-continual-bench-matrix-online"
     assert (
         run_online.run_name
         == "energy-airlines-1117-0912-1424bfc8-electricity-hoeffding_tree-incremental-online-job-1"
