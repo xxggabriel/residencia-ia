@@ -1,6 +1,6 @@
 # Implementação e validação da Semana 09
 
-Em 3 de novembro de 2026, foi ampliado o laboratório da Semana 08 na branch local `Semana-09`, criada de `origin/main` (`bd8ac1c`) do remoto confirmado `https://github.com/xxggabriel/residencia-ia.git`. O checkout inicial estava limpo. Foram implementados componentes e executadas validações funcionais no homelab; não foi concluída uma campanha comparativa, um ranking ou uma reprodução CARA/UPF.
+Em 3 de novembro de 2026, foi ampliado o laboratório da Semana 08 na branch local `Semana-09`, criada de `origin/main` (`bd8ac1c`) do remoto confirmado `https://github.com/xxggabriel/residencia-ia.git`. O checkout inicial estava limpo. Foram implementados componentes e executadas validações funcionais. A campanha comparativa, o ranking e a reprodução CARA/UPF ficaram pendentes nessa etapa.
 
 A etapa de 4 de novembro acrescentou os loaders brutos e os testes de **100 exemplos/2 épocas**. A remoção de Stream51 e o gate vigente de 17 fontes estão registrados no [relatório de datasets e execução](task-dataset-execution.md). Em 12 de novembro, CARA, UPF e Oracle substituíram a heurística de custo na base do projeto. A integração e as comparações que vieram depois estão no [guia de retreinamento por custo](cost-aware-retraining.md). As seções abaixo registram a primeira etapa, de 3 de novembro.
 
@@ -20,9 +20,7 @@ A matriz com componentes, versões, fontes, testes e restrições está em [cobe
 
 ## Ambiente e isolamento
 
-Todos os testes iniciais foram executados via `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes gabriel@192.168.100.27`, utilizando autenticação e host conhecidos. Não foram alterados firewall, credenciais, permissões ou stacks existentes. O acesso ao ambiente gráfico do Mac não foi utilizado.
-
-O preflight encontrou o host `gabriel`, CPU Intel Xeon E5-2680 v4, 28 CPUs lógicas, aproximadamente 30 GiB de RAM e 525 GiB livres no filesystem raiz. A carga inicial era 0,63/0,74/0,83 e havia cerca de 21 GiB disponíveis. A stack existente estava saudável. Os testes usaram snapshots próprios em `/home/gabriel/semana09-20261103-2146`, com versões finais em `revision4`.
+O preflight registrou CPU Intel Xeon E5-2680 v4, 28 CPUs lógicas, aproximadamente 30 GiB de RAM e 525 GiB livres no filesystem raiz. A carga inicial era 0,63/0,74/0,83 e havia cerca de 21 GiB disponíveis. A stack existente estava saudável. Os testes usaram snapshots isolados do código.
 
 Foi reutilizada a imagem existente `continual-bench-worker:0.1.0`, ID `sha256:75335742611805882ea6d92d0b9b5ed80a3ba8e45dc2e3caf751cf2d37364bc7`, com `PYTHONPATH=/work/src` e `PYTHONHASHSEED=0`. O ambiente registrou Python 3.12.13, River 0.26.1, pytest 9.1.1, Ruff 0.15.7 e ZenML 0.98.0; as versões completas e o hash do código ficaram nos artefatos.
 
@@ -34,7 +32,7 @@ O projeto/stack ZenML isolado foi `semana09-20261103-2146` / `semana09-validatio
 
 | Verificação | Resultado | Evidência |
 | --- | --- | --- |
-| Base antes das mudanças | PASS, 343 testes, 28 excluídos, 28,24 s | `evidence/baseline.txt` no homelab |
+| Base antes das mudanças | PASS, 343 testes, 28 excluídos, 28,24 s | `evidence/baseline.txt` |
 | Suíte final sem serviços/benchmark | PASS, 430 testes, 31 excluídos, 29,63 s | `reports/semana09/unit.txt` |
 | Ruff final | PASS | `reports/semana09/lint.txt` |
 | Compose do cliente transitório | PASS, `config --quiet` | Comando abaixo; nenhum serviço foi iniciado por essa validação |
@@ -62,24 +60,18 @@ O hash SHA-256 do código Python validado foi `b82fa3f7699d58b73d514d5c83a73d9cb
 4. A primeira integração Hyperplane executou o benchmark e falhou no persist por ausência de `version` no manifesto. O contrato foi corrigido; seu formato foi avançado para `river-moving-v2`, preservando os objetos imutáveis anteriores.
 5. Uma repetição com código alterado tentou reutilizar run keys já publicadas, e o MLflow rejeitou os parâmetros imutáveis. Os testes passaram a derivar o namespace do hash do código. Outra tentativa encontrou o catálogo Hyperplane antigo com metadados diferentes; a versão nova da fonte produziu identidade própria. Nenhum objeto imutável foi apagado ou sobrescrito para ocultar o conflito.
 6. A revisão identificou que o caminho local de cache não poderia integrar metadados compartilhados por conteúdo. Ele foi excluído, com teste de regressão.
-7. A cópia de relatórios atômicos pelo usuário SSH recebeu PermissionError porque esses arquivos foram criados pelo usuário do container. A exportação foi realizada no ambiente executor que os produziu; permissões não foram alteradas. A tentativa de leitura falha não foi descrita como exportação bem-sucedida.
+7. A cópia de relatórios atômicos a partir de fora do container recebeu PermissionError porque os arquivos pertenciam ao usuário do container. A exportação foi realizada no ambiente executor que os produziu; permissões não foram alteradas. A tentativa de leitura falha não foi descrita como exportação bem-sucedida.
 
-As rodadas falhas ficaram em `evidence/unit-first.txt`, `unit-second.txt`, `unit-third.txt`, `services-first.txt`, `services-final.txt` e `services-namespaced.txt` no diretório isolado do homelab. A rodada final ficou em `unit-v4.txt`, `lint-v4.txt`, `services-v4.txt`, `campaign-v4.txt` e `typed-v4.txt`.
+As rodadas falhas ficaram em `evidence/unit-first.txt`, `unit-second.txt`, `unit-third.txt`, `services-first.txt`, `services-final.txt` e `services-namespaced.txt` no diretório de validação. A rodada final ficou em `unit-v4.txt`, `lint-v4.txt`, `services-v4.txt`, `campaign-v4.txt` e `typed-v4.txt`.
 
 ## Reprodução
 
-Os comandos abaixo foram executados no homelab. `TASK_BENCH_SERVICE_ENV` apontou para o arquivo de ambiente já configurado, sem imprimir seu conteúdo. O script `run_task_homelab.sh` utilizou o overlay específico da execução, preservado em `revision4/compose.yaml`.
+Os testes unitários e de serviços usaram um snapshot do código e um estado isolado.
+Para reproduzir os testes de serviços com o template versionado, configure os caminhos do snapshot,
+do estado e do arquivo de ambiente:
 
 ```bash
-export TASK_BENCH_ROOT=/home/gabriel/semana09-20261103-2146/revision4
-export TASK_BENCH_SERVICE_ENV=/home/gabriel/.config/continual-bench/benchmark.env
-bash "$TASK_BENCH_ROOT/code/scripts/run_task_homelab.sh" unit
-bash "$TASK_BENCH_ROOT/code/scripts/run_task_homelab.sh" services
-```
-
-Para reconstruir o cliente transitório com o template versionado, em um novo diretório de estado:
-
-```bash
+export TASK_BENCH_SERVICE_ENV=/caminho/privado/benchmark.env
 export TASK_BENCH_CODE=/caminho/absoluto/do/snapshot
 export TASK_BENCH_STATE=/caminho/absoluto/do/estado/isolado
 export TASK_BENCH_PROJECT=semana09-validacao-IDENTIFICADOR
@@ -92,7 +84,7 @@ docker compose --env-file "$TASK_BENCH_SERVICE_ENV" \
   -m pytest -q -p no:cacheprovider -m services tests/test_task_services.py
 ```
 
-No cliente limitado do homelab, os comandos CLI executados foram:
+Os comandos CLI executados no cliente de validação foram:
 
 ```bash
 python -m continual_bench.cli campaign configs/campaigns/task-smoke.yaml --state /state/smoke

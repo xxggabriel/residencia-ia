@@ -27,4 +27,4 @@ O limite de 100 selecionou exatamente o prefixo publicado, sem embaralhamento ne
 
 Gas preservou a ordem dos dez lotes e registrou `task_id`/grupo por lote, além das cardinalidades e classes do arquivo completo. Um prefixo de 100 pôde abranger apenas parte do primeiro lote e das classes; ele não foi descrito como avaliação de todas as mudanças do dataset. INSECTS preservou a ordem do CSV `abrupt_balanced`. Nenhum loader inventou pontos de drift verdadeiros: `changepoints=None`. O relógio de replay foi ordinal simulado e não substituiu o calendário original de cada observação.
 
-Os testes de contrato cobrem parsers, ordem de lotes, classes, integridade, corrupção, retry explícito, limites e rejeição de respostas HTML. INSECTS e Gas passaram no smoke do homelab com 100 exemplos reais por fonte e duas épocas. [Relatório de execução](task-dataset-execution.md)
+Os testes de contrato cobrem parsers, ordem de lotes, classes, integridade, corrupção, retry explícito, limites e rejeição de respostas HTML. INSECTS e Gas passaram no teste smoke com 100 exemplos reais por fonte e duas épocas. [Relatório de execução](task-dataset-execution.md)

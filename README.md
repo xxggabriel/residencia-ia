@@ -2,8 +2,8 @@
 
 Laboratório reprodutível e limitado para **aprendizado contínuo com mudança de conceito (drift)**.
 Compara modelos, detectores de drift e políticas de retreinamento sobre fluxos ordenados no tempo,
-com protocolos de avaliação explícitos, rastreamento de experimentos e execução local, em homelab
-(Docker Compose) ou na AWS.
+com protocolos de avaliação explícitos e rastreamento de experimentos. A execução pode ser local,
+com Docker Compose ou na AWS.
 
 > **Escopo.** Os testes rápidos e os *smokes* validam algoritmo, protocolo e integração, não desempenho.
 > Nenhum resultado aqui é alegação de estado da arte. Veja os limites em [docs/reliability.md](docs/reliability.md).
@@ -17,7 +17,7 @@ com protocolos de avaliação explícitos, rastreamento de experimentos e execu�
 - [Componentes e extensão](#componentes-e-extensão)
 - [Avaliação iterativa (Semana 09)](#avaliação-iterativa-semana-09)
 - [Conjuntos de dados](#conjuntos-de-dados)
-- [Execução em serviços reais (homelab)](#execução-em-serviços-reais-homelab)
+- [Execução em serviços reais](#execução-em-serviços-reais)
 - [Perfil AWS](#perfil-aws)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Testes e qualidade](#testes-e-qualidade)
@@ -138,15 +138,14 @@ treino, fontes com drift explícito, admissão de datasets locais, avaliação t
 métricas futuras com modelos congelados. Detalhes em [docs/task-coverage.md](docs/task-coverage.md) e
 [docs/task-report.md](docs/task-report.md).
 
-No homelab, `scripts/run_iterative_homelab.sh` treina os 17 datasets do catálogo em 8 containers
-(2 vCPU / 2 GiB cada) que consomem uma fila compartilhada, registrando no MLflow:
+O worker iterativo treina os 17 datasets do catálogo por padrão. Workers que compartilham o diretório
+de saída usam uma fila de datasets. Configure `MLFLOW_TRACKING_URI` para publicar as métricas no MLflow.
+Para instâncias autenticadas, forneça `MLFLOW_TRACKING_USERNAME` e `MLFLOW_TRACKING_PASSWORD` pelo ambiente.
 
 ```bash
-ITER_ROOT=/caminho/absoluto bash scripts/run_iterative_homelab.sh
+uv run continual-bench iterative-worker --cache /caminho/cache \
+  --real-directory /caminho/datasets --out /caminho/estado --campaign minha-campanha
 ```
-
-Variáveis: `ITER_IMAGE`, `ITER_WORKERS`, `ITER_CAMPAIGN`, `ITER_SERVICE_ENV`, `ITER_MLFLOW_URI`.
-As credenciais vêm do arquivo de ambiente do serviço e nunca são impressas.
 
 ## Conjuntos de dados
 
@@ -162,7 +161,7 @@ são explícitas e seguem os locks ou manifestos de cada fonte.
 | Imagens | Split MNIST, Permuted MNIST, Split CIFAR-10/100, CORe50, CLEAR-10/100 |
 
 Os [benchmarks Zia Data Labs](docs/zia-benchmarks.md) (rede social, fraude e e-commerce) usam fluxos
-Parquet temporais próprios e rodam no homelab e na AWS. Na AWS, o catálogo do SageMaker Unified Studio
+Parquet temporais próprios e rodam com Docker Compose e na AWS. Na AWS, o catálogo do SageMaker Unified Studio
 publica os snapshots e reúne os links para os runs Zia correspondentes no MLflow.
 
 Cada execução registra fonte, versão, semente, SHA-256 do JSONL, limites dos conceitos e tipo de timestamp.
@@ -172,7 +171,7 @@ Veja [docs/image-datasets.md](docs/image-datasets.md), [docs/real-streams.md](do
 [docs/temporal-vision.md](docs/temporal-vision.md) e
 [aquisição e execução](docs/task-dataset-execution.md).
 
-## Execução em serviços reais (homelab)
+## Execução em serviços reais
 
 Serviços: Airflow, ZenML, MLflow, MinIO, Kafka e Postgres via Docker Compose, com limites de CPU/RAM por
 container e sem montar Docker socket. Apenas as interfaces web são publicadas, vinculadas ao IP privado
@@ -180,19 +179,19 @@ aprovado; Kafka, Postgres, API S3 e API de tarefas ficam só na rede Docker.
 
 1. Mantenha o arquivo de ambiente privado fora do Git (`.env.example` traz só exemplos). MLflow exige senha
    de pelo menos 12 caracteres em `MLFLOW_PASSWORD`.
-2. Valide a estrutura sem imprimir valores: `python3 scripts/preflight.py`.
-3. Suba o conjunto:
+2. Em uma implantação com endereço previamente aprovado, valide o ambiente com `python3 scripts/preflight.py`.
+3. Valide a configuração do Compose, gere as imagens e suba os serviços:
 
 ```bash
-docker compose -f compose.yaml -f compose.homelab.yaml --env-file /caminho/privado/benchmark.env config --quiet
-docker compose -f compose.yaml -f compose.homelab.yaml --env-file /caminho/privado/benchmark.env build
-docker compose -f compose.yaml -f compose.homelab.yaml --env-file /caminho/privado/benchmark.env up -d --wait --wait-timeout 300
+docker compose -f compose.yaml --env-file /caminho/privado/benchmark.env config --quiet
+docker compose -f compose.yaml --env-file /caminho/privado/benchmark.env build
+docker compose -f compose.yaml --env-file /caminho/privado/benchmark.env up -d --wait --wait-timeout 300
 ```
 
 Não use `down -v` nem remova volumes. Valide os serviços reais (exige Kafka, MinIO, MLflow e ZenML ativos):
 
 ```bash
-docker compose -f compose.yaml -f compose.homelab.yaml --env-file /caminho/privado/benchmark.env \
+docker compose -f compose.yaml --env-file /caminho/privado/benchmark.env \
   exec worker-1 pytest -q -m services tests/test_services.py
 ```
 
@@ -236,7 +235,7 @@ Os alvos do `Makefile` cobrem validação, imagens, bootstrap, campanhas (`aws-c
 src/continual_bench/   core, config, datasets, models, detectors, evaluation, application, infrastructure, orchestration
 configs/               runs, matrices, campaigns, typed, contratos e locks
 dags/                  DAGs do Airflow
-scripts/               campanhas, validações, análise e execução no homelab
+scripts/               campanhas, validações, análise e execução de benchmarks
 infra/ cfn-project/    CloudFormation, buildspecs, Athena, Flink
 docker/ compose*.yaml  imagens e conjuntos de serviços
 docs/                  documentação e evidências de validação versionadas

@@ -1,6 +1,6 @@
 # Contrato de execução e recuperação
 
-## Perfil local e homelab
+## Execução local e com Docker Compose
 
 Um `run_key` é o hash da configuração validada, incluindo semente aleatória, fonte, protocolo e nome. Alterar um fator cria outra execução. Repetir a mesma configuração no mesmo transporte significa reprocessamento ou retomada; para nova réplica, mudar `name` e/ou a semente aleatória. Código, versões Python/dependências e soma de verificação da fonte fazem parte do contrato do ponto de recuperação. Uma incompatibilidade falha explicitamente; não carrega estado antigo silenciosamente.
 

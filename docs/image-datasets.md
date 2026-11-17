@@ -70,8 +70,7 @@ silenciosamente. Foram aplicados lock por asset, limite de bytes e deadline.
 
 Os testes entregues cobriram fixtures binárias reais de formato, limites,
 split/ID/classe/permutação, corrupção, falhas de rede e idempotência de cache.
-Os testes iniciais foram executados somente no homelab. Os resultados de
-aquisição e treinamento ficaram no [relatório de execução](task-dataset-execution.md).
+O [relatório de execução](task-dataset-execution.md) registra os resultados iniciais de aquisição e treinamento.
 
 ## Fonte CIFAR Parquet explicitamente selecionada
 

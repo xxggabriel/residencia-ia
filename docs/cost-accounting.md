@@ -49,7 +49,7 @@ costs: # tracking.costs no fluxo principal
 
 As tarifas foram verificadas em 08/11/2026 nos catálogos públicos da AWS: [Fargate Linux/x86 On-Demand em us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECS/current/us-east-1/index.json), publicado em 19/10/2026, e [S3 Standard em us-east-1](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.json), publicado em 04/11/2026. Armazenamento usa a primeira faixa de 50 TB/mês. Os preços ficam fixados na configuração, sem consulta remota durante a execução. Outra região exige informar os três preços, fontes e data explicitamente. Atualizações de tarifa ou alocação alteram a identidade da execução.
 
-O perfil de estimativa usa CPU e RAM **reservadas** e projeta uma tarefa Fargate por run. O Compose padrão do homelab define oito containers de até uma run cada, com 1 vCPU e 2 GiB por container e swap desabilitado. Compare o perfil de cada run pelo registro da campanha, que preserva o ambiente original. A duração estimada soma os tempos medidos de treino (incluindo aquecimento e replay) e predição de cada protocolo. O cálculo arredonda os segundos para cima e aplica o mínimo de 60 segundos uma vez por execução. [Regras do Fargate](https://aws.amazon.com/fargate/pricing/), [perfil do homelab](benchmark-operations.md#perfil-padrão-de-recursos-dos-experimentos), [custos do runtime AWS](aws/costs.md).
+O perfil de estimativa usa CPU e RAM **reservadas** e projeta uma tarefa Fargate por run. O Compose padrão define oito containers de até uma run cada, com 1 vCPU e 2 GiB por container e swap desabilitado. Compare o perfil de cada run pelo registro da campanha, que preserva o ambiente original. A duração estimada soma os tempos medidos de treino (incluindo aquecimento e replay) e predição de cada protocolo. O cálculo arredonda os segundos para cima e aplica o mínimo de 60 segundos uma vez por execução. [Regras do Fargate](https://aws.amazon.com/fargate/pricing/), [perfil de recursos do Compose](benchmark-operations.md#perfil-padrão-de-recursos-dos-experimentos), [custos do runtime AWS](aws/costs.md).
 
 - `billed_seconds = max(minimum_compute_seconds, ceil(train_seconds + prediction_seconds))`
 - `cost_cpu_usd = vcpus × billed_seconds / 3600 × vcpu_hour_usd`
@@ -64,15 +64,15 @@ Os três fluxos também geram o gráfico `costs/aws_usd` com os componentes em U
 
 ## Validação com serviços reais — 08/11/2026
 
-Foi executada uma única run no homelab `192.168.100.27`, em cliente transitório com código/estado isolados, reutilizando os serviços existentes. Não foi iniciada uma campanha nem repetido o benchmark. A run processou 180 amostras SEA em streaming, com regressão logística, ADWIN e política periódica (cinco atualizações). O ZenML concluiu as quatro etapas; o MLflow finalizou a run `eba563d87b8644bfad6c3c76896c60eb` no experimento `4`.
+A validação usou uma única run, em cliente transitório com código e estado isolados. Não foi iniciada uma campanha nem repetido o benchmark. A run processou 180 amostras SEA em streaming, com regressão logística, ADWIN e política periódica (cinco atualizações). O ZenML concluiu as quatro etapas; o MLflow finalizou a run `eba563d87b8644bfad6c3c76896c60eb` no experimento `4`.
 
 A leitura autenticada do MLflow confirmou os quatro escalares `tracking_v1/summary/aws_cost_*_usd`, cada um com um único ponto no passo zero e valores iguais ao cálculo independente. CPU: USD 0.0006746666666666667; RAM: USD 0.00014816666666666667; modelos: USD 0.00000014829356223344801; total: USD 0.0008229816268955669. O aprendiz consumiu aproximadamente 0.008061 s; a hipótese Fargate aplicou o mínimo de 60 s. Foram contabilizados 6923 bytes de modelos, com retenção projetada de 30 dias.
 
-O relatório, o gráfico `plots/costs/aws_usd.svg` e os dados `data/costs/aws_usd.json` foram baixados do MLflow e comparados por SHA-256 com os arquivos locais. Quatro objetos do MinIO também coincidiram por hash; a versão de modelo registrada apontou para a mesma run. IDs, valores, consumo e hashes foram preservados no arquivo local `reports/aws-costs-service-20261108/evidence.json` (`reports/` é ignorado pelo Git). [Abrir run no MLflow](http://192.168.100.27:15000/#/experiments/4/runs/eba563d87b8644bfad6c3c76896c60eb).
+O relatório, o gráfico `plots/costs/aws_usd.svg` e os dados `data/costs/aws_usd.json` foram baixados do MLflow e comparados por SHA-256 com os arquivos locais. Quatro objetos do MinIO também coincidiram por hash; a versão de modelo registrada apontou para a mesma run. IDs, valores, consumo e hashes foram preservados no arquivo local `reports/aws-costs-service-20261108/evidence.json` (`reports/` é ignorado pelo Git).
 
 A primeira chamada do teste completou a pipeline e todas as verificações de custos/artefatos, mas falhou ao exigir 180 mensagens ainda retidas no Kafka: os offsets observados foram low=180/high=180. O produtor usa timestamps sintéticos antigos e o tópico configura retenção de 24 horas; o teste passou a verificar o high watermark de 180 eventos publicados e a registrar separadamente os eventos ainda retidos. A verificação foi repetida **somente em leitura**, sobre a mesma run, sem chamar `execute_pipeline` ou republicar: `1 passed in 14.74s`.
 
-Os dois pontos de entrada ficaram em `tests/test_aws_cost_services.py`: `test_single_run_publishes_aws_costs_to_mlflow` executa uma nova run e confere a publicação; `test_existing_run_aws_cost_readback` exige `SERVICE_TEST_RUN_KEY` e somente confere uma run existente; sem essa seleção explícita, ele é ignorado pelo pytest. Não executar o módulo inteiro quando a intenção for estritamente uma run. A execução observada utilizou, no cliente isolado do homelab:
+Os dois pontos de entrada ficaram em `tests/test_aws_cost_services.py`: `test_single_run_publishes_aws_costs_to_mlflow` executa uma nova run e confere a publicação; `test_existing_run_aws_cost_readback` exige `SERVICE_TEST_RUN_KEY` e somente confere uma run existente; sem essa seleção explícita, ele é ignorado pelo pytest. Não executar o módulo inteiro quando a intenção for estritamente uma run. O cliente de validação executou:
 
 ```bash
 python -m pytest -q -s -p no:cacheprovider -o addopts= -m services \
@@ -82,4 +82,4 @@ python -m pytest -q -s -p no:cacheprovider -o addopts= -m services \
   tests/test_aws_cost_services.py::test_existing_run_aws_cost_readback
 ```
 
-O snapshot/estado e os logs originais foram mantidos em `/home/gabriel/aws-cost-single-20261108.2uaGy6/`. Essa validação conferiu a integração com os serviços reais do homelab; não envolveu consumo ou faturamento na AWS.
+Essa validação conferiu a integração com os serviços de tracking e armazenamento. Os valores registrados foram estimativas de custo AWS.

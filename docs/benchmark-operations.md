@@ -1,4 +1,4 @@
-# Operação do benchmark no homelab
+# Operação do benchmark com Docker Compose
 
 Este guia cobre o perfil Docker Compose com Airflow, ZenML, MinIO e MLflow.
 Para as campanhas no Batch, os pipelines SageMaker e o catálogo tabular,
@@ -6,24 +6,28 @@ consulte a [operação na AWS](aws/operations.md).
 
 ## Interfaces
 
-- Airflow: <http://192.168.100.27:18081>
-- ZenML: <http://192.168.100.27:18082>
-- MLflow: <http://192.168.100.27:15000>
+Use o endereço configurado em `WEB_BIND_IP` para acessar as interfaces HTTP.
 
-MLflow usa `WEB_USER` e a senha exclusiva `MLFLOW_PASSWORD`, no arquivo privado
-`/home/gabriel/.config/continual-bench/benchmark.env`. A cópia local fica em `.env`.
-Esses arquivos têm modo 600 e não integram o Git. As outras interfaces mantêm suas credenciais.
+| Serviço | Porta |
+| --- | --- |
+| Airflow | 18081 |
+| ZenML | 18082 |
+| MLflow | 15000 |
 
-## Campanhas de políticas em paralelo no homelab
+MLflow usa `WEB_USER` e a senha exclusiva `MLFLOW_PASSWORD`. Guarde o arquivo
+de ambiente fora do Git com permissão 600. Os exemplos abaixo usam
+`/caminho/privado/benchmark.env`.
 
-Com `compose.policies-parallel.yaml` aplicado após `compose.yaml` e `compose.homelab.yaml`,
+## Campanhas de políticas em paralelo
+
+Com `compose.policies-parallel.yaml` aplicado após `compose.yaml`,
 o distribuidor mantém oito containers de execução, cada um com 1 vCPU e 2 GiB. A DAG
 `benchmark_policies` admite até oito campanhas e executa uma avaliação por campanha de cada vez.
 Submeter uma campanha por dataset, com nomes de campanha e experimento distintos. Os sete
 datasets da matriz podem avançar em paralelo.
 
 O teto agregado dos workers é de 8 vCPUs e 16 GiB. Nesse perfil, o distribuidor recebe 1 vCPU
-e o MLflow recebe 8 vCPUs para atender a publicação concorrente. Usar os mesmos três arquivos
+e o MLflow recebe 8 vCPUs para atender a publicação concorrente. Usar os mesmos arquivos
 Compose nos comandos de operação desse perfil.
 
 ## Perfil padrão de recursos dos experimentos
@@ -55,8 +59,7 @@ Status e recibos continuam no volume compartilhado; GET pode ser atendido por ou
 `dataset-worker-8`, atrás de `http://dataset-worker:8088`. Cada backend tem os mesmos limites e
 um diretório SDK ZenML próprio. A prontidão de datasets continua exigindo a admissão completa.
 `compose.task-validation.yaml` herda apenas um container de execução para testes explicitamente
-selecionados; não inicia oito benchmarks nem um distribuidor. O script `scripts/run_task_homelab.sh`
-também usa 1 vCPU e 2 GiB em seu cliente isolado. O limite global do Airflow continua oito mesmo
+selecionados. O limite global do Airflow continua oito mesmo
 quando há pools distintos; clientes que submetem diretamente à API precisam respeitar esse teto
 entre pools. Não é necessário manter o pool de datasets ligado para usar o pool binário.
 
@@ -126,7 +129,7 @@ Para uma campanha com configurações novas, o tempo inclui captura dos logs Zen
 
 O Compose configura o ZenML OSS 0.98.0 com o projeto `default`. O bootstrap define
 seu nome de exibição como **Continual Benchmark**. Os testes de outubro de 2026 com
-o projeto adicional `continual-benchmark` pertencem ao diagnóstico do homelab.
+o projeto adicional `continual-benchmark` fizeram parte do diagnóstico de implantação.
 
 A pipeline `finite_benchmark` tem quatro passos visíveis:
 
@@ -147,9 +150,10 @@ Os pins das dependências de S3 estão em [pyproject.toml](../pyproject.toml) e
 ## Bootstrap e recuperação
 
 O arquivo Compose exige `MLFLOW_PASSWORD` explícito. Não usa a senha das demais interfaces como fallback.
-`scripts/preflight.py` rejeita senha ausente, curta ou de exemplo. MLflow limita threads BLAS/OMP
-para não esgotar o limite de processos do contêiner. A origem exata `http://192.168.100.27:15000`
-é permitida em `--cors-allowed-origins`: somente `--allowed-hosts` não libera as chamadas POST do painel.
+`scripts/preflight.py` verifica o endereço da implantação aprovada e rejeita senhas ausentes, curtas ou de exemplo.
+MLflow limita threads BLAS/OMP
+para não esgotar o limite de processos do contêiner. O Compose usa `http://${WEB_BIND_IP}:15000`
+em `--cors-allowed-origins` para liberar as chamadas POST do painel. `--allowed-hosts` valida o cabeçalho do host.
 Uma configuração incorreta de origem faz a UI apresentar `INTERNAL_ERROR`, mesmo com a API Python funcional.
 
 Antes do bootstrap ZenML, devem existir:
@@ -158,16 +162,15 @@ Antes do bootstrap ZenML, devem existir:
 - identidade MinIO `zenml-benchmark`, restrita a esse bucket;
 - segredo ZenML `benchmark-minio-artifacts`, com campos `key` e `secret`.
 
-O backup privado da identidade está em `/home/gabriel/.config/continual-bench/zenml-minio.json`, modo 600.
 O segredo é referenciado pelo armazenamento, sem credenciais literais na configuração da stack.
 A política efetiva concede localização/listagem do bucket e leitura/escrita/remoção de seus objetos,
 incluindo operações multipart. Não concede acesso aos buckets `benchmarks` e `mlflow`.
 
-Depois de provisionar esses recursos, executar no diretório remoto:
+Depois de provisionar esses recursos, executar no diretório do projeto:
 
 ```bash
-docker compose --env-file /home/gabriel/.config/continual-bench/benchmark.env \
-  -f compose.yaml -f compose.homelab.yaml exec -T worker-1 python scripts/bootstrap_zenml.py
+docker compose --env-file /caminho/privado/benchmark.env \
+  -f compose.yaml exec -T worker-1 python scripts/bootstrap_zenml.py
 ```
 
 O script é idempotente e registra projeto/armazenamento/stack. Não cria credenciais administrativas.
@@ -257,8 +260,8 @@ esta campanha usa 3000, sem alegar execução de todas as linhas brutas. Nenhum 
 Antes de executar o pipeline, adquirir e admitir as fontes completas explicitamente:
 
 ```bash
-docker compose --env-file /home/gabriel/.config/continual-bench/benchmark.env \
-  -f compose.yaml -f compose.homelab.yaml exec -T worker-1 \
+docker compose --env-file /caminho/privado/benchmark.env \
+  -f compose.yaml exec -T worker-1 \
   python scripts/prepare_real_sources.py --directory /state/datasets
 ```
 
@@ -323,8 +326,8 @@ Apenas artefatos próprios e autenticados devem ser desserializados.
 Auditoria após a conclusão:
 
 ```bash
-docker compose --env-file /home/gabriel/.config/continual-bench/benchmark.env \
-  -f compose.yaml -f compose.homelab.yaml exec -T worker-1 \
+docker compose --env-file /caminho/privado/benchmark.env \
+  -f compose.yaml exec -T worker-1 \
   python scripts/verify_versioned_campaign.py > versioned-v4-inputs.json
 ```
 

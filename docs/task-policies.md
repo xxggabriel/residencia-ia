@@ -47,4 +47,4 @@ O holdout de cada candidato não integrou seu treino. O incumbente pode ter apre
 
 ## Verificação
 
-Os testes cubrem gatilhos, configurações inválidas, atraso de rótulos, separação entre treino e validação, rejeição e consumo de orçamento, retomada por checkpoint, replay idempotente, falha de treinamento e reprodutibilidade dos detectores. O [relatório da Semana 09](task-report.md) registra os comandos e resultados da primeira rodada no homelab.
+Os testes cubrem gatilhos, configurações inválidas, atraso de rótulos, separação entre treino e validação, rejeição e consumo de orçamento, retomada por checkpoint, replay idempotente, falha de treinamento e reprodutibilidade dos detectores. O [relatório da Semana 09](task-report.md) registra os comandos e resultados da primeira rodada.

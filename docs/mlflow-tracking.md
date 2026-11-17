@@ -1,7 +1,7 @@
 # Rastreamento no MLflow: métricas, métricas de sistema, gráficos e dados
 
 Os avaliadores geram métricas, gráficos e dados conforme o protocolo e as entradas disponíveis.
-No homelab, os publicadores registram no MLflow as métricas e os artefatos produzidos.
+No perfil Docker Compose, os publicadores registram no MLflow as métricas e os artefatos produzidos.
 No perfil AWS, o MLflow gerenciado recebe as campanhas Zia, as matrizes e os jobs
 nativos do SageMaker.
 

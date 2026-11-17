@@ -21,7 +21,7 @@ representa o status observado e depende da maturação dos pedidos.
 
 ## Protocolo
 
-1. Preparar os Parquets no homelab, ordenados por timestamp e, em empates, ID.
+1. Preparar os Parquets, ordenados por timestamp e, em empates, ID.
    A preparação usa ordenação externa em disco. Os identificadores, rótulos
    auxiliares de fraude, peso de interação social e graus finais ficam fora das
    features. Os graus sociais contam apenas arestas de datas anteriores. As
@@ -96,7 +96,7 @@ campanha. Fixe os custos antes da execução, sem ajustá-los pelos resultados d
 
 Os runs publicados incluem o índice de gráficos, SVGs e seus dados em `plots/`
 e `data/`, definições e métricas versionadas em `tracking/`, configuração,
-ambiente, catálogo e linhagem das versões. A publicação do homelab coloca
+ambiente, catálogo e linhagem das versões. A publicação via cliente MLflow coloca
 o modelo final carregável em `model/` e registra uma versão no MLflow Model
 Registry. A assinatura recebe as
 features numéricas preparadas na ordem registrada e devolve uma coluna de
@@ -122,7 +122,7 @@ e os artefatos do MLflow são persistidos no MinIO do stack.
 
 ## Operação
 
-No homelab, preparar os datasets com Python 3.12 e `uv sync --locked --extra
+Para execução via Compose, preparar os datasets com Python 3.12 e `uv sync --locked --extra
 datasets --extra large-datasets` ou usar a imagem do worker para preparar os
 arquivos já baixados. O parâmetro `--download` exige `curl` e deve ser usado
 no servidor que guarda os originais.
@@ -136,7 +136,7 @@ done
 
 Copiar para o Mac somente `smoke.parquet` e `smoke.json` por dataset.
 Cada amostra contém as primeiras 10 mil linhas físicas da fonte, depois
-ordenadas e transformadas no homelab. A amostra valida o fluxo funcional.
+ordenadas e transformadas antes da avaliação. A amostra valida o fluxo funcional.
 Com os extras instalados, executar localmente:
 
 ```bash

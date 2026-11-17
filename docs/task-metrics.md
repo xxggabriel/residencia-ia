@@ -19,7 +19,7 @@ ou da camada de aplicação.
 | Separação temporal | Contrato local `validate_temporal_holdout` | Novo validador de disponibilidade e IDs nas partições | Testes de leakage por ID e por rótulos tardios |
 | Objetivo de retreinamento UPF | [Regol et al., ICML 2025](https://proceedings.mlr.press/v267/regol25a.html), [arXiv 2505.14903v1, seção 5](https://arxiv.org/html/2505.14903v1) | Mantida distinção entre custo de cenário, sensibilidade pós-hoc e campanha UPF; AUC UPF só nos runs das políticas cost-aware ([métricas](cost-aware-retraining.md#métricas-rastreadas)) | Sem alegação de reprodução dos números do artigo |
 
-O [relatório da Semana 09](task-report.md) registra a execução histórica dos testes no homelab.
+O [relatório da Semana 09](task-report.md) registra a execução histórica dos testes.
 
 ## Detecção e ausência de anotações
 
