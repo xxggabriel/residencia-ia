@@ -149,6 +149,7 @@ def run_unit(args):
                 git_sha=os.environ.get("BENCH_GIT_REVISION", unit.contract["release"]["git_sha"]),
                 stack=os.environ.get("BENCH_STACK", "continual-bench"),
                 tracking_uri=tracking_uri,
+                async_progress=True,
             )
 
     workdir = Path(args.workdir or tempfile.mkdtemp(prefix="cb-run-"))

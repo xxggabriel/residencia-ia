@@ -74,32 +74,10 @@ def metric_points(tracking):
 
 
 def missing_metric_points(client, run_id, points, known_keys=None):
-    """Read each history once and reject conflicting values, ignoring timestamp."""
-    desired = {}
-    for key, step, value in points:
-        if value is not None and not _finite(value):
-            raise ValueError(f"nonfinite metric {key}")
-        by_step = desired.setdefault(key, {})
-        if step in by_step and by_step[step] != value:
-            raise ValueError(f"conflicting metric {key} at step {step}")
-        by_step[step] = value
-    if known_keys is None and callable(getattr(client, "get_run", None)):
-        run = client.get_run(run_id)
-        metrics = getattr(getattr(run, "data", None), "metrics", None)
-        if isinstance(metrics, dict):
-            known_keys = set(metrics)
-    missing = []
-    for key, by_step in desired.items():
-        existing = {}
-        history = client.get_metric_history(run_id, key) if known_keys is None or key in known_keys else ()
-        for metric in history:
-            if metric.step in by_step:
-                if not _finite(metric.value) or metric.value != by_step[metric.step]:
-                    raise ValueError(f"remote metric conflicts for {key} at step {metric.step}")
-                existing[metric.step] = metric.value
-        missing.extend((key, step, value) for step, value in by_step.items()
-                       if step not in existing and value is not None)
-    return missing
+    """Read each existing history once (concurrently on remote stores); see ``tracking.reconcile``."""
+    from .tracking.reconcile import missing_metric_points as reconcile
+
+    return reconcile(client, run_id, points, known_keys)
 
 
 def log_metric_points(client, run_id, points):
@@ -110,12 +88,10 @@ def log_metric_points(client, run_id, points):
 def _log_verified_points(client, run_id, missing):
     """Append preflight-verified points while the caller holds the run lock."""
     if missing:
-        from mlflow.entities import Metric
+        from .tracking import as_backend
 
-        for offset in range(0, len(missing), 500):
-            client.log_batch(run_id, metrics=[Metric(key, value, 0, step)
-                                             for key, step, value in missing[offset:offset + 500]],
-                             synchronous=True)
+        # Explicitly synchronous: a completion tag must never precede queued writes.
+        as_backend(client).log_batch(run_id, metrics=missing)
 
 
 def publish_tracking(client, run_id, report, directory, objects=None, derived=False):
@@ -184,14 +160,19 @@ def publish_tracking(client, run_id, report, directory, objects=None, derived=Fa
         client.log_artifact(run_id, str(path), artifact_path=destination)
     # Explicitly synchronous: a completion tag must never precede queued writes.
     _log_verified_points(client, run_id, missing)
-    client.set_tag(run_id, "tracking_v1_settings_sha256", envelope["settings_sha256"])
+    from .tracking import as_backend
+
+    completion = {"tracking_v1_settings_sha256": envelope["settings_sha256"]}
     if tracking.get("definitions_sha256"):
-        client.set_tag(run_id, "tracking_v1_definitions_sha256", tracking["definitions_sha256"])
-    client.set_tag(run_id, "tracking_v1_origin", "derived" if derived else "native")
-    client.set_tag(run_id, "tracking_v1_unavailable_count",
-                   str(sum(value is None for value in tracking["metrics"].values())))
-    client.set_tag(run_id, "tracking_v1_payload_sha256", payload_sha)
-    client.set_tag(run_id, "tracking_v1_status", "complete")
+        completion["tracking_v1_definitions_sha256"] = tracking["definitions_sha256"]
+    completion.update({
+        "tracking_v1_origin": "derived" if derived else "native",
+        "tracking_v1_unavailable_count": str(sum(value is None for value in tracking["metrics"].values())),
+        "tracking_v1_payload_sha256": payload_sha,
+        "tracking_v1_status": "complete",
+    })
+    # One request instead of six set_tag calls; it follows the synchronous metric writes.
+    as_backend(client).log_batch(run_id, tags=completion)
     return {"payload_sha256": payload_sha, "artifact_path": artifact_path,
             "sidecar_path": str(sidecar), "object_uris": uris}
 

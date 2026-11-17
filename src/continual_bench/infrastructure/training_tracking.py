@@ -169,60 +169,12 @@ def publish_training_history(client, run_id, directory, report, *, include_check
 
 
 def publish_sdk_training_rounds(client, experiment_id, parent_run_id, report, now_ms=None):
-    """Synchronously publish one child run per fit, keyed by parent attempt and fit ID."""
-    from mlflow.entities import Metric, Param, RunTag
+    """Synchronously publish one child run per fit, keyed by parent attempt and fit ID.
 
-    from .metric_tracking import missing_metric_points
+    Thin facade over ``tracking.rounds.publish_training_rounds``, the algorithm
+    shared with the AWS REST tracker.
+    """
+    from .tracking.rounds import publish_training_rounds
 
-    if not report.get("training_history"):
-        return []
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
-    existing = {}
-    token = None
-    while True:
-        found = client.search_runs(
-            [experiment_id], f"tags.`mlflow.parentRunId` = '{parent_run_id}'",
-            max_results=500, page_token=token,
-        )
-        for run in found:
-            if fit_id := run.data.tags.get("cb-fit-id"):
-                if fit_id in existing:
-                    raise ValueError(f"duplicate MLflow child runs for {parent_run_id}/{fit_id}")
-                existing[fit_id] = run
-        token = found.token
-        if not token:
-            break
-    receipts = []
-    for tags, params, metrics in training_round_mlflow(parent_run_id, report, now_ms):
-        fit_id = tags["cb-fit-id"]
-        run = existing.get(fit_id) or client.create_run(experiment_id, tags=tags)
-        run_id = run.info.run_id
-        evidence_keys = ("cb-fit-evidence-sha256", "cb-fit-observations-sha256")
-        extending = False
-        for key in evidence_keys:
-            expected = tags.get(key)
-            if expected is None:
-                continue
-            remote_evidence = run.data.tags.get(key)
-            if remote_evidence is not None and remote_evidence != expected:
-                raise ValueError(f"MLflow child {fit_id} already tracks different training evidence")
-            extending |= remote_evidence is None
-        if run.info.status != "FINISHED" or extending:
-            missing = missing_metric_points(
-                client, run_id, [(p["key"], p["step"], p["value"]) for p in metrics],
-                known_keys=set(run.data.metrics),
-            )
-            for offset in range(0, max(1, len(missing)), 500):
-                batch = [Metric(k, v, now_ms, s) for k, s, v in missing[offset:offset + 500]]
-                client.log_batch(
-                    run_id,
-                    metrics=batch,
-                    params=[Param(k, v) for k, v in params.items()] if offset == 0 else (),
-                    synchronous=True,
-                )
-            client.log_batch(
-                run_id, tags=[RunTag(key, val) for key, val in tags.items()], synchronous=True,
-            )
-            client.set_terminated(run_id, "FINISHED")
-        receipts.append({"fit_id": fit_id, "run_id": run_id, "metric_points": len(metrics)})
-    return receipts
+    return publish_training_rounds(client, experiment_id, parent_run_id, report, now_ms=now_ms)

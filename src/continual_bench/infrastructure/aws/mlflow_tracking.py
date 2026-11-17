@@ -29,18 +29,28 @@ from continual_bench.infrastructure.observation_tracking import (
     parent_observation_points,
     write_observation_evidence,
 )
-from continual_bench.infrastructure.zia_training_tracking import sanitize_mlflow_name, training_round_mlflow
+from continual_bench.infrastructure.tracking import AsyncMetricWriter, RestBackend, batch_payloads
+from continual_bench.infrastructure.tracking.artifacts import (
+    DEFAULT_UPLOAD_WORKERS,
+    SKIP_PREFIXES,
+    SKIP_SUFFIXES,
+    artifact_plan,
+    upload_concurrently,
+)
+from continual_bench.infrastructure.tracking.http import shared_opener
+from continual_bench.infrastructure.tracking.rounds import publish_training_rounds as publish_child_runs
+from continual_bench.infrastructure.training_tracking import sanitize_mlflow_name
 
 from .session import DEFAULT_REGION as REGION
 from .session import client as make_client
 
 EMPTY_SHA256_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-MLFLOW_LOG_BATCH_MAX_METRICS = 500
-MLFLOW_LOG_BATCH_MAX_PARAMS = 100
-MLFLOW_LOG_BATCH_MAX_TAGS = 100
 PROGRESS_INTERVAL_SECONDS = 30
-_SKIP_SUFFIXES = (".lock",)
-_SKIP_PREFIXES = (".pending-", ".predictions-", ".model-", ".prepare-", ".zia-resume")
+#: Concurrent MLflow requests during publication (history reads, child runs).
+PUBLISH_CONCURRENCY = int(os.environ.get("BENCH_MLFLOW_PUBLISH_CONCURRENCY", "4"))
+# Backwards-compatible names; the layout itself lives in tracking.artifacts.
+_SKIP_SUFFIXES = SKIP_SUFFIXES
+_SKIP_PREFIXES = SKIP_PREFIXES
 
 
 def parse_sagemaker_mlflow_arn(uri: str) -> dict[str, Any]:
@@ -191,61 +201,37 @@ def upload_directory_to_mlflow_artifacts(
     artifact_uri: str | None,
     *,
     immutable: bool = False,
+    exclude: tuple[str, ...] = (),
+    workers: int = DEFAULT_UPLOAD_WORKERS,
 ) -> dict[str, Any]:
-    """Upload run files, plots/, and data/ directly to the MLflow run's S3 artifact store."""
+    """Upload the run directory once, in parallel, to the MLflow run's S3 artifact store.
+
+    The layout is ``tracking.artifacts.artifact_plan`` (``artifacts/plots`` ->
+    ``plots/``, ``artifacts/data`` -> ``data/``), shared with the SDK publisher.
+    """
     if not artifact_uri or not artifact_uri.startswith("s3://") or store is None:
         return {"files": 0, "bytes": 0, "artifact_uri": artifact_uri}
     bucket, base_prefix = split_uri(artifact_uri.rstrip("/"))
     if getattr(store, "bucket", bucket) != bucket:
         return {"files": 0, "bytes": 0, "artifact_uri": artifact_uri}
 
-    files_uploaded = 0
-    bytes_uploaded = 0
-    seen_keys: set[str] = set()
-
-    def _put(local_path: Path, rel_Target: str) -> None:
-        nonlocal files_uploaded, bytes_uploaded
-        key = f"{base_prefix}/{rel_Target.lstrip('/')}"
-        if key in seen_keys:
-            return
-        seen_keys.add(key)
+    def _put(local_path: Path, target: str) -> int:
+        key = f"{base_prefix}/{target.lstrip('/')}"
+        size = local_path.stat().st_size
         if immutable:
             digest = sha256_path(local_path)
             try:
                 store.put_file(key, local_path, if_absent=True, sha256=digest)
             except ObjectExists:
                 existing = store.head(key)
-                if (
-                    existing is None
-                    or existing.sha256 != digest
-                    or existing.size != local_path.stat().st_size
-                ):
+                if existing is None or existing.sha256 != digest or existing.size != size:
                     raise ValueError(f"MLflow artifact differs from archived evidence: {key}") from None
         else:
             store.put_file(key, local_path)
-        files_uploaded += 1
-        bytes_uploaded += local_path.stat().st_size
+        return size
 
-    # Mirror artifacts/plots -> plots/ and artifacts/data -> data/ at the root of the MLflow run
-    artifacts_root = output_dir / "artifacts"
-    for subfolder in ("plots", "data"):
-        sub_dir = artifacts_root / subfolder
-        if sub_dir.is_dir():
-            for path in sorted(sub_dir.rglob("*")):
-                if path.is_file() and not path.name.endswith(_SKIP_SUFFIXES):
-                    rel = path.relative_to(sub_dir).as_posix()
-                    _put(path, f"{subfolder}/{rel}")
-
-    # Upload all standard run documents, reports, and model archive
-    for path in sorted(output_dir.rglob("*")):
-        if not path.is_file() or path.name.endswith(_SKIP_SUFFIXES):
-            continue
-        relative = path.relative_to(output_dir)
-        if any(part.startswith(_SKIP_PREFIXES) for part in relative.parts):
-            continue
-        _put(path, relative.as_posix())
-
-    return {"files": files_uploaded, "bytes": bytes_uploaded, "artifact_uri": artifact_uri}
+    sizes = upload_concurrently(_put, artifact_plan(output_dir, exclude=exclude), workers=workers)
+    return {"files": len(sizes), "bytes": sum(sizes), "artifact_uri": artifact_uri}
 
 
 def report_params(tracker: "SageMakerMlflowTracker", report: dict[str, Any]) -> dict[str, str]:
@@ -358,6 +344,7 @@ class SageMakerMlflowTracker:
         http_opener: Any | None = None,
         logger: logging.Logger | None = None,
         timeout_seconds: float = 10.0,
+        async_progress: bool = False,
     ):
         self.project = project
         self.stack = stack or project
@@ -373,7 +360,12 @@ class SageMakerMlflowTracker:
         self._tracking_uri = (tracking_uri or os.environ.get("MLFLOW_TRACKING_URI", "")).strip() or None
         self._session = boto3_session
         self._sagemaker_client = sagemaker_client
-        self._http_opener = http_opener or urllib.request.urlopen
+        # Keep-alive pool: urlopen paid a TCP+TLS handshake on every MLflow call.
+        self._http_opener = http_opener or shared_opener()
+        self._credentials = None
+        self.concurrency = max(1, PUBLISH_CONCURRENCY)
+        self.async_progress = async_progress
+        self._live_writer: AsyncMetricWriter | None = None
         self.timeout_seconds = timeout_seconds
         self.logger = logger or logging.getLogger("continual_bench.aws.mlflow")
 
@@ -563,11 +555,16 @@ class SageMakerMlflowTracker:
             return None
 
     def _session_credentials(self, region: str):
-        session = self._session or boto3.Session(region_name=region)
-        creds = session.get_credentials()
-        if creds is None:
+        # One session per tracker: resolving the credential chain (IMDS on EC2) per
+        # request was a measurable share of every call. Refreshable credentials
+        # still rotate through get_frozen_credentials().
+        if self._credentials is None:
+            if self._session is None:
+                self._session = boto3.Session(region_name=region)
+            self._credentials = self._session.get_credentials()
+        if self._credentials is None:
             raise RuntimeError("No AWS credentials available for SigV4 signing")
-        return creds.get_frozen_credentials()
+        return self._credentials.get_frozen_credentials()
 
     def _request(
         self,
@@ -844,12 +841,20 @@ class SageMakerMlflowTracker:
         if not points:
             return
         self._progress_step = step
+        if self.async_progress and not self.spot:
+            # Training never waits on the network; a daemon thread sends coalesced snapshots.
+            if self._live_writer is None:
+                self._live_writer = AsyncMetricWriter(self.log_progress_metrics, PROGRESS_INTERVAL_SECONDS)
+            self._live_writer.submit(points)
+            return
         self._pending_progress.update((point["key"], point) for point in points)
         if (self._progress_attempted_at is None
                 or time.monotonic() - self._progress_attempted_at >= PROGRESS_INTERVAL_SECONDS):
             self._flush_progress()
 
     def _flush_progress(self) -> None:
+        if self._live_writer is not None:
+            self._live_writer.flush()
         if self._pending_progress:
             points = list(self._pending_progress.values())
             self._pending_progress.clear()
@@ -900,51 +905,22 @@ class SageMakerMlflowTracker:
         if not run_id:
             return False
 
-        all_metrics = metrics or []
-        all_params = params or []
-        all_tags = tags or []
-        success = True
-
-        for offset in range(0, len(all_params), MLFLOW_LOG_BATCH_MAX_PARAMS):
-            chunk = all_params[offset : offset + MLFLOW_LOG_BATCH_MAX_PARAMS]
+        # Params, tags and metrics share requests up to MLflow's limits.
+        chunks = batch_payloads(metrics or (), params or (), tags or ())
+        for chunk_metrics, chunk_params, chunk_tags in chunks:
+            payload: dict[str, Any] = {"run_id": run_id}
+            if chunk_params:
+                payload["params"] = chunk_params
+            if chunk_tags:
+                payload["tags"] = chunk_tags
+            if chunk_metrics:
+                payload["metrics"] = chunk_metrics
             try:
-                self._request(
-                    "POST",
-                    "/api/2.0/mlflow/runs/log-batch",
-                    payload={"run_id": run_id, "params": chunk},
-                )
+                self._request("POST", "/api/2.0/mlflow/runs/log-batch", payload=payload)
             except Exception as err:
-                success = False
-                self._record_error("log_batch_params", err)
-                break
-
-        for offset in range(0, len(all_tags), MLFLOW_LOG_BATCH_MAX_TAGS):
-            chunk = all_tags[offset : offset + MLFLOW_LOG_BATCH_MAX_TAGS]
-            try:
-                self._request(
-                    "POST",
-                    "/api/2.0/mlflow/runs/log-batch",
-                    payload={"run_id": run_id, "tags": chunk},
-                )
-            except Exception as err:
-                success = False
-                self._record_error("log_batch_tags", err)
-                break
-
-        for offset in range(0, len(all_metrics), MLFLOW_LOG_BATCH_MAX_METRICS):
-            chunk = all_metrics[offset : offset + MLFLOW_LOG_BATCH_MAX_METRICS]
-            try:
-                self._request(
-                    "POST",
-                    "/api/2.0/mlflow/runs/log-batch",
-                    payload={"run_id": run_id, "metrics": chunk},
-                )
-            except Exception as err:
-                success = False
-                self._record_error("log_batch_metrics", err)
-                break
-
-        return success
+                self._record_error("log_batch", err)
+                return False
+        return True
 
     def log_hyperparameters(
         self,
@@ -1026,6 +1002,8 @@ class SageMakerMlflowTracker:
     def finish(self, status: str = "FINISHED") -> bool:
         if not self.mlflow_run_id:
             return False
+        if self._live_writer is not None:
+            self._live_writer.close()
         mlflow_status = {
             "Completed": "FINISHED",
             "FINISHED": "FINISHED",
@@ -1097,77 +1075,12 @@ class SageMakerMlflowTracker:
 
     def publish_training_rounds(self, report) -> list[dict]:
         """Use fit-local steps inside one child run per round of this parent run."""
-        if not report.get("training_history"):
-            return []
-        existing = {}
-        search = {
-            "experiment_ids": [self.experiment_id],
-            "filter": f"tags.`mlflow.parentRunId` = '{self.mlflow_run_id}'",
-            "max_results": 200,
-        }
-        while True:
-            found = self._request("POST", "/api/2.0/mlflow/runs/search", payload=search)
-            for run in found.get("runs") or []:
-                tags = {tag["key"]: tag["value"] for tag in (run.get("data", {}).get("tags") or [])}
-                if fit_id := tags.get("cb-fit-id"):
-                    if fit_id in existing:
-                        raise ValueError(f"duplicate MLflow child runs for {self.mlflow_run_id}/{fit_id}")
-                    known_keys = {metric["key"] for metric in run.get("data", {}).get("metrics") or ()}
-                    existing[fit_id] = (run["info"], tags, known_keys)
-            page = found.get("next_page_token")
-            if not page:
-                break
-            search["page_token"] = page
-        receipts = []
-        for tags, params, metrics in training_round_mlflow(self.mlflow_run_id, report):
-            fit_id = tags["cb-fit-id"]
-            checkpoint_uri = None
-            if self.spot and self.artifact_uri and (checkpoint := params.get("checkpoint")):
-                checkpoint_uri = f"{self.artifact_uri.rstrip('/')}/{checkpoint}"
-                tags["cb-fit-checkpoint-uri"] = checkpoint_uri
-            info, remote_tags, known_keys = existing.get(fit_id, (None, {}, set()))
-            if info is None:
-                info = self._request(
-                    "POST",
-                    "/api/2.0/mlflow/runs/create",
-                    payload={
-                        "experiment_id": self.experiment_id,
-                        "start_time": int(time.time() * 1000),
-                        "run_name": tags["mlflow.runName"],
-                        "tags": [{"key": key, "value": value} for key, value in tags.items()],
-                    },
-                )["run"]["info"]
-            child_id = info["run_id"]
-            evidence_keys = ("cb-fit-evidence-sha256", "cb-fit-observations-sha256", "cb-fit-checkpoint-uri")
-            extending = False
-            for key in evidence_keys:
-                expected = tags.get(key)
-                if expected is None:
-                    continue
-                if key in remote_tags and remote_tags[key] != expected:
-                    raise ValueError(f"MLflow child {fit_id} already tracks different training evidence")
-                extending |= key not in remote_tags
-            if info.get("status") != "FINISHED" or extending:
-                missing = self._missing_completed_metrics(child_id, metrics, known_keys)
-                for offset in range(0, max(1, len(missing)), MLFLOW_LOG_BATCH_MAX_METRICS):
-                    batch = missing[offset:offset + MLFLOW_LOG_BATCH_MAX_METRICS]
-                    payload = {"run_id": child_id, "metrics": batch}
-                    if offset == 0:
-                        payload["params"] = [{"key": k, "value": v} for k, v in params.items()]
-                        if extending:
-                            payload["tags"] = [{"key": k, "value": v} for k, v in tags.items()]
-                    self._request("POST", "/api/2.0/mlflow/runs/log-batch", payload=payload)
-                self._request(
-                    "POST", "/api/2.0/mlflow/runs/update",
-                    payload={"run_id": child_id, "status": "FINISHED", "end_time": int(time.time() * 1000)},
-                )
-            receipt = {"fit_id": fit_id, "run_id": child_id, "metric_points": len(metrics)}
-            if checkpoint_uri:
-                receipt["checkpoint_uri"] = checkpoint_uri
-            if report.get("tracking_observations"):
-                receipt["artifact_uri"] = info.get("artifact_uri")
-            receipts.append(receipt)
-        return receipts
+        return publish_child_runs(
+            RestBackend(self._request, concurrency=self.concurrency),
+            self.experiment_id, self.mlflow_run_id, report,
+            checkpoint_base_uri=self.artifact_uri if self.spot else None,
+            include_artifact_uri=True,
+        )
 
     def stage_observation_artifacts(self, directory, report, children, store):
         root = write_observation_evidence(directory, report, self.mlflow_run_id, children)
@@ -1307,6 +1220,7 @@ class SageMakerMlflowTracker:
                 self.stage_observation_artifacts(output_dir, report, child_runs, store)
                 uploaded = upload_directory_to_mlflow_artifacts(
                     store, output_dir, self.artifact_uri, immutable=self.spot,
+                    exclude=child_artifact_prefixes(child_runs),
                 )
                 if not uploaded["files"]:
                     raise ValueError("MLflow run has no uploaded artifacts")
@@ -1711,6 +1625,13 @@ class SageMakerMlflowTracker:
             "registered_family_model": family_model_name,
             "registered_family_version": family_version,
         }
+
+
+def child_artifact_prefixes(child_runs) -> tuple[str, ...]:
+    """Fit observations already published on their child runs (never re-sent to the parent)."""
+    return tuple(
+        f"{ARTIFACT_ROOT}/fits/{child['fit_id']}" for child in child_runs if child.get("artifact_uri")
+    )
 
 
 class MlflowRestError(RuntimeError):

@@ -3,8 +3,13 @@
 import math
 import time
 
+from continual_bench.infrastructure.tracking import AsyncMetricWriter
+
 from .benchmark_tracking import BenchmarkMlflowRun
 from .mlflow_tracking import sanitize_mlflow_name
+
+FLUSH_SECONDS = 2
+FLUSH_POINTS = 500
 
 
 class MatrixMlflowRun(BenchmarkMlflowRun):
@@ -62,16 +67,29 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
             return
         self.step = max(self.step, step)
         stamp = int(time.time() * 1000)
-        self.pending.extend(
+        points = [
             {"key": f"{prefix}/{key}", "value": float(value), "step": step, "timestamp": stamp}
             for key, value in values.items()
             if type(value) in (float, int) and math.isfinite(value)
-        )
+        ]
+        if not self.spot:
+            # Every step is kept (no coalescing); a daemon thread sends them off the training thread.
+            if self._live_writer is None:
+                self._live_writer = AsyncMetricWriter(
+                    self.log_progress_metrics, FLUSH_SECONDS, coalesce=False, max_pending=FLUSH_POINTS,
+                )
+            self._live_writer.submit(points)
+            return
+        # Spot reconciliation reads remote histories in order, so it stays on the caller thread.
+        self.pending.extend(points)
         now = time.monotonic()
-        if self.last_flush is None or now - self.last_flush >= 2 or len(self.pending) >= 500:
+        due = self.last_flush is None or now - self.last_flush >= FLUSH_SECONDS
+        if due or len(self.pending) >= FLUSH_POINTS:
             self.flush()
 
     def flush(self):
+        if self._live_writer is not None:
+            self._live_writer.flush()
         if self.pending:
             self.log_progress_metrics(self.pending)
             self.pending.clear()
