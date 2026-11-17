@@ -38,7 +38,7 @@ jobs:
           uv venv /tmp/cfn-lint
           uv pip install --python /tmp/cfn-lint/bin/python --require-hashes -r infra/ci-requirements.lock
       - run: ruff check src tests dags examples scripts
-      - run: python -m pytest -q
+      - run: python -m pytest -q --durations=15
       - name: Validate CloudFormation templates and ASL (offline)
         run: |
           CFN_LINT=/tmp/cfn-lint/bin/cfn-lint python scripts/aws/validate_templates.py

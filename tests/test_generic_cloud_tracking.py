@@ -18,6 +18,7 @@ from continual_bench.application.cloud.fixtures import publish_fixture_release
 from continual_bench.evaluation.artifacts.svg import nice_ticks
 from continual_bench.infrastructure.aws import matrix_tracking, native_tracking
 from continual_bench.infrastructure.aws.benchmark_tracking import aws_metric_points
+from continual_bench.infrastructure.mlflow_figures import matplotlib_available
 from continual_bench.infrastructure.object_store import LocalObjectStore, get_json, sha256_path
 
 
@@ -184,7 +185,7 @@ def test_matrix_retries_only_publication_and_keeps_the_original_training_attempt
         "base": {"warmup": 20, "metric_window": 10},
     }, "update"),
     ("typed", {"typed_policies": ["online"]}, "update"),
-    ("epochs", {"base": {"epochs": 2}}, "epoch"),
+    pytest.param("epochs", {"base": {"epochs": 2}}, "epoch", marks=pytest.mark.observation_pngs),
 ])
 def test_batch_publishes_a_real_matrix_case(evaluator, options, step_kind, tmp_path, monkeypatch):
     snapshot = tmp_path / "configs"
@@ -226,6 +227,12 @@ def test_batch_publishes_a_real_matrix_case(evaluator, options, step_kind, tmp_p
     assert any(tags.get("cb-step-kind") == step_kind for tags in created)
     assert store.head("mlflow/run-1/training-history.json")
     assert store.head("mlflow/run-1/data/index.json")
+    if evaluator == "epochs" and matplotlib_available():
+        child = final["tracking"]["child_runs"][0]["run_id"]
+        overview = store.get_bytes("mlflow/run-1/tracking-observations/overview/overview.png")
+        epochs = store.get_bytes(f"mlflow/{child}/tracking-observations/epochs.png")
+        assert overview.startswith(b"\x89PNG\r\n\x1a\n")
+        assert epochs.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_studio_verifies_per_run_matrix_indices_without_a_cross_dataset_plot(monkeypatch):

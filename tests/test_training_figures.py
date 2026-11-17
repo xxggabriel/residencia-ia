@@ -16,6 +16,8 @@ from continual_bench.infrastructure.training_figures import (
     write_observation_figures,
 )
 
+pytestmark = pytest.mark.observation_pngs
+
 
 def _fit(number, scope, quality, status, *, epochs=True):
     all_steps = [{"step": i, "metrics": {"training/native_loss": 1 / i, "training/duration_seconds": 0.2}}
