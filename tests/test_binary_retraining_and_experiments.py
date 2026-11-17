@@ -298,3 +298,29 @@ def test_lambda_planning_validates_batch_policies_without_numpy(monkeypatch):
                 "policy": {"name": "cara", "params": {"bogus": 1}},
             }
         )
+
+
+def test_batch_retraining_run_with_retrains_produces_valid_aws_metric_points(tmp_path):
+    from continual_bench.application.runner import run
+    from continual_bench.infrastructure.aws.benchmark_tracking import aws_metric_points
+    from continual_bench.infrastructure.metric_tracking import metric_points
+
+    cfg = Config.model_validate(
+        {
+            "mode": "incremental",
+            "warmup": 20,
+            "metric_window": 20,
+            "batch_size": 25,
+            "replay_window": 100,
+            "dataset": {"name": "sea", "samples": 300, "seed": 42},
+            "model": {"name": "logistic"},
+            "detector": {"name": "none"},
+            "policy": {"name": "cara", "params": {"alpha": 0.0, "tau": 0.0}},
+        }
+    )
+    report = run(cfg, str(tmp_path / "run"))
+    assert report["complete"] is True
+    assert report["metrics"]["retrain_count"] >= 1
+    points = metric_points(report["tracking"])
+    assert points
+    assert aws_metric_points(report)
