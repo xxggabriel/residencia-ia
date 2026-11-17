@@ -8,11 +8,10 @@ allowed to read future entries, which makes it a lower bound rather than a deplo
 
 from __future__ import annotations
 
-import math
 from typing import ClassVar
 
 from continual_bench.core.contracts import Decision, DecisionContext
-from continual_bench.core.policies import RetrainingPolicy
+from continual_bench.core.policies import RetrainingPolicy, validate_batch_policy_params
 
 from .matrix import PerformanceMatrix
 from .rules import UPF, CaraCT, CaraP, CaraT, Oracle, Rule
@@ -39,20 +38,7 @@ class BatchPolicy(RetrainingPolicy):
         self.retrains: list[int] = []
 
     def _validate(self):
-        if self.action != "reset_retrain":
-            raise ValueError("batch policies only retrain from scratch")
-        if self.params.keys() - self.permitted:
-            raise ValueError("unknown policy params")
-        for key, value in self.params.items():
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"policy {key} must be numeric")
-            may_be_infinite = key in {"tau", "tau_cum", "period"}
-            if math.isnan(value) or value < 0 or (math.isinf(value) and not may_be_infinite):
-                raise ValueError(f"policy {key} must be nonnegative and finite")
-        if self.params.get("period", 1) < 1 or self.params.get("samples", 2) < 2:
-            raise ValueError("invalid policy period or sample count")
-        if not 0 < self.params.get("delta", 0.5) < 1:
-            raise ValueError("policy delta must be in (0, 1)")
+        validate_batch_policy_params(self.kind, self.action, self.params)
 
     def make_rule(self) -> Rule:
         raise NotImplementedError

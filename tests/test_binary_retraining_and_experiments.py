@@ -269,3 +269,32 @@ def test_batch_retraining_stop_after_returns_incomplete_then_resumes_full_run(tm
     assert full["complete"] is True
     assert full["observed"] == 200
     assert full["metrics"]["retraining_cara_auc"] is not None
+
+
+def test_lambda_planning_validates_batch_policies_without_numpy(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "numpy", None)
+    monkeypatch.setitem(sys.modules, "continual_bench.retraining", None)
+    monkeypatch.setitem(sys.modules, "continual_bench.retraining.policies", None)
+
+    for policy in ("cara", "upf", "oracle"):
+        cfg = Config.model_validate(
+            {
+                "mode": "incremental",
+                "dataset": {"name": "sea", "samples": 200},
+                "detector": {"name": "none"},
+                "policy": {"name": policy},
+            }
+        )
+        assert cfg.policy.name == policy
+
+    with pytest.raises(ValueError, match="unknown policy params"):
+        Config.model_validate(
+            {
+                "mode": "incremental",
+                "dataset": {"name": "sea", "samples": 200},
+                "detector": {"name": "none"},
+                "policy": {"name": "cara", "params": {"bogus": 1}},
+            }
+        )
