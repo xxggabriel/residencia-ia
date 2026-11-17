@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 from river import optim
 from scipy.optimize import minimize
-from scipy.special import expit, logsumexp, softmax
+from scipy.special import expit, softmax
 
 from continual_bench.config.iterative import IterativeTrainingConfig
 from continual_bench.core.observability import peak_rss_bytes as process_peak_rss_bytes
@@ -230,6 +230,7 @@ class FraudOrReturnBooster:
         dataset: str | None = None,
         classes: int | list[str] | None = None,
         decision_threshold: float | None = None,
+        model_params: dict[str, Any] | None = None,
     ):
         enforce_single_thread_env()
         import xgboost
@@ -238,6 +239,7 @@ class FraudOrReturnBooster:
         self.model = None
         self.params = dict(self.params)
         self.dataset = dataset
+        self.model_params = None if model_params is None else dict(model_params)
         self.class_labels = list(classes) if isinstance(classes, list) else [0, 1]
         self.decision_threshold = 0.5 if decision_threshold is None else decision_threshold
         self.params["nthread"] = int(os.environ["OMP_NUM_THREADS"])
@@ -257,16 +259,20 @@ class FraudOrReturnBooster:
                 if "dataset" in config and not self.dataset:
                     self.dataset = str(config["dataset"])
 
-        if "scale_pos_weight" not in self.params:
-            if self.dataset == "fraud":
-                self.params["scale_pos_weight"] = 39.0
-            elif self.dataset == "ecommerce":
-                self.params["scale_pos_weight"] = 10.0
+        for key, value in self._dataset_params().items():
+            self.params.setdefault(key, value)
 
         self.params.setdefault("nthread", 2)
         self._cached_dmatrix = None
         self._cached_dmatrix_key: tuple[int, tuple[int, ...], int, tuple[int, ...]] | None = None
         self.last_training_result: TrainingResult | None = None
+
+    def _dataset_params(self) -> dict[str, Any]:
+        """Dataset defaults (e.g. class imbalance) injected by the caller from the stream provider.
+
+        The model layer never resolves datasets itself; see ``datasets.streams``.
+        """
+        return self.model_params or {}
 
     def fit_online(
         self,
@@ -439,11 +445,8 @@ class FraudOrReturnBooster:
         self.params["reg_lambda"] = iter_cfg.l2_regularization
         self.params["seed"] = iter_cfg.seed
         self.params["nthread"] = int(self.params.get("nthread", 2))
-        if "scale_pos_weight" not in self.params:
-            if self.dataset == "fraud":
-                self.params["scale_pos_weight"] = 39.0
-            elif self.dataset == "ecommerce":
-                self.params["scale_pos_weight"] = 10.0
+        for key, value in self._dataset_params().items():
+            self.params.setdefault(key, value)
 
         result = train_iterative(
             self,
@@ -530,6 +533,13 @@ class MultinomialLogistic:
             self.continued_rounds = cfg.max_epochs
         self.last_training_result: TrainingResult | None = None
 
+    @property
+    def online_iterations(self) -> int:
+        return self._online_optimizer.n_iterations
+
+    def restore_online_iterations(self, iterations: int) -> None:
+        self._online_optimizer.n_iterations = iterations
+
     def fit_online(
         self,
         x: np.ndarray,
@@ -582,16 +592,20 @@ class MultinomialLogistic:
     ) -> tuple[float, np.ndarray]:
         weights = flat_weights.reshape(shape)
         logits = (x @ weights[:-1]).astype(np.float64, copy=False) + weights[-1]
-        logits = logits - logsumexp(logits, axis=1, keepdims=True)
+        logits -= logits.max(axis=1, keepdims=True)
         index = np.arange(len(y))
+        observed_logits = logits[index, y]
+        np.exp(logits, out=logits)
+        normalizer = logits.sum(axis=1, keepdims=True)
         loss = float(
-            -logits[index, y].mean() + (regularization / 2.0) * np.square(weights[:-1]).sum()
+            (np.log(normalizer[:, 0]) - observed_logits).mean()
+            + (regularization / 2.0) * np.square(weights[:-1]).sum()
         )
-        residuals = np.exp(logits)
-        residuals[index, y] -= 1.0
+        logits /= normalizer
+        logits[index, y] -= 1.0
         gradient = np.empty(shape, dtype=np.float64)
-        gradient[:-1] = (x.T @ residuals) / len(y) + regularization * weights[:-1]
-        gradient[-1] = residuals.mean(axis=0)
+        gradient[:-1] = (x.T @ logits) / len(y) + regularization * weights[:-1]
+        gradient[-1] = logits.mean(axis=0)
         return loss, gradient.ravel()
 
     def train_epoch(self, train_data: Any) -> dict[str, float | None]:
@@ -746,10 +760,13 @@ def make_zia_model(
     dataset: str | None = None,
     *,
     decision_threshold: float | None = None,
+    model_params: dict[str, Any] | None = None,
 ):
+    """Build a stream model; ``model_params`` are the dataset defaults from its stream provider."""
     if name == "xgboost":
         return FraudOrReturnBooster(
             config=config, dataset=dataset, classes=classes, decision_threshold=decision_threshold,
+            model_params=model_params,
         )
     if name == "multinomial_logistic":
         return MultinomialLogistic(classes, config=config, decision_threshold=decision_threshold)

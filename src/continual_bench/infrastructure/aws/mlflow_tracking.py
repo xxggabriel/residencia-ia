@@ -22,25 +22,40 @@ from botocore.awsrequest import AWSRequest
 
 from continual_bench.config.iterative import IterativeTrainingConfig
 from continual_bench.infrastructure.metric_tracking import metric_points, missing_metric_points
-from continual_bench.infrastructure.object_store import split_uri
+from continual_bench.infrastructure.object_store import ObjectExists, sha256_path, split_uri
 from continual_bench.infrastructure.observation_tracking import (
     ARTIFACT_ROOT,
     observation_tags,
     parent_observation_points,
     write_observation_evidence,
 )
-from continual_bench.infrastructure.zia_training_tracking import sanitize_mlflow_name, training_round_mlflow
+from continual_bench.infrastructure.tracking import AsyncMetricWriter, RestBackend, batch_payloads
+from continual_bench.infrastructure.tracking.artifacts import (
+    DEFAULT_UPLOAD_WORKERS,
+    SKIP_PREFIXES,
+    SKIP_SUFFIXES,
+    artifact_plan,
+    upload_concurrently,
+)
+from continual_bench.infrastructure.tracking.http import shared_opener
+from continual_bench.infrastructure.tracking.mlflow_async import (
+    NativeAsyncLogger,
+    async_logging_requested,
+    native_logging_available,
+)
+from continual_bench.infrastructure.tracking.rounds import publish_training_rounds as publish_child_runs
+from continual_bench.infrastructure.training_tracking import sanitize_mlflow_name
 
 from .session import DEFAULT_REGION as REGION
 from .session import client as make_client
 
 EMPTY_SHA256_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-MLFLOW_LOG_BATCH_MAX_METRICS = 500
-MLFLOW_LOG_BATCH_MAX_PARAMS = 100
-MLFLOW_LOG_BATCH_MAX_TAGS = 100
 PROGRESS_INTERVAL_SECONDS = 30
-_SKIP_SUFFIXES = (".lock",)
-_SKIP_PREFIXES = (".pending-", ".predictions-", ".model-", ".prepare-")
+#: Concurrent MLflow requests during publication (history reads, child runs).
+PUBLISH_CONCURRENCY = int(os.environ.get("BENCH_MLFLOW_PUBLISH_CONCURRENCY", "4"))
+# Backwards-compatible names; the layout itself lives in tracking.artifacts.
+_SKIP_SUFFIXES = SKIP_SUFFIXES
+_SKIP_PREFIXES = SKIP_PREFIXES
 
 
 def parse_sagemaker_mlflow_arn(uri: str) -> dict[str, Any]:
@@ -189,48 +204,39 @@ def upload_directory_to_mlflow_artifacts(
     store: Any,
     output_dir: Path,
     artifact_uri: str | None,
+    *,
+    immutable: bool = False,
+    exclude: tuple[str, ...] = (),
+    workers: int = DEFAULT_UPLOAD_WORKERS,
 ) -> dict[str, Any]:
-    """Upload run files, plots/, and data/ directly to the MLflow run's S3 artifact store."""
+    """Upload the run directory once, in parallel, to the MLflow run's S3 artifact store.
+
+    The layout is ``tracking.artifacts.artifact_plan`` (``artifacts/plots`` ->
+    ``plots/``, ``artifacts/data`` -> ``data/``), shared with the SDK publisher.
+    """
     if not artifact_uri or not artifact_uri.startswith("s3://") or store is None:
         return {"files": 0, "bytes": 0, "artifact_uri": artifact_uri}
     bucket, base_prefix = split_uri(artifact_uri.rstrip("/"))
     if getattr(store, "bucket", bucket) != bucket:
         return {"files": 0, "bytes": 0, "artifact_uri": artifact_uri}
 
-    files_uploaded = 0
-    bytes_uploaded = 0
-    seen_keys: set[str] = set()
+    def _put(local_path: Path, target: str) -> int:
+        key = f"{base_prefix}/{target.lstrip('/')}"
+        size = local_path.stat().st_size
+        if immutable:
+            digest = sha256_path(local_path)
+            try:
+                store.put_file(key, local_path, if_absent=True, sha256=digest)
+            except ObjectExists:
+                existing = store.head(key)
+                if existing is None or existing.sha256 != digest or existing.size != size:
+                    raise ValueError(f"MLflow artifact differs from archived evidence: {key}") from None
+        else:
+            store.put_file(key, local_path)
+        return size
 
-    def _put(local_path: Path, rel_Target: str) -> None:
-        nonlocal files_uploaded, bytes_uploaded
-        key = f"{base_prefix}/{rel_Target.lstrip('/')}"
-        if key in seen_keys:
-            return
-        seen_keys.add(key)
-        store.put_file(key, local_path)
-        files_uploaded += 1
-        bytes_uploaded += local_path.stat().st_size
-
-    # Mirror artifacts/plots -> plots/ and artifacts/data -> data/ at the root of the MLflow run
-    artifacts_root = output_dir / "artifacts"
-    for subfolder in ("plots", "data"):
-        sub_dir = artifacts_root / subfolder
-        if sub_dir.is_dir():
-            for path in sorted(sub_dir.rglob("*")):
-                if path.is_file() and not path.name.endswith(_SKIP_SUFFIXES):
-                    rel = path.relative_to(sub_dir).as_posix()
-                    _put(path, f"{subfolder}/{rel}")
-
-    # Upload all standard run documents, reports, and model archive
-    for path in sorted(output_dir.rglob("*")):
-        if not path.is_file() or path.name.endswith(_SKIP_SUFFIXES):
-            continue
-        relative = path.relative_to(output_dir)
-        if any(part.startswith(_SKIP_PREFIXES) for part in relative.parts):
-            continue
-        _put(path, relative.as_posix())
-
-    return {"files": files_uploaded, "bytes": bytes_uploaded, "artifact_uri": artifact_uri}
+    sizes = upload_concurrently(_put, artifact_plan(output_dir, exclude=exclude), workers=workers)
+    return {"files": len(sizes), "bytes": sum(sizes), "artifact_uri": artifact_uri}
 
 
 def report_params(tracker: "SageMakerMlflowTracker", report: dict[str, Any]) -> dict[str, str]:
@@ -343,6 +349,7 @@ class SageMakerMlflowTracker:
         http_opener: Any | None = None,
         logger: logging.Logger | None = None,
         timeout_seconds: float = 10.0,
+        async_progress: bool = False,
     ):
         self.project = project
         self.stack = stack or project
@@ -358,7 +365,14 @@ class SageMakerMlflowTracker:
         self._tracking_uri = (tracking_uri or os.environ.get("MLFLOW_TRACKING_URI", "")).strip() or None
         self._session = boto3_session
         self._sagemaker_client = sagemaker_client
-        self._http_opener = http_opener or urllib.request.urlopen
+        # Keep-alive pool: urlopen paid a TCP+TLS handshake on every MLflow call.
+        self._http_opener = http_opener or shared_opener()
+        self._credentials = None
+        self.concurrency = max(1, PUBLISH_CONCURRENCY)
+        self.async_progress = async_progress
+        self._live_writer: AsyncMetricWriter | None = None
+        self._native: NativeAsyncLogger | None = None
+        self._native_checked = False
         self.timeout_seconds = timeout_seconds
         self.logger = logger or logging.getLogger("continual_bench.aws.mlflow")
 
@@ -373,6 +387,10 @@ class SageMakerMlflowTracker:
         self._progress_step = -1
         self._progress_attempted_at: float | None = None
         self._pending_progress: dict[str, dict[str, Any]] = {}
+        self._spot_attempt_tags: dict[str, str] | None = None
+        self._recorded_progress: dict[str, set[int]] = {}
+        self._known_remote_metrics: set[str] | None = None
+        self._rest_endpoint: str | None = None
 
     @property
     def tracking_uri(self) -> str | None:
@@ -425,16 +443,121 @@ class SageMakerMlflowTracker:
         short_id = self.run_id[:8] if self.run_id else "run"
         short = self.short_sha
         base = f"{self.dataset}-{self.policy}-{self.scope}-{short}-{short_id}"
-        return f"{base}-{self.attempt_key}" if self.attempt_key else base
+        return f"{base}-{self.attempt_key}" if self.attempt_key and not self.spot else base
+
+    @property
+    def logical_run_id(self) -> str:
+        return self.run_id
+
+    @property
+    def spot(self) -> bool:
+        return self._spot_attempt_tags is not None
 
     @property
     def run_key(self) -> str:
+        if self.spot:
+            return f"spot-{self.logical_run_id}"
         return f"{self.run_id}-{self.attempt_key}" if self.attempt_key else self.run_id
 
     def bind_attempt(self, attempt_key: str) -> None:
         if self.mlflow_run_id is not None and self.attempt_key != attempt_key:
             raise ValueError("MLflow tracker already belongs to another attempt")
         self.attempt_key = attempt_key
+
+    def bind_spot_attempt(
+        self,
+        attempt_key: str,
+        *,
+        instance_id: str,
+        attempt: int | str,
+        resumed_checkpoint: str | None = None,
+        recovery_reason: str | None = None,
+        previous_attempt_key: str | None = None,
+        log_group: str | None = None,
+        log_stream: str | None = None,
+    ) -> None:
+        """Bind attempt metadata before resolving the shared MLflow run."""
+        if self.mlflow_run_id is not None:
+            raise ValueError("Bind the Spot attempt before opening the MLflow run")
+        self.bind_attempt(attempt_key)
+        prefix = f"cb-spot-attempt-{attempt_key}"
+        self._spot_attempt_tags = {
+            "cb-compute": "batch-fargate-spot",
+            "cb-spot-attempt": attempt_key,
+            f"{prefix}-number": str(attempt),
+            f"{prefix}-instance-id": instance_id,
+        }
+        if log_group:
+            self._spot_attempt_tags[f"{prefix}-log-group"] = log_group
+        if log_stream:
+            self._spot_attempt_tags[f"{prefix}-log-stream"] = log_stream
+        if resumed_checkpoint:
+            self._spot_attempt_tags[f"{prefix}-resumed-checkpoint"] = resumed_checkpoint
+        if recovery_reason:
+            self._spot_attempt_tags[f"{prefix}-recovery-reason"] = recovery_reason
+            if previous_attempt_key:
+                previous = f"cb-spot-attempt-{previous_attempt_key}"
+                self._spot_attempt_tags[f"{previous}-recovery-cause"] = recovery_reason
+                previous_id, _, previous_number = previous_attempt_key.rpartition("-")
+                if previous_id.startswith("i-") and previous_number.isdigit():
+                    self._spot_attempt_tags[f"{previous}-instance-id"] = previous_id
+                    self._spot_attempt_tags[f"{previous}-number"] = previous_number
+
+    def record_spot_attempt(
+        self, state: str, reason: str | None = None, checkpoint: str | None = None,
+    ) -> bool:
+        """Persist attempt-specific evidence without ending the logical run."""
+        if self._spot_attempt_tags is None:
+            return False
+        prefix = f"cb-spot-attempt-{self.attempt_key}"
+        tags = {**self._spot_attempt_tags, f"{prefix}-state": state}
+        if reason:
+            tags[f"{prefix}-reason"] = reason
+        if checkpoint:
+            tags[f"{prefix}-last-checkpoint"] = checkpoint
+        # Queued live metrics land before the attempt state that summarizes them.
+        self.flush()
+        return self.log_batch(tags=[{"key": key, "value": value[:4500]} for key, value in tags.items()])
+
+    @property
+    def native_logger(self) -> NativeAsyncLogger | None:
+        """MLflow's own async client when MLFLOW_ENABLE_ASYNC_LOGGING is on and MLflow is installed."""
+        if not self._native_checked:
+            self._native_checked = True
+            if async_logging_requested() and native_logging_available(self.tracking_uri):
+                try:
+                    self._native = NativeAsyncLogger(self.tracking_uri)
+                except Exception as error:  # Fall back to the REST transport.
+                    self._record_error("mlflow_async_logging", error)
+        return self._native
+
+    def log_live(self, metrics: list[dict[str, Any]]) -> bool:
+        """Send live points without blocking training: MLflow async queue, else the REST batch."""
+        native = self.native_logger
+        if native is None:
+            return self.log_batch(metrics=metrics)
+        run_id = self.ensure_run()
+        if not run_id:
+            return False
+        try:
+            native.log_batch(run_id, metrics=metrics)
+            return True
+        except Exception as error:
+            self._record_error("mlflow_async_log_batch", error)
+            return self.log_batch(metrics=metrics)
+
+    def flush(self) -> bool:
+        """Drain every asynchronous write (MLflow queue and the REST live writer)."""
+        ok = True
+        if self._live_writer is not None:
+            self._live_writer.flush()
+        if self._native is not None:
+            try:
+                self._native.flush()
+            except Exception as error:
+                self._record_error("mlflow_async_flush", error)
+                ok = False
+        return ok
 
     @property
     def mlflow_tags(self) -> list[dict[str, str]]:
@@ -443,7 +566,7 @@ class SageMakerMlflowTracker:
             {"key": "cb-policy", "value": str(self.policy)},
             {"key": "cb-scope", "value": str(self.scope)},
             {"key": "cb-model", "value": str(self.model_name)},
-            {"key": "cb-run-id", "value": str(self.run_id)},
+            {"key": "cb-run-id", "value": str(self.logical_run_id if self.spot else self.run_id)},
             {"key": "cb-stack", "value": str(self.stack)},
             {"key": "cb-git-sha", "value": str(self.git_sha)},
             {"key": self.run_key_tag, "value": self.run_key},
@@ -456,8 +579,10 @@ class SageMakerMlflowTracker:
         ]
         if self.campaign_id:
             tags.append({"key": "cb-campaign-id", "value": str(self.campaign_id)})
-        if self.attempt_key:
+        if self.attempt_key and not self.spot:
             tags.append({"key": "cb-attempt-key", "value": self.attempt_key})
+        if self._spot_attempt_tags:
+            tags.extend({"key": k, "value": v[:4500]} for k, v in self._spot_attempt_tags.items())
         return tags
 
     def _record_error(self, action: str, error: Exception) -> None:
@@ -479,11 +604,16 @@ class SageMakerMlflowTracker:
             return None
 
     def _session_credentials(self, region: str):
-        session = self._session or boto3.Session(region_name=region)
-        creds = session.get_credentials()
-        if creds is None:
+        # One session per tracker: resolving the credential chain (IMDS on EC2) per
+        # request was a measurable share of every call. Refreshable credentials
+        # still rotate through get_frozen_credentials().
+        if self._credentials is None:
+            if self._session is None:
+                self._session = boto3.Session(region_name=region)
+            self._credentials = self._session.get_credentials()
+        if self._credentials is None:
             raise RuntimeError("No AWS credentials available for SigV4 signing")
-        return creds.get_frozen_credentials()
+        return self._credentials.get_frozen_credentials()
 
     def _request(
         self,
@@ -512,7 +642,8 @@ class SageMakerMlflowTracker:
         body_hash = sha256(body_bytes).hexdigest() if body_bytes else EMPTY_SHA256_HASH
 
         last_error: Exception | None = None
-        for endpoint in meta["endpoints"]:
+        endpoints = [self._rest_endpoint] if self.spot and self._rest_endpoint else meta["endpoints"]
+        for endpoint in endpoints:
             url = f"{endpoint}{path}{query}"
             headers: dict[str, str] = {
                 "Accept": "application/json",
@@ -548,6 +679,8 @@ class SageMakerMlflowTracker:
             try:
                 with self._http_opener(http_req, timeout=self.timeout_seconds) as resp:
                     raw_resp = resp.read()
+                    if self.spot:
+                        self._rest_endpoint = endpoint
                     return json.loads(raw_resp.decode("utf-8")) if raw_resp else {}
             except urllib.error.HTTPError as http_err:
                 raw_body = ""
@@ -563,6 +696,8 @@ class SageMakerMlflowTracker:
                 error_code = parsed_err.get("error_code", f"HTTP_{http_err.code}")
                 message = parsed_err.get("message", raw_body[:300] or str(http_err))
                 err = MlflowRestError(http_err.code, error_code, message)
+                if self.spot and parsed_err.get("error_code"):
+                    self._rest_endpoint = endpoint
                 raise err from http_err
             except urllib.error.URLError as url_err:
                 last_error = url_err
@@ -651,7 +786,7 @@ class SageMakerMlflowTracker:
         if exp_id is None:
             return None
 
-        # Only a retry of publication for the same trained output reuses the run.
+        # An EC2 worker retains the logical key across attempts. Batch retains the attempt key.
         try:
             search_resp = self._request(
                 "POST",
@@ -669,6 +804,9 @@ class SageMakerMlflowTracker:
                 info = runs[0].get("info") or {}
                 self.mlflow_run_id = info.get("run_id")
                 self.artifact_uri = info.get("artifact_uri")
+                metrics = (runs[0].get("data") or {}).get("metrics")
+                if self.spot and metrics is not None:
+                    self._known_remote_metrics = {point["key"] for point in metrics}
                 if info.get("status") in {"FAILED", "KILLED", "FINISHED"}:
                     try:
                         self._request(
@@ -699,6 +837,8 @@ class SageMakerMlflowTracker:
             run_info = (create_resp.get("run") or {}).get("info") or {}
             self.mlflow_run_id = run_info.get("run_id")
             self.artifact_uri = run_info.get("artifact_uri")
+            if self.spot:
+                self._known_remote_metrics = set()
             if hyperparameters is not None:
                 self.log_hyperparameters(hyperparameters)
             return self.mlflow_run_id
@@ -729,6 +869,8 @@ class SageMakerMlflowTracker:
 
     def start_live(self) -> bool:
         """Expose the Zia attempt before training or dataset materialization."""
+        if self.spot and not self.record_spot_attempt("RUNNING"):
+            return False
         return self.log_batch(tags=[
             {"key": "benchmark_complete", "value": "false"},
             {"key": "zia_artifacts_status", "value": "running"},
@@ -748,18 +890,62 @@ class SageMakerMlflowTracker:
         if not points:
             return
         self._progress_step = step
+        if self.native_logger is not None:
+            # MLflow buffers and sends from its own thread pool; no extra coalescing needed.
+            self.log_progress_metrics(points)
+            return
+        if self.async_progress and not self.spot:
+            # Training never waits on the network; a daemon thread sends coalesced snapshots.
+            if self._live_writer is None:
+                self._live_writer = AsyncMetricWriter(self.log_progress_metrics, PROGRESS_INTERVAL_SECONDS)
+            self._live_writer.submit(points)
+            return
         self._pending_progress.update((point["key"], point) for point in points)
         if (self._progress_attempted_at is None
                 or time.monotonic() - self._progress_attempted_at >= PROGRESS_INTERVAL_SECONDS):
             self._flush_progress()
 
     def _flush_progress(self) -> None:
+        self.flush()
         if self._pending_progress:
             points = list(self._pending_progress.values())
             self._pending_progress.clear()
-            # Avoid replaying a batch that may already have been accepted after a connection failure.
-            self.log_batch(metrics=points)
+            self.log_progress_metrics(points)
             self._progress_attempted_at = time.monotonic()
+
+    def log_progress_metrics(self, points) -> bool:
+        if not self.spot:
+            return self.log_live(points)
+        run_id = self.ensure_run()
+        if run_id is None:
+            return False
+        written = {}
+        try:
+            for point in points:
+                key, step = point["key"], point["step"]
+                if key not in self._recorded_progress:
+                    history = ()
+                    if self._known_remote_metrics is None or key in self._known_remote_metrics:
+                        history = self.get_metric_history(run_id, key)
+                    self._recorded_progress[key] = {row.step for row in history}
+                if step not in self._recorded_progress[key]:
+                    written.setdefault((key, step), point)
+        except Exception as err:
+            self._record_error("resolve_live_progress", err)
+            return False
+        if not written:
+            return True
+        if self._known_remote_metrics is not None:
+            self._known_remote_metrics.update(key for key, _ in written)
+        # A resumed attempt skips steps its predecessor already stored, then queues the rest.
+        if not self.log_live(list(written.values())):
+            # A failed response can have persisted some points. Reconcile those series on the next flush.
+            for key, _ in written:
+                self._recorded_progress.pop(key, None)
+            return False
+        for key, step in written:
+            self._recorded_progress[key].add(step)
+        return True
 
     def log_batch(
         self,
@@ -772,51 +958,22 @@ class SageMakerMlflowTracker:
         if not run_id:
             return False
 
-        all_metrics = metrics or []
-        all_params = params or []
-        all_tags = tags or []
-        success = True
-
-        for offset in range(0, len(all_params), MLFLOW_LOG_BATCH_MAX_PARAMS):
-            chunk = all_params[offset : offset + MLFLOW_LOG_BATCH_MAX_PARAMS]
+        # Params, tags and metrics share requests up to MLflow's limits.
+        chunks = batch_payloads(metrics or (), params or (), tags or ())
+        for chunk_metrics, chunk_params, chunk_tags in chunks:
+            payload: dict[str, Any] = {"run_id": run_id}
+            if chunk_params:
+                payload["params"] = chunk_params
+            if chunk_tags:
+                payload["tags"] = chunk_tags
+            if chunk_metrics:
+                payload["metrics"] = chunk_metrics
             try:
-                self._request(
-                    "POST",
-                    "/api/2.0/mlflow/runs/log-batch",
-                    payload={"run_id": run_id, "params": chunk},
-                )
+                self._request("POST", "/api/2.0/mlflow/runs/log-batch", payload=payload)
             except Exception as err:
-                success = False
-                self._record_error("log_batch_params", err)
-                break
-
-        for offset in range(0, len(all_tags), MLFLOW_LOG_BATCH_MAX_TAGS):
-            chunk = all_tags[offset : offset + MLFLOW_LOG_BATCH_MAX_TAGS]
-            try:
-                self._request(
-                    "POST",
-                    "/api/2.0/mlflow/runs/log-batch",
-                    payload={"run_id": run_id, "tags": chunk},
-                )
-            except Exception as err:
-                success = False
-                self._record_error("log_batch_tags", err)
-                break
-
-        for offset in range(0, len(all_metrics), MLFLOW_LOG_BATCH_MAX_METRICS):
-            chunk = all_metrics[offset : offset + MLFLOW_LOG_BATCH_MAX_METRICS]
-            try:
-                self._request(
-                    "POST",
-                    "/api/2.0/mlflow/runs/log-batch",
-                    payload={"run_id": run_id, "metrics": chunk},
-                )
-            except Exception as err:
-                success = False
-                self._record_error("log_batch_metrics", err)
-                break
-
-        return success
+                self._record_error("log_batch", err)
+                return False
+        return True
 
     def log_hyperparameters(
         self,
@@ -866,7 +1023,7 @@ class SageMakerMlflowTracker:
             )
         if not mlflow_metrics:
             return True
-        return self.log_batch(metrics=mlflow_metrics)
+        return self.log_live(mlflow_metrics)
 
     log_epoch = log_epoch_metrics
 
@@ -898,6 +1055,9 @@ class SageMakerMlflowTracker:
     def finish(self, status: str = "FINISHED") -> bool:
         if not self.mlflow_run_id:
             return False
+        self.flush()
+        if self._live_writer is not None:
+            self._live_writer.close()
         mlflow_status = {
             "Completed": "FINISHED",
             "FINISHED": "FINISHED",
@@ -968,72 +1128,13 @@ class SageMakerMlflowTracker:
         return self.log_batch(metrics=self._missing_completed_metrics(run_id, metrics, known_keys))
 
     def publish_training_rounds(self, report) -> list[dict]:
-        """Use fit-local steps inside one child run per round of this parent attempt."""
-        if not report.get("training_history"):
-            return []
-        existing = {}
-        search = {
-            "experiment_ids": [self.experiment_id],
-            "filter": f"tags.`mlflow.parentRunId` = '{self.mlflow_run_id}'",
-            "max_results": 200,
-        }
-        while True:
-            found = self._request("POST", "/api/2.0/mlflow/runs/search", payload=search)
-            for run in found.get("runs") or []:
-                tags = {tag["key"]: tag["value"] for tag in (run.get("data", {}).get("tags") or [])}
-                if fit_id := tags.get("cb-fit-id"):
-                    if fit_id in existing:
-                        raise ValueError(f"duplicate MLflow child runs for {self.mlflow_run_id}/{fit_id}")
-                    known_keys = {metric["key"] for metric in run.get("data", {}).get("metrics") or ()}
-                    existing[fit_id] = (run["info"], tags, known_keys)
-            page = found.get("next_page_token")
-            if not page:
-                break
-            search["page_token"] = page
-        receipts = []
-        for tags, params, metrics in training_round_mlflow(self.mlflow_run_id, report):
-            fit_id = tags["cb-fit-id"]
-            info, remote_tags, known_keys = existing.get(fit_id, (None, {}, set()))
-            if info is None:
-                info = self._request(
-                    "POST",
-                    "/api/2.0/mlflow/runs/create",
-                    payload={
-                        "experiment_id": self.experiment_id,
-                        "start_time": int(time.time() * 1000),
-                        "run_name": tags["mlflow.runName"],
-                        "tags": [{"key": key, "value": value} for key, value in tags.items()],
-                    },
-                )["run"]["info"]
-            child_id = info["run_id"]
-            evidence_keys = ("cb-fit-evidence-sha256", "cb-fit-observations-sha256")
-            extending = False
-            for key in evidence_keys:
-                expected = tags.get(key)
-                if expected is None:
-                    continue
-                if key in remote_tags and remote_tags[key] != expected:
-                    raise ValueError(f"MLflow child {fit_id} already tracks different training evidence")
-                extending |= key not in remote_tags
-            if info.get("status") != "FINISHED" or extending:
-                missing = self._missing_completed_metrics(child_id, metrics, known_keys)
-                for offset in range(0, max(1, len(missing)), MLFLOW_LOG_BATCH_MAX_METRICS):
-                    batch = missing[offset:offset + MLFLOW_LOG_BATCH_MAX_METRICS]
-                    payload = {"run_id": child_id, "metrics": batch}
-                    if offset == 0:
-                        payload["params"] = [{"key": k, "value": v} for k, v in params.items()]
-                        if extending:
-                            payload["tags"] = [{"key": k, "value": v} for k, v in tags.items()]
-                    self._request("POST", "/api/2.0/mlflow/runs/log-batch", payload=payload)
-                self._request(
-                    "POST", "/api/2.0/mlflow/runs/update",
-                    payload={"run_id": child_id, "status": "FINISHED", "end_time": int(time.time() * 1000)},
-                )
-            receipt = {"fit_id": fit_id, "run_id": child_id, "metric_points": len(metrics)}
-            if report.get("tracking_observations"):
-                receipt["artifact_uri"] = info.get("artifact_uri")
-            receipts.append(receipt)
-        return receipts
+        """Use fit-local steps inside one child run per round of this parent run."""
+        return publish_child_runs(
+            RestBackend(self._request, concurrency=self.concurrency),
+            self.experiment_id, self.mlflow_run_id, report,
+            checkpoint_base_uri=self.artifact_uri if self.spot else None,
+            include_artifact_uri=True,
+        )
 
     def stage_observation_artifacts(self, directory, report, children, store):
         root = write_observation_evidence(directory, report, self.mlflow_run_id, children)
@@ -1047,7 +1148,7 @@ class SageMakerMlflowTracker:
             if not target:
                 raise RuntimeError("MLflow child did not provide an artifact URI")
             uploaded = upload_directory_to_mlflow_artifacts(
-                store, fit_root, f"{target.rstrip('/')}/{ARTIFACT_ROOT}",
+                store, fit_root, f"{target.rstrip('/')}/{ARTIFACT_ROOT}", immutable=self.spot,
             )
             if not uploaded["files"]:
                 raise RuntimeError("MLflow did not publish fit observation artifacts")
@@ -1068,7 +1169,7 @@ class SageMakerMlflowTracker:
         `aws-mlflow` extra) and falls back to the REST/SigV4 client below otherwise or on failure.
         """
         self._flush_progress()
-        library = self._publish_with_library(
+        library = None if self.spot else self._publish_with_library(
             report, adapted=adapted, output_dir=output_dir, outputs_uri=outputs_uri,
             model_package_arn=model_package_arn,
         )
@@ -1093,7 +1194,7 @@ class SageMakerMlflowTracker:
         note_lines = [
             f"### Continual-Bench Run: `{self.dataset}` | `{self.policy}` | `{self.scope}`",
             f"- **Campaign ID:** `{self.campaign_id or 'n/a'}`",
-            f"- **Run ID:** `{self.run_id}`",
+            f"- **Run ID:** `{self.logical_run_id}`",
             f"- **Model:** `{report.get('model', self.model_name)}`",
             f"- **Holdout Accuracy:** `{holdout_metrics.get('accuracy', 'n/a')}`",
             f"- **Prequential Accuracy:** `{summary_metrics.get('accuracy', 'n/a')}`",
@@ -1171,7 +1272,10 @@ class SageMakerMlflowTracker:
             child_runs = self.publish_training_rounds(report)
             if output_dir is not None:
                 self.stage_observation_artifacts(output_dir, report, child_runs, store)
-                uploaded = upload_directory_to_mlflow_artifacts(store, output_dir, self.artifact_uri)
+                uploaded = upload_directory_to_mlflow_artifacts(
+                    store, output_dir, self.artifact_uri, immutable=self.spot,
+                    exclude=child_artifact_prefixes(child_runs),
+                )
                 if not uploaded["files"]:
                     raise ValueError("MLflow run has no uploaded artifacts")
         except Exception as err:
@@ -1187,6 +1291,8 @@ class SageMakerMlflowTracker:
             )
         except Exception as err:
             self._record_error("register_run_models", err)
+            if self.spot:
+                return {"published": False, "errors": list(self.api_errors)}
 
         if not self.finish("FINISHED") or not self.log_batch(tags=[
             {"key": "benchmark_complete", "value": "true"},
@@ -1286,19 +1392,35 @@ class SageMakerMlflowTracker:
                 for mv in resp.get("model_versions") or []:
                     if mv.get("run_id") == run_id:
                         mv_tags = {t["key"]: t["value"] for t in (mv.get("tags") or []) if "key" in t}
-                        found[mv_tags.get("ordinal", "final")] = mv
+                        ordinal = mv_tags.get("ordinal", "final")
+                        if self.spot and ordinal in found:
+                            raise ValueError(f"duplicate MLflow model versions for {run_id}/{name}/{ordinal}")
+                        found[ordinal] = mv
                 page = resp.get("next_page_token")
                 if not page:
                     break
                 params["page_token"] = page
         except Exception:
-            pass
+            if self.spot:
+                raise
         return found
 
-    def _set_model_alias(self, name: str, alias: str, version: str) -> None:
+    def _set_model_alias(self, name: str, alias: str, version: str, *, recovering: bool = False) -> None:
         clean_alias = re.sub(r"[^a-zA-Z0-9_\-]", "-", alias).strip("-")[:64]
         if not clean_alias:
             return
+        if recovering:
+            try:
+                existing = self._request(
+                    "GET", "/api/2.0/mlflow/registered-models/alias",
+                    params={"name": name, "alias": clean_alias},
+                ).get("model_version") or {}
+            except MlflowRestError as err:
+                if err.error_code not in {"RESOURCE_DOES_NOT_EXIST", "INVALID_PARAMETER_VALUE"}:
+                    raise
+                existing = {}
+            if (current := existing.get("version")) and int(current) >= int(version):
+                return
         try:
             self._request(
                 "POST",
@@ -1306,7 +1428,16 @@ class SageMakerMlflowTracker:
                 payload={"name": name, "alias": clean_alias, "version": str(version)},
             )
         except Exception:
-            pass
+            if self.spot:
+                raise
+
+    def _policy_aliases(self, name, version, *, idx, end_seq, is_final, recovering=False):
+        if idx == 0:
+            self._set_model_alias(name, "initial", version, recovering=recovering)
+        self._set_model_alias(name, f"step-{end_seq}", version, recovering=recovering)
+        if is_final:
+            self._set_model_alias(name, "final", version, recovering=recovering)
+            self._set_model_alias(name, "current", version, recovering=recovering)
 
     def register_run_models(
         self,
@@ -1360,7 +1491,7 @@ class SageMakerMlflowTracker:
         ]
 
         # 2. Ensure per-policy Registered Model and register every continual-learning checkpoint version
-        self._ensure_registered_model(
+        ensured_policy = self._ensure_registered_model(
             policy_model_name,
             (
                 f"Continual-Bench ZIA model versions for dataset={dataset}, "
@@ -1368,23 +1499,33 @@ class SageMakerMlflowTracker:
             ),
             [*common_rm_tags, {"key": "policy", "value": policy}],
         )
+        if self.spot and not ensured_policy:
+            raise RuntimeError(f"could not verify MLflow registered model {policy_model_name}")
         existing_policy_versions = self._existing_model_versions(policy_model_name, run_id)
         created_versions: list[str] = []
 
         for idx, ver in enumerate(raw_versions):
             ord_key = str(idx)
             is_final = idx == len(raw_versions) - 1
+            rel_file = "model/model.tar.gz" if is_final else str(ver["file"]).lstrip("/")
+            source_uri = f"{base_uri}/{rel_file}"
+            end_seq = int(ver.get("end_seq", 0))
             if ord_key in existing_policy_versions:
-                v_num = str(existing_policy_versions[ord_key].get("version", ""))
+                existing_version = existing_policy_versions[ord_key]
+                v_num = str(existing_version.get("version", ""))
+                if self.spot:
+                    if not v_num or existing_version.get("source") != source_uri:
+                        raise ValueError(f"archive mismatch for MLflow model version {source_uri}")
+                    self._policy_aliases(
+                        policy_model_name, v_num, idx=idx, end_seq=end_seq,
+                        is_final=is_final, recovering=True,
+                    )
                 if v_num:
                     created_versions.append(v_num)
                 continue
 
-            rel_file = "model/model.tar.gz" if is_final else str(ver["file"]).lstrip("/")
-            source_uri = f"{base_uri}/{rel_file}"
             action = str(ver.get("action") or ("initial" if idx == 0 else "update"))
             start_seq = int(ver.get("start_seq", 0))
-            end_seq = int(ver.get("end_seq", 0))
             train_samples = int(ver.get("train_samples", 0))
             sha_short = str(ver.get("sha256", ""))[:12]
 
@@ -1440,18 +1581,19 @@ class SageMakerMlflowTracker:
                 v_num = str((mv_resp.get("model_version") or {}).get("version", ""))
                 if v_num:
                     created_versions.append(v_num)
-                    if idx == 0:
-                        self._set_model_alias(policy_model_name, "initial", v_num)
-                    self._set_model_alias(policy_model_name, f"step-{end_seq}", v_num)
-                    if is_final:
-                        self._set_model_alias(policy_model_name, "final", v_num)
-                        self._set_model_alias(policy_model_name, "current", v_num)
+                    self._policy_aliases(
+                        policy_model_name, v_num, idx=idx, end_seq=end_seq, is_final=is_final,
+                    )
+                elif self.spot:
+                    raise RuntimeError("MLflow did not return a model version")
             except Exception as err:
+                if self.spot:
+                    raise
                 self._record_error("create_model_version", err)
 
         # 3. Also register the final model in the cross-policy family registry for side-by-side comparison
         family_version = ""
-        self._ensure_registered_model(
+        ensured_family = self._ensure_registered_model(
             family_model_name,
             (
                 f"Unified Continual-Bench ZIA model registry comparing policies "
@@ -1459,13 +1601,20 @@ class SageMakerMlflowTracker:
             ),
             common_rm_tags,
         )
+        if self.spot and not ensured_family:
+            raise RuntimeError(f"could not verify MLflow registered model {family_model_name}")
+        family_source = f"{base_uri}/model/model.tar.gz"
         existing_family = self._existing_model_versions(family_model_name, run_id)
         if existing_family:
             first_existing = next(iter(existing_family.values()))
             family_version = str(first_existing.get("version", ""))
+            if self.spot:
+                if not family_version or first_existing.get("source") != family_source:
+                    raise ValueError(f"archive mismatch for MLflow model version {family_source}")
+                self._set_model_alias(family_model_name, policy_slug, family_version, recovering=True)
+                self._set_model_alias(family_model_name, "current", family_version, recovering=True)
         else:
             final_ver = raw_versions[-1]
-            rel_file = "model/model.tar.gz"
             family_desc = (
                 f"Policy={policy} ({len(raw_versions)} checkpoints, "
                 f"final end_seq={final_ver.get('end_seq', 0)}): "
@@ -1493,7 +1642,7 @@ class SageMakerMlflowTracker:
                     "/api/2.0/mlflow/model-versions/create",
                     payload={
                         "name": family_model_name,
-                        "source": f"{base_uri}/{rel_file}",
+                        "source": family_source,
                         "run_id": run_id,
                         "description": family_desc[:1000],
                         "tags": [t for t in family_tags if t["value"] != ""],
@@ -1503,7 +1652,11 @@ class SageMakerMlflowTracker:
                 if family_version:
                     self._set_model_alias(family_model_name, policy_slug, family_version)
                     self._set_model_alias(family_model_name, "current", family_version)
+                elif self.spot:
+                    raise RuntimeError("MLflow did not return a family model version")
             except Exception as err:
+                if self.spot:
+                    raise
                 self._record_error("create_family_model_version", err)
 
         final_version = created_versions[-1] if created_versions else ""
@@ -1516,7 +1669,8 @@ class SageMakerMlflowTracker:
             run_tags.append({"key": "registered_model_version", "value": final_version})
         if family_version:
             run_tags.append({"key": "registered_family_version", "value": family_version})
-        self.log_batch(tags=run_tags)
+        if not self.log_batch(tags=run_tags) and self.spot:
+            raise RuntimeError("MLflow did not persist registered model links")
 
         return {
             "registered_model": policy_model_name,
@@ -1525,6 +1679,13 @@ class SageMakerMlflowTracker:
             "registered_family_model": family_model_name,
             "registered_family_version": family_version,
         }
+
+
+def child_artifact_prefixes(child_runs) -> tuple[str, ...]:
+    """Fit observations already published on their child runs (never re-sent to the parent)."""
+    return tuple(
+        f"{ARTIFACT_ROOT}/fits/{child['fit_id']}" for child in child_runs if child.get("artifact_uri")
+    )
 
 
 class MlflowRestError(RuntimeError):

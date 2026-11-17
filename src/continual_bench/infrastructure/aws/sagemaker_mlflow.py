@@ -21,21 +21,23 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from continual_bench.infrastructure.tracking import MlflowClientBackend
+from continual_bench.infrastructure.tracking.artifacts import artifact_plan, upload_concurrently
+from continual_bench.infrastructure.tracking.rounds import publish_training_rounds
 from continual_bench.infrastructure.zia_model_bundle import (
     PYFUNC_LOADER,
     pyfunc_code_paths,
     pyfunc_dependencies,
 )
-from continual_bench.infrastructure.zia_training_tracking import publish_sdk_training_rounds
 
-from .mlflow_tracking import _SKIP_PREFIXES, _SKIP_SUFFIXES, report_metric_items, report_params
+from .mlflow_tracking import ARTIFACT_ROOT, report_metric_items, report_params
 
-BATCH_METRICS = 500
-BATCH_PARAMS = 100
+
 class LibraryPublishError(RuntimeError):
     """The library path failed; the caller falls back to the REST tracker."""
 
@@ -52,11 +54,6 @@ def library_available() -> bool:
     except ImportError:
         return False
     return True
-
-
-def _chunks(items: list, size: int):
-    for offset in range(0, len(items), size):
-        yield items[offset : offset + size]
 
 
 def _slug(value: str) -> str:
@@ -99,27 +96,25 @@ def _log_dataset(mlflow, tracker, report: dict[str, Any], outputs_uri: str | Non
     return True
 
 
-def _log_artifacts(mlflow, output_dir: Path | None) -> int:
+def _log_artifacts(client, run_id: str, output_dir: Path | None, *, exclude=()) -> int:
+    """Upload the shared artifact layout once, concurrently (``client`` is thread-safe; the
+    fluent ``mlflow.log_artifact`` is bound to the caller thread's active run)."""
     if output_dir is None or not Path(output_dir).is_dir():
         return 0
-    root = Path(output_dir)
-    uploaded = 0
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.name.endswith(_SKIP_SUFFIXES):
-            continue
-        relative = path.relative_to(root)
-        if any(part.startswith(_SKIP_PREFIXES) for part in relative.parts):
-            continue
-        # artifacts/plots -> plots/, artifacts/data -> data/ (same layout as every other publisher)
-        parts = (
-            relative.parts[1:]
-            if relative.parts[0] == "artifacts" and len(relative.parts) > 1
-            else relative.parts
-        )
-        parent = "/".join(parts[:-1])
-        mlflow.log_artifact(str(path), artifact_path=parent or None)
-        uploaded += 1
-    return uploaded
+
+    def put(path: Path, target: str) -> None:
+        parent = target.rpartition("/")[0]
+        client.log_artifact(run_id, str(path), artifact_path=parent or None)
+
+    return len(upload_concurrently(put, artifact_plan(output_dir, exclude=exclude)))
+
+
+def _saved_figures(output_dir: Path | None) -> list[str]:
+    """Figures ``prepare_artifacts`` already rendered under ``artifacts/plots``."""
+    root = Path(output_dir) / "artifacts" if output_dir is not None else None
+    if root is None or not (root / "plots").is_dir():
+        return []
+    return sorted(path.relative_to(root).as_posix() for path in (root / "plots").rglob("*.png"))
 
 
 def _ensure_registered_model(client, name: str, description: str, tags: dict[str, str]) -> None:
@@ -288,16 +283,16 @@ def publish_with_library(
     if not library_available():
         raise LibraryPublishError("mlflow and sagemaker-mlflow are not installed")
     import mlflow
-    from mlflow.entities import Metric, RunTag
     from mlflow.tracking import MlflowClient
 
-    from continual_bench.infrastructure.metric_tracking import missing_metric_points
     from continual_bench.infrastructure.mlflow_figures import log_report_figures
     from continual_bench.infrastructure.observation_tracking import publish_sdk_observations
+    from continual_bench.infrastructure.tracking import missing_metric_points
 
     try:
         mlflow.set_tracking_uri(tracker.tracking_uri)
         client = MlflowClient()
+        backend = MlflowClientBackend(client)
         experiment = mlflow.set_experiment(tracker.experiment_name)
         tags = {t["key"]: t["value"] for t in tracker.mlflow_tags}
         resumed = tracker.mlflow_run_id
@@ -333,23 +328,23 @@ def publish_with_library(
                 "benchmark_complete": "false", "zia_artifacts_status": "publishing",
             })
             params = report_params(tracker, report)
-            for chunk in _chunks(list(params.items()), BATCH_PARAMS):
-                mlflow.log_params(dict(chunk))
             points = report_metric_items(report, 0, adapted, include_observations=output_dir is None)
             desired = {(p["key"], p["step"], p["value"]): p for p in points}
-            missing = missing_metric_points(client, run_id, desired)
-            for chunk in _chunks([desired[key] for key in missing], BATCH_METRICS):
-                client.log_batch(
-                    run_id,
-                    metrics=[Metric(p["key"], p["value"], p["timestamp"], p["step"]) for p in chunk],
-                    synchronous=True,
-                )
+            missing = missing_metric_points(backend, run_id, desired)
+            # Params and metrics share log-batch requests (MLflow limits in tracking.batching).
+            backend.log_batch(run_id, metrics=[desired[key] for key in missing], params=params)
             dataset_logged = _log_dataset(mlflow, tracker, report, outputs_uri)
-            child_runs = publish_sdk_training_rounds(client, experiment.experiment_id, run_id, report)
-            if output_dir is not None:
-                publish_sdk_observations(client, run_id, output_dir, report, child_runs)
-            figures = log_report_figures(report)  # mlflow.log_figure on this active run
-            uploaded = _log_artifacts(mlflow, output_dir)
+            child_runs = publish_training_rounds(
+                backend, experiment.experiment_id, run_id, report, now_ms=int(time.time() * 1000),
+            )
+            observed = output_dir is not None and publish_sdk_observations(
+                client, run_id, output_dir, report, child_runs,
+            )
+            # prepare_artifacts already rendered the dashboards: upload them instead of re-plotting.
+            figures = _saved_figures(output_dir) or log_report_figures(report)
+            uploaded = _log_artifacts(
+                client, run_id, output_dir, exclude=(ARTIFACT_ROOT,) if observed else (),
+            )
             if output_dir is not None and not uploaded:
                 raise ValueError("MLflow run has no uploaded artifacts")
             pyfunc_logged = _log_pyfunc_model(mlflow, output_dir, report)
@@ -366,8 +361,7 @@ def publish_with_library(
                 tags_done["registered_model_version"] = registry["registered_model_version"]
             if outputs_uri:
                 tags_done["cb-outputs-uri"] = str(outputs_uri)[:500]
-        tags_done = [RunTag(key, value) for key, value in tags_done.items()]
-        client.log_batch(run_id, tags=tags_done, synchronous=True)
+        backend.log_batch(run_id, tags=tags_done)
     except Exception as error:
         raise LibraryPublishError(f"{type(error).__name__}: {error}") from error
     return {

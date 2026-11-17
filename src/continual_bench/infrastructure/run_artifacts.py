@@ -26,19 +26,14 @@ def system_metric_points(system) -> tuple[list[tuple[str, int, float]], dict]:
 
 
 def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoints=True) -> dict:
-    from mlflow.entities import Metric
+    from .tracking import MetricPoint, as_backend
 
+    backend = as_backend(client)
     points, stamps = system_metric_points(report.get("system_metrics"))
     missing = missing_metric_points(client, run_id, points)
-    for offset in range(0, len(missing), 500):
-        client.log_batch(
-            run_id,
-            metrics=[
-                Metric(key, value, stamps[key, step], step)
-                for key, step, value in missing[offset : offset + 500]
-            ],
-            synchronous=True,
-        )
+    backend.log_batch(run_id, metrics=[
+        MetricPoint(key, value, step, stamps[key, step]) for key, step, value in missing
+    ])
     root = Path(directory) / "artifacts"
     uploaded = 0
     for folder in ("plots", "data"):
@@ -47,9 +42,11 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
             uploaded += sum(1 for path in (root / folder).rglob("*") if path.is_file())
     figures = log_detailed_figures(report, run_id)
     system = report.get("system_metrics") or {}
-    client.set_tag(run_id, "detailed_figures", str(len(figures)))
-    client.set_tag(run_id, "system_metrics_collector", system.get("collector", "absent"))
-    client.set_tag(run_id, "run_artifacts", f"{uploaded} files; plots/ and data/")
+    backend.log_batch(run_id, tags={
+        "detailed_figures": str(len(figures)),
+        "system_metrics_collector": system.get("collector", "absent"),
+        "run_artifacts": f"{uploaded} files; plots/ and data/",
+    })
     result = {
         "system_metric_points": len(points), "artifact_files": uploaded, "detailed_figures": len(figures),
     }

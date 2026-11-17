@@ -11,6 +11,12 @@ O perfil AWS separa quatro grandezas e nunca as soma entre si:
 
 ## Por tentativa
 
+Nas campanhas Fargate Spot, cada tentativa interrompida e retomada aparece como uma tentativa
+do job Batch em `analytics/attempts/`. Consulte `cur_campaign_spot.sql` após a atualização do
+CUR para obter os valores faturados de vCPU, memória e armazenamento efêmero do Fargate Spot
+por política. Ative também a tag `cb-component` no Cost Allocation Tags da conta pagadora.
+As tarifas Fargate Spot variam por região e tempo.
+
 `record_attempt` grava em `analytics/attempts/` o ID do job, o ARN da task ECS, o código de
 saída, `createdAt`, `startedAt` e `stoppedAt`, a job definition com revisão, vCPU, memória e
 disco reservados. Grava também, em `analytics/cost_estimates/`, a espera na fila, a duração, os
@@ -19,6 +25,7 @@ worker registra no `final.json` e no `status.json` os bytes publicados, a duraç
 e o digest da imagem. A estimativa cobre só a reserva Fargate. S3, logs, endpoints e serviços
 compartilhados entram pelo CUR.
 
+Esse cálculo se aplica às tentativas históricas em Fargate.
 `configs/contracts/aws-prices.us-east-1.json` é o snapshot de preços versionado. Fargate e S3
 coincidem com os catálogos públicos verificados em 08/11/2026. As demais entradas ficam
 marcadas `seed_pending_price_list_refresh` até rodar, com credenciais:
@@ -63,6 +70,8 @@ deve esperar o fechamento.
 ## Consultas
 
 ```bash
+continual-bench aws query infra/athena/cur_campaign_spot.sql --database continual_bench_billing \
+  --param campaign=zia-social-full-spot-v1 --param period=2026-11
 continual-bench aws query infra/athena/cur_campaign_tasks.sql --database continual_bench_billing \
   --param campaign=zia-social-full-v1 --param period=2026-11
 continual-bench aws query infra/athena/cur_shared_costs.sql --database continual_bench_billing --param period=2026-11
@@ -124,7 +133,10 @@ para o Batch e omitia o modo dos endpoints. Para preservar o perfil implantado, 
 os dois parâmetros no objeto antes de um novo deploy por GitHub Actions. Consulte
 [a evidência de rede](validation.md#rede-do-batch).
 
-Valores ilustrativos da parcela fixa, com 730 h/mês e USD 0,01/h por endpoint por AZ.
+A parcela fixa incide enquanto a stack temporária existe. A tabela usa 730 h/mês para
+ilustrar o custo de manter os endpoints provisionados continuamente. Com cinco endpoints em
+uma AZ, a tarifa de USD 0,01/h por endpoint totaliza USD 0,05/h enquanto a stack existe.
+Veja o [ciclo dos endpoints](operations.md#7-ciclo-dos-endpoints-de-interface).
 `single` mantém as duas opções de sub-rede para o Batch, mas os workers da outra AZ cruzam a zona
 para chegar aos endpoints de interface. Considere a latência e os custos de tráfego aplicáveis:
 uma falha na AZ dos endpoints afeta o acesso a esses serviços nas duas sub-redes.

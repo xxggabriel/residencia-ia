@@ -5,6 +5,10 @@ Description: >-
   CloudFormation execution role used to apply the runtime change set. Replaces the former
   CodePipeline/CodeBuild pipeline. Workflows never download datasets or start campaigns.
 
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
 Parameters:
   Project:
     Type: String
@@ -156,6 +160,7 @@ Resources:
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-acquisition"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-benchmark-job"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-control"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-endpoints"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-feature-store"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-firehose"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-flink"

@@ -83,6 +83,7 @@ def test_plan_is_published_once_before_submission(campaign):
 @pytest.mark.parametrize("scope", ["smoke", "full"])
 def test_zia_examples_plan_all_thirty_six_independent_jobs(campaign, scope):
     _, _, release, _, _ = campaign
+    release = release.model_copy(update={"benchmark_compute": "ec2-spot-c6a.large"})
     jobs = set()
     for dataset in ("fraud", "social", "ecommerce"):
         def request(filename):
@@ -92,13 +93,13 @@ def test_zia_examples_plan_all_thirty_six_independent_jobs(campaign, scope):
         campaign_request = CampaignRequest.model_validate(request("campaign"))
         prepare = DatasetRequest.model_validate(request("dataset"))
         assert campaign_request.snapshot == prepare.snapshot() and campaign_request.snapshot.scope == scope
-        assert campaign_request.campaign_id == f"zia-{dataset}-{scope}-v3"
+        assert campaign_request.campaign_id == f"zia-{dataset}-{scope}-spot-v1"
         assert campaign_request.run_timeout_seconds == (3600 if scope == "smoke" else 172800)
         plan = planning.build_plan(campaign_request, release, snapshot_manifest={
             "manifest_sha256": "a" * 64, "manifest_uri": "s3://bucket/snapshot.json",
             "prepared": {"sha256": "b" * 64},
         })
-        assert plan["concurrency"] == 2 and len(plan["units"]) == 12
+        assert plan["concurrency"] == 12 and len(plan["units"]) == 12
         assert tuple(u["params"]["policy"] for u in plan["units"]) == ZIA_POLICIES
         for unit in plan["units"]:
             assert Job(**unit["labels"], campaign="audit").policy == unit["params"]["policy"]

@@ -268,7 +268,7 @@ def schedule_figure(showcase):
 
 
 def oracle_comparison_figures(result):
-    """Compare shared Electricity schedules under each objective and its own lower bound."""
+    """Compare shared schedules under each objective and its own lower bound."""
     from matplotlib.ticker import FuncFormatter
 
     curves, prices = result["curves"], np.asarray(result["alphas"])
@@ -279,6 +279,7 @@ def oracle_comparison_figures(result):
     same_batch = result["comparison"]["same_batch"]
     mode = "same_batch" if same_batch else "next_batch"
     prefix = f"oracle_comparison_{result['dataset']}_{mode}"
+    dataset = result["dataset"].capitalize()
     timing = "ativação no próprio lote" if same_batch else "ativação no lote seguinte"
     subtitle = f"{result['trials']} sementes pareadas · mesmos modelos, lotes e partições · {timing}"
 
@@ -308,7 +309,7 @@ def oracle_comparison_figures(result):
         for rule in rules:
             draw(ax, rule, prices, curves[rule][metric])
         price_axis(ax)
-    _header(fig, "CARA / UPF", "Electricity · dois objetivos e dois Oracles", subtitle,
+    _header(fig, "CARA / UPF", f"{dataset} · dois objetivos e dois Oracles", subtitle,
             left=.075, top=.71, right=.97, bottom=.10, hspace=.50, wspace=.26)
     _legend(fig, *axes[0, 0].get_legend_handles_labels(), columns=3, x=.075, y=.80)
     costs = fig
@@ -321,7 +322,7 @@ def oracle_comparison_figures(result):
             draw(ax, rule, prices, curves[rule][metric])
         price_axis(ax)
     _percent(axes[1])
-    _header(fig, "CARA / UPF", "Electricity · retreinos e acurácia", subtitle,
+    _header(fig, "CARA / UPF", f"{dataset} · retreinos e acurácia", subtitle,
             left=.075, top=.66, right=.97, bottom=.16, wspace=.25)
     _legend(fig, *axes[0].get_legend_handles_labels(), columns=3, x=.075, y=.80)
     schedules = fig
@@ -335,7 +336,7 @@ def oracle_comparison_figures(result):
             measure = np.asarray(curves[rule][metric]) - prices * retrains
             draw(ax, rule, retrains, measure, scatter=True)
         ax.set_xlabel("Número médio de retreinos")
-    _header(fig, "CARA / UPF", "Electricity · desempenho por frequência de retreino",
+    _header(fig, "CARA / UPF", f"{dataset} · desempenho por frequência de retreino",
             f"Um ponto por preço, sem cobrar o retreino no eixo vertical · {timing}.",
             left=.075, top=.66, right=.97, bottom=.16, wspace=.25)
     _legend(fig, *axes[0].get_legend_handles_labels(), columns=3, x=.075, y=.80)

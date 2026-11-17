@@ -26,6 +26,7 @@ LAMBDA_TRANSIENT = {
 PLACEHOLDER = re.compile(r"\$\{([A-Za-z0-9_]+)\}")
 SAMPLE_SUBSTITUTIONS = {
     "ControlFunction": "arn:aws:lambda:us-east-1:123456789012:function:continual-bench-control:1",
+    "EndpointsFunction": "arn:aws:lambda:us-east-1:123456789012:function:continual-bench-endpoints",
     "JobQueue": "arn:aws:batch:us-east-1:123456789012:job-queue/continual-bench-jobs",
     "AcquisitionProject": "continual-bench-acquisition",
     "MapResultsBucket": "continual-bench-artifacts-123456789012-us-east-1",
@@ -154,7 +155,9 @@ def project_rules(name: str, definition: dict, errors: list):
                 f"{name}: benchmark workflow must reconcile before submitting and after the campaign"
             )
         if "submitJob.sync" not in text:
-            errors.append(f"{name}: runs must be submitted with batch:submitJob.sync")
+            errors.append(f"{name}: runs must be submitted with batch:submitJob.sync (Fargate Spot)")
+        if "ec2:" in text or "advance_spot_run" in text:
+            errors.append(f"{name}: benchmark units are serverless Fargate jobs, never EC2 instances")
     if "ecs:runTask" in text or "ecs:createService" in text:
         errors.append(f"{name}: workers are Batch jobs, never ECS services or ad-hoc tasks")
 

@@ -160,9 +160,10 @@ class ArtifactClient:
     def get_metric_history(self, run_id, key):
         return self.metrics.get(key, [])
 
-    def log_batch(self, run_id, metrics=(), synchronous=None):
+    def log_batch(self, run_id, metrics=(), tags=(), synchronous=None):
         for metric in metrics:
             self.metrics.setdefault(metric.key, []).append(metric)
+        self.tags.update({tag.key: tag.value for tag in tags})
 
     def log_artifacts(self, run_id, local_dir, artifact_path=None):
         self.artifacts[artifact_path] = sorted(

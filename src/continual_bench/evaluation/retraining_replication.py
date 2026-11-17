@@ -20,6 +20,8 @@ from continual_bench.retraining.analysis import DEFAULT_RULES, analyze, trapezoi
 from .retraining_observations import candidate_report
 
 OFFLINE, ONLINE, ALPHAS = 7, 8, 10
+COMPARISON_DATASETS = ("electricity", "airlines")
+COMPARISON_BATCH_SIZE = 2000
 # Extra resolution at low costs, where the per-query staleness objective changes schedules.
 COMPARISON_GRID = (0.0, 0.001, 0.0025, 0.005, 0.01, 0.02, 0.03, 0.05, 0.075, 0.1,
                    0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
@@ -91,7 +93,7 @@ class XGBoostLearner:
 
 
 def trial_batches(name: str, trial: int, electricity_path=None, size=None, directory=DEFAULT_CACHE, *,
-                  airlines_path=None):
+                  airlines_path=None, airlines_disk_cache=True):
     length = OFFLINE + ONLINE
     rng = np.random.default_rng(10_000 + trial)
     if name == "gauss":
@@ -104,9 +106,10 @@ def trial_batches(name: str, trial: int, electricity_path=None, size=None, direc
         pool = every[start:start + length]
     elif name == "airlines":
         path = Path(airlines_path or Path(directory).expanduser() / "airlines.arff").expanduser().resolve()
-        if path not in _ARRAYS:
-            _ARRAYS[path] = data.airlines_arrays(path)
-        x, y = _ARRAYS[path]
+        cache_key = (path, airlines_disk_cache)
+        if cache_key not in _ARRAYS:
+            _ARRAYS[cache_key] = data.airlines_arrays(path, use_disk_cache=airlines_disk_cache)
+        x, y = _ARRAYS[cache_key]
         size = size or 3000
         start = int(rng.integers(0, len(y) // size - length + 1))
         pool = data.windowed_batches(x, y, size, length, start)
@@ -118,13 +121,17 @@ def trial_batches(name: str, trial: int, electricity_path=None, size=None, direc
 def run_trial(name, trial, *, electricity_path=None, airlines_path=None, size=None, samples=100, rules=None,
               compare_oracles=False, decision_timing="same-batch"):
     started = time.perf_counter()
-    if compare_oracles and name != "electricity":
-        raise ValueError("the shared CARA/UPF benchmark uses Electricity")
+    if compare_oracles:
+        if name not in COMPARISON_DATASETS:
+            raise ValueError("the shared CARA/UPF benchmark supports Electricity and Airlines")
+        size = size or COMPARISON_BATCH_SIZE
     if decision_timing not in ("same-batch", "next-batch"):
         raise ValueError("unknown decision timing")
     if decision_timing == "next-batch" and not compare_oracles:
         raise ValueError("next-batch timing requires the shared benchmark")
-    batches = trial_batches(name, trial, electricity_path, size, airlines_path=airlines_path)
+    # In paired runs, the reported source hash must identify the parsed rows.
+    batches = trial_batches(name, trial, electricity_path, size, airlines_path=airlines_path,
+                            airlines_disk_cache=not compare_oracles)
     learner = XGBoostLearner(trial)
     matrix, states = build_paper_matrix(batches, learner, OFFLINE, seed=trial,
                                         separate_query_split=compare_oracles)
@@ -177,14 +184,14 @@ def replicate(name, trials=10, *, compare_oracles=False, **options):
                 values = [run["table"][level][rule][key] for run in runs]
                 stats[key] = {"mean": float(np.mean(values)), "std": float(np.std(values))}
             table[level][rule] = {"alpha": row["alpha"], **stats}
-    result = {"dataset": name, "trials": trials, "alpha_max": ALPHA_MAX[name], "summary": summary,
-            "alphas": runs[0]["alphas"], "curves": curves, "table": table,
+    result = {"dataset": name, "trials": trials, "alpha_max": runs[0]["setup"]["alpha_max"],
+            "summary": summary, "alphas": runs[0]["alphas"], "curves": curves, "table": table,
             "oracle_alpha_max_per_trial": [run["setup"]["oracle_alpha_max"] for run in runs],
             "candidate_tracking": [run["candidate_tracking"] for run in runs]}
     if compare_oracles:
         result["comparison"] = {
             "same_batch": options.get("decision_timing", "same-batch") == "same-batch",
-            "batch_size": options.get("size") or 2000, "train_fraction": 0.8,
+            "batch_size": options.get("size") or COMPARISON_BATCH_SIZE, "train_fraction": 0.8,
             "offline_batches": OFFLINE, "online_batches": ONLINE, "seeds": list(range(trials)),
             "decision_points": runs[0]["setup"]["decision_points"],
             "upf_delta": 0.95, "upf_samples": options.get("samples", 100),

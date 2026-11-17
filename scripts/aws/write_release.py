@@ -14,7 +14,11 @@ import subprocess
 import sys
 import tempfile
 
-STABLE_FIELDS = ("version", "git_sha", "stack", "region", "images", "job_definitions", "control_function")
+SPOT_BACKEND = "batch-fargate-spot"
+STABLE_FIELDS = (
+    "version", "git_sha", "stack", "region", "images", "job_definitions", "control_function",
+    "benchmark_compute",
+)
 
 
 def aws(*args, check=True):
@@ -52,6 +56,9 @@ def compose(outputs: dict, build: dict, git_sha: str, stack: str, execution_id: 
         "control_function": outputs["ControlFunctionVersionArn"],
         "pipeline_execution_id": execution_id or None,
     }
+    # Only resumable Fargate Spot releases are marked; on-demand Fargate keeps the legacy shape.
+    if outputs.get("BenchmarkComputeBackend") == SPOT_BACKEND:
+        manifest["benchmark_compute"] = SPOT_BACKEND
     validate(manifest)
     return manifest
 
@@ -59,6 +66,8 @@ def compose(outputs: dict, build: dict, git_sha: str, stack: str, execution_id: 
 def validate(manifest: dict):
     if not re.fullmatch(r"[0-9a-f]{40}", manifest["git_sha"]):
         raise SystemExit("invalid git sha")
+    if manifest.get("benchmark_compute") not in (None, SPOT_BACKEND):
+        raise SystemExit("unsupported benchmark backend in the runtime stack outputs")
     for name, arn in manifest["job_definitions"].items():
         if not re.fullmatch(r"arn:aws:batch:[a-z0-9-]+:\d{12}:job-definition/[\w-]+:\d+", arn):
             raise SystemExit(f"{name} job definition must be revision-qualified: {arn}")

@@ -15,6 +15,7 @@ from . import layout
 from .contracts import (
     EVALUATION_PROTOCOL,
     OFFLINE_MATRIX_FAMILIES,
+    SPOT_BACKEND,
     CampaignRequest,
     ReleaseManifest,
     RunUnit,
@@ -47,8 +48,16 @@ def file_sha256(project_root, relative) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def admit_capacity(concurrency: int, vcpus_per_job: float, *, quota_vcpus: float, queue: dict) -> dict:
-    """Fail the preflight when the regional quota or the queue cannot hold the parallel tasks."""
+def admit_capacity(
+    concurrency: int, vcpus_per_job: float, *, quota_vcpus: float, queue: dict, queue_excess: bool = False,
+) -> dict:
+    """Check the regional quota and the queue against the parallel tasks.
+
+    On-demand campaigns fail when the requested parallelism does not fit. Spot campaigns
+    (``queue_excess``) submit every unit at once: Batch starts as many tasks as the quota and
+    the compute environment allow and keeps the rest RUNNABLE, so only a single task that can
+    never start is refused.
+    """
     required = concurrency * vcpus_per_job
     evidence = {
         "concurrency": concurrency,
@@ -59,11 +68,19 @@ def admit_capacity(concurrency: int, vcpus_per_job: float, *, quota_vcpus: float
     }
     if queue.get("queue_state") != "ENABLED" or queue.get("queue_status") != "VALID":
         raise CapacityError(f"job queue not usable: {queue.get('queue_state')}/{queue.get('queue_status')}")
+    limit = min(queue["max_vcpus"], quota_vcpus)
+    running = int(limit // vcpus_per_job)
+    evidence["max_parallel_admitted"] = running
+    if queue_excess:
+        if running < 1:
+            raise CapacityError(f"a {vcpus_per_job}-vCPU task exceeds the usable limit of {limit} vCPUs")
+        evidence["running_in_parallel"] = min(running, concurrency)
+        evidence["queued"] = max(0, concurrency - running)
+        return evidence
     if required > queue["max_vcpus"]:
         raise CapacityError(f"{required} vCPUs exceed the compute environment limit {queue['max_vcpus']}")
     if required > quota_vcpus:
         raise CapacityError(f"{required} vCPUs exceed the regional Fargate quota {quota_vcpus}")
-    evidence["max_parallel_admitted"] = int(min(queue["max_vcpus"], quota_vcpus) // vcpus_per_job)
     return evidence
 
 
@@ -146,6 +163,13 @@ def build_plan(
         expansions = _zia_units(request, release, snapshot_manifest, tracking_sha256)
     else:
         expansions = _matrix_units(request, release, project_root)
+    spot = release.benchmark_compute == SPOT_BACKEND
+    release_contract = {
+        "git_sha": release.git_sha,
+        "runtime_image": release.images["runtime"].digest,
+        "job_definition": release.job_definitions["benchmark"],
+        **({"compute": SPOT_BACKEND} if spot else {}),
+    }
     units = []
     for kind, params, labels, extra in expansions:
         contract = {
@@ -153,11 +177,7 @@ def build_plan(
             "kind": kind,
             "params": params,
             "tracking_sha256": tracking_sha256,
-            "release": {
-                "git_sha": release.git_sha,
-                "runtime_image": release.images["runtime"].digest,
-                "job_definition": release.job_definitions["benchmark"],
-            },
+            "release": release_contract,
             **extra,
         }
         run_id, contract_sha256 = run_identity(request.campaign_id, contract)
@@ -178,11 +198,15 @@ def build_plan(
         raise ValueError("matrix produced duplicate execution contracts")
     if not units:
         raise ValueError("campaign matrix expanded to no runnable units")
-    concurrency = min(request.max_parallel, len(units))
+    # Fargate Spot submits every unit at once; Batch runs as many as the vCPU quota allows.
+    concurrency = min(request.max_parallel or (len(units) if spot else 4), len(units))
+    recorded_request = request.model_dump(mode="json")
+    if not spot:
+        recorded_request.setdefault("max_parallel", 4)  # Match existing legacy plan documents.
     return {
         "version": PLAN_VERSION,
         "campaign_id": request.campaign_id,
-        "request": request.model_dump(mode="json"),
+        "request": recorded_request,
         "release": release.model_dump(mode="json"),
         "snapshot": (
             {
@@ -195,7 +219,7 @@ def build_plan(
         ),
         "units": [u.model_dump(mode="json") for u in units],
         "concurrency": concurrency,
-        "mode": "inline" if len(units) <= INLINE_LIMIT else "distributed",
+        "mode": "distributed" if len(units) > INLINE_LIMIT else "inline",
         "timeouts": {
             "queue_seconds": request.queue_timeout_seconds,
             "run_seconds": request.run_timeout_seconds,

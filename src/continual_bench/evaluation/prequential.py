@@ -38,16 +38,20 @@ class Prequential(BinaryProtocol):
             promotion=config.promotion.model_dump() if config.promotion else None,
         )
 
-    def stream(self, run: BinaryRun):
+    def stream(self, run: BinaryRun, start: int):
         if self.use_transport and run.transport:
             return run.transport.events(run.manifest, run.events(), run.config.max_seconds)
-        return run.events()
+        return run.events(start)
 
     def execute(self, run: BinaryRun) -> Outcome | Progress:
         config = run.config
         engine = run.snapshot["state"] if run.snapshot else self.build_engine(run)
+        # EC2 retries recreate the output tree at a new absolute path.
+        engine.versions.directory = run.versions.directory
+        if getattr(engine, "evaluation_finished", False):
+            return Outcome(engine.report(), engine, engine.model, engine.versions, engine.observer)
         previous_duration = getattr(engine, "evaluation_duration_seconds", 0.0)
-        events = iter(self.stream(run))
+        events = iter(self.stream(run, engine.next_seq))
         next_checkpoint = engine.next_seq + config.checkpoint_every
         probes = run.source.probes() if hasattr(run.source, "probes") else {}
         for batch in iter(lambda: list(itertools.islice(events, self.batch_size)), []):
@@ -60,15 +64,13 @@ class Prequential(BinaryProtocol):
                 if run.progress is not None:
                     for window in engine.windows[before:]:
                         run.progress(window["end_seq"], window)
-            if engine.next_seq >= next_checkpoint:
+            bounded_stop = run.stop_after is not None and engine.next_seq >= run.stop_after
+            if engine.next_seq >= next_checkpoint or run.durable_checkpoint_due() or bounded_stop:
                 engine.versions.flush()
                 engine.evaluation_duration_seconds = previous_duration + time.monotonic() - run.started
                 run.checkpoint(engine)
                 next_checkpoint = engine.next_seq + config.checkpoint_every
-            if run.stop_after is not None and engine.next_seq >= run.stop_after:
-                engine.versions.flush()
-                engine.evaluation_duration_seconds = previous_duration + time.monotonic() - run.started
-                run.checkpoint(engine)
+            if bounded_stop:
                 return Progress(engine.next_seq)
         if engine.next_seq != config.dataset.samples:
             raise ValueError(f"source ended early at {engine.next_seq}")
@@ -76,4 +78,8 @@ class Prequential(BinaryProtocol):
         engine.observer.sample_memory()
         engine.probe(probes)
         engine.evaluation_duration_seconds = previous_duration + time.monotonic() - run.started
+        if run.checkpoint_due is not None:
+            engine.evaluation_finished = True
+            engine.versions.flush()
+            run.checkpoint(engine, force=True)
         return Outcome(engine.report(), engine, engine.model, engine.versions, engine.observer)

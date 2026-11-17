@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from continual_bench.evaluation.tracking_observations import observations, process_peak_rss_bytes
+from continual_bench.evaluation.tracking_observations import observations
 from continual_bench.evaluation.zia_training_history import unique_train_rows
 from continual_bench.models.classification_metrics import decide
 
@@ -138,7 +138,8 @@ def run_observations(
             "training_seconds": fit_seconds("training_seconds"),
             "inference_seconds": metrics["prediction_seconds"],
             "predictions_per_second": metrics["prediction_throughput_per_second"],
-            "peak_rss_bytes": process_peak_rss_bytes(), "rss_scope": "process_lifetime_high_water_mark",
+            "peak_rss_bytes": metrics["process_peak_rss_bytes"],
+            "rss_scope": "process_lifetime_high_water_mark",
             "cost_total": cost, "cost_per_1000_evaluated": 1000 * cost / evaluated,
             "cost_currency": "USD" if aws_cost is not None else report["costs"]["settings"]["unit"],
             "cost_kind": "estimated", "cost_scope": cost_scope,

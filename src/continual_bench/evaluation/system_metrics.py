@@ -190,9 +190,14 @@ class SystemMetricsSampler:
         self.sample()
         return False
 
-    def report(self) -> dict:
+    def report(self, *, previous=(), elapsed_offset=0.0, segment=None) -> dict:
         with self._lock:
             samples = list(self.samples)
+        if segment is not None:
+            samples = list(previous) + [
+                {**sample, "elapsed_seconds": elapsed_offset + sample["elapsed_seconds"], "segment": segment}
+                for sample in samples
+            ]
         names = sorted({name for sample in samples for name in sample["values"]})
         summary = {}
         for name in names:

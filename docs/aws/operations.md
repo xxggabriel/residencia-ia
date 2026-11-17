@@ -42,10 +42,10 @@ requests e pushes fora de `main`.
 | `deploy` | Aplica o change set do runtime com `deploy_change_set.sh` e lê os parâmetros operacionais do objeto S3 indicado por `RUNTIME_CONFIG_KEY`. Um change set vazio é removido sem falhar. |
 | `release` | `write_release.py` confere as saídas da stack contra o build e os digests no ECR. Grava `releases/<sha>/release.json` uma vez e move `releases/latest.json`. |
 
-O manifesto de release contém o Git SHA, as imagens por digest, as revisões das job
-definitions e a versão do Lambda de controle. A campanha resolve `latest` uma única vez, no
-plano. Daí em diante, jobs e chamadas ao Lambda usam os ARNs com revisão e versão daquela
-release, mesmo que outro merge aconteça durante a campanha.
+O manifesto de release contém o Git SHA, as imagens por digest, o tipo de execução do
+benchmark, as revisões das job definitions e a versão do Lambda de controle. A campanha
+resolve `latest` uma única vez, no plano. Cada tentativa Spot usa a imagem e a versão do
+Lambda fixadas no plano, mesmo que haja outro deploy durante a campanha.
 
 ### Verificar no ECR a imagem publicada
 
@@ -54,12 +54,12 @@ SHA=$(git rev-parse origin/main)
 aws ecr describe-images --repository-name continual-bench-runtime --image-ids imageTag=git-$SHA \
   --query 'imageDetails[0].[imageDigest,imagePushedAt]' --output text
 aws s3 cp s3://continual-bench-data-$ACCOUNT-us-east-1/releases/$SHA/release.json - | python -m json.tool
-aws batch describe-job-definitions --job-definitions "$(scripts/aws/outputs.sh BenchmarkJobDefinitionArn)" \
-  --query 'jobDefinitions[0].containerProperties.image' --output text
+scripts/aws/outputs.sh RuntimeImage
+scripts/aws/outputs.sh BenchmarkComputeBackend
 ```
 
-O digest do ECR, o `images.runtime.digest` do release e o sufixo `@sha256:` da imagem da job
-definition devem coincidir.
+O digest do ECR, `images.runtime.digest` da release e o sufixo `@sha256:` da saída
+`RuntimeImage` devem coincidir. O backend esperado é `batch-fargate-spot`.
 
 ### Recriar o runtime com os logs preservados
 
@@ -67,7 +67,7 @@ Para recriar a stack de runtime após rollback ou remoção, confirme se os grup
 `/continual-bench/batch` e `/continual-bench/acquisition` foram preservados. Se ambos
 existirem com a chave KMS e a retenção esperadas, acrescente
 `"ReuseRuntimeLogGroups": "true"` ao objeto `config/runtime-parameters.json` no bucket de artefatos.
-O runtime passa a usar esses grupos existentes, e a retenção deles é gerenciada separadamente.
+A retenção dos grupos reutilizados é gerenciada separadamente.
 
 ### Rollback por digest
 
@@ -120,26 +120,46 @@ scripts/aws/start_campaign.sh infra/examples/campaign-social-smoke.json
 scripts/aws/start_campaign.sh infra/examples/campaign-binary-matrix.json    # matriz existente, Distributed Map
 ```
 
-O nome da execução é o `campaign_id`. Uma nova execução da mesma campanha usa
-`<campaign_id>--<sufixo>` e reaproveita as runs com manifesto final. O Lambda `plan_campaign`
-valida a entrada, resolve a release e verifica o snapshot. Também confere a quota regional do
-Fargate (`L-3032A538`), o `maxvCpus` dos compute environments e o estado da fila, depois
-publica o plano. Antes de cada submissão, `reconcile_unit` procura o manifesto final e jobs
-com o nome determinístico `cb-<campanha>-<run_id>`. Isso evita reenvio quando a resposta
-de uma submissão se perde. Jobs duplicados ativos são terminados, mantendo o mais antigo.
-Cada tentativa grava a própria evidência em `attempts/<job>-<n>/`, incluindo as linhas do
-Athena (`analytics-rows.json`). O manifesto final usa `If-None-Match: *`. Depois dele, as
-linhas da tentativa vencedora são publicadas e o marcador `analytics.json` é gravado. Se essa
-etapa for interrompida, um job reaproveitado ou a consolidação da campanha refazem a
-publicação. Uma saída 0 sem manifesto final conta como `FAILED_PUBLICATION`. A reconciliação
-só termina jobs cujo nome é exatamente `cb-<campanha>-<run_id de 20 hex>`, para não alcançar
-campanhas cujo ID começa com o mesmo prefixo.
+O planejador valida os dados e fixa a release e o digest da imagem. A execução é 100%
+serverless: cada unidade vira um job do AWS Batch no compute environment `FARGATE_SPOT`
+(2 vCPU e 4 GiB por tarefa; o Fargate não aceita 2 GiB com 2 vCPU). Nenhuma instância EC2
+é criada. O Map submete **todas as unidades ao mesmo tempo**: o Batch inicia quantas tarefas
+couberem no limite de vCPU (`MaxVcpus`, padrão 64, igual à quota de Fargate Spot
+`L-36FBB829`; com 2 vCPU são 32 tarefas simultâneas) e mantém as demais em `RUNNABLE` até
+liberar capacidade. O preflight registra `running_in_parallel` e `queued` em
+`campaigns/<id>/preflight/`. A preparação de datasets usa uma fila separada em Fargate
+on-demand, porque não é retomável.
 
-As regras de `jobStateTimeLimitActions` da fila cancelam jobs presos em `RUNNABLE`.
-O pedido `run_timeout_seconds` chega ao Batch em `Timeout.AttemptDurationSeconds`
-nos dois modos do Map. O `TimeoutSecondsPath` do `.sync` limita espera mais
-execução por item. Códigos de saída: 0 sucesso ou reaproveitamento, 1 falha de execução,
-2 contrato (imagem ou perfil divergente do plano), 3 snapshot.
+Quando o Fargate recupera a capacidade Spot, a tarefa recebe SIGTERM e, 30 segundos depois,
+SIGKILL (o Batch não expõe `stopTimeout`). O worker então:
+
+1. para no próximo ponto seguro do avaliador e confirma um checkpoint no S3
+   (`runs/<run_id>/spot/checkpoints/`), além do checkpoint periódico a cada
+   `BenchmarkCheckpointSeconds` (padrão 30 s);
+2. drena a fila de logging assíncrono do MLflow e grava o estado `INTERRUPTED` da tentativa na
+   run lógica;
+3. sai com o código 75, que a `RetryStrategy` do job trata como `RETRY` (até `JobAttempts`,
+   padrão 5). Se a tarefa for encerrada antes, o motivo de parada do Spot também gera `RETRY`.
+
+A tentativa seguinte é numerada por um claim write-once (`runs/<run_id>/spot/attempt-NNN/claim.json`),
+valida as entradas, restaura o checkpoint confirmado mais recente e continua a mesma run no
+MLflow. O trabalho feito depois do último checkpoint é refeito. Ao concluir, o worker confirma
+a publicação no S3 e no MLflow.
+
+Cada tentativa escreve em `attempts/<job_id>-<n>/`. O relatório continua usando
+`final.json`, `analytics.json`, `report.json`, `training-history.json` e o manifesto de
+predições. As janelas de progresso e os ajustes no MLflow mantêm a identidade da run lógica.
+Se a publicação falhar após os resultados intermediários chegarem ao S3, a próxima tentativa
+pode concluir a publicação desse conjunto de resultados.
+
+As métricas ao vivo usam o logging assíncrono nativo do MLflow (`MLFLOW_ENABLE_ASYNC_LOGGING=true`,
+`mlflow.config.enable_async_logging`). O treino só enfileira os pontos; o pool do MLflow
+(`MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE=4`, lotes a cada `MLFLOW_ASYNC_LOGGING_BUFFERING_SECONDS=5`)
+os envia ao MLflow App. A fila é drenada no aviso Spot, antes da publicação final e ao encerrar
+a run. Sem o pacote MLflow, o worker usa o transporte REST/SigV4.
+
+Use `<campaign_id>--<sufixo>` para repetir uma execução falha com o mesmo pedido. Use um novo
+ID se mudar o plano ou se a campanha anterior foi explicitamente cancelada.
 
 ### Campanha integral dos três datasets Zia
 
@@ -147,15 +167,18 @@ Os exemplos `dataset-{fraud,social,ecommerce}-full.json` preparam 50, 100 e 50 m
 de eventos, respectivamente. Aguarde os três marcadores `_SUCCESS.json` no escopo `full`
 e confira as contagens no manifesto antes de iniciar as campanhas.
 
-Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem 12 jobs independentes
-por dataset, 36 no total. Os três exemplos `*-smoke.json` usam a mesma matriz e snapshots
-de 10 mil linhas. Os scripts exigem um SHA de release publicado para Zia. Defina o mesmo
-`RELEASE_SHA` nas três submissões ou grave o SHA em `request.release` em cada arquivo.
-Use `CAMPAIGN_ID` ou edite o campo `request.campaign_id` quando mudar um plano já publicado.
-Cada plano reserva até duas execuções simultâneas. Com 1 vCPU e 2 GiB por job, as três
-campanhas em conjunto podem ocupar até 6 das 8 vCPUs configuradas por padrão. Se a
-reserva da release ou a capacidade livre da fila mudar, ajuste a concorrência antes
-da submissão. O prazo por tentativa é de 1 hora no smoke e 48 horas no full.
+Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem 12 políticas por dataset
+com `max_parallel=12`. As três campanhas juntas submetem 36 jobs (72 vCPUs). Com a quota de
+64 vCPUs de Fargate Spot, 32 começam juntos e os outros 4 esperam em `RUNNABLE`. Sem capacidade
+Spot disponível, os jobs aguardam até `queue_timeout_seconds`. O prazo para rodar cada tentativa é de uma hora no smoke e 48 horas
+no full. Use o mesmo `RELEASE_SHA` publicado nas três submissões e um novo `CAMPAIGN_ID`
+para qualquer plano alterado.
+
+```bash
+export RELEASE_SHA=<sha-publicado>
+scripts/aws/start_campaign.sh infra/examples/campaign-social-full.json
+# Para os outros datasets, use os pedidos campaign-fraud-full.json e campaign-ecommerce-full.json.
+```
 
 As variantes são `frozen`, `online`, `drift`, `drift_adwin`, `drift_ddm`, `incremental`,
 `periodic`, `cara`, `cara_cumulative`, `cara_periodic`, `upf` e `oracle`.
@@ -203,19 +226,52 @@ e exporta o resultado da orquestração para `map-results/<campanha>/` no bucket
 artefatos com SSE-KMS por padrão. Manifestos e métricas das unidades continuam no bucket
 de dados.
 
+### Aceitação com duas políticas
+
+Use o snapshot Social `smoke` e uma release `batch-fargate-spot` publicada. Execute a referência
+com um ID novo e guarde o ARN que o comando retorna.
+
+```bash
+CAMPAIGN_ID=zia-spot-accept-ref scripts/aws/start_campaign.sh \
+  infra/examples/campaign-social-spot-acceptance.json
+aws batch list-jobs --job-queue continual-bench-jobs --filters name=JOB_NAME,values=cb-zia-spot-accept-ref-*
+```
+
+Repita com um novo ID para cada cenário. Leia `plan.json` para mapear política e `run_id`.
+Espere aparecer um manifesto em `runs/<run_id>/spot/checkpoints/manifests/` antes de injetar
+a interrupção. Faça os testes apenas nas tarefas das campanhas reduzidas.
+
+- Para exercitar o aviso Spot, pare a tarefa Fargate do job de teste. O ECS envia SIGTERM e,
+  30 segundos depois, SIGKILL, como numa interrupção Spot:
+  `aws ecs stop-task --cluster <cluster-do-batch> --task <task-arn> --reason "spot drill"`.
+  A tentativa deve terminar `INTERRUPTED` com o código 75, e a seguinte deve registrar
+  `recovery_reason=INTERRUPTED` e o manifesto retomado. A ação `aws:ecs:stop-task` do AWS FIS
+  produz o mesmo efeito.
+- Para exercitar uma falha de publicação, simule a perda da confirmação após a escrita de um
+  lote MLflow. Confirme `PUBLICATION_FAILED` no estado da tentativa e a conclusão na tentativa
+  seguinte com o mesmo identificador de run e de ajustes no MLflow.
+
+Compare os artefatos publicados com a referência por política. Use o mesmo digest e o mesmo
+snapshot. Compare o corte temporal, as matrizes de confusão, as predições, a linhagem de ajustes
+e as métricas de qualidade. Tempos de execução e custos dependentes desses tempos variam.
+Confira os estados das tentativas em `runs/<run_id>/attempts/` e os streams do job no
+CloudWatch (`/continual-bench/batch`).
+
+Use `make aws-mlflow-ui` e os IDs em `final.json` para abrir as runs. Confira o histórico de
+`progress/rows_processed`, as tags `cb-spot-attempt-*`, os ajustes filhos e os artefatos
+`report.json` e `predictions-manifest.json` na run lógica.
+
 ## 5. Cancelamento e reconciliação
 
 ```bash
-scripts/aws/cancel_campaign.sh social-smoke-v1                  # stop-execution + reconcile até tudo parar
-continual-bench aws reconcile --campaign social-smoke-v1 --bucket $BUCKET --queue "$(scripts/aws/outputs.sh JobQueueArn)"
+scripts/aws/cancel_campaign.sh zia-social-smoke-spot-v1
 ```
 
-A interrupção do `.sync` é de melhor esforço. Por isso a regra do EventBridge para execuções
-`ABORTED`, `TIMED_OUT` ou `FAILED` chama `reconcile_campaign`. Ele termina somente jobs com tag
-`cb-stack` do projeto e nome da campanha, a única permissão de `TerminateJob` concedida, e
-grava `campaigns/<id>/reconciliation/`. Ao fim de toda campanha, o workflow repete a
-verificação por até 10 minutos e falha com `TasksStillActive` se algum job não estiver
-terminal ou alguma task ECS não estiver `STOPPED`.
+O cancelamento registra a intenção no S3 antes de parar o workflow. Essa intenção bloqueia
+novas tentativas. A reconciliação do EventBridge encerra os jobs da execução interrompida e
+preserva os checkpoints confirmados e os logs. O histórico da reconciliação fica em
+`campaigns/<id>/reconciliation/`. Consulte o estado no Step Functions e confira que não restam
+tasks em execução antes de considerar a limpeza concluída.
 
 ## 6. Consultar resultados
 
@@ -227,11 +283,31 @@ continual-bench aws query infra/athena/attempt_costs.sql --param campaign=social
 ```
 
 A tabela `predictions` usa projeção injetada: filtre `campaign_id`, `run_id` e `attempt_key`
-(lidos em `runs`/`final.json`). Logs: CloudWatch Logs `/continual-bench/batch`, em JSON com
-`campaign_id`, `run_id` e `job_id`. O dashboard `continual-bench-operations` mostra as
+(lidos em `runs`/`final.json`). Os logs dos workers Fargate Spot e do preparo de datasets ficam
+no CloudWatch Logs `/continual-bench/batch`. O dashboard `continual-bench-operations` mostra as
 métricas EMF por dataset, escopo e política, sem `run_id` como dimensão.
 
-## 7. Remover recursos cobrados
+## 7. Ciclo dos endpoints de interface
+
+O benchmark provisiona a stack `continual-bench-interface-endpoints` depois do preflight
+e aguarda todos os endpoints ficarem `available` antes de submeter os jobs Fargate Spot. O workflow
+de datasets faz o mesmo quando precisa executar a etapa de preparação no Batch. Use os workflows para executar os workers nas sub-redes privadas. Para repetir uma execução encerrada, inicie uma
+nova execução com o mesmo pedido e o sufixo de tentativa do projeto para passar pelo
+provisionamento novamente.
+
+As execuções compartilham a stack. A limpeza roda a cada cinco minutos e aguarda todas
+as execuções admitidas encerrarem, um intervalo de dois minutos para propagar as
+transições e as filas de benchmark e de preparação ficarem sem jobs ativos. Isso abrange falhas e cancelamentos.
+O deploy da `main` atualiza o runtime e mantém o MLflow App, os workflows do Studio,
+a VPC e o gateway do S3. Os workflows de benchmark e de preparação de datasets provisionam a stack de endpoints.
+
+Na migração de uma stack com endpoints permanentes, aplique primeiro o template atualizado
+de CI/CD. Faça o primeiro deploy da versão nova com a fila do Batch vazia e sem execuções
+dos workflows de benchmark e dataset. Aguarde o deploy concluir antes de enviar novas
+campanhas. Essa atualização remove os endpoints que estavam na stack de rede para liberar
+o DNS privado usado pela stack temporária.
+
+## 8. Remover todo o runtime
 
 ```bash
 scripts/aws/flink.sh stop                 # se o streaming estiver ativo
@@ -239,7 +315,8 @@ scripts/aws/teardown.sh                   # runtime: endpoints da VPC, Batch, La
 scripts/aws/teardown.sh --with-cicd       # também a stack de OIDC e roles de deploy
 ```
 
-O script preserva a stack persistente (buckets, KMS, ECR), os log groups de jobs e aquisição
+O script aguarda a remoção da stack temporária antes de excluir o runtime.
+Ele preserva a stack persistente (buckets, KMS, ECR), os log groups de jobs e aquisição
 e o Model Registry. Planeje separadamente a parada de execuções e remoção das stacks
 complementares do Studio. Elas usam os workflows, buckets e app MLflow do ambiente.
 

@@ -149,6 +149,7 @@ def run_unit(args):
                 git_sha=os.environ.get("BENCH_GIT_REVISION", unit.contract["release"]["git_sha"]),
                 stack=os.environ.get("BENCH_STACK", "continual-bench"),
                 tracking_uri=tracking_uri,
+                async_progress=True,
             )
 
     workdir = Path(args.workdir or tempfile.mkdtemp(prefix="cb-run-"))
@@ -163,12 +164,15 @@ def run_unit(args):
 def selftest(args):
     """Image contract: imports, CLI entry point, locked runtime and scientific stack."""
     import importlib
+    import importlib.util
     import platform
 
     checks = {"python": platform.python_version(), "machine": platform.machine()}
     modules = {
         "runtime": [
             "continual_bench.evaluation.zia",
+            "continual_bench.evaluation.stream_benchmark",
+            "continual_bench.infrastructure.tracking",
             "continual_bench.application.cloud.worker",
             "continual_bench.infrastructure.aws.s3",
             "continual_bench.infrastructure.aws.experiments",
@@ -192,6 +196,11 @@ def selftest(args):
     }[args.role]
     for name in modules:
         importlib.import_module(name)
+    if args.role == "runtime":
+        # MLflow's native async logging must be installed, yet only imported once a run logs.
+        missing = [m for m in ("mlflow", "sagemaker_mlflow") if importlib.util.find_spec(m) is None]
+        if missing:
+            raise SystemExit(f"runtime image lacks MLflow async logging packages: {missing}")
     forbidden = [m for m in ("mlflow", "zenml", "confluent_kafka", "airflow") if m in sys.modules]
     if forbidden:
         raise SystemExit(f"AWS profile imported forbidden services: {forbidden}")
@@ -302,22 +311,29 @@ def query(args):
 
 
 def reconcile(args):
-    from continual_bench.application.cloud.lifecycle import reconcile_campaign
+    from continual_bench.application.cloud import lifecycle
     from continual_bench.infrastructure.aws.batch import BatchJobs
 
-    store, jobs = _store(args), BatchJobs(args.queue or os.environ["BENCH_JOB_QUEUE"])
+    store = _store(args)
+    jobs = BatchJobs(args.queue or os.environ["BENCH_JOB_QUEUE"])
     for attempt in range(args.checks):
-        report = reconcile_campaign(store, jobs, args.campaign, args.reason)
+        report = lifecycle.reconcile_campaign(store, jobs, args.campaign, args.reason)
         if report["clean"]:
             break
-        time.sleep(args.interval)
+        if attempt + 1 < args.checks:
+            time.sleep(args.interval)
     _emit(report)
     sys.exit(0 if report["clean"] else 1)
 
 
 def cancel(args):
+    from continual_bench.application.cloud.lifecycle import cancel_campaign
     from continual_bench.infrastructure.aws.session import client
 
+    execution_name = args.execution_arn.rsplit(":", 1)[-1]
+    if execution_name != args.campaign and not execution_name.startswith(f"{args.campaign}--"):
+        raise SystemExit("execution ARN does not belong to this campaign")
+    cancel_campaign(_store(args), args.campaign)
     client("stepfunctions").stop_execution(
         executionArn=args.execution_arn,
         error="CampaignCancelled",
@@ -486,6 +502,7 @@ def configure(parser: argparse.ArgumentParser):
     def stop(command):
         command.add_argument("--campaign", required=True)
         command.add_argument("--queue")
+        command.add_argument("--project", default=os.environ.get("BENCH_STACK", "continual-bench"))
         command.add_argument("--checks", type=int, default=10)
         command.add_argument("--interval", type=int, default=30)
 

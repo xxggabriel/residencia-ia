@@ -17,6 +17,8 @@ DIGEST = r"^sha256:[0-9a-f]{64}$"
 ZIA_POLICIES = ("frozen", "drift", "incremental", "periodic")
 EVALUATION_PROTOCOL = "zia-batch-prequential-holdout-v1"
 OFFLINE_MATRIX_FAMILIES = ("river_abrupt", "river_moving", "river_regression")
+# Serverless resumable backend: AWS Batch on FARGATE_SPOT, checkpoints in S3 between attempts.
+SPOT_BACKEND = "batch-fargate-spot"
 
 
 def canonical(value) -> bytes:
@@ -92,6 +94,9 @@ class ReleaseManifest(Strict):
     images: dict[Literal["runtime", "ml"], ImageRef]
     job_definitions: dict[Literal["benchmark", "prepare"], str]
     control_function: str
+    benchmark_compute: Literal["batch-fargate-spot"] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     pipeline_execution_id: str | None = None
 
     @field_validator("job_definitions")
@@ -148,7 +153,7 @@ class CampaignRequest(Strict):
         default_factory=ZiaMatrix, discriminator="kind"
     )
     source_digests: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
-    max_parallel: int = Field(default=4, ge=1, le=256)
+    max_parallel: int | None = Field(default=None, ge=1, le=256, exclude_if=lambda value: value is None)
     max_attempts: int = Field(default=2, ge=1, le=5)
     queue_timeout_seconds: int = Field(default=3600, ge=600, le=86_400)
     run_timeout_seconds: int = Field(default=14400, ge=900, le=14 * 24 * 3600)
@@ -184,7 +189,7 @@ class CampaignRequest(Strict):
 
 
 class RunUnit(Strict):
-    """One independent execution: one Batch job, one run, one final manifest."""
+    """One independent logical execution with one final manifest."""
 
     run_id: str = Field(pattern=r"^[0-9a-f]{20}$")
     campaign_id: str = Field(pattern=CAMPAIGN_ID)

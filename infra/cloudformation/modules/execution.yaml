@@ -1,8 +1,13 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  Execution: AWS Batch on Fargate (private subnets, AssignPublicIp=DISABLED), benchmark and
-  preparation job definitions, the acquisition CodeBuild project (outside the VPC), the
-  versioned control Lambda and the two manual Standard state machines.
+  Execution: serverless benchmark workers on AWS Batch with Fargate Spot (resumable from
+  S3 checkpoints), on-demand Fargate for dataset preparation, the acquisition CodeBuild
+  project (outside the VPC), the versioned control Lambda and the two manual Standard
+  state machines. No EC2 instance is managed by this stack.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
 
 Parameters:
   Project:
@@ -25,6 +30,18 @@ Parameters:
     Type: AWS::EC2::SecurityGroup::Id
   S3GatewayEndpointId:
     Type: String
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  EndpointSubnets:
+    Type: String
+  EndpointSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  EnableStreaming:
+    Type: String
+    AllowedValues: ["true", "false"]
+  EnableFeatureStore:
+    Type: String
+    AllowedValues: ["true", "false"]
   RuntimeImage:
     Type: String
     AllowedPattern: "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
@@ -42,25 +59,41 @@ Parameters:
     Description: Base64 SHA-256 of the control Lambda zip; a change publishes a new version.
   MaxVcpus:
     Type: Number
-    Default: 8
+    Default: 64
     MinValue: 1
     MaxValue: 256
+    Description: >-
+      vCPU ceiling of the benchmark compute environment. Match the regional Fargate Spot vCPU
+      quota (L-36FBB829) so every task that fits starts at once; the rest stays RUNNABLE.
   FargateCapacity:
     Type: String
-    Default: FARGATE
+    Default: FARGATE_SPOT
     AllowedValues: [FARGATE, FARGATE_SPOT]
+    Description: FARGATE_SPOT runs resumable benchmark attempts; FARGATE is on-demand.
   BenchmarkVcpus:
     Type: String
-    Default: "1"
+    Default: "2"
     AllowedValues: ["0.25", "0.5", "1", "2", "4", "8", "16"]
   BenchmarkMemoryMiB:
     Type: Number
-    Default: 2048
+    Default: 4096
+    Description: >-
+      Task memory. Fargate accepts 4096-16384 MiB (1 GiB steps) with 2 vCPU; 2048 MiB is
+      only valid with 0.25, 0.5 or 1 vCPU.
   BenchmarkEphemeralGiB:
     Type: Number
     Default: 50
     MinValue: 21
     MaxValue: 200
+  BenchmarkCheckpointSeconds:
+    Type: Number
+    Default: 30
+    MinValue: 10
+    MaxValue: 600
+    Description: >-
+      Longest interval between confirmed S3 checkpoints. Batch on Fargate keeps the default
+      30-second stopTimeout after the Spot SIGTERM, which bounds the final checkpoint and the
+      MLflow flush.
   BenchmarkTimeoutSeconds:
     Type: Number
     Default: 14400
@@ -88,9 +121,10 @@ Parameters:
     MaxValue: 86400
   JobAttempts:
     Type: Number
-    Default: 2
+    Default: 5
     MinValue: 1
     MaxValue: 10
+    Description: Batch attempts per job; Spot interruptions retry from the last checkpoint.
   LogRetentionDays:
     Type: Number
     Default: 14
@@ -207,14 +241,21 @@ Resources:
                 Effect: Allow
                 Action: [s3:GetObject, s3:GetObjectVersion]
                 Resource:
+                  - !Sub "${DataBucketArn}/releases/*"
                   - !Sub "${DataBucketArn}/datasets/*/manifests/*"
                   - !Sub "${DataBucketArn}/datasets/*/prepared/*"
                   - !Sub "${DataBucketArn}/datasets/matrix/*"
                   - !Sub "${DataBucketArn}/campaigns/*/units/*"
+                  - !Sub "${DataBucketArn}/campaigns/*/cancelled.json"
                   - !Sub "${DataBucketArn}/campaigns/*/runs/*"
+                  - !Sub "${DataBucketArn}/analytics/runs/*"
+                  - !Sub "${DataBucketArn}/analytics/metrics/*"
+                  - !Sub "${DataBucketArn}/analytics/windows/*"
+                  - !Sub "${DataBucketArn}/analytics/model_versions/*"
                   - !Sub "${DataBucketArn}/mlflow/*"
                 Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
               - Sid: WriteRunEvidence
+                # Includes the Spot attempt claims and the checkpoints under campaigns/*/runs/*/spot/.
                 Effect: Allow
                 Action: [s3:PutObject, s3:AbortMultipartUpload]
                 Resource:
@@ -463,11 +504,15 @@ Resources:
                 Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: [!GetAtt ControlFunction.Arn, !Sub "${ControlFunction.Arn}:*"]
-              - Sid: SubmitToThisQueueOnly
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt EndpointsFunction.Arn
+              - Sid: SubmitToThisStacksQueues
                 Effect: Allow
                 Action: batch:SubmitJob
                 Resource:
                   - !Ref JobQueue
+                  - !Ref PrepareJobQueue
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-benchmark:*"
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-prepare:*"
               - Sid: TagJobsOnSubmission
@@ -476,6 +521,7 @@ Resources:
                 # A tagged SubmitJob also checks TagResource against the queue and job definition.
                 Resource:
                   - !Ref JobQueue
+                  - !Ref PrepareJobQueue
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-benchmark:*"
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-prepare:*"
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*"
@@ -525,7 +571,8 @@ Resources:
                          logs:DescribeLogGroups]
                 Resource: "*"
 
-  # ---------------------------------------------------------------- Batch on Fargate
+  # ---------------------------------------------------------------- Batch on Fargate (Spot)
+  # Serverless: Batch places every task on Fargate; no instance, AMI or launch template exists.
   ComputeEnvironment:
     Type: AWS::Batch::ComputeEnvironment
     Properties:
@@ -538,6 +585,33 @@ Resources:
         SecurityGroupIds: [!Ref WorkerSecurityGroupId]
       Tags: {cb-stack: !Ref Project, cb-component: batch}
 
+  # Dataset preparation is not resumable, so it never runs on reclaimable capacity.
+  PrepareComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      Type: MANAGED
+      State: ENABLED
+      ComputeResources:
+        Type: FARGATE
+        MaxvCpus: 16
+        Subnets: !Ref PrivateSubnets
+        SecurityGroupIds: [!Ref WorkerSecurityGroupId]
+      Tags: {cb-stack: !Ref Project, cb-component: prepare}
+
+  PrepareJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      JobQueueName: !Sub "${Project}-prepare"
+      Priority: 1
+      State: ENABLED
+      ComputeEnvironmentOrder: [{Order: 1, ComputeEnvironment: !Ref PrepareComputeEnvironment}]
+      JobStateTimeLimitActions:
+        - {Action: CANCEL, State: RUNNABLE, MaxTimeSeconds: !Ref QueueWaitTimeoutSeconds,
+           Reason: "MISCONFIGURATION:COMPUTE_ENVIRONMENT_MAX_RESOURCE"}
+        - {Action: CANCEL, State: RUNNABLE, MaxTimeSeconds: !Ref QueueWaitTimeoutSeconds,
+           Reason: "MISCONFIGURATION:JOB_RESOURCE_REQUIREMENT"}
+      Tags: {cb-stack: !Ref Project}
+
   JobQueue:
     Type: AWS::Batch::JobQueue
     Properties:
@@ -546,6 +620,8 @@ Resources:
       State: ENABLED
       ComputeEnvironmentOrder: [{Order: 1, ComputeEnvironment: !Ref ComputeEnvironment}]
       # Bounded queue wait: jobs stuck RUNNABLE for these reasons are cancelled by Batch.
+      # Jobs beyond the vCPU quota wait RUNNABLE by design; only misconfiguration is cancelled.
+      # Spot capacity shortages wait too, up to the campaign's queue timeout.
       JobStateTimeLimitActions:
         - {Action: CANCEL, State: RUNNABLE, MaxTimeSeconds: !Ref QueueWaitTimeoutSeconds,
            Reason: "MISCONFIGURATION:COMPUTE_ENVIRONMENT_MAX_RESOURCE"}
@@ -567,9 +643,14 @@ Resources:
       PropagateTags: true
       Tags: {cb-stack: !Ref Project, cb-component: benchmark}
       Timeout: {AttemptDurationSeconds: !Ref BenchmarkTimeoutSeconds}
+      # A reclaimed Fargate Spot task (or a worker that checkpointed after SIGTERM and exited
+      # 75) retries; the next attempt restores the newest confirmed checkpoint.
       RetryStrategy:
         Attempts: !Ref JobAttempts
         EvaluateOnExit:
+          - {OnExitCode: "75", Action: RETRY}
+          - {OnStatusReason: "*Spot*", Action: RETRY}
+          - {OnStatusReason: "*interrupted*", Action: RETRY}
           - {OnStatusReason: "ResourceInitializationError*", Action: RETRY}
           - {OnStatusReason: "CannotPullContainerError*", Action: RETRY}
           - {OnStatusReason: "Timeout waiting for network interface*", Action: RETRY}
@@ -606,6 +687,13 @@ Resources:
           - {Name: MLFLOW_TRACKING_URI, Value: !If [MlflowTracking, !GetAtt MlflowApp.Arn, ""]}
           - {Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region}
           - {Name: BENCH_BENCHMARK_VCPUS, Value: !Ref BenchmarkVcpus}
+          - {Name: BENCH_FARGATE_SPOT, Value: !If [Spot, "true", "false"]}
+          - {Name: BENCH_CHECKPOINT_INTERVAL_SECONDS, Value: !Ref BenchmarkCheckpointSeconds}
+          # MLflow's own async logging (mlflow.config.enable_async_logging): training never
+          # blocks on the tracking server; workers flush the queue on SIGTERM and at publication.
+          - {Name: MLFLOW_ENABLE_ASYNC_LOGGING, Value: "true"}
+          - {Name: MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE, Value: "4"}
+          - {Name: MLFLOW_ASYNC_LOGGING_BUFFERING_SECONDS, Value: "5"}
           - {Name: OMP_NUM_THREADS, Value: "2"}
           - {Name: OPENBLAS_NUM_THREADS, Value: "2"}
           - {Name: MKL_NUM_THREADS, Value: "2"}
@@ -764,6 +852,9 @@ Resources:
           BENCH_SNS_TOPIC: !Sub "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${Project}-alerts"
           BENCH_BENCHMARK_VCPUS: !Ref BenchmarkVcpus
           BENCH_FARGATE_SPOT: !If [Spot, "true", "false"]
+          BENCH_STACK: !Ref Project
+          BENCH_MODEL_REGISTRY: !Ref EnableModelRegistry
+          MLFLOW_TRACKING_URI: !If [MlflowTracking, !GetAtt MlflowApp.Arn, ""]
           BENCH_BENCHMARK_STATE_MACHINE_SUFFIX: !Sub ":${Project}-benchmark"
       Tags:
         - {Key: cb-stack, Value: !Ref Project}
@@ -778,6 +869,146 @@ Resources:
       CodeSha256: !Ref ControlCodeSha256
       Description: !Sub "git ${GitSha}"
 
+  EndpointsRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Limit the lifecycle Lambda to one endpoint stack and its coordination state.
+        must:
+          - Restrict mutating EC2 permissions to the private Batch network and tagged interface endpoints.
+    Properties:
+      RoleName: !Sub "${Project}-endpoints"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}}
+      Policies:
+        - PolicyName: interface-endpoint-lifecycle
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${ControlLogGroup.Arn}:*"
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "${DataBucketArn}/runtime/interface-endpoints.json"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Ref DataBucketArn
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: !Ref DataKeyArn
+                Condition: {StringEquals: {kms:ViaService: !Sub "s3.${AWS::Region}.amazonaws.com"}}
+              - Effect: Allow
+                Action: states:DescribeExecution
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${Project}-benchmark:*"
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${Project}-dataset:*"
+              - Effect: Allow
+                Action: states:ListMapRuns
+                Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${Project}-benchmark:*"
+              - Effect: Allow
+                Action: states:DescribeMapRun
+                Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:mapRun:${Project}-benchmark/*"
+              - Effect: Allow
+                Action: batch:ListJobs
+                Resource: "*"
+              - Effect: Allow
+                Action: [cloudformation:CreateStack, cloudformation:DescribeStacks,
+                         cloudformation:ListStackResources, cloudformation:DeleteStack]
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${Project}-interface-endpoints/*"
+              - Effect: Allow
+                Action: [ec2:DescribeVpcEndpoints, ec2:DescribeVpcs, ec2:DescribeSubnets,
+                         ec2:DescribeSecurityGroups]
+                Resource: "*"
+              - Effect: Allow
+                Action: ec2:CreateVpcEndpoint
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:vpc/${VpcId}"
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:security-group/${EndpointSecurityGroupId}"
+              - Effect: Allow
+                Action: ec2:CreateVpcEndpoint
+                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/*"
+                Condition: {StringEquals: {ec2:SubnetID: !Split [",", !Ref EndpointSubnets]}}
+              - Effect: Allow
+                Action: ec2:CreateVpcEndpoint
+                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:vpc-endpoint/*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/cb-stack: !Ref Project
+                    aws:RequestTag/cb-component: interface-endpoints
+              - Effect: Allow
+                Action: ec2:CreateTags
+                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:vpc-endpoint/*"
+                Condition: {StringEquals: {ec2:CreateAction: CreateVpcEndpoint}}
+              - Effect: Allow
+                Action: ec2:DeleteVpcEndpoints
+                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:vpc-endpoint/*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/cb-stack: !Ref Project
+                    aws:ResourceTag/cb-component: interface-endpoints
+
+  EndpointsFunction:
+    Type: AWS::Lambda::Function
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Make private Batch networking available on demand without recreating MLflow or Studio.
+        must:
+          - Keep the mutex expiry longer than the function timeout.
+          - Invoke this function before submitting jobs on the private Batch queue.
+    Properties:
+      FunctionName: !Sub "${Project}-endpoints"
+      Runtime: python3.12
+      Handler: continual_bench.orchestration.aws_endpoints.handler
+      Code: {S3Bucket: !Ref ArtifactsBucketName, S3Key: !Ref ControlCodeKey}
+      Timeout: 60
+      Role: !GetAtt EndpointsRole.Arn
+      LoggingConfig: {LogGroup: !Ref ControlLogGroup, LogFormat: JSON}
+      Environment:
+        Variables:
+          ENDPOINT_STATE_BUCKET: !Ref DataBucketName
+          ENDPOINT_STATE_KMS_KEY: !Ref DataKeyArn
+          ENDPOINT_JOB_QUEUE: !Ref JobQueue
+          ENDPOINT_PREPARE_JOB_QUEUE: !Ref PrepareJobQueue
+          BENCH_STACK: !Ref Project
+          ENDPOINT_BENCHMARK_WORKFLOW: !Sub "${Project}-benchmark"
+          ENDPOINT_STACK_NAME: !Sub "${Project}-interface-endpoints"
+          ENDPOINT_PARAMETERS: !Sub >-
+            {"Project":"${Project}","VpcId":"${VpcId}","EndpointSubnets":"${EndpointSubnets}",
+            "EndpointSecurityGroupId":"${EndpointSecurityGroupId}","EnableModelRegistry":"${EnableModelRegistry}",
+            "EnableMlflowTracking":"${EnableMlflowTracking}","EnableStreaming":"${EnableStreaming}",
+            "EnableFeatureStore":"${EnableFeatureStore}","EnableKmsAndSecretsEndpoints":"false"}
+      Tags:
+        - {Key: cb-stack, Value: !Ref Project}
+        - {Key: cb-component, Value: interface-endpoints}
+
+  EndpointsCleanup:
+    Type: AWS::Events::Rule
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Recheck idleness after normal exits, failures and aborts, including missed events.
+        must:
+          - Only the cleanup function may remove the endpoint stack after checking workflows and the queue.
+    Properties:
+      Description: Remove idle interface endpoints, including after failed or stopped executions.
+      ScheduleExpression: rate(5 minutes)
+      Targets:
+        - {Id: cleanup, Arn: !GetAtt EndpointsFunction.Arn, Input: "{}"}
+
+  EndpointsCleanupPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref EndpointsFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EndpointsCleanup.Arn
+
   BenchmarkStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
@@ -787,6 +1018,7 @@ Resources:
       DefinitionS3Location: ../../statemachines/benchmark.asl.json
       DefinitionSubstitutions:
         ControlFunction: !Ref ControlVersion
+        EndpointsFunction: !GetAtt EndpointsFunction.Arn
         JobQueue: !Ref JobQueue
         Project: !Ref Project
         MapResultsBucket: !Ref ArtifactsBucketName
@@ -806,7 +1038,8 @@ Resources:
       DefinitionS3Location: ../../statemachines/dataset.asl.json
       DefinitionSubstitutions:
         ControlFunction: !Ref ControlVersion
-        JobQueue: !Ref JobQueue
+        EndpointsFunction: !GetAtt EndpointsFunction.Arn
+        JobQueue: !Ref PrepareJobQueue
         AcquisitionProject: !Ref AcquisitionProject
         Project: !Ref Project
       LoggingConfiguration:
@@ -821,9 +1054,12 @@ Outputs:
     Value: !Ref DataKeyArn
   JobQueueArn:
     Value: !Ref JobQueue
+  PrepareJobQueueArn:
+    Value: !Ref PrepareJobQueue
   BenchmarkJobDefinitionArn:
-    Description: Revision-qualified ARN recorded in the release manifest
     Value: !Ref BenchmarkJobDefinition
+  BenchmarkComputeBackend:
+    Value: !If [Spot, batch-fargate-spot, batch-fargate]
   PrepareJobDefinitionArn:
     Value: !Ref PrepareJobDefinition
   ControlFunctionName:

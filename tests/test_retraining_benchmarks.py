@@ -143,19 +143,31 @@ def test_shared_staleness_uses_unlabeled_test_queries():
 
 
 @pytest.mark.parametrize(("timing", "decisions"), [("same-batch", 8), ("next-batch", 7)])
-def test_shared_benchmark_scores_both_objectives_with_their_oracles(tmp_path, timing, decisions):
+@pytest.mark.parametrize("dataset", ("electricity", "airlines"))
+def test_shared_benchmark_scores_both_objectives_with_their_oracles(tmp_path, timing, decisions, dataset):
     pytest.importorskip("xgboost")
     rows = []
-    for batch in range(15):
-        for i in range(48):
-            label = "UP" if i % 11 < 3 + (batch % 4) else "DOWN"
+    if dataset == "electricity":
+        path = tmp_path / "electricity.arff"
+        header = "@data"
+    else:
+        path = tmp_path / "airlines.csv"
+        header = "Airline,Flight,AirportFrom,AirportTo,DayOfWeek,Time,Length,Delay"
+    for batch, i in product(range(15), range(48)):
+        positive = i % 11 < 3 + (batch % 4)
+        if dataset == "electricity":
+            label = "UP" if positive else "DOWN"
             rows.append(f"0,1,{i / 48},{i % 11 / 11},{batch / 15},0.2,0.3,0.4,{label}")
-    path = tmp_path / "electricity.arff"
-    path.write_text("@data\n" + "\n".join(rows))
-    report = replicate("electricity", trials=1, electricity_path=path, size=48, samples=10,
+        else:
+            rows.append(f"{i % 3},{i},{i % 11},{batch},{batch % 7},{i * 5},205,{int(positive)}")
+    path.write_text(header + "\n" + "\n".join(rows))
+    report = replicate(dataset, trials=1, electricity_path=path, airlines_path=path, size=48, samples=10,
                        rules=("cara", "upf"), compare_oracles=True, decision_timing=timing)
     assert report["alphas"] == list(COMPARISON_GRID)
+    assert report["alpha_max"] == COMPARISON_GRID[-1]
+    assert report["comparison"]["batch_size"] == 48
     assert report["comparison"]["decision_points"] == decisions
+    assert report["table"]["high"]["upf"]["alpha"] == pytest.approx(0.9)
     assert report["summary"]["oracle"]["paper_auc"] is None
     curves = report["curves"]
     strategy_reference = curves["oracle_staleness"]["strategy_cost"]

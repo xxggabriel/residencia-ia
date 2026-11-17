@@ -5,11 +5,21 @@ from .session import client as make_client
 # Service Quotas code for "Fargate On-Demand vCPU resource count" (us-east-1, account level).
 FARGATE_ON_DEMAND_VCPU = ("fargate", "L-3032A538")
 FARGATE_SPOT_VCPU = ("fargate", "L-36FBB829")
+STANDARD_SPOT_VCPU = ("ec2", "L-34B43A08")
 
 
 def fargate_vcpu_quota(*, spot=False, client=None) -> float:
-    client = client or make_client("service-quotas")
     service, code = FARGATE_SPOT_VCPU if spot else FARGATE_ON_DEMAND_VCPU
+    return _quota(service, code, client)
+
+
+def standard_spot_vcpu_quota(client=None) -> float:
+    service, code = STANDARD_SPOT_VCPU
+    return _quota(service, code, client)
+
+
+def _quota(service, code, client):
+    client = client or make_client("service-quotas")
     try:
         return float(client.get_service_quota(ServiceCode=service, QuotaCode=code)["Quota"]["Value"])
     except client.exceptions.NoSuchResourceException:

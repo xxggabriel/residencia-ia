@@ -1,9 +1,10 @@
 # Plataforma AWS gerenciada do continual-bench
 
 Perfil de execução em us-east-1 que adquire e prepara datasets, executa campanhas de
-benchmark em paralelo no AWS Batch sobre Fargate, publica resultados consultáveis no S3,
+benchmark em paralelo no AWS Batch com Fargate Spot (serverless, 2 vCPU e 4 GiB por tarefa),
+publica resultados consultáveis no S3,
 Glue e Athena, registra candidatos no SageMaker Model Registry e concilia custos com o CUR 2.0.
-O SageMaker Studio acompanha as campanhas do Batch e os jobs nativos em Pipelines. As métricas
+O SageMaker Studio acompanha as campanhas e os jobs nativos em Pipelines. As métricas
 ficam no MLflow App serverless, e o SageMaker Unified Studio cataloga os snapshots Zia com
 links para avaliações. A operação do perfil AWS é independente do Compose, Airflow, ZenML,
 MinIO e Kafka locais.
@@ -23,12 +24,12 @@ GitHub main ──push/merge──▶ GitHub Actions ─▶ testes, lint, cfn-li
                                               ─▶ imagens x86_64 (tag git-<sha>, digest) ─▶ change set ─▶ releases/<sha>
 operador ──start-execution──▶ state machine de datasets ─▶ resolver ─▶ adquirir (CodeBuild, fora da VPC)
                                                         ─▶ validar ─▶ preparar (Batch privado) ─▶ manifesto + _SUCCESS
-operador ──start-execution──▶ state machine de benchmark ─▶ plano no S3 ─▶ Map (1 job Batch/Fargate por run)
-                                                        ─▶ consolidar ─▶ verificar tasks paradas
+operador ──start-execution──▶ state machine de benchmark ─▶ plano no S3 ─▶ Map (1 job Batch Fargate Spot por run,
+                                                           todos submetidos de uma vez) ─▶ consolidar ─▶ verificar tasks paradas
 EventBridge (Batch e Step Functions) ─▶ Lambda de controle ─▶ registro, SNS e reconciliação (nunca inicia campanhas)
 SageMaker Studio ─▶ continual-bench-campaign ─▶ callbacks que iniciam e acompanham os workflows
 SageMaker Studio ─▶ continual-bench-native ─▶ Processing, Training e Tuning (Social)
-Workers Batch e jobs nativos ─▶ MLflow App
+Workers Fargate Spot (logging assíncrono do MLflow) e jobs nativos ─▶ MLflow App
 S3 (snapshot pronto, avaliação Zia concluída) ─▶ EventBridge ─▶ SQS FIFO ─▶ Lambda ─▶ catálogo e links MLflow
 ```
 
@@ -94,24 +95,24 @@ analytics/<tabela>/<campanha>__<run_id>[__<job>].json              JSON Lines pa
 | `continual-bench-persistent` | `infra/cloudformation/persistent.yaml` | Bootstrap. KMS, buckets de dados, artefatos, billing e logs de acesso, ECR. Tudo com `Retain` e proteção contra término. |
 | `continual-bench-cicd` | `infra/cloudformation/cicd.yaml` | Bootstrap. Provedor OIDC do GitHub Actions e roles de deploy. |
 | `continual-bench-runtime` | `infra/cloudformation/root.yaml` | GitHub Actions. Aninha `network`, `execution`, `observability`, `analytics` (Core) e `billing`, `streaming`, `features`, `ml`, `bi` (ativáveis). O módulo de execução cria o MLflow App com `EnableMlflowTracking=true`. |
+| `continual-bench-interface-endpoints` | `infra/cloudformation/modules/interface-endpoints.yaml` | Criada sob demanda pelos workflows e removida quando as filas e as execuções ficam ociosas. |
 | `continual-bench-studio` | `infra/cloudformation/studio.yaml` | Pipeline de campanhas com callbacks para Step Functions, implantado separadamente. |
 | `continual-bench-studio-native` | `infra/cloudformation/studio-native.yaml` | Pipeline nativo para perfil, treinamento e tuning do Social, implantado separadamente. |
 | `continual-bench-studio-catalog` | `infra/cloudformation/studio-catalog.yaml` | Publicação de snapshots Zia e links para avaliações no catálogo, implantada separadamente. |
 
-Não há ciclo entre pipeline, ECR e job definition. O ECR fica na stack persistente, o
-pipeline publica imagens por digest e passa o digest como parâmetro da stack de execução.
-Cada mudança de digest cria uma revisão nova da job definition, gravada no manifesto de
-release depois do deploy.
+Não há ciclo entre pipeline, ECR e job definition. O ECR fica na stack persistente. O pipeline publica os digests no manifesto da release.
+O benchmark e o preparo de datasets usam a revisão da job definition do Batch fixada no plano.
+Nenhuma instância EC2 é criada ou gerenciada pelo perfil.
 
 ## Segurança
 
-- **Rede**: as tasks rodam em sub-redes privadas sem rota para a internet, com
-  `AssignPublicIp=DISABLED`. Não há Internet Gateway, NAT, Elastic IP nem load balancer.
+- **Rede**: as tasks Fargate de benchmark e de preparação rodam em sub-redes privadas sem
+  rota para a internet ou IP público. Não há Internet Gateway, NAT, Elastic IP nem load balancer.
   O S3 é acessado pelo gateway endpoint, cuja política inclui o bucket de camadas do ECR. ECR
   API, ECR Docker e CloudWatch Logs passam por endpoints de interface com DNS privado e política
   restrita à conta. `EnableMlflowTracking=true` habilita os endpoints SageMaker API
   e MLflow. O registro de modelos também exige o endpoint SageMaker API. Kinesis e Feature Store runtime usam endpoints quando os
-  módulos correspondentes estão ativos. A rede admite duas sub-redes do Batch com os
+  módulos correspondentes estão ativos. A rede admite duas sub-redes para os workers com os
   endpoints de interface em uma AZ (`InterfaceEndpointAzMode=single`), mantendo a rota
   compartilhada para o gateway do S3. O security group dos workers só sai por HTTPS para os
   endpoints e para a prefix list do S3.

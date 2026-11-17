@@ -170,12 +170,13 @@ class FakeContext(aws_control.Context):
         )
         self._store, self._jobs, self.quota, self.notifications = store, jobs, quota, []
 
-    def capacity(self, concurrency):
+    def capacity(self, concurrency, *, queue_excess=False):
         return planning.admit_capacity(
             concurrency,
             1,
             quota_vcpus=self.quota,
             queue={"queue_state": "ENABLED", "queue_status": "VALID", "max_vcpus": 8},
+            queue_excess=queue_excess,
         )
 
     def notify(self, subject, message):

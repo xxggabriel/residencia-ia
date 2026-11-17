@@ -9,10 +9,18 @@ alerts through SNS and reconciles stopped executions; it never starts a benchmar
 
 import json
 import os
+import re
 import time
 
 from continual_bench.application.cloud import layout, lifecycle, planning, snapshots
-from continual_bench.application.cloud.contracts import CampaignRequest, DatasetRequest, SnapshotRef
+from continual_bench.application.cloud.contracts import (
+    CAMPAIGN_ID,
+    SPOT_BACKEND,
+    CampaignRequest,
+    DatasetRequest,
+    SnapshotRef,
+)
+from continual_bench.infrastructure.object_store import put_json
 
 TERMINAL_EXECUTION = ("FAILED", "TIMED_OUT", "ABORTED")
 
@@ -52,7 +60,7 @@ class Context:
             TopicArn=topic, Subject=subject[:100], Message=json.dumps(message, default=str)
         )
 
-    def capacity(self, concurrency):
+    def capacity(self, concurrency, *, queue_excess=False):
         from continual_bench.infrastructure.aws.quotas import fargate_vcpu_quota, queue_capacity
 
         spot = self.env.get("BENCH_FARGATE_SPOT", "false") == "true"
@@ -61,6 +69,7 @@ class Context:
             float(self.env.get("BENCH_BENCHMARK_VCPUS", "1")),
             quota_vcpus=fargate_vcpu_quota(spot=spot),
             queue=queue_capacity(self.env["BENCH_JOB_QUEUE"]),
+            queue_excess=queue_excess,
         )
 
     @property
@@ -86,11 +95,16 @@ def plan_campaign(ctx, event):
 
     request = CampaignRequest(**event["request"])
     release = planning.resolve_release(ctx.store, request.release)
+    spot = release.benchmark_compute == SPOT_BACKEND
+    if event.get("require_spot") and not spot:
+        raise planning.CampaignConflict(f"Release {release.git_sha} does not run benchmarks on Fargate Spot")
+    if ctx.store.head(layout.cancelled_key(request.campaign_id)) is not None:
+        raise planning.CampaignConflict(f"Campaign {request.campaign_id} was explicitly cancelled")
     snapshot = snapshots.verify_snapshot(ctx.store, request.snapshot) if request.snapshot else None
     plan = planning.build_plan(request, release, snapshot_manifest=snapshot, project_root=ctx.project_root)
     verify_plan_sources(ctx.store, plan["units"])
-    evidence = ctx.capacity(plan["concurrency"])
-    from continual_bench.infrastructure.object_store import put_json
+    # Spot campaigns submit every unit at once; Batch queues what exceeds the vCPU quota.
+    evidence = ctx.capacity(plan["concurrency"], queue_excess=spot)
 
     put_json(
         ctx.store,
@@ -105,7 +119,10 @@ def plan_campaign(ctx, event):
         "bucket": ctx.env["BENCH_BUCKET"],
         "control_function": release.control_function,
         "capacity": {
-            k: evidence[k] for k in ("required_vcpus", "fargate_vcpu_quota", "max_parallel_admitted")
+            k: evidence[k]
+            for k in ("required_vcpus", "fargate_vcpu_quota", "max_parallel_admitted", "running_in_parallel",
+                      "queued")
+            if k in evidence
         },
     }
 
@@ -133,9 +150,10 @@ def consolidate(ctx, event):
 
 
 def reconcile_campaign(ctx, event):
-    return lifecycle.reconcile_campaign(
-        ctx.store, ctx.jobs, event["campaign_id"], event.get("reason", "requested")
-    )
+    campaign, reason = event["campaign_id"], event.get("reason", "requested")
+    if event.get("cancel"):
+        lifecycle.cancel_campaign(ctx.store, campaign)
+    return lifecycle.reconcile_campaign(ctx.store, ctx.jobs, campaign, reason)
 
 
 # Dataset pipeline -----------------------------------------------------------------------------------
@@ -183,6 +201,17 @@ def publish_snapshot(ctx, event):
     return {k: published[k] for k in ("manifest_uri", "marker_uri", "created", "snapshot_id")}
 
 
+def _observed_campaign(detail, name):
+    # Prefer the request over the name so a delimiter in the campaign ID is unambiguous.
+    try:
+        campaign = json.loads(detail.get("input") or "{}").get("request", {}).get("campaign_id", "")
+    except (AttributeError, TypeError, ValueError):
+        campaign = ""
+    if isinstance(campaign, str) and re.fullmatch(CAMPAIGN_ID, campaign):
+        return campaign
+    return name.split("--", 1)[0]
+
+
 # Lifecycle observation ------------------------------------------------------------------------------
 def observe(ctx, event):
     detail, kind = event.get("detail", {}), event.get("detail-type")
@@ -194,8 +223,6 @@ def observe(ctx, event):
             campaign, _, run_id = name[3:].rpartition("-")
         status = detail.get("status")
         if campaign and run_id:
-            from continual_bench.infrastructure.object_store import put_json
-
             put_json(
                 ctx.store,
                 layout.event_key(campaign, run_id, _stamp(), detail.get("jobId", "unknown"), status),
@@ -221,7 +248,9 @@ def observe(ctx, event):
             ctx.env.get("BENCH_BENCHMARK_STATE_MACHINE_SUFFIX", ":continual-bench-benchmark")
         ):
             # Execution names are `<campaign_id>` or `<campaign_id>--<retry-suffix>`.
-            campaign = name.split("--", 1)[0]
+            campaign = _observed_campaign(detail, name)
+            if status == "ABORTED":
+                lifecycle.cancel_campaign(ctx.store, campaign)
             result["reconciliation"] = lifecycle.reconcile_campaign(
                 ctx.store, ctx.jobs, campaign, f"execution {status}"
             )

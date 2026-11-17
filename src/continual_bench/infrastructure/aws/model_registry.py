@@ -1,5 +1,7 @@
 """SageMaker Model Registry: candidates stay PendingManualApproval and point to S3 + ECR digests."""
 
+from uuid import NAMESPACE_URL, uuid5
+
 from .session import client as make_client
 from .session import error_code
 
@@ -56,6 +58,7 @@ class SageMakerModelRegistry:
         properties = {k: str(v)[:256] for k, v in {**metadata, "run_id": run_id}.items()}
         response = self.client.create_model_package(
             ModelPackageGroupName=group,
+            ClientToken=str(uuid5(NAMESPACE_URL, f"sagemaker:model-package:{group}:{run_id}")),
             ModelPackageDescription=description[:1024],
             ModelApprovalStatus="PendingManualApproval",
             CustomerMetadataProperties=properties,

@@ -12,7 +12,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from continual_bench.core.policies import ZiaPolicy
-from continual_bench.datasets.zia import load_manifest, sha256_file
+from continual_bench.datasets.streams import load_stream_manifest as load_manifest
+from continual_bench.datasets.streams import sha256_file
 from continual_bench.evaluation.environment import encoded, environment
 from continual_bench.infrastructure.storage import atomic_write
 

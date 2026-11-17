@@ -1,5 +1,5 @@
 {
-  "Comment": "Manual benchmark campaign. Plan and publish the plan, fan out one AWS Batch Fargate job per run (reconciling before every submission), consolidate the final manifests and verify that no campaign task is left running. Never triggered by events.",
+  "Comment": "Manual benchmark campaign on AWS Batch with Fargate Spot (serverless). Plan, provision the private interface endpoints, submit every run at once (Batch starts as many tasks as the Fargate Spot vCPU quota allows and queues the rest), reconcile before every submission, retry reclaimed tasks from their S3 checkpoints, consolidate the final manifests and verify that no campaign task is left running. Never triggered by events.",
   "StartAt": "Plan",
   "States": {
     "Plan": {
@@ -9,7 +9,8 @@
         "FunctionName": "${ControlFunction}",
         "Payload": {
           "action": "plan_campaign",
-          "request.$": "$.request"
+          "request.$": "$.request",
+          "execution_arn.$": "$$.Execution.Id"
         }
       },
       "ResultSelector": {
@@ -39,12 +40,60 @@
           "Next": "PreflightFailed"
         }
       ],
-      "Next": "ChooseFanOut"
+      "Next": "EnsureEndpoints"
     },
     "PreflightFailed": {
       "Type": "Fail",
       "Error": "PreflightFailed",
       "Cause": "Request validation, release resolution, snapshot verification, capacity admission or plan publication failed; no job was submitted."
+    },
+    "EnsureEndpoints": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${EndpointsFunction}",
+        "Payload": {
+          "execution_arn.$": "$$.Execution.Id"
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "EndpointsPending"
+          ],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 60,
+          "BackoffRate": 1
+        },
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "EndpointSetupFailed"
+        }
+      ],
+      "Next": "ChooseFanOut"
+    },
+    "EndpointSetupFailed": {
+      "Type": "Fail",
+      "Error": "EndpointSetupFailed",
+      "Cause": "Private interface endpoints could not be provisioned. Check the endpoint stack and lifecycle Lambda logs."
     },
     "ChooseFanOut": {
       "Type": "Choice",

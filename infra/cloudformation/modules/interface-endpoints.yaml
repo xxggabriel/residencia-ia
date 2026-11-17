@@ -1,0 +1,238 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Interface endpoints provisioned only while the private Batch workflows need them.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  Project:
+    Type: String
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  EndpointSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+  EndpointSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  EnableModelRegistry:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  EnableMlflowTracking:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  EnableStreaming:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableFeatureStore:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  EnableKmsAndSecretsEndpoints:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Only for modules that call KMS or Secrets Manager directly from inside the VPC.
+
+Conditions:
+  ModelRegistry: !Equals [!Ref EnableModelRegistry, "true"]
+  MlflowTracking: !Equals [!Ref EnableMlflowTracking, "true"]
+  SageMakerApi: !Or [!Condition ModelRegistry, !Condition MlflowTracking]
+  Streaming: !Equals [!Ref EnableStreaming, "true"]
+  FeatureStore: !Equals [!Ref EnableFeatureStore, "true"]
+  KmsSecrets: !Equals [!Ref EnableKmsAndSecretsEndpoints, "true"]
+
+Resources:
+  # Interface endpoints restrict callers to this account's principals.
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to authenticate to ECR.
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref EndpointSubnets
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: interface-endpoints}]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [ecr:GetAuthorizationToken, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer,
+                     ecr:BatchCheckLayerAvailability]
+            Resource: "*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  EcrDockerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to pull container images.
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref EndpointSubnets
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: interface-endpoints}]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+            Resource: "*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to deliver container logs.
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref EndpointSubnets
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: interface-endpoints}]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+            Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  SageMakerApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to use the model registry and tracking APIs.
+    Condition: SageMakerApi
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.sagemaker.api"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref EndpointSubnets
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: interface-endpoints}]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [sagemaker:DescribeModelPackageGroup, sagemaker:CreateModelPackageGroup,
+                     sagemaker:ListModelPackages, sagemaker:DescribeModelPackage, sagemaker:CreateModelPackage,
+                     sagemaker:CreateExperiment, sagemaker:DescribeExperiment, sagemaker:UpdateExperiment,
+                     sagemaker:CreateTrial, sagemaker:DescribeTrial, sagemaker:UpdateTrial,
+                     sagemaker:CreateTrialComponent, sagemaker:DescribeTrialComponent, sagemaker:UpdateTrialComponent,
+                     sagemaker:AssociateTrialComponent, sagemaker:BatchPutMetrics, sagemaker:AddTags,
+                     sagemaker:CallMlflowAppApi, sagemaker:DescribeMlflowApp, sagemaker:ListMlflowApps,
+                     sagemaker:CreatePresignedMlflowAppUrl, sagemaker:DescribeMlflowTrackingServer,
+                     sagemaker:ListMlflowTrackingServers]
+            Resource: "*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  SageMakerMlflowEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to call the MLflow data plane.
+    Condition: MlflowTracking
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "aws.sagemaker.${AWS::Region}.mlflow"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref EndpointSubnets
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: interface-endpoints}]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [sagemaker:CallMlflowAppApi, sagemaker:DescribeMlflowApp, sagemaker:ListMlflowApps,
+                     sagemaker:CreatePresignedMlflowAppUrl, sagemaker-mlflow:*]
+            Resource: "*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  KinesisEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to use Kinesis when streaming is enabled.
+    Condition: Streaming
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.kinesis-streams"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref EndpointSubnets
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: interface-endpoints}]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: [kinesis:PutRecords, kinesis:GetRecords, kinesis:GetShardIterator, kinesis:ListShards,
+                     kinesis:DescribeStreamSummary]
+            Resource: !Sub "arn:${AWS::Partition}:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${Project}-*"
+            Condition: {StringEquals: {aws:PrincipalAccount: !Ref AWS::AccountId}}
+
+  FeatureStoreRuntimeEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allow private workers to reach the optional Feature Store runtime.
+    Condition: FeatureStore
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.sagemaker.featurestore-runtime"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref EndpointSubnets
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: interface-endpoints}]
+
+  KmsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Provide connectivity for optional direct KMS calls.
+    Condition: KmsSecrets
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.kms"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref EndpointSubnets
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: interface-endpoints}]
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Provide connectivity for optional direct Secrets Manager calls.
+    Condition: KmsSecrets
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref EndpointSubnets
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: interface-endpoints}]

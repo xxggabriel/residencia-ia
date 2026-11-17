@@ -30,9 +30,12 @@ def publish_run_metrics(client, directory, run_id, report):
     contract = report["contract"]
     source = contract["input"]["source"]
     env = contract["environment"]
+    # Zia streams carry a pinned Hugging Face source; catalog streams name their catalog entry.
+    dataset_source = (f"ziadatalabs/{source['repo']}" if "repo" in source
+                      else f"catalog/{source.get('catalog', report['dataset'])}")
     params = {
         "model": report["model"], "policy": report["policy"], "protocol": report["protocol"],
-        "dataset_source": f"ziadatalabs/{source['repo']}", "dataset_revision": source["revision"],
+        "dataset_source": dataset_source, "dataset_revision": source.get("revision", "catalog"),
         "dataset_sha256": contract["input"]["sha256"], "dataset_license": contract["input"]["license"],
         "samples": contract["input"]["rows"], "holdout_start": contract["holdout_start"],
         "block_rows": contract["block_rows"], "model_params": json.dumps(report["model_params"]),
@@ -45,10 +48,11 @@ def publish_run_metrics(client, directory, run_id, report):
     )
     inputs = client.get_run(run_id).inputs
     if not inputs or not inputs.dataset_inputs:
+        url = (f"https://huggingface.co/datasets/{dataset_source}/resolve/{source['revision']}/{source['file']}"
+               if "repo" in source else f"catalog://{source.get('catalog', report['dataset'])}")
         dataset = Dataset(
             name=params["dataset_source"], digest=params["dataset_sha256"][:32], source_type="http",
-            source=json.dumps({"url": f"https://huggingface.co/datasets/{params['dataset_source']}"
-                                      f"/resolve/{source['revision']}/{source['file']}"}),
+            source=json.dumps({"url": url}),
             profile=json.dumps({
                 "num_rows": params["samples"], "num_features": len(contract["input"]["features"]),
             }),

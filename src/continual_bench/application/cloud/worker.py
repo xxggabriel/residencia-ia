@@ -1,4 +1,4 @@
-"""One AWS Batch job = one run: load the verified snapshot, evaluate, publish, exit.
+"""Load the verified snapshot, evaluate, and publish a campaign unit.
 
 The evaluator, artifact generators and metrics are the project's own (`evaluation.zia.run`,
 `write_zia_artifacts`, `prediction_manifest`, `application.matrix`). This module only moves
@@ -22,13 +22,23 @@ from continual_bench.infrastructure.object_store import (
     ObjectExists,
     get_json,
     put_json,
+    sha256_bytes,
     sha256_path,
     split_uri,
 )
 from continual_bench.models.training.callbacks import GracefulTerminationHandler
 
 from . import layout
-from .contracts import RunUnit, SnapshotRef
+from .checkpoints import (
+    SKIP_SUFFIXES,
+    CampaignCancelled,
+    CheckpointError,
+    SpotAttempt,
+    SpotCheckpoint,
+    SpotGrantError,
+    output_files,
+)
+from .contracts import ReleaseManifest, RunUnit, SnapshotRef, run_identity
 from .records import ROWS_FILE, ensure_rows, matrix_rows, zia_rows
 from .snapshots import SnapshotNotReady, materialize, verify_snapshot
 
@@ -37,8 +47,7 @@ os.environ["OPENBLAS_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 
 EXIT_OK, EXIT_FAILED, EXIT_CONTRACT, EXIT_SNAPSHOT = 0, 1, 2, 3
-SKIP_SUFFIXES = (".lock",)
-SKIP_PREFIXES = (".pending-", ".predictions-", ".model-", ".prepare-")
+EXIT_INTERRUPTED, EXIT_CANCELLED = 75, 76
 
 
 class ContractError(ValueError):
@@ -95,17 +104,10 @@ def ecs_task_arn(env) -> str | None:
 
 def publish_directory(store, directory: Path, prefix: str, *, check_stop=None) -> dict:
     files, total = 0, 0
-    for path in sorted(directory.rglob("*")):
+    for relative, path in output_files(directory):
         if check_stop is not None:
             check_stop()
-        relative = path.relative_to(directory)
-        if (
-            not path.is_file()
-            or path.name.endswith(SKIP_SUFFIXES)
-            or any(part.startswith(SKIP_PREFIXES) for part in relative.parts)
-        ):
-            continue
-        key = f"{prefix}/{relative.as_posix()}"
+        key = f"{prefix}/{relative}"
         digest = sha256_path(path)
         existing = store.head(key)
         if existing is None:
@@ -197,7 +199,17 @@ def verify_native_loader(directory: Path, report: dict, data_root: Path, rows: i
     }
 
 
-def execute_zia(unit: RunUnit, store, workdir: Path, log, *, stop_requested=None, progress=None) -> dict:
+def zia_snapshot(store, unit):
+    manifest = verify_snapshot(store, SnapshotRef(**unit.params["snapshot"]))
+    if manifest["manifest_sha256"] != unit.contract["snapshot"]["manifest_sha256"]:
+        raise SnapshotNotReady("incompatible", "snapshot manifest differs from the campaign plan")
+    return manifest
+
+
+def execute_zia(
+    unit: RunUnit, store, workdir: Path, log, *, stop_requested=None, progress=None, checkpoint=None,
+    snapshot_manifest=None,
+) -> dict:
     import yaml
 
     from continual_bench.config import TrackingConfig
@@ -207,10 +219,7 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log, *, stop_requested=None
     from continual_bench.evaluation.zia_publication import run_documents
 
     params = unit.params
-    snapshot = SnapshotRef(**params["snapshot"])
-    manifest = verify_snapshot(store, snapshot)
-    if manifest["manifest_sha256"] != unit.contract["snapshot"]["manifest_sha256"]:
-        raise SnapshotNotReady("incompatible", "snapshot manifest differs from the campaign plan")
+    manifest = snapshot_manifest if snapshot_manifest is not None else zia_snapshot(store, unit)
     tracking_path = Path(os.environ.get("BENCH_PROJECT_ROOT", ".")) / params["tracking"]
     import hashlib
 
@@ -229,8 +238,9 @@ def execute_zia(unit: RunUnit, store, workdir: Path, log, *, stop_requested=None
         params["policy"],
         output,
         settings,
-        stop_requested=stop_requested,
+        stop_requested=stop_requested if checkpoint is None else None,
         progress=progress,
+        **({"checkpoint": checkpoint} if checkpoint is not None else {}),
     )
     if stop_requested is not None and stop_requested():
         raise InterruptedError("Zia evaluation stopped after SIGTERM")
@@ -266,12 +276,19 @@ def restore_benchmark_evidence(store, final, directory, *, report_path="report.j
     return directory
 
 
-def start_zia_tracking(tracker, attempt_key, log):
+def flush_tracking(tracker):
+    """Drain asynchronous MLflow writes (native async queue or the REST live writer)."""
+    flush = getattr(tracker, "flush", None)
+    if callable(flush):
+        flush()
+
+
+def start_zia_tracking(tracker, attempt_key, log, *, spot=False):
     start_live = getattr(tracker, "start_live", None)
     if not callable(start_live):
         return False
     bind_attempt = getattr(tracker, "bind_attempt", None)
-    if callable(bind_attempt):
+    if callable(bind_attempt) and not spot:
         bind_attempt(attempt_key)
     try:
         start_live()
@@ -292,7 +309,7 @@ def stop_zia_tracking(tracker, log):
 
 
 def complete_zia_tracking(tracker, store, final, output, report, adapted):
-    if hasattr(tracker, "bind_attempt"):
+    if hasattr(tracker, "bind_attempt") and not final["attempt"].get("worker_id"):
         tracker.bind_attempt(final["attempt"]["attempt_key"])
     result = tracker.publish_run_report(
         report,
@@ -335,7 +352,7 @@ def complete_zia_tracking(tracker, store, final, output, report, adapted):
     }
 
 
-def execute_matrix_case(store, unit: RunUnit, workdir: Path, *, progress=None) -> dict:
+def execute_matrix_case(store, unit: RunUnit, workdir: Path, *, progress=None, checkpoint=None) -> dict:
     from continual_bench.application.matrix import _execute_case, _headline
     from continual_bench.config import Config, EpochConfig, TypedConfig
 
@@ -350,7 +367,10 @@ def execute_matrix_case(store, unit: RunUnit, workdir: Path, *, progress=None) -
         source = materialize_source(
             store, unit.labels["dataset"], unit.params["source_sha256"], workdir / "source", config, evaluator
         )
-    report = _execute_case(config, output, str(workdir / "cache"), None, source=source, progress=progress)
+    report = _execute_case(
+        config, output, str(workdir / "cache"), None, source=source, progress=progress,
+        **({"checkpoint": checkpoint} if checkpoint is not None else {}),
+    )
     directory = output / evaluator / report["run_key"]
     report_path = directory / ("epoch-report.json" if evaluator == "epochs" else "report.json")
     return {"report": report, "headline": _headline(report), "output": output, "report_path": report_path}
@@ -392,6 +412,69 @@ def flush_partial_state(
     return payload
 
 
+def verify_spot_inputs(store, key, unit, env):
+    expected_id, contract_hash = run_identity(unit.campaign_id, unit.contract)
+    if (
+        unit.run_id != expected_id
+        or unit.contract_sha256 != contract_hash
+        or unit.unit_key != key
+        or unit.unit_key != layout.unit_key(unit.campaign_id, unit.run_id)
+        or unit.params != unit.contract.get("params")
+        or unit.kind != unit.contract.get("kind")
+    ):
+        raise ContractError("unit document differs from its campaign contract")
+    revision = unit.contract["release"]["git_sha"]
+    release = ReleaseManifest(**get_json(store, layout.release_key(revision)))
+    image = release.images["runtime"]
+    if (
+        env.get("BENCH_GIT_REVISION") != revision
+        or release.git_sha != revision
+        or image.digest != unit.contract["release"]["runtime_image"]
+        or env.get("BENCH_IMAGE_DIGEST") != image.digest
+        or env.get("BENCH_IMAGE_URI", image.uri) != image.uri
+    ):
+        raise ContractError("instance image or revision differs from the campaign release")
+    if unit.kind == "zia":
+        manifest = zia_snapshot(store, unit)
+        if manifest["prepared"]["sha256"] != unit.contract["snapshot"]["prepared_sha256"]:
+            raise SnapshotNotReady("incompatible", "prepared dataset differs from the campaign plan")
+        return manifest
+    if "source_sha256" in unit.params:
+        from .matrix_sources import verify_source
+
+        verify_source(store, unit.labels["dataset"], unit.params["source_sha256"])
+    return None
+
+
+def reuse_final(store, final_key, status_key, status, log, clock):
+    try:
+        analytics = ensure_rows(store, get_json(store, final_key))
+    except Exception as error:  # Repair failed: report it, keep the final manifest untouched.
+        log.error("analytics repair failed", exc_info=True)
+        put_json(
+            store, status_key,
+            {**status, "state": "REUSED_ANALYTICS_FAILED", "finished_at": clock(),
+             "diagnostic": {"error_type": type(error).__name__, "message": str(error)[:2000]}},
+        )
+        return EXIT_FAILED
+    put_json(
+        store,
+        status_key,
+        {**status, "state": "REUSED", "finished_at": clock(), "final_uri": store.uri(final_key),
+         "analytics": analytics},
+    )
+    log.info("run already final; reusing published evidence", extra={"fields": {"analytics": analytics}})
+    return EXIT_OK
+
+
+def stage_publication(store, output, prefix, checkpoint, *, check_stop=None):
+    if checkpoint is None:
+        return {"published": publish_directory(store, output, prefix, check_stop=check_stop)}
+    files = checkpoint.archive_files(private=False, check_stop=check_stop)
+    summary = {"files": len(files), "bytes": sum(file["bytes"] for file in files.values()), "prefix": prefix}
+    return {"publication_files": files, "published": summary}
+
+
 def run_unit(
     store,
     unit_ref: str,
@@ -412,6 +495,10 @@ def run_unit(
     unit = RunUnit(**get_json(store, key))
     job_id, attempt = env.get("AWS_BATCH_JOB_ID"), env.get("AWS_BATCH_JOB_ATTEMPT")
     attempt_key = layout.attempt_key_for(job_id, attempt)
+    # Fargate Spot attempts are resumable: checkpoints in S3, one logical MLflow run.
+    resumable = bool(job_id) and env.get("BENCH_FARGATE_SPOT", "false") == "true"
+    task_arn = ecs_task_arn(env)
+    worker_id = task_arn or job_id
     context = {
         "campaign_id": unit.campaign_id,
         "run_id": unit.run_id,
@@ -427,30 +514,14 @@ def run_unit(
         "attempt_key": attempt_key,
         "job_id": job_id,
         "attempt": attempt,
-        "task_arn": ecs_task_arn(env),
+        "task_arn": task_arn,
         "image_digest": env.get("BENCH_IMAGE_DIGEST"),
         "git_sha": env.get("BENCH_GIT_REVISION"),
         "started_at": clock(),
         "labels": unit.labels,
     }
-    if store.head(final_key) is not None:
-        try:
-            analytics = ensure_rows(store, get_json(store, final_key))
-        except Exception as error:  # Repair failed: report it, keep the final manifest untouched.
-            log.error("analytics repair failed", exc_info=True)
-            put_json(store, status_key, {**status, "state": "REUSED_ANALYTICS_FAILED", "finished_at": clock(),
-                                         "diagnostic": {"error_type": type(error).__name__,
-                                                        "message": str(error)[:2000]}})
-            return EXIT_FAILED
-        put_json(
-            store,
-            status_key,
-            {**status, "state": "REUSED", "finished_at": clock(), "final_uri": store.uri(final_key),
-             "analytics": analytics},
-        )
-        log.info("run already final; reusing published evidence", extra={"fields": {"analytics": analytics}})
-        return EXIT_OK
-    put_json(store, status_key, {**status, "state": "RUNNING"})
+    if not resumable and store.head(final_key) is not None:
+        return reuse_final(store, final_key, status_key, status, log, clock)
     started = time.monotonic()
     prefix = layout.attempt_prefix(unit.campaign_id, unit.run_id, attempt_key)
     active_tracker = None
@@ -458,13 +529,19 @@ def run_unit(
     pending_key = f"{layout.run_prefix(unit.campaign_id, unit.run_id)}/pending-publication.json"
     tracking_uri = env.get("MLFLOW_TRACKING_URI")
     tracking_required = bool(tracking_uri or (unit.kind == "zia" and tracker is not None))
-    publication_required = tracking_required or (unit.kind == "zia" and registry is not None)
+    publication_required = bool(
+        resumable or tracking_required or (unit.kind == "zia" and registry is not None)
+    )
     resuming = False
     live_attempt = None
+    spot = None
+    checkpoint = None
+    publishing = False
 
     def on_terminate(_signal):
-        if unit.kind == "zia":
-            return  # Zia stops at the next training step before flushing its last recorded metrics.
+        if resumable or unit.kind == "zia":
+            # The evaluator checkpoints at its next safe point, then the attempt flushes MLflow.
+            return
         flush_partial_state(store, workdir / "run", prefix, status_key, status, started=started, clock=clock)
         if matrix_tracker is not None:
             matrix_tracker.finish("KILLED")
@@ -472,14 +549,67 @@ def run_unit(
     sigterm_handler = GracefulTerminationHandler(on_terminate=on_terminate)
     zia_signal_scope = ExitStack()
 
-    def check_zia_stop():
+    def check_stop():
+        if spot:
+            spot.check_publication()
         if sigterm_handler.received:
             raise InterruptedError("Zia execution stopped after SIGTERM")
 
+    def stop_requested():
+        return bool(spot.reason() if spot else sigterm_handler.received)
+
+    def bind_spot_tracking(active):
+        if active is not None and spot:
+            active.bind_spot_attempt(
+                attempt_key, instance_id=worker_id, attempt=spot.attempt,
+                resumed_checkpoint=status.get("resumed_checkpoint"),
+                previous_attempt_key=status.get("previous_attempt_key"),
+                recovery_reason=status.get("recovery_reason"),
+            )
+
+    def record_spot_tracking(state, reason=None):
+        if active_tracker is not None and spot:
+            return active_tracker.record_spot_attempt(
+                state, reason=reason, checkpoint=checkpoint.receipt if checkpoint else None,
+            )
+        return True
+
     try:
-        if unit.kind == "zia":
+        if resumable or unit.kind == "zia":
             zia_signal_scope.enter_context(sigterm_handler)
-        with nullcontext() if unit.kind == "zia" else sigterm_handler:
+        with nullcontext() if resumable or unit.kind == "zia" else sigterm_handler:
+            snapshot_manifest = None
+            if resumable:
+                spot = SpotAttempt(
+                    store, unit, worker_id, attempt_key, stop_requested=lambda: sigterm_handler.received,
+                )
+                try:
+                    grant = spot.acquire()
+                except SpotGrantError:
+                    log.error("worker could not claim the next resumable attempt", exc_info=True)
+                    return EXIT_CONTRACT
+                except CampaignCancelled:
+                    return EXIT_CANCELLED
+                except InterruptedError:
+                    return EXIT_INTERRUPTED
+                status["worker_id"] = worker_id
+                status["spot_attempt"] = spot.attempt
+                status.update({key: grant.get(key) for key in ("previous_attempt_key", "recovery_reason")})
+                put_json(store, status_key, {**status, "state": "RUNNING"})
+                snapshot_manifest = verify_spot_inputs(store, key, unit, env)
+                if store.head(final_key) is not None:
+                    check_stop()
+                    return reuse_final(store, final_key, status_key, status, log, clock)
+                checkpoint = SpotCheckpoint(
+                    store, unit, workdir / "run", spot.attempt, requested=stop_requested, logger=log,
+                    interval=float(env.get("BENCH_CHECKPOINT_INTERVAL_SECONDS", "30")),
+                )
+                if store.head(pending_key) is not None:
+                    status["resumed_checkpoint"] = store.uri(pending_key)
+                else:
+                    checkpoint.prepare_restore()
+                    status["resumed_checkpoint"] = checkpoint.resumed
+            put_json(store, status_key, {**status, "state": "RUNNING"})
             expected_image = unit.contract["release"]["runtime_image"]
             if env.get("BENCH_IMAGE_DIGEST") and env["BENCH_IMAGE_DIGEST"] != expected_image:
                 raise ContractError("job runs an image other than the campaign release")
@@ -487,39 +617,52 @@ def run_unit(
                 active_tracker = tracker(unit) if callable(tracker) else tracker
                 if tracking_required and not hasattr(active_tracker, "publish_run_report"):
                     raise TrackingPublicationError("MLflow is configured but the worker has no publisher")
+                bind_spot_tracking(active_tracker)
                 resuming = publication_required and store.head(pending_key) is not None
                 if not resuming:
-                    if start_zia_tracking(active_tracker, attempt_key, log):
+                    if start_zia_tracking(active_tracker, attempt_key, log, spot=bool(spot)):
                         live_attempt = attempt_key
                     callback = getattr(active_tracker, "progress", None)
 
                     def live_progress(step, metrics):
-                        if sigterm_handler.received:
+                        if stop_requested():
                             return
                         try:
                             callback(step, metrics)
                         except Exception:
                             log.warning("could not publish Zia progress to MLflow", exc_info=True)
 
-                    check_zia_stop()
-                    outcome = execute_zia(
-                        unit, store, workdir, log, stop_requested=lambda: sigterm_handler.received,
-                        progress=live_progress if callable(callback) else None,
+                    check_stop()
+                    options = (
+                        {"checkpoint": checkpoint, "snapshot_manifest": snapshot_manifest} if spot else {}
                     )
-                    check_zia_stop()
+                    outcome = execute_zia(
+                        unit, store, workdir, log, stop_requested=stop_requested,
+                        progress=live_progress if callable(callback) else None,
+                        **options,
+                    )
+                    check_stop()
             else:
-                resuming = tracking_required and store.head(pending_key) is not None
+                resuming = publication_required and store.head(pending_key) is not None
+                options = {"checkpoint": checkpoint} if spot else {}
                 if tracking_required and not resuming:
                     from continual_bench.infrastructure.aws.matrix_tracking import MatrixMlflowRun
 
                     matrix_tracker = MatrixMlflowRun(unit, attempt_key, job_id, tracking_uri, log)
-                    matrix_tracker.start()
+                    bind_spot_tracking(matrix_tracker)
+                    if spot:
+                        matrix_tracker.start_live()
+                    else:
+                        matrix_tracker.start()
                     active_tracker = matrix_tracker
-                    outcome = execute_matrix_case(store, unit, workdir, progress=matrix_tracker.metrics)
+                    outcome = execute_matrix_case(
+                        store, unit, workdir, progress=matrix_tracker.metrics, **options,
+                    )
                 elif not resuming:
-                    outcome = execute_matrix_case(store, unit, workdir)
-                if sigterm_handler.received:
+                    outcome = execute_matrix_case(store, unit, workdir, **options)
+                if stop_requested():
                     raise InterruptedError("Matrix evaluation stopped after SIGTERM")
+        publishing = True
         evaluation_seconds = time.monotonic() - started
         outputs_uri = store.uri(prefix)
         final = {
@@ -536,12 +679,18 @@ def run_unit(
             "outputs_uri": outputs_uri,
             "evaluation_seconds": evaluation_seconds,
         }
+        if spot:
+            final["attempt"].update({name: status.get(name) for name in (
+                "worker_id", "spot_attempt", "previous_attempt_key", "recovery_reason",
+                "resumed_checkpoint",
+            )})
+            final["attempt"]["checkpoint"] = checkpoint.receipt
         if unit.kind == "zia" and not resuming:
             report, output = outcome["report"], outcome["output"]
             metadata, links, documents = outcome["documents"](report, outcome["adapted"], outputs_uri)
             for name, value in documents.items():
                 (output / name).write_text(json.dumps(value, sort_keys=True, indent=2))
-            check_zia_stop()
+            check_stop()
             loader = verify_native_loader(output, report, outcome["data_root"])
             (output / "model").mkdir(exist_ok=True)
             (output / "model" / "model.tar.gz").write_bytes(model_tarball(output, metadata))
@@ -549,8 +698,7 @@ def run_unit(
             (output / ROWS_FILE).write_text(json.dumps(rows, sort_keys=True, allow_nan=False))
             if hasattr(active_tracker, "prepare_artifacts"):
                 active_tracker.prepare_artifacts(report, output)
-            check_zia_stop()
-            published = publish_directory(store, output, prefix, check_stop=check_zia_stop)
+            check_stop()
             final.update(
                 {
                     "snapshot": unit.contract["snapshot"],
@@ -604,16 +752,11 @@ def run_unit(
                     },
                     "decision_threshold": report["contract"].get("decision_threshold"),
                     "links": links,
-                    "published": published,
                 }
             )
+            final.update(stage_publication(store, output, prefix, checkpoint, check_stop=check_stop))
             adapted = outcome["adapted"]
             final["tracking"] = {"required": tracking_required, "complete": False}
-            if publication_required:
-                try:
-                    put_json(store, pending_key, final, if_absent=True)
-                except ObjectExists:
-                    resuming = True
         elif unit.kind != "zia" and not resuming:
             from continual_bench.models import default_model
 
@@ -635,12 +778,10 @@ def run_unit(
                 outputs_uri,
             )
             (outcome["output"] / ROWS_FILE).write_text(json.dumps(rows, sort_keys=True, allow_nan=False))
-            published = publish_directory(store, outcome["output"], prefix)
             final.update(
                 {
                     "metrics": outcome["headline"],
                     "matrix_coordinates": coordinates,
-                    "published": published,
                     "run_key": report["run_key"],
                     "report_uri": f"{outputs_uri}/{relative_report}",
                     "report_sha256": sha256_path(report_path),
@@ -649,38 +790,78 @@ def run_unit(
                     "tracking": {"required": tracking_required, "complete": False},
                 }
             )
+            final.update(stage_publication(
+                store, outcome["output"], prefix, checkpoint, check_stop=check_stop if spot else None,
+            ))
             if "training_history" in report:
                 final["training_history_uri"] = f"{outputs_uri}/{relative_evidence}/training-history.json"
-            if tracking_required:
-                try:
-                    put_json(store, pending_key, final, if_absent=True)
-                except ObjectExists:
-                    resuming = True
+        if publication_required and not resuming:
+            if spot:
+                spot.check_publication(strict=True)
+            try:
+                pending = put_json(store, pending_key, final, if_absent=True)
+                if spot:
+                    log.info("publication receipt confirmed", extra={"fields": {"receipt": pending.uri}})
+            except ObjectExists:
+                resuming = True
+        publication_root = None
+        if spot:
+            if resuming:
+                data = store.get_bytes(pending_key)
+                if store.head(pending_key).sha256 != sha256_bytes(data):
+                    raise CheckpointError("Publication receipt checksum could not be verified")
+                final = json.loads(data)
+                if final["contract_sha256"] != unit.contract_sha256:
+                    raise ContractError("Archived evidence does not match the unit contract")
+                publication_root = workdir / "publication"
+                publication_root.mkdir(parents=True, exist_ok=True)
+                checkpoint.restore_files(
+                    final["publication_files"], publication_root, check_stop=check_stop,
+                )
+            else:
+                publication_root = outcome["output"]
+            final.pop("publication_files")
+            published = final["published"]
+            archived_prefix = layout.attempt_prefix(
+                unit.campaign_id, unit.run_id, final["attempt"]["attempt_key"],
+            )
+            if published["prefix"] != archived_prefix or final["outputs_uri"] != store.uri(archived_prefix):
+                raise ContractError("Archived evidence is outside its campaign attempt")
+            replicated = publish_directory(
+                store, publication_root, archived_prefix, check_stop=check_stop,
+            )
+            if replicated != published:
+                raise TrackingPublicationError("Restored files differ from the publication receipt")
         if unit.kind == "zia" and publication_required:
-            check_zia_stop()
+            check_stop()
             if resuming:
                 from continual_bench.evaluation.zia_artifacts import tracking_report
                 from continual_bench.evaluation.zia_predictions import prediction_manifest
 
-                final = get_json(store, pending_key)
+                if not spot:
+                    final = get_json(store, pending_key)
                 if final["contract_sha256"] != unit.contract_sha256:
                     raise ContractError("Archived attempt does not match the unit contract")
                 archived_attempt = final["attempt"]["attempt_key"]
-                if live_attempt != archived_attempt:
+                if spot:
+                    start_zia_tracking(active_tracker, attempt_key, log, spot=True)
+                elif live_attempt != archived_attempt:
                     if live_attempt is not None:
                         stop_zia_tracking(active_tracker, log)
                         if callable(tracker):
                             active_tracker = tracker(unit)
                     start_zia_tracking(active_tracker, archived_attempt, log)
-                output = restore_benchmark_evidence(
-                    store, final, workdir / "publication", check_stop=check_zia_stop
+                output = publication_root or restore_benchmark_evidence(
+                    store, final, workdir / "publication", check_stop=check_stop
                 )
                 report = json.loads((output / "report.json").read_text())
                 metadata = json.loads((output / "model-metadata.json").read_text())
                 adapted = tracking_report(report, prediction_manifest(output, report))
                 evaluation_seconds = final["evaluation_seconds"]
-                check_zia_stop()
+                check_stop()
             if registry is not None:
+                if spot:
+                    spot.check_publication(strict=True)
                 model_package = registry(
                     unit, report, metadata, final["model"]["archive_uri"],
                     {"snapshot_id": final["snapshot"]["id"]},
@@ -689,36 +870,49 @@ def run_unit(
                     raise RuntimeError("SageMaker registry returned no model package ARN")
                 final["model"]["model_package_arn"] = model_package["model_package_arn"]
             if tracking_required:
-                check_zia_stop()
+                if spot:
+                    spot.check_publication(strict=True)
+                else:
+                    check_stop()
                 complete_zia_tracking(active_tracker, store, final, output, report, adapted)
-                check_zia_stop()
+                check_stop()
         elif unit.kind != "zia" and tracking_required:
             from continual_bench.infrastructure.aws.matrix_tracking import MatrixMlflowRun
 
             if resuming:
-                final = get_json(store, pending_key)
+                if not spot:
+                    final = get_json(store, pending_key)
                 if final["contract_sha256"] != unit.contract_sha256:
                     raise ContractError("Archived attempt does not match the unit contract")
                 archived = final["attempt"]
                 if matrix_tracker is not None and archived["attempt_key"] != attempt_key:
                     matrix_tracker.finish("KILLED")
-                root = restore_benchmark_evidence(
+                root = publication_root or restore_benchmark_evidence(
                     store, final, workdir / "publication", report_path=final["report_path"]
                 )
                 report_path = root / final["report_path"]
                 directory = report_path.parent
                 report = json.loads(report_path.read_text())
                 evaluation_seconds = final["evaluation_seconds"]
-                matrix_tracker = MatrixMlflowRun(
-                    unit, archived["attempt_key"], archived["job_id"], tracking_uri, log
-                )
+                if spot:
+                    matrix_tracker = MatrixMlflowRun(unit, attempt_key, job_id, tracking_uri, log)
+                    bind_spot_tracking(matrix_tracker)
+                    matrix_tracker.start_live()
+                else:
+                    matrix_tracker = MatrixMlflowRun(
+                        unit, archived["attempt_key"], archived["job_id"], tracking_uri, log,
+                    )
                 active_tracker = matrix_tracker
             try:
+                if spot:
+                    spot.check_publication(strict=True)
                 receipt = matrix_tracker.publish_training_evidence(
                     report, directory, store=store, headline=final["metrics"],
                     outputs_uri=final["outputs_uri"],
                 )
                 matrix_tracker.finish_publication()
+            except InterruptedError:
+                raise
             except Exception as error:
                 raise TrackingPublicationError(f"Matrix MLflow publication failed: {error}") from error
             final["tracking"] = {"required": True, "complete": True, **receipt}
@@ -728,6 +922,17 @@ def run_unit(
                 "mlflow_artifact_uri": receipt["artifact_uri"],
             }
 
+        if spot:
+            spot.check_publication(strict=True)
+            analytics = ensure_rows(store, final)
+            if analytics not in {"present", "repaired"}:
+                raise TrackingPublicationError("Could not publish benchmark analytics")
+            if not record_spot_tracking("SUCCEEDED"):
+                raise TrackingPublicationError("Could not record the completed Spot attempt in MLflow")
+            final["publication_attempt"] = {
+                "attempt_key": attempt_key, "worker_id": worker_id, "attempt": spot.attempt,
+            }
+            spot.check_publication(strict=True)
         try:
             put_json(store, final_key, final, if_absent=True)
             state = "SUCCEEDED"
@@ -735,7 +940,8 @@ def run_unit(
             state = "SUPERSEDED"  # Another attempt published first; this attempt's evidence stays.
             log.warning("final manifest already exists; attempt kept as superseded evidence")
         # Rows come from the winning attempt's archived file; a failure here is repaired later.
-        analytics = ensure_rows(store, get_json(store, final_key))
+        if not spot:
+            analytics = ensure_rows(store, get_json(store, final_key))
         finished = clock()
         put_json(
             store,
@@ -748,6 +954,7 @@ def run_unit(
                 "final_uri": store.uri(final_key),
                 "published_bytes": final["published"]["bytes"],
                 "analytics": analytics,
+                **({"checkpoint": checkpoint.receipt} if checkpoint else {}),
             },
         )
         holdout_m = final.get("holdout", {})
@@ -801,11 +1008,23 @@ def run_unit(
         )
         return EXIT_OK
     except Exception as error:
+        reason = None
+        if spot:
+            try:
+                reason = spot.reason()
+            except Exception:
+                log.warning("could not verify the current Spot interruption state", exc_info=True)
+        if isinstance(error, CampaignCancelled):
+            reason = "cancelled"
         code = (
-            EXIT_SNAPSHOT
+            EXIT_CANCELLED
+            if reason == "cancelled" or isinstance(error, CampaignCancelled)
+            else EXIT_INTERRUPTED
+            if reason
+            else EXIT_SNAPSHOT
             if isinstance(error, SnapshotNotReady)
             else EXIT_CONTRACT
-            if isinstance(error, ContractError)
+            if isinstance(error, (ContractError, CheckpointError, SpotGrantError))
             else EXIT_FAILED
         )
         diagnostic = {
@@ -817,20 +1036,20 @@ def run_unit(
         log.error("run failed", exc_info=True, extra={"fields": {"exit_code": code}})
         if (
             active_tracker is not None and hasattr(active_tracker, "mark_failed")
-            and not sigterm_handler.received
+            and not spot and not sigterm_handler.received
         ):
             try:
                 active_tracker.mark_failed(str(error)[:1000])
             except Exception:
                 pass
-        if unit.kind == "zia" and sigterm_handler.received:
+        if not spot and unit.kind == "zia" and sigterm_handler.received:
             stop_zia_tracking(active_tracker, log)
             flush_partial_state(
                 store, workdir / "run", prefix, status_key, status, started=started, clock=clock
             )
             return code
-        failure_state = "FAILED"
-        if publication_required and store.head(pending_key):
+        failure_state = {EXIT_CANCELLED: "CANCELLED", EXIT_INTERRUPTED: "INTERRUPTED"}.get(code, "FAILED")
+        if code == EXIT_FAILED and publication_required and (publishing or store.head(pending_key)):
             failure_state = (
                 "TRACKING_FAILED" if isinstance(error, TrackingPublicationError) else "PUBLICATION_FAILED"
             )
@@ -843,8 +1062,23 @@ def run_unit(
                 "finished_at": clock(),
                 "wall_seconds": time.monotonic() - started,
                 "diagnostic": diagnostic,
+                **({"interruption_reason": reason, "checkpoint": checkpoint.receipt if checkpoint else None}
+                   if spot else {}),
             },
         )
+        if spot and not isinstance(error, SpotGrantError):
+            try:
+                record_spot_tracking(failure_state, reason=reason or str(error)[:1000])
+                # Every queued MLflow write reaches the server before the task is reclaimed.
+                flush_tracking(active_tracker)
+                if code == EXIT_CANCELLED:
+                    stop_zia_tracking(active_tracker, log)
+                elif failure_state == "FAILED" and callable(
+                    mark_failed := getattr(active_tracker, "mark_failed", None)
+                ):
+                    mark_failed(str(error)[:1000])
+            except Exception:
+                log.warning("could not record the failed Spot attempt in MLflow", exc_info=True)
         if emit:
             emit(
                 {"RunFailed": 1},

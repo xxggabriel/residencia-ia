@@ -16,9 +16,9 @@ from continual_bench.core.continual import ContinualEvaluation
 from continual_bench.core.contracts import Event
 
 
-def read_events(path):
+def read_events(path, start=0):
     with Path(path).open() as f:
-        for line in f:
+        for line in itertools.islice(f, start, None):
             yield Event(**json.loads(line))
 
 
@@ -55,9 +55,13 @@ class BinaryRun:
     manifest: dict = field(default_factory=dict)
     stop_after: int | None = None
     progress: Callable[[int, dict], None] | None = None
+    checkpoint_due: Callable[[], bool] | None = None
 
-    def events(self):
-        return read_events(self.events_path)
+    def events(self, start=0):
+        return read_events(self.events_path, start)
+
+    def durable_checkpoint_due(self):
+        return self.checkpoint_due is not None and self.checkpoint_due()
 
 
 @dataclass

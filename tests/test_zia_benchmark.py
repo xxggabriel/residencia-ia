@@ -6,10 +6,34 @@ from shutil import copytree
 import numpy as np
 import pytest
 import yaml
+from scipy.special import logsumexp
 
 from continual_bench.core.metrics import Metrics
 from continual_bench.evaluation.zia_metrics import ClassificationMetrics
 from continual_bench.models.zia import FraudOrReturnBooster, MultinomialLogistic
+
+
+def test_logistic_objective_matches_logsumexp_with_extreme_scores():
+    model = MultinomialLogistic(3)
+    features = np.array([[1, -2], [3, 4], [-1, 2]], dtype=np.float32)
+    labels = np.array([2, 1, 0])
+    weights = np.array([[1_000, 0, -1_000], [-500, 500, 0], [1, 0, -1]], dtype=np.float64)
+    regularization = 0.001
+
+    loss, gradient = model._objective_and_grad(
+        features, labels, weights.ravel(), weights.shape, regularization,
+    )
+    logits = features @ weights[:-1] + weights[-1]
+    log_probabilities = logits - logsumexp(logits, axis=1, keepdims=True)
+    expected_loss = -log_probabilities[np.arange(len(labels)), labels].mean()
+    expected_loss += regularization / 2 * np.square(weights[:-1]).sum()
+    residuals = np.exp(log_probabilities) - np.eye(3)[labels]
+    expected_gradient = np.vstack((
+        features.T @ residuals / len(labels) + regularization * weights[:-1],
+        residuals.mean(axis=0),
+    ))
+    assert loss == pytest.approx(expected_loss, rel=1e-12)
+    np.testing.assert_allclose(gradient.reshape(weights.shape), expected_gradient, rtol=1e-12, atol=1e-15)
 
 
 def test_binned_metrics_preserve_binary_confusion_and_calibration():

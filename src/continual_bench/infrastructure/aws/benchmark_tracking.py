@@ -66,7 +66,9 @@ class BenchmarkMlflowRun(SageMakerMlflowTracker):
             bucket, _ = split_uri(self.artifact_uri)
             store = S3ObjectStore(bucket, kms_key_id=os.environ.get("BENCH_KMS_KEY_ID"))
         self.stage_observation_artifacts(directory, report, child_runs, store)
-        artifacts = upload_directory_to_mlflow_artifacts(store, directory, self.artifact_uri)
+        artifacts = upload_directory_to_mlflow_artifacts(
+            store, directory, self.artifact_uri, immutable=self.spot,
+        )
         if not artifacts["files"]:
             raise RuntimeError("MLflow did not publish benchmark artifacts")
         tags = [

@@ -5,7 +5,8 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from continual_bench.datasets.zia import load_manifest, sha256_file
+from continual_bench.datasets.streams import load_stream_manifest as load_manifest
+from continual_bench.datasets.streams import sha256_file
 from continual_bench.evaluation.environment import encoded
 from continual_bench.evaluation.zia_artifacts import tracking_report, write_zia_artifacts
 from continual_bench.evaluation.zia_predictions import INDEX, PredictionArchive, prediction_manifest
@@ -22,6 +23,9 @@ from continual_bench.models.zia import ZiaPredictor, make_zia_model
 
 
 def dataset_source_uri(source):
+    """Provenance URI of a prepared stream: the pinned Hugging Face file or the catalog entry."""
+    if "repo" not in source:
+        return f"catalog://{source.get('catalog', 'unknown')}"
     return (f"https://huggingface.co/datasets/ziadatalabs/{source['repo']}"
             f"/resolve/{source['revision']}/{source['file']}")
 
@@ -180,6 +184,8 @@ def publish_artifacts(client, directory, run_id, report, root, *, derived=False,
 
 
 def _publish_artifacts(client, directory, run_id, report, root, derived=False, elapsed_seconds=None):
+    from mlflow.entities import RunTag
+
     directory = Path(directory)
     run = client.get_run(run_id)
     if run.data.tags.get("zia_run_key") != directory.name:
@@ -212,13 +218,14 @@ def _publish_artifacts(client, directory, run_id, report, root, derived=False, e
         atomic_write(path, encoded(value))
         client.log_artifact(run_id, str(path))
     version = publish_model(client, run, directory, report, metadata, root)
-    client.set_tag(run_id, "registered_model", version.name)
-    client.set_tag(run_id, "registered_model_version", str(version.version))
+    client.log_batch(run_id, synchronous=True, tags=[
+        RunTag("registered_model", version.name), RunTag("registered_model_version", str(version.version)),
+    ])
     log_metric_points(client, run_id, [("training_used", 0, report["metrics"]["training_used_post_warmup"])])
     tracking = publish_tracking(client, run_id, adapted, directory, derived=derived)
     training_rounds = artifacts.get("training_rounds", [])
-    client.set_tag(run_id, "cb-training-round-count", str(len(training_rounds)))
-    client.set_tag(run_id, "zia_artifacts_status", "complete")
+    client.log_batch(run_id, tags=[RunTag("cb-training-round-count", str(len(training_rounds))),
+                                   RunTag("zia_artifacts_status", "complete")], synchronous=True)
     return {"run_artifacts": artifacts, "tracking": tracking, "training_rounds": training_rounds,
             "registered_model": version.name,
             "registered_model_version": str(version.version), **links}

@@ -44,7 +44,10 @@ class Client:
     def log_batch(self, run_id, metrics=(), params=(), tags=(), synchronous=None):
         assert run_id == "existing-run"
         assert synchronous is True
-        self.operations.append("batch")
+        if metrics or params:
+            self.operations.append("batch")
+        # Batched tags keep their order, so a completion tag is still observable as the last write.
+        self.operations.extend((tag.key, tag.value) for tag in tags)
         for param in params:
             self.params[param.key] = param.value
         for metric in metrics:

@@ -38,20 +38,27 @@ Parameters:
     Default: pl-63a5400a
   MaxVcpus:
     Type: Number
-    Default: 8
+    Default: 64
+    Description: Benchmark compute environment ceiling; match the Fargate Spot vCPU quota.
   FargateCapacity:
     Type: String
-    Default: FARGATE
+    Default: FARGATE_SPOT
     AllowedValues: [FARGATE, FARGATE_SPOT]
   BenchmarkVcpus:
     Type: String
-    Default: "1"
+    Default: "2"
   BenchmarkMemoryMiB:
     Type: Number
-    Default: 2048
+    Default: 4096
+    Description: Fargate requires 4096-16384 MiB with 2 vCPU.
   BenchmarkEphemeralGiB:
     Type: Number
     Default: 50
+  BenchmarkCheckpointSeconds:
+    Type: Number
+    Default: 30
+    MinValue: 10
+    MaxValue: 600
   BenchmarkTimeoutSeconds:
     Type: Number
     Default: 14400
@@ -72,7 +79,7 @@ Parameters:
     Default: 3600
   JobAttempts:
     Type: Number
-    Default: 2
+    Default: 5
   LogRetentionDays:
     Type: Number
     Default: 14
@@ -199,6 +206,11 @@ Resources:
         PrivateSubnets: !GetAtt Network.Outputs.PrivateSubnets
         WorkerSecurityGroupId: !GetAtt Network.Outputs.WorkerSecurityGroupId
         S3GatewayEndpointId: !GetAtt Network.Outputs.S3GatewayEndpointId
+        VpcId: !GetAtt Network.Outputs.VpcId
+        EndpointSubnets: !GetAtt Network.Outputs.EndpointSubnets
+        EndpointSecurityGroupId: !GetAtt Network.Outputs.EndpointSecurityGroupId
+        EnableStreaming: !Ref EnableStreaming
+        EnableFeatureStore: !Ref EnableFeatureStore
         RuntimeImage: !Ref RuntimeImage
         MlImage: !Ref MlImage
         GitSha: !Ref GitSha
@@ -209,6 +221,7 @@ Resources:
         BenchmarkVcpus: !Ref BenchmarkVcpus
         BenchmarkMemoryMiB: !Ref BenchmarkMemoryMiB
         BenchmarkEphemeralGiB: !Ref BenchmarkEphemeralGiB
+        BenchmarkCheckpointSeconds: !Ref BenchmarkCheckpointSeconds
         BenchmarkTimeoutSeconds: !Ref BenchmarkTimeoutSeconds
         PrepareVcpus: !Ref PrepareVcpus
         PrepareMemoryMiB: !Ref PrepareMemoryMiB
@@ -337,6 +350,10 @@ Outputs:
     Value: !GetAtt Execution.Outputs.JobQueueArn
   BenchmarkJobDefinitionArn:
     Value: !GetAtt Execution.Outputs.BenchmarkJobDefinitionArn
+  BenchmarkComputeBackend:
+    Value: !GetAtt Execution.Outputs.BenchmarkComputeBackend
+  PrepareJobQueueArn:
+    Value: !GetAtt Execution.Outputs.PrepareJobQueueArn
   PrepareJobDefinitionArn:
     Value: !GetAtt Execution.Outputs.PrepareJobDefinitionArn
   ControlFunctionVersionArn:

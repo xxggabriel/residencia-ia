@@ -120,6 +120,9 @@ def build(output: Path) -> dict:
                     target = staging / path.relative_to(ROOT)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(path.read_bytes())
+        endpoint_template = Path("infra/cloudformation/modules/interface-endpoints.yaml")
+        (staging / endpoint_template).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / endpoint_template, staging / endpoint_template)
         output.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
             for path in files(staging):

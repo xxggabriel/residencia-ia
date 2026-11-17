@@ -173,7 +173,7 @@ def covertype_batches(path: str | Path, n_batches: int = 100):
     return _chunks(x, y, n_batches)
 
 
-def airlines_arrays(path: str | Path):
+def airlines_arrays(path: str | Path, *, use_disk_cache: bool = True):
     """Load seven Airlines features and the binary Delay label from CSV or OpenML ARFF.
 
     UPF (Table 4) lists 7 features for XGBoost. CARA uses the separate one-hot CSV adapter.
@@ -202,7 +202,7 @@ def airlines_arrays(path: str | Path):
             rows.append(values)
         return np.asarray(rows, dtype=np.float32), np.asarray(labels, dtype=np.int64)
 
-    return _cached(path.with_suffix(".npz"), build)
+    return _cached(path.with_suffix(".npz"), build) if use_disk_cache else build()
 
 
 def airlines_batches(path: str | Path, n_batches: int = 100):

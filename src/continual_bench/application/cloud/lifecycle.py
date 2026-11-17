@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 from continual_bench.infrastructure.object_store import get_json, put_json
 
 from . import layout
+from .contracts import SPOT_BACKEND
 from .costs import attempt_estimate
 from .records import ensure_rows, put_row_once
 
@@ -189,8 +190,30 @@ def _publish_zia_comparisons(store, campaign_id, units):
     return store.uri(index_key)
 
 
+def verify_publication(store, final, contract_sha256):
+    """A resumable attempt is only a success once its report, index and analytics verify."""
+    from continual_bench.infrastructure.object_store import split_uri
+
+    run_id = final["run_id"]
+    tracking = final.get("tracking") or {}
+    if final.get("contract_sha256") != contract_sha256 or (
+        tracking.get("required") and not tracking.get("complete")
+    ):
+        raise ValueError(f"Invalid final manifest for {run_id}")
+    report = store.head(split_uri(final["report_uri"])[1])
+    if report is None or report.sha256 != final["report_sha256"]:
+        raise ValueError(f"Published report failed its checksum for {run_id}")
+    if store.head(split_uri(final["artifacts_index_uri"])[1]) is None:
+        raise ValueError(f"Artifact index is missing for {run_id}")
+    status = ensure_rows(store, final)
+    if status != "present" and status != "repaired":
+        raise ValueError(f"Analytics publication incomplete for {run_id}")
+    return status
+
+
 def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> dict:
     plan = get_json(store, layout.plan_key(campaign_id))
+    spot = plan["release"].get("benchmark_compute") == SPOT_BACKEND
     reported_by_run = reported_outcomes(results)
     units, analytics_errors = [], []
     for unit in plan["units"]:
@@ -198,7 +221,10 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
         if store.head(final_key) is not None:
             final = get_json(store, final_key)
             try:
-                analytics = ensure_rows(store, final)
+                if spot:
+                    analytics = verify_publication(store, final, unit["contract_sha256"])
+                else:
+                    analytics = ensure_rows(store, final)
             except Exception as error:  # Keep consolidating; the campaign is reported incomplete.
                 analytics = "error"
                 analytics_errors.append({"run_id": unit["run_id"], "error_type": type(error).__name__,
@@ -207,7 +233,7 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
                 {
                     "run_id": unit["run_id"],
                     "labels": unit["labels"],
-                    "status": "SUCCEEDED",
+                    "status": "PUBLICATION_FAILED" if spot and analytics == "error" else "SUCCEEDED",
                     "final_uri": store.uri(final_key),
                     "metrics": final.get("metrics"),
                     "holdout": final.get("holdout"),
@@ -227,6 +253,7 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
                     "labels": unit["labels"],
                     "status": reported.get("status", "FAILED"),
                     "final_uri": None,
+                    **({"status_reason": reported.get("reason")} if spot else {}),
                 }
             )
     succeeded = sum(u["status"] == "SUCCEEDED" for u in units)
@@ -266,6 +293,18 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
     if "artifacts_index_uri" in summary:
         result["artifacts_index_uri"] = summary["artifacts_index_uri"]
     return result
+
+
+def cancel_campaign(store, campaign_id: str, *, clock=time.time) -> dict:
+    """Write the cancellation marker once; workers stop at their next safe point."""
+    from continual_bench.infrastructure.object_store import ObjectExists
+
+    record = {"state": "CANCELLED", "cancelled_at": clock()}
+    try:
+        put_json(store, layout.cancelled_key(campaign_id), record, if_absent=True)
+    except ObjectExists:
+        return get_json(store, layout.cancelled_key(campaign_id))
+    return record
 
 
 def campaign_job_name(campaign_id: str):

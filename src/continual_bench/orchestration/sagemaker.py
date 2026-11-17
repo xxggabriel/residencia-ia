@@ -87,6 +87,7 @@ def _training_job_name():
 
 def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tracker=True) -> dict:
     from continual_bench.config.iterative import IterativeTrainingConfig
+    from continual_bench.datasets.streams import dataset_model_params
     from continual_bench.datasets.zia import DATASETS
     from continual_bench.evaluation.environment import encoded, environment
     from continual_bench.evaluation.epoch_history import epoch_fit, write_state
@@ -117,7 +118,7 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tra
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("decision_threshold must be between 0 and 1")
     model = make_zia_model(spec["model"], classes, config=iter_config, dataset=dataset,
-                           decision_threshold=threshold)
+                           decision_threshold=threshold, model_params=dataset_model_params(dataset))
     if model.name == "xgboost" and "max_depth" in params:
         model.params["max_depth"] = int(params["max_depth"])
 
