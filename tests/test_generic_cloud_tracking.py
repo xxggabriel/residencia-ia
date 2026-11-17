@@ -367,3 +367,50 @@ def test_matrix_mlflow_run_uses_short_sha_experiment_and_strategy_run_name():
     )
     run_online = matrix_tracking.MatrixMlflowRun(unit_online, "job-1", "job", "http://fake", log=Mock())
     assert run_online.run_name == "energy-airlines-1117-0912-1424bfc8ed2c-online-job-1"
+    assert run.timeout_seconds == 15
+
+
+def test_pooled_http_opener_wraps_timeout_and_tracker_retries_transient_url_error(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    from continual_bench.infrastructure.aws.mlflow_tracking import SageMakerMlflowTracker
+    from continual_bench.infrastructure.tracking.http import PooledHttpOpener
+
+    opener = PooledHttpOpener()
+    monkeypatch.setattr(opener._pool, "request", lambda *a, **kw: (_ for _ in ()).throw(TimeoutError("read")))
+    req = urllib.request.Request("https://example.com/api")
+    with pytest.raises(urllib.error.URLError):
+        opener(req, timeout=1)
+
+    attempts = {"count": 0}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"experiment": {"experiment_id": "1"}}'
+
+    def flaky_opener(http_req, timeout=None):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise urllib.error.URLError("RemoteDisconnected")
+        return _Resp()
+
+    monkeypatch.setattr("continual_bench.infrastructure.aws.mlflow_tracking.time.sleep", lambda *_: None)
+    tracker = SageMakerMlflowTracker(
+        tracking_uri="http://fake",
+        dataset="electricity",
+        policy="drift",
+        model_name="logistic",
+        run_id="run-1",
+        http_opener=flaky_opener,
+    )
+    tracker._rest_endpoint = "http://fake"
+    res = tracker._request("GET", "/api/2.0/mlflow/experiments/get-by-name")
+    assert attempts["count"] == 2
+    assert res["experiment"]["experiment_id"] == "1"
