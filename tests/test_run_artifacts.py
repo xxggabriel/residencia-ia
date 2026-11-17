@@ -190,3 +190,46 @@ def test_publication_logs_timestamped_system_metrics_and_segmented_artifacts_ide
     counts = {key: len(values) for key, values in client.metrics.items()}
     publish_run_artifacts(client, "run", tmp_path / report["run_key"], report)
     assert {key: len(values) for key, values in client.metrics.items()} == counts
+
+
+def test_system_metrics_default_interval_and_mlflow_configuration(monkeypatch):
+    import builtins
+    import os
+
+    if "BENCH_SYSTEM_METRICS_INTERVAL" not in os.environ:
+        assert system_metrics.DEFAULT_INTERVAL == 5.0
+
+    pytest.importorskip("mlflow")
+    pytest.importorskip("psutil")
+    assert system_metrics.configure_mlflow_system_metrics(node_id="worker-0", sampling_interval=10) is True
+
+    real_import = builtins.__import__
+
+    def no_psutil(name, *args, **kwargs):
+        if name == "psutil":
+            raise ImportError("no psutil")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_psutil)
+    assert system_metrics.configure_mlflow_system_metrics() is False
+
+
+def test_publish_run_artifacts_downsamples_large_system_metrics(tmp_path):
+    pytest.importorskip("mlflow")
+    samples = [
+        {"timestamp_ms": 1_000_000 + i * 500, "elapsed_seconds": i * 0.5, "values": {"cpu_pct": float(i)}}
+        for i in range(600)
+    ]
+    report = {
+        "system_metrics": {
+            "version": "system-metrics-v1",
+            "collector": "psutil",
+            "samples": samples,
+        }
+    }
+    client = ArtifactClient()
+    publish_run_artifacts(client, "run", tmp_path, report)
+    logged = client.metrics["system/cpu_pct"]
+    assert len(logged) == 200
+    assert logged[0].step == 0 and logged[-1].step == 599
+    assert [m.step for m in logged] == sorted(m.step for m in logged)

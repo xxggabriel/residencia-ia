@@ -36,6 +36,35 @@ def native_logging_available(tracking_uri: str | None) -> bool:
     return True
 
 
+def configure_mlflow_system_metrics(
+    node_id: str | None = None,
+    sampling_interval: int = 10,
+    samples_before_logging: int = 3,
+) -> bool:
+    """Enable and configure MLflow's native system metrics collector if available.
+
+    Returns ``True`` when both ``mlflow`` and ``psutil`` are importable and
+    system-metrics logging was enabled, or ``False`` otherwise.
+    """
+    try:
+        import mlflow
+        import psutil  # noqa: F401
+    except ImportError:
+        return False
+    if not callable(getattr(mlflow, "enable_system_metrics_logging", None)):
+        return False
+    if hasattr(mlflow, "system_metrics"):
+        sm = mlflow.system_metrics
+        if node_id is not None and callable(getattr(sm, "set_system_metrics_node_id", None)):
+            sm.set_system_metrics_node_id(node_id)
+        if callable(getattr(sm, "set_system_metrics_sampling_interval", None)):
+            sm.set_system_metrics_sampling_interval(int(sampling_interval))
+        if callable(getattr(sm, "set_system_metrics_samples_before_logging", None)):
+            sm.set_system_metrics_samples_before_logging(int(samples_before_logging))
+    mlflow.enable_system_metrics_logging()
+    return True
+
+
 class NativeAsyncLogger:
     def __init__(self, tracking_uri: str, *, client: Any = None):
         import mlflow

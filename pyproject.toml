@@ -29,6 +29,7 @@ services = [
   "s3fs==2026.9.0",
   "pandas==2.3.3",
   "matplotlib==3.11.2",
+  "psutil==7.2.2",
 ]
 # Keep the existing installation extra for the replication commands.
 replication = []
@@ -43,11 +44,16 @@ aws-mlflow = [
   "mlflow-skinny==3.17.2",
   "sagemaker-mlflow==0.5.0",
   "matplotlib==3.11.2",
+  "psutil==7.2.2",
 ]
 # AWS managed profile: S3/Batch/SageMaker adapters and the native loader, without ZenML,
 # Kafka, MinIO or Airflow (the image adds `aws-mlflow`).
-aws = ["boto3==1.43.117", "pandas==2.3.3"]
-dev = ["pytest==9.1.1", "ruff==0.15.7"]
+aws = ["boto3==1.43.117", "pandas==2.3.3", "psutil==7.2.2"]
+dev = [
+    "pytest==9.1.1",
+    "pytest-xdist>=3.8.0",
+    "ruff==0.15.7",
+]
 
 [project.scripts]
 continual-bench = "continual_bench.cli:main"

@@ -185,3 +185,24 @@ def test_invalid_probability_does_not_mutate_state(p):
     with pytest.raises(ValueError):
         metrics.add(True, p)
     assert pickle.dumps(metrics) == before
+
+
+def test_downsample_points_preserves_endpoints_and_monotonic_steps():
+    from continual_bench.infrastructure.metric_tracking import downsample_points
+
+    raw = [("a", step, float(step)) for step in range(1000)] + [
+        ("b", step, float(step)) for step in range(10)
+    ]
+    sampled = downsample_points(raw, max_points_per_key=250)
+    a_points = [p for p in sampled if p[0] == "a"]
+    b_points = [p for p in sampled if p[0] == "b"]
+
+    assert len(a_points) == 250
+    assert a_points[0] == ("a", 0, 0.0)
+    assert a_points[-1] == ("a", 999, 999.0)
+    assert [p[1] for p in a_points] == sorted(p[1] for p in a_points)
+    assert len({p[1] for p in a_points}) == 250
+    assert len(b_points) == 10
+    assert downsample_points(raw, max_points_per_key=None) == raw
+    assert downsample_points(raw, max_points_per_key=0) == raw
+    assert downsample_points(raw, max_points_per_key=250) == sampled

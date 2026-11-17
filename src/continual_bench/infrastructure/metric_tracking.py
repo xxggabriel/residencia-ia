@@ -11,6 +11,34 @@ from .storage import atomic_write
 
 VERSION = "residency-metrics-v1"
 EXECUTION_SCOPE = "worker_subprocess_including_materialization_evaluation_publication_excluding_this_sidecar"
+DEFAULT_MAX_POINTS_PER_KEY = 250
+
+
+def downsample_points(points, max_points_per_key: int | None = DEFAULT_MAX_POINTS_PER_KEY):
+    """Deterministically downsample ``(key, step, value)`` points per metric key.
+
+    Preserves the first and last point for each key and keeps steps
+    monotonically increasing. When ``max_points_per_key`` is ``None`` or
+    ``<= 0``, returns all points unchanged.
+    """
+    materialized = list(points)
+    if max_points_per_key is None or max_points_per_key <= 0 or not materialized:
+        return materialized
+    grouped: dict[str, list[tuple[str, int, float | None]]] = {}
+    for point in materialized:
+        grouped.setdefault(point[0], []).append(point)
+    result: list[tuple[str, int, float | None]] = []
+    for series in grouped.values():
+        series.sort(key=lambda item: item[1])
+        n = len(series)
+        if n <= max_points_per_key:
+            result.extend(series)
+        elif max_points_per_key == 1:
+            result.append(series[0])
+        else:
+            indices = [round(i * (n - 1) / (max_points_per_key - 1)) for i in range(max_points_per_key)]
+            result.extend(series[idx] for idx in indices)
+    return result
 
 
 def _json_bytes(value):
@@ -80,8 +108,9 @@ def missing_metric_points(client, run_id, points, known_keys=None):
     return reconcile(client, run_id, points, known_keys)
 
 
-def log_metric_points(client, run_id, points):
-    missing = missing_metric_points(client, run_id, points)
+def log_metric_points(client, run_id, points, *, max_points_per_key: int | None = DEFAULT_MAX_POINTS_PER_KEY):
+    sampled = downsample_points(points, max_points_per_key=max_points_per_key)
+    missing = missing_metric_points(client, run_id, sampled)
     _log_verified_points(client, run_id, missing)
 
 
@@ -94,7 +123,16 @@ def _log_verified_points(client, run_id, missing):
         as_backend(client).log_batch(run_id, metrics=missing)
 
 
-def publish_tracking(client, run_id, report, directory, objects=None, derived=False):
+def publish_tracking(
+    client,
+    run_id,
+    report,
+    directory,
+    objects=None,
+    derived=False,
+    *,
+    max_points_per_key: int | None = DEFAULT_MAX_POINTS_PER_KEY,
+):
     """Publish a content-addressed sidecar; never mutate the original run files.
 
     The caller must serialize publication for a run. Read/check/append on MLflow
@@ -104,8 +142,9 @@ def publish_tracking(client, run_id, report, directory, objects=None, derived=Fa
     if tracking is None:
         return None
     points = metric_points(tracking)
+    mlflow_points = downsample_points(points, max_points_per_key=max_points_per_key)
     # Detect conflicts before publishing any side effects or completion tags.
-    missing = missing_metric_points(client, run_id, points)
+    missing = missing_metric_points(client, run_id, mlflow_points)
     directory = Path(directory)
     report_path = directory / "report.json"
     original = (

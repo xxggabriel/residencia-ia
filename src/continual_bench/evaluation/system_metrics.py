@@ -12,11 +12,15 @@ import threading
 import time
 from pathlib import Path
 
+from continual_bench.infrastructure.tracking.mlflow_async import configure_mlflow_system_metrics
+
 from .environment import current_rss_bytes
 
 MEGABYTE = 1024**2
-DEFAULT_INTERVAL = float(os.environ.get("BENCH_SYSTEM_METRICS_INTERVAL", "0.5"))
+DEFAULT_INTERVAL = float(os.environ.get("BENCH_SYSTEM_METRICS_INTERVAL", "5.0"))
 MAX_SAMPLES = 3600
+
+__all__ = ["DEFAULT_INTERVAL", "MAX_SAMPLES", "SystemMetricsSampler", "configure_mlflow_system_metrics"]
 
 
 def _current_cgroup() -> Path | None:

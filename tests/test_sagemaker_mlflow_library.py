@@ -189,3 +189,50 @@ def test_mlflow_pyfunc_registry_loads_the_final_native_checkpoint(tracker, outpu
     model = mlflow.pyfunc.load_model(final.source)
     features = pd.DataFrame({"feature": [1.0, -1.0]})
     np.testing.assert_allclose(model.predict(features), learner.predict(features.to_numpy()))
+
+
+def test_report_metric_items_downsamples_system_and_tracking_series():
+    from continual_bench.infrastructure.aws.mlflow_tracking import report_metric_items
+
+    payload = {
+        "system_metrics": {
+            "samples": [
+                {"timestamp_ms": 1_000 + i, "values": {"cpu_utilization_percentage": float(i)}}
+                for i in range(500)
+            ]
+        }
+    }
+    adapted = {
+        "tracking": {
+            "version": "residency-metrics-v1",
+            "metrics": {"accuracy": 0.9},
+            "series": {
+                "loss": [{"step": i, "value": 1.0 / (i + 1)} for i in range(600)],
+            },
+            "availability": {},
+            "settings": {},
+        }
+    }
+    items = report_metric_items(payload, now_ms=1_000, adapted=adapted)
+    sys_items = [m for m in items if m["key"] == "system/cpu_utilization_percentage"]
+    loss_items = [m for m in items if m["key"] == "tracking_v1/loss"]
+    assert len(sys_items) == 200
+    assert sys_items[0]["step"] == 0 and sys_items[-1]["step"] == 499
+    assert len(loss_items) == 250
+    assert loss_items[0]["step"] == 0 and loss_items[-1]["step"] == 599
+
+
+def test_publish_with_library_respects_async_logging_and_logs_system_metrics(
+    tracker, output_dir, monkeypatch
+):
+    monkeypatch.setenv("MLFLOW_ENABLE_ASYNC_LOGGING", "true")
+    payload = report()
+    payload["system_metrics"] = {
+        "samples": [
+            {"timestamp_ms": 1_700_000_000_000 + i * 5000, "values": {"cpu_utilization_percentage": 12.5 + i}}
+            for i in range(4)
+        ]
+    }
+    result = sm.publish_with_library(tracker, payload, output_dir=output_dir)
+    history = MlflowClient().get_metric_history(result["mlflow_run_id"], "system/cpu_utilization_percentage")
+    assert [m.step for m in history] == [0, 1, 2, 3]

@@ -8,11 +8,12 @@ Republishing is idempotent: existing metric points are checked, not duplicated.
 
 from pathlib import Path
 
-from .metric_tracking import missing_metric_points
+from .metric_tracking import downsample_points, missing_metric_points
 from .observation_tracking import publish_sdk_observations
 from .training_tracking import publish_training_history
 
 SYSTEM_PREFIX = "system/"
+DEFAULT_MAX_SYSTEM_POINTS = 200
 
 
 def system_metric_points(system) -> tuple[list[tuple[str, int, float]], dict]:
@@ -30,7 +31,8 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
 
     backend = as_backend(client)
     points, stamps = system_metric_points(report.get("system_metrics"))
-    missing = missing_metric_points(client, run_id, points)
+    sampled = downsample_points(points, max_points_per_key=DEFAULT_MAX_SYSTEM_POINTS)
+    missing = missing_metric_points(client, run_id, sampled)
     backend.log_batch(
         run_id, metrics=[MetricPoint(key, value, step, stamps[key, step]) for key, step, value in missing]
     )

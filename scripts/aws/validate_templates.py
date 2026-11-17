@@ -13,6 +13,7 @@ Usage: CFN_LINT=cfn-lint python scripts/aws/validate_templates.py [templates...]
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -124,6 +125,8 @@ def check(path: Path) -> list[str]:
             compute = props.get("ComputeResources") or {}
             if compute.get("Type") not in ({"Ref": "FargateCapacity"}, "FARGATE", "FARGATE_SPOT"):
                 errors.append(f"{where}: compute environment must be Fargate")
+        if kind == "AWS::Batch::JobDefinition":
+            errors.extend(f"{where}: {error}" for error in retry_strategy_errors(props.get("RetryStrategy")))
         if kind in (
             "AWS::EC2::Instance",
             "AWS::EC2::LaunchTemplate",
@@ -132,6 +135,29 @@ def check(path: Path) -> list[str]:
             "AWS::AutoScaling::AutoScalingGroup",
         ):
             errors.append(f"{where}: workers are serverless Fargate tasks, never EC2 capacity")
+    return errors
+
+
+BATCH_REASON = re.compile(r"[A-Za-z0-9.: \t]{0,511}\*?")
+BATCH_EXIT_CODE = re.compile(r"[0-9]{1,511}\*?|\*")
+
+
+def retry_strategy_errors(strategy) -> list[str]:
+    """AWS Batch limits that cfn-lint does not check (the API rejects them at deploy time)."""
+    conditions = (strategy or {}).get("EvaluateOnExit") or []
+    errors = []
+    if len(conditions) > 5:
+        errors.append(f"RetryStrategy.EvaluateOnExit has {len(conditions)} conditions; Batch allows 5")
+    for condition in conditions:
+        for key in ("OnStatusReason", "OnReason"):
+            if key in condition and not BATCH_REASON.fullmatch(str(condition[key])):
+                errors.append(
+                    f"{key} {condition[key]!r} allows letters, digits, '.', ':', spaces and a "
+                    "trailing '*' only"
+                )
+        code = condition.get("OnExitCode")
+        if code is not None and not BATCH_EXIT_CODE.fullmatch(str(code)):
+            errors.append(f"OnExitCode {code!r} must be digits with an optional trailing '*'")
     return errors
 
 

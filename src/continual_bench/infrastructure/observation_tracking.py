@@ -176,15 +176,24 @@ def write_observation_evidence(directory, report, parent_run_id=None, children=(
     return root
 
 
-def publish_sdk_observations(client, run_id, directory, report, children):
+def publish_sdk_observations(
+    client,
+    run_id,
+    directory,
+    report,
+    children,
+    *,
+    max_points_per_key: int | None = 250,
+):
     from mlflow.entities import RunTag
 
-    from .metric_tracking import log_metric_points
+    from .metric_tracking import downsample_points, log_metric_points
 
     root = write_observation_evidence(directory, report, run_id, children)
     if root is None:
         return None
-    log_metric_points(client, run_id, parent_observation_points(report))
+    sampled = downsample_points(parent_observation_points(report), max_points_per_key=max_points_per_key)
+    log_metric_points(client, run_id, sampled, max_points_per_key=max_points_per_key)
     client.log_batch(
         run_id, tags=[RunTag(key, value) for key, value in observation_tags(report).items()], synchronous=True
     )
