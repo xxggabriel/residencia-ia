@@ -13,7 +13,7 @@ TEMPLATE = Path("infra/cloudformation/modules/interface-endpoints.yaml")
 STATE_KEY = "runtime/interface-endpoints.json"
 LOCK_SECONDS = 180  # Longer than the Lambda timeout, including SDK retries.
 DRAIN_SECONDS = 120  # Let in-flight worker submissions/cancellations become visible.
-SPOT_DRAIN_SECONDS = 360  # Cover the control Lambda deadline and Spot tasks checkpointing after a stop.
+SPOT_DRAIN_SECONDS = 180  # Cover the control Lambda deadline and Spot tasks checkpointing after a stop.
 STACK_READY = {"CREATE_COMPLETE", "UPDATE_COMPLETE"}
 STACK_BUSY = {"CREATE_IN_PROGRESS", "ROLLBACK_IN_PROGRESS", "DELETE_IN_PROGRESS"}
 
@@ -38,6 +38,10 @@ class EndpointLifecycle:
         self.name = env["ENDPOINT_STACK_NAME"]
         self.parameters = json.loads(env["ENDPOINT_PARAMETERS"])
         self.project = env.get("BENCH_STACK")
+        self.auto_stop_idle = env.get("AUTO_STOP_IDLE_SERVICES", "false").lower() == "true"
+        self.flink_application = env.get("ENDPOINT_FLINK_APPLICATION") or (
+            f"{self.project}-event-time-windows" if self.project else None
+        )
 
     def stack(self):
         try:
@@ -142,6 +146,44 @@ class EndpointLifecycle:
                     return active, None
         return active, stack["StackId"]
 
+    def stop_idle_services(self) -> dict[str, list[str]]:
+        """Stop optional hourly services (Flink, ephemeral SageMaker endpoints) when all runs finish."""
+        stopped: dict[str, list[str]] = {"flink": [], "sagemaker_endpoints": []}
+        if not self.auto_stop_idle:
+            return stopped
+        if self.flink_application:
+            try:
+                ka = client("kinesisanalyticsv2", max_attempts=2, read_timeout=5)
+                detail = ka.describe_application(ApplicationName=self.flink_application)[
+                    "ApplicationDetail"
+                ]
+                if detail.get("ApplicationStatus") == "RUNNING":
+                    ka.stop_application(ApplicationName=self.flink_application, Force=False)
+                    stopped["flink"].append(self.flink_application)
+            except Exception as error:
+                if error_code(error) not in {"ResourceNotFoundException", "AccessDeniedException"}:
+                    raise
+        if self.project:
+            try:
+                sm = client("sagemaker", max_attempts=2, read_timeout=5)
+                for page in sm.get_paginator("list_endpoints").paginate(StatusEquals="InService"):
+                    for ep in page.get("Endpoints", []):
+                        arn = ep["EndpointArn"]
+                        tags = {
+                            t["Key"]: t["Value"]
+                            for t in sm.list_tags(ResourceArn=arn).get("Tags", [])
+                        }
+                        if (
+                            tags.get("cb-stack") == self.project
+                            and tags.get("cb-ephemeral") == "true"
+                        ):
+                            sm.delete_endpoint(EndpointName=ep["EndpointName"])
+                            stopped["sagemaker_endpoints"].append(ep["EndpointName"])
+            except Exception as error:
+                if error_code(error) not in {"AccessDeniedException"}:
+                    raise
+        return stopped
+
     def reconcile(self, execution_arn=None):
         now = time.time()
         state, etag = self.read()
@@ -167,10 +209,19 @@ class EndpointLifecycle:
                 state["deleting_stack"] = idle_stack
                 etag = self.write(state, etag)
                 self.cfn.delete_stack(StackName=idle_stack)
+            if not state["leases"] and not self.has_active_batch_jobs():
+                self.stop_idle_services()
             return False
         finally:
             state["locked_until"] = 0
             self.write(state, etag)
+
+    def has_active_batch_jobs(self) -> bool:
+        for queue in self.queues:
+            for status in ACTIVE:
+                if self.batch.list_jobs(jobQueue=queue, jobStatus=status, maxResults=1)["jobSummaryList"]:
+                    return True
+        return False
 
 
 def handler(event, _context):

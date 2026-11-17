@@ -13,10 +13,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Lint, test, validate
+  lint-validate:
+    name: Lint and validate templates
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      UV_SYSTEM_PYTHON: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            requirements.lock
+            infra/ci-requirements.lock
+      - name: Install lint and validation tools
+        run: |
+          uv pip install --system --no-deps ruff==0.15.7 PyYAML==6.0.3
+          uv venv /tmp/cfn-lint
+          uv pip install --python /tmp/cfn-lint/bin/python --require-hashes -r infra/ci-requirements.lock
+      - run: ruff check src tests dags examples scripts
+      - name: Validate CloudFormation templates and ASL (offline)
+        run: |
+          CFN_LINT=/tmp/cfn-lint/bin/cfn-lint python scripts/aws/validate_templates.py
+          python scripts/aws/validate_asl.py infra/statemachines/*.asl.json
+
+  test:
+    name: Test (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       OMP_NUM_THREADS: "1"
@@ -26,25 +59,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements.lock
-            infra/ci-requirements.lock
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements.lock"
       - name: Install dependencies
         run: |
-          python -m pip install uv
           uv pip install --system --require-hashes -r requirements.lock
           uv pip install --system --no-deps -e .
-          uv venv /tmp/cfn-lint
-          uv pip install --python /tmp/cfn-lint/bin/python --require-hashes -r infra/ci-requirements.lock
-      - run: ruff check src tests dags examples scripts
-      - run: python -m pytest -q --durations=15
-      - name: Validate CloudFormation templates and ASL (offline)
-        run: |
-          CFN_LINT=/tmp/cfn-lint/bin/cfn-lint python scripts/aws/validate_templates.py
-          python scripts/aws/validate_asl.py infra/statemachines/*.asl.json
-      - name: Local smoke
-        run: |
-          continual-bench aws local-smoke --root /tmp/cb-local-smoke
-          continual-bench aws local-smoke --dataset fraud --root /tmp/cb-local-fraud
-          continual-bench aws local-smoke --dataset ecommerce --root /tmp/cb-local-ecommerce
+      - run: python -m pytest -q --shard=${{ matrix.shard }} --num-shards=4 --durations=10

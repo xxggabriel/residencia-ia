@@ -953,6 +953,19 @@ Resources:
                   StringEquals:
                     aws:ResourceTag/cb-stack: !Ref Project
                     aws:ResourceTag/cb-component: interface-endpoints
+              - Effect: Allow
+                Action: [kinesisanalytics:DescribeApplication, kinesisanalytics:StopApplication]
+                Resource: !Sub "arn:${AWS::Partition}:kinesisanalytics:${AWS::Region}:${AWS::AccountId}:application/${Project}-*"
+              - Effect: Allow
+                Action: [sagemaker:ListEndpoints, sagemaker:ListTags]
+                Resource: "*"
+              - Effect: Allow
+                Action: sagemaker:DeleteEndpoint
+                Resource: !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:endpoint/*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/cb-stack: !Ref Project
+                    aws:ResourceTag/cb-ephemeral: "true"
 
   EndpointsFunction:
     Type: AWS::Lambda::Function
@@ -979,6 +992,8 @@ Resources:
           BENCH_STACK: !Ref Project
           ENDPOINT_BENCHMARK_WORKFLOW: !Sub "${Project}-benchmark"
           ENDPOINT_STACK_NAME: !Sub "${Project}-interface-endpoints"
+          AUTO_STOP_IDLE_SERVICES: "true"
+          ENDPOINT_FLINK_APPLICATION: !Sub "${Project}-event-time-windows"
           ENDPOINT_PARAMETERS: !Sub >-
             {"Project":"${Project}","VpcId":"${VpcId}","EndpointSubnets":"${EndpointSubnets}",
             "EndpointSecurityGroupId":"${EndpointSecurityGroupId}","EnableModelRegistry":"${EnableModelRegistry}",

@@ -143,13 +143,34 @@ class ProjectSuite(Strict):
     seed: int = Field(default=42, ge=0, le=2**31 - 1)
 
 
+class BenchmarkWorkload(Strict):
+    """Generic workload matrix for any registered dataset, model, policy, detector, and metrics."""
+
+    kind: Literal["benchmark"] = "benchmark"
+    evaluator: Literal["binary", "typed", "epochs"] = "binary"
+    datasets: tuple[str, ...] = Field(min_length=1)
+    models: tuple[str, ...] = Field(default=("logistic",), min_length=1)
+    policies: tuple[str, ...] = Field(default=("drift",), min_length=1)
+    detectors: tuple[str, ...] = Field(default=("adwin",), min_length=1)
+    modes: tuple[Literal["streaming", "incremental", "offline"], ...] = ("streaming",)
+    metrics: tuple[str, ...] = Field(default_factory=tuple)
+    seeds: tuple[int, ...] = Field(default=(42,), min_length=1)
+    samples: int | None = Field(default=None, ge=10, le=100_000)
+    label_delay: int | None = Field(default=None, ge=0, le=10_000)
+    base: dict = Field(default_factory=dict)
+    dataset_params: dict = Field(default_factory=dict)
+    model_params: dict = Field(default_factory=dict)
+    policy_params: dict = Field(default_factory=dict)
+    on_incompatible: Literal["skip", "error"] = "skip"
+
+
 class CampaignRequest(Strict):
     campaign_id: str = Field(pattern=CAMPAIGN_ID)
-    dataset: Literal["fraud", "social", "ecommerce"] | None = None
+    dataset: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]*$")
     scope: Literal["smoke", "full"] | None = None
     snapshot: SnapshotRef | None = None
     release: str = Field(default="latest", pattern=r"^(latest|[0-9a-f]{40})$")
-    matrix: ZiaMatrix | ExperimentMatrixRef | ProjectSuite = Field(
+    matrix: ZiaMatrix | ExperimentMatrixRef | ProjectSuite | BenchmarkWorkload = Field(
         default_factory=ZiaMatrix, discriminator="kind"
     )
     source_digests: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)

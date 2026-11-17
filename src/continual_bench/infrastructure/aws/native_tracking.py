@@ -7,13 +7,29 @@ from .benchmark_tracking import BenchmarkMlflowRun
 from .mlflow_tracking import sanitize_mlflow_name
 
 
+def _resolve_native_model_name(dataset: str, model_name: str | None) -> str:
+    if model_name:
+        return model_name
+    from continual_bench.datasets.zia import DATASETS as ZIA_DATASETS
+
+    if dataset in ZIA_DATASETS:
+        return ZIA_DATASETS[dataset]["model"]
+    return os.environ.get("BENCH_MODEL", "generic")
+
+
 class NativeJobRun(BenchmarkMlflowRun):
-    def __init__(self, uri, execution, stage, job_name, *, dataset="social", scope=None, model_name=None):
+    def __init__(self, uri, execution, stage, job_name, *, dataset=None, scope=None, model_name=None):
+        resolved_dataset = dataset or os.environ.get("BENCH_DATASET", "generic")
         super().__init__(
-            tracking_uri=uri, dataset=dataset, policy=stage,
-            model_name=model_name or ("multinomial-logistic" if dataset == "social" else "xgboost"),
+            tracking_uri=uri,
+            dataset=resolved_dataset,
+            policy=stage,
+            model_name=_resolve_native_model_name(resolved_dataset, model_name),
             scope=scope or os.environ.get("BENCH_NATIVE_SCOPE", "smoke"),
-            campaign_id=execution, run_id=job_name, job_name=job_name, timeout_seconds=3,
+            campaign_id=execution,
+            run_id=job_name,
+            job_name=job_name,
+            timeout_seconds=3,
         )
         self.execution = execution
         self.stage = stage
@@ -41,7 +57,7 @@ class NativeJobRun(BenchmarkMlflowRun):
 
 @contextmanager
 def track_native_job(
-    tracking_uri, execution, stage, job_name, *, dataset="social", scope=None, model_name=None,
+    tracking_uri, execution, stage, job_name, *, dataset=None, scope=None, model_name=None,
 ):
     tracker = NativeJobRun(tracking_uri, execution, stage, job_name, dataset=dataset, scope=scope,
                            model_name=model_name)

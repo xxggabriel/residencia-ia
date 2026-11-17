@@ -96,6 +96,9 @@ class SageMakerExperimentsTracker:
         mlflow_tracker: SageMakerMlflowTracker | None = None,
         logger: logging.Logger | None = None,
         emit_stdout: bool = True,
+        experiment_name: str | None = None,
+        input_artifacts: dict[str, dict[str, str]] | None = None,
+        output_artifacts: dict[str, dict[str, str]] | None = None,
     ):
         self.project = project
         self.dataset = dataset
@@ -107,6 +110,9 @@ class SageMakerExperimentsTracker:
         self.job_name = job_name or f"cb-{dataset}-{policy}-{run_id}"
         self.stack = stack or project
         self.git_sha = git_sha or os.environ.get("BENCH_GIT_REVISION", "uncommitted")
+        self._experiment_name = experiment_name
+        self.input_artifacts = dict(input_artifacts or {})
+        self.output_artifacts = dict(output_artifacts or {})
         self._client = client
         self._metrics_client = metrics_client
         self._lazy_start_on_epoch = client is None and metrics_client is None
@@ -139,7 +145,7 @@ class SageMakerExperimentsTracker:
 
     @property
     def experiment_name(self) -> str:
-        return f"{self.project}-zia-experiments"
+        return self._experiment_name or f"{self.project}-experiments"
 
     @property
     def trial_name(self) -> str:
@@ -199,7 +205,7 @@ class SageMakerExperimentsTracker:
         try:
             response = self.client.create_experiment(
                 ExperimentName=self.experiment_name,
-                Description=f"Zia continual-learning experiments for {self.project}",
+                Description=f"Continual-learning benchmark experiments for {self.project}",
                 Tags=self.tags,
             )
             self.experiment_arn = response["ExperimentArn"]
@@ -267,13 +273,18 @@ class SageMakerExperimentsTracker:
                 self._record_error("describe_trial_component", error)
                 return None
         try:
-            response = self.client.create_trial_component(
-                TrialComponentName=self.trial_component_name,
-                DisplayName=self.trial_component_name,
-                Status={"PrimaryStatus": "InProgress"},
-                Parameters=parameters,
-                Tags=self.tags,
-            )
+            create_kwargs: dict[str, Any] = {
+                "TrialComponentName": self.trial_component_name,
+                "DisplayName": self.trial_component_name,
+                "Status": {"PrimaryStatus": "InProgress"},
+                "Parameters": parameters,
+                "Tags": self.tags,
+            }
+            if self.input_artifacts:
+                create_kwargs["InputArtifacts"] = self.input_artifacts
+            if self.output_artifacts:
+                create_kwargs["OutputArtifacts"] = self.output_artifacts
+            response = self.client.create_trial_component(**create_kwargs)
             self.trial_component_arn = response["TrialComponentArn"]
             return self.trial_component_arn
         except Exception as error:
@@ -355,6 +366,57 @@ class SageMakerExperimentsTracker:
         except Exception as error:
             self._record_error("add_tags", error)
             return False
+
+    def register_lineage(
+        self,
+        *,
+        dataset_uri: str | None = None,
+        model_uri: str | None = None,
+        model_package_arn: str | None = None,
+    ) -> dict[str, str | None]:
+        """Link dataset and model artifacts to this TrialComponent in SageMaker Lineage (fail-safe)."""
+        linked: dict[str, str | None] = {"dataset_artifact_arn": None, "model_artifact_arn": None}
+        if self.trial_component_arn is None:
+            return linked
+        if dataset_uri:
+            try:
+                ds_art = self.client.create_artifact(
+                    ArtifactName=f"{self.trial_component_name}-dataset",
+                    Source={"SourceUri": dataset_uri},
+                    ArtifactType="DataSet",
+                    Properties={"dataset": str(self.dataset), "scope": str(self.scope)},
+                )["ArtifactArn"]
+                self.client.add_association(
+                    SourceArn=ds_art,
+                    DestinationArn=self.trial_component_arn,
+                    AssociationType="ContributedTo",
+                )
+                linked["dataset_artifact_arn"] = ds_art
+            except Exception as error:
+                self._record_error("register_lineage_dataset", error)
+        if model_uri:
+            try:
+                mdl_art = self.client.create_artifact(
+                    ArtifactName=f"{self.trial_component_name}-model",
+                    Source={"SourceUri": model_uri},
+                    ArtifactType="Model",
+                    Properties={"model": str(self.model_name), "policy": str(self.policy)},
+                )["ArtifactArn"]
+                self.client.add_association(
+                    SourceArn=self.trial_component_arn,
+                    DestinationArn=mdl_art,
+                    AssociationType="Produced",
+                )
+                if model_package_arn:
+                    self.client.add_association(
+                        SourceArn=mdl_art,
+                        DestinationArn=model_package_arn,
+                        AssociationType="AssociatedWith",
+                    )
+                linked["model_artifact_arn"] = mdl_art
+            except Exception as error:
+                self._record_error("register_lineage_model", error)
+        return linked
 
     def log_epoch_metrics(
         self,

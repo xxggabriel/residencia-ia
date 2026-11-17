@@ -55,6 +55,9 @@ def pipeline_definition(*, bucket, role, runtime_image, ml_image, git_sha, key_a
             "BENCH_NATIVE_EXECUTION_ID": execution,
             "BENCH_NATIVE_STAGE": stage,
             "BENCH_NATIVE_SCOPE": param("Scope"),
+            "BENCH_DATASET": param("DatasetName"),
+            "BENCH_MODEL": param("ModelName"),
+            "BENCH_POLICY": param("PolicyName"),
         }
 
     data_input = processing["ProcessingInputs"][0]
@@ -91,6 +94,10 @@ def pipeline_definition(*, bucket, role, runtime_image, ml_image, git_sha, key_a
         definition["OutputDataConfig"]["S3OutputPath"] = output_path(stage)
         definition["Environment"].update(environment(stage))
         definition[hyperparameter_field]["scope"] = param("Scope")
+        definition[hyperparameter_field]["dataset"] = param("DatasetName")
+        definition[hyperparameter_field]["model"] = param("ModelName")
+        definition[hyperparameter_field]["policy"] = param("PolicyName")
+        definition[hyperparameter_field]["evaluator"] = param("Evaluator")
         definition["ResourceConfig"]["InstanceType"] = param("TrainingInstanceType")
 
     training["HyperParameters"]["max_epochs"] = as_string(param("MaxEpochs"))
@@ -107,9 +114,44 @@ def pipeline_definition(*, bucket, role, runtime_image, ml_image, git_sha, key_a
         "MaxNumberOfTrainingJobs": param("MaxTuningJobs"),
         "MaxParallelTrainingJobs": param("MaxParallelTuningJobs"),
     }
+    register_model = {
+        "ModelPackageGroupName": param("ModelPackageGroupName"),
+        "ModelApprovalStatus": "PendingManualApproval",
+        "InferenceSpecification": {
+            "Containers": [
+                {
+                    "Image": ml_image,
+                    "ModelDataUrl": get("Steps.TrainBaseline.ModelArtifacts.S3ModelArtifacts"),
+                }
+            ],
+            "SupportedContentTypes": ["application/json", "text/csv"],
+            "SupportedResponseMIMETypes": ["application/json"],
+            "SupportedRealtimeInferenceInstanceTypes": ["ml.m5.large"],
+            "SupportedTransformInstanceTypes": ["ml.m5.large"],
+        },
+        "ModelMetrics": {
+            "ModelQuality": {
+                "Statistics": {
+                    "ContentType": "application/json",
+                    "S3Uri": join_path(output_path("training"), "metrics.json"),
+                }
+            }
+        },
+    }
+
     return {
         "Version": "2020-12-01",
+        "PipelineExperimentConfig": {
+            "ExperimentName": param("ExperimentName"),
+            "TrialName": execution,
+        },
         "Parameters": [
+            {"Name": "DatasetName", "Type": "String", "DefaultValue": "sem-nome"},
+            {"Name": "ModelName", "Type": "String", "DefaultValue": "multinomial_logistic"},
+            {"Name": "PolicyName", "Type": "String", "DefaultValue": "frozen"},
+            {"Name": "Evaluator", "Type": "String", "DefaultValue": "native"},
+            {"Name": "ExperimentName", "Type": "String", "DefaultValue": "continual-bench-experiments"},
+            {"Name": "ModelPackageGroupName", "Type": "String", "DefaultValue": "continual-bench-models"},
             {
                 "Name": "PreparedParquetUri",
                 "Type": "String",
@@ -147,6 +189,12 @@ def pipeline_definition(*, bucket, role, runtime_image, ml_image, git_sha, key_a
         "Steps": [
             {"Name": "ProfileSnapshot", "Type": "Processing", "Arguments": processing},
             {"Name": "TrainBaseline", "Type": "Training", "Arguments": training},
+            {
+                "Name": "RegisterBaselineModel",
+                "Type": "RegisterModel",
+                "DependsOn": ["TrainBaseline"],
+                "Arguments": register_model,
+            },
             {
                 "Name": "TuneHyperparameters",
                 "Type": "Tuning",
