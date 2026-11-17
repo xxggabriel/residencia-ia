@@ -1,4 +1,4 @@
-.PHONY: test lint smoke compose-check aws-validate aws-smoke aws-images aws-lambda \
+.PHONY: test lint format smoke compose-check aws-validate aws-smoke aws-images aws-lambda \
         aws-bootstrap aws-dataset-smoke aws-dataset-full \
         aws-dataset-fraud-full aws-dataset-ecommerce-full \
         aws-campaign-smoke aws-campaign-full aws-campaign-fraud-full aws-campaign-ecommerce-full \
@@ -14,6 +14,10 @@ test:
 
 lint:
 	uv run ruff check src tests dags examples scripts
+
+format:
+	uv run ruff format src tests dags examples scripts
+	uv run ruff check --fix src tests dags examples scripts
 
 smoke:
 	uv run continual-bench smoke --state state/smoke --samples 600 --baselines
