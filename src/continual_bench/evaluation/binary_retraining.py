@@ -302,10 +302,10 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
                 )
                 observer.recorded_model_version(version)
             if current.n:
-                windows.append({"end_seq": end_seq, "scope": "offline", **current.values()})
+                windows.append({"end_seq": end_seq, **current.values()})
             continue
 
-        window = {"end_seq": end_seq, "scope": "prequential", **current.values()}
+        window = {"end_seq": end_seq, **current.values()}
         windows.append(window)
         if run.progress is not None:
             run.progress(end_seq, window)
@@ -323,6 +323,8 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
                 "action": "reset_retrain",
                 "reason": decision.reason,
                 "samples": int(matrix.rows[t]),
+                "train_samples": int(matrix.rows[t]),
+                "train_seq_range": [int(block[0].seq), int(end_seq) + 1],
                 "seconds": fit_sec,
                 "promoted": True,
             }
@@ -342,7 +344,12 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
             )
             ver = run.versions.record(
                 deployed_model,
-                {"action": "reset_retrain", "batch": t, "seq": end_seq},
+                {
+                    "action": "reset_retrain",
+                    "seq_range": [int(block[0].seq), int(end_seq)],
+                    "batch": t,
+                    "seq": end_seq,
+                },
             )
             observer.recorded_model_version(ver)
 

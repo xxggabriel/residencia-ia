@@ -284,7 +284,7 @@ def build_tracking(
         available(key, value, "undefined_for_class_support_or_missing_prediction_scores")
     for window in report["windows"]:
         for key, value in window.items():
-            if key != "end_seq":
+            if key not in ("end_seq", "scope"):
                 series.setdefault(key, []).append({"step": window["end_seq"], "value": value})
     if predictions is not None:
         probability_mae = sum(abs(int(r["label"]) - r["probability"]) for r in predictions)
