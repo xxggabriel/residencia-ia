@@ -123,9 +123,9 @@ O deploy lê o objeto `config/runtime-parameters.json` do bucket de artefatos qu
 
 | Perfil | Parâmetros | Core com registro e MLflow | Core sem registro e MLflow |
 |---|---|---:|---:|
-| Redundância de rede (padrão do template) | `AvailabilityZoneCount=2`, `InterfaceEndpointAzMode=all` | USD 73,00/mês | USD 43,80/mês |
+| Ambiente com uma AZ (padrão otimizado) | `AvailabilityZoneCount=1`, `InterfaceEndpointAzMode=single` | USD 36,50/mês | USD 21,90/mês |
 | Duas sub-redes e endpoints em uma AZ | `AvailabilityZoneCount=2`, `InterfaceEndpointAzMode=single` | USD 36,50/mês | USD 21,90/mês |
-| Ambiente com uma AZ | `AvailabilityZoneCount=1` | USD 36,50/mês | USD 21,90/mês |
+| Redundância de rede (multi-AZ) | `AvailabilityZoneCount=2`, `InterfaceEndpointAzMode=all` | USD 73,00/mês | USD 43,80/mês |
 
 Em 16/11/2026, o runtime de referência estava com `AvailabilityZoneCount=2` e
 `InterfaceEndpointAzMode=single`. O arquivo de overrides no S3 ainda indicava uma AZ

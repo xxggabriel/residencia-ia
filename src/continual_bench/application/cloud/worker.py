@@ -485,10 +485,17 @@ def run_unit(
     tracker=None,
     emit=None,
     clock=time.time,
+    runtime=None,
 ) -> int:
     os.environ["OMP_NUM_THREADS"] = "2"
     os.environ["OPENBLAS_NUM_THREADS"] = "2"
     os.environ["MKL_NUM_THREADS"] = "2"
+    if runtime is not None:
+        store = runtime.store if store is None else store
+        registry = runtime.model_registrar if registry is None else registry
+        tracker = runtime.tracker_factory if tracker is None else tracker
+        if env is None:
+            env = runtime.env
     env = os.environ if env is None else env
     workdir = Path(workdir)
     key = split_uri(unit_ref)[1] if "://" in unit_ref else unit_ref

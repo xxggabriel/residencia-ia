@@ -109,55 +109,45 @@ def publish_matrix_source(args):
 
 
 def run_unit(args):
+    from continual_bench.application.cloud.dependencies import (
+        build_aws_runtime,
+        build_cli_runtime,
+        build_container_runtime,
+    )
     from continual_bench.application.cloud.worker import run_unit as execute
-    from continual_bench.application.cloud.worker import sagemaker_registrar
     from continual_bench.infrastructure.aws.emf import emit
 
     os.environ["OMP_NUM_THREADS"] = "2"
     os.environ["OPENBLAS_NUM_THREADS"] = "2"
     os.environ["MKL_NUM_THREADS"] = "2"
-    store = _store(args)
-    registry = None
-    tracker = None
-    if os.environ.get("BENCH_MODEL_REGISTRY", "false") == "true" and not args.local_root:
-        from continual_bench.infrastructure.aws.model_registry import SageMakerModelRegistry
-
-        registry = sagemaker_registrar(SageMakerModelRegistry(), os.environ["BENCH_INFERENCE_IMAGE"])
-    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
-    if tracking_uri and not args.local_root:
-        from continual_bench.infrastructure.aws.mlflow_tracking import SageMakerMlflowTracker
-
-        model_names = {
-            "social": "multinomial-logistic",
-            "fraud": "fraud-booster",
-            "ecommerce": "return-booster",
-        }
-
-        def tracker(unit):
-            dataset = unit.params.get("dataset", "social")
-            policy = unit.params.get("policy", "frozen")
-            scope = unit.params.get("scope", "smoke")
-            return SageMakerMlflowTracker(
-                project=os.environ.get("BENCH_STACK", "continual-bench"),
-                dataset=dataset,
-                policy=policy,
-                scope=scope,
-                campaign_id=unit.campaign_id,
-                model_name=model_names.get(dataset, "zia-model"),
-                run_id=unit.run_id,
-                job_name=unit.job_name,
-                git_sha=os.environ.get("BENCH_GIT_REVISION", unit.contract["release"]["git_sha"]),
-                stack=os.environ.get("BENCH_STACK", "continual-bench"),
-                tracking_uri=tracking_uri,
-                async_progress=True,
-            )
-
     workdir = Path(args.workdir or tempfile.mkdtemp(prefix="cb-run-"))
     workdir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+
     if args.local_root:
-        env.pop("MLFLOW_TRACKING_URI", None)
-    code = execute(store, args.unit_uri, workdir, env=env, registry=registry, tracker=tracker, emit=emit)
+        runtime = build_cli_runtime(args.local_root, env=env)
+    elif env.get("S3_ENDPOINT_URL"):
+        runtime = build_container_runtime(
+            bucket=args.bucket or env.get("BENCH_BUCKET", "benchmarks"),
+            endpoint_url=env.get("S3_ENDPOINT_URL"),
+            mlflow_tracking_uri=env.get("MLFLOW_TRACKING_URI"),
+            env=env,
+        )
+    else:
+        bucket = args.bucket or env.get("BENCH_BUCKET")
+        if not bucket:
+            raise SystemExit("--bucket or BENCH_BUCKET is required (or --local-root for offline runs)")
+        runtime = build_aws_runtime(
+            bucket,
+            kms_key_id=env.get("BENCH_KMS_KEY_ID"),
+            inference_image=env.get("BENCH_INFERENCE_IMAGE"),
+            mlflow_tracking_uri=env.get("MLFLOW_TRACKING_URI"),
+            enable_sagemaker_experiments=env.get("BENCH_SAGEMAKER_EXPERIMENTS", "false") == "true",
+            enable_model_registry=env.get("BENCH_MODEL_REGISTRY", "false") == "true",
+            env=env,
+        )
+
+    code = execute(runtime.store, args.unit_uri, workdir, runtime=runtime, emit=emit)
     sys.exit(code)
 
 

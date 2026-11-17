@@ -51,23 +51,37 @@ class SageMakerModelRegistry:
         metadata: dict,
         content_types=("application/json", "text/csv"),
         description: str = "",
+        model_metrics_uri: str | None = None,
+        drift_check_baselines: dict | None = None,
     ) -> dict:
         existing = self.find(group, run_id)
         if existing:
             return {"model_package_arn": existing, "created": False}
         properties = {k: str(v)[:256] for k, v in {**metadata, "run_id": run_id}.items()}
-        response = self.client.create_model_package(
-            ModelPackageGroupName=group,
-            ClientToken=str(uuid5(NAMESPACE_URL, f"sagemaker:model-package:{group}:{run_id}")),
-            ModelPackageDescription=description[:1024],
-            ModelApprovalStatus="PendingManualApproval",
-            CustomerMetadataProperties=properties,
-            InferenceSpecification={
+        kwargs: dict = {
+            "ModelPackageGroupName": group,
+            "ClientToken": str(uuid5(NAMESPACE_URL, f"sagemaker:model-package:{group}:{run_id}")),
+            "ModelPackageDescription": description[:1024],
+            "ModelApprovalStatus": "PendingManualApproval",
+            "CustomerMetadataProperties": properties,
+            "InferenceSpecification": {
                 "Containers": [{"Image": image, "ModelDataUrl": model_data_uri}],
                 "SupportedContentTypes": list(content_types),
                 "SupportedResponseMIMETypes": ["application/json"],
                 "SupportedRealtimeInferenceInstanceTypes": ["ml.m5.large"],
                 "SupportedTransformInstanceTypes": ["ml.m5.large"],
             },
-        )
+        }
+        if model_metrics_uri:
+            kwargs["ModelMetrics"] = {
+                "ModelQuality": {
+                    "Statistics": {
+                        "ContentType": "application/json",
+                        "S3Uri": model_metrics_uri,
+                    }
+                }
+            }
+        if drift_check_baselines:
+            kwargs["DriftCheckBaselines"] = drift_check_baselines
+        response = self.client.create_model_package(**kwargs)
         return {"model_package_arn": response["ModelPackageArn"], "created": True}

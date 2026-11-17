@@ -41,7 +41,7 @@ def test_sagemaker_experiments_hierarchy_tags_parameters_and_epoch_metrics():
         client=sm_client,
         metrics_client=metrics_client,
     )
-    assert tracker.experiment_name == "continual-bench-zia-experiments"
+    assert tracker.experiment_name == "continual-bench-experiments"
     assert tracker.trial_name == "social-drift-multinomial-logistic-a1b2c3d4e5"
     assert tracker.trial_component_name == "cb-social-drift-a1b2-training"
     assert tracker.operational_tags() == [
@@ -51,7 +51,7 @@ def test_sagemaker_experiments_hierarchy_tags_parameters_and_epoch_metrics():
         {"Key": "cb-git-sha", "Value": "1" * 40},
     ]
 
-    exp_arn = "arn:aws:sagemaker:us-east-1:123456789012:experiment/continual-bench-zia-experiments"
+    exp_arn = "arn:aws:sagemaker:us-east-1:123456789012:experiment/continual-bench-experiments"
     tc_arn = "arn:aws:sagemaker:us-east-1:123456789012:experiment-trial-component/tc1"
     trial_arn = "arn:aws:sagemaker:us-east-1:123456789012:experiment-trial/t1"
 
@@ -61,7 +61,7 @@ def test_sagemaker_experiments_hierarchy_tags_parameters_and_epoch_metrics():
             "create_experiment",
             {"ExperimentArn": exp_arn},
             {
-                "ExperimentName": "continual-bench-zia-experiments",
+                "ExperimentName": "continual-bench-experiments",
                 "Description": ANY,
                 "Tags": tracker.operational_tags(),
             },
@@ -72,7 +72,7 @@ def test_sagemaker_experiments_hierarchy_tags_parameters_and_epoch_metrics():
             {"TrialArn": trial_arn},
             {
                 "TrialName": "social-drift-multinomial-logistic-a1b2c3d4e5",
-                "ExperimentName": "continual-bench-zia-experiments",
+                "ExperimentName": "continual-bench-experiments",
                 "Tags": tracker.operational_tags(),
             },
         )

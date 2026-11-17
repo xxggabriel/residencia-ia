@@ -85,10 +85,100 @@ def _training_job_name():
     return None
 
 
+def _resolve_spec(dataset: str, manifest: dict, params: dict):
+    """Resolve model name and classes from params/manifest, falling back to Zia catalog if applicable."""
+    from continual_bench.datasets.zia import DATASETS as ZIA_DATASETS
+
+    spec = ZIA_DATASETS.get(dataset, {})
+    model_name = params.get("model") or manifest.get("model") or spec.get("model") or "xgboost"
+    classes = params.get("classes") or manifest.get("classes") or spec.get("classes")
+    return model_name, classes
+
+
+def _run_registry_benchmark(params: dict, model_dir: Path, *, tracker=None, finish_tracker=True) -> dict:
+    """Execute any registered ComponentRegistry dataset/model/policy/metrics in SageMaker."""
+    from continual_bench.application.components import default_registry, make_source
+    from continual_bench.config import Config, EpochConfig, TypedConfig
+    from continual_bench.evaluation.environment import encoded
+    from continual_bench.infrastructure.storage import atomic_write
+
+    evaluator = str(params.get("evaluator", "binary"))
+    dataset = str(params.get("dataset", "sea"))
+    model_name = str(params.get("model", "logistic"))
+    policy_name = str(params.get("policy", "drift"))
+    detector_name = str(params.get("detector", "adwin"))
+    mode = str(params.get("mode", "streaming"))
+    seed = int(params.get("seed", 42))
+    samples = int(params.get("samples", 1000))
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    work_root = model_dir / "work"
+    work_root.mkdir(parents=True, exist_ok=True)
+
+    if evaluator == "binary":
+        from continual_bench.application.runner import run as run_binary
+
+        cfg = Config.model_validate(
+            {
+                "name": str(params.get("campaign_id", "sagemaker-native")),
+                "mode": mode,
+                "dataset": {"name": dataset, "samples": samples, "seed": seed},
+                "model": {"name": model_name},
+                "detector": {"name": detector_name},
+                "policy": {"name": policy_name},
+            }
+        )
+        report = run_binary(cfg, str(work_root))
+    elif evaluator == "typed":
+        from continual_bench.evaluation.typed import run_typed
+
+        cfg = TypedConfig.model_validate(
+            {
+                "policy": policy_name if policy_name in ("none", "online", "periodic") else "online",
+                "dataset": {"name": dataset, "samples": samples, "seed": seed},
+                "model": {"name": model_name},
+            }
+        )
+        source = make_source(default_registry(cfg.plugins), cfg.dataset)
+        report = run_typed(source, str(work_root), **cfg.model_dump(exclude={"dataset"}))
+    else:
+        from continual_bench.evaluation.epochs import run_epochs
+
+        cfg = EpochConfig.model_validate(
+            {"dataset": dataset, "examples": samples, "seed": seed, "model": {"name": model_name}}
+        )
+        report = run_epochs(cfg, str(work_root))
+
+    metrics = dict(report.get("metrics") or {})
+    if tracker is not None:
+        if hasattr(tracker, "log_epoch_metrics") and metrics:
+            tracker.log_epoch_metrics(metrics, step=1)
+        if finish_tracker and hasattr(tracker, "finish"):
+            tracker.finish("Completed")
+
+    for name, value in metrics.items():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            print(f"validation:{name}={value};", flush=True)
+
+    metadata = {
+        "dataset": dataset,
+        "model": model_name,
+        "policy": policy_name,
+        "evaluator": evaluator,
+        "metrics": metrics,
+        "run_key": report.get("run_key"),
+    }
+    atomic_write(model_dir / "model-metadata.json", encoded(metadata))
+    atomic_write(model_dir / "report.json", encoded(report))
+    output = PREFIX / "output"
+    if output.is_dir():
+        atomic_write(output / "metrics.json", encoded({"validation": metrics, "metadata": metadata}))
+    return {"validation": metrics, "metadata": metadata, "report": report, "complete": True}
+
+
 def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tracker=True) -> dict:
     from continual_bench.config.iterative import IterativeTrainingConfig
     from continual_bench.datasets.streams import dataset_model_params
-    from continual_bench.datasets.zia import DATASETS
     from continual_bench.evaluation.environment import encoded, environment
     from continual_bench.evaluation.epoch_history import epoch_fit, write_state
     from continual_bench.evaluation.tracking_observations import observations
@@ -100,15 +190,23 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tra
 
     started = time.perf_counter()
     params = params if params is not None else hyperparameters()
-    iter_config = IterativeTrainingConfig.from_params(params)
     channel = Path(channel or PREFIX / "input" / "data" / "train")
     model_dir = Path(model_dir or PREFIX / "model")
     scope = str(params.get("scope", "smoke"))
+    manifest_file = channel / f"{scope}.json"
+    if not manifest_file.is_file() and params.get("evaluator") in {"binary", "typed", "epochs"}:
+        return _run_registry_benchmark(params, model_dir, tracker=tracker, finish_tracker=finish_tracker)
+
+    iter_config = IterativeTrainingConfig.from_params(params)
     manifest = _training_manifest(channel, scope)
     parquet = next(p for p in (channel / scope / "data.parquet", channel / f"{scope}.parquet") if p.is_file())
     dataset = manifest["dataset"]
-    spec = DATASETS[dataset]
-    classes = spec["classes"]
+    model_name, classes = _resolve_spec(dataset, manifest, params)
+    if classes is None:
+        import pyarrow.parquet as pq
+
+        labels_col = pq.read_table(parquet, columns=["label"])["label"].to_pylist()
+        classes = sorted(set(labels_col))
     (train_start, train_stop), (val_start, val_stop), holdout_start = chronological_splits(
         manifest["rows"],
         iter_config.validation_fraction,
@@ -117,7 +215,7 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tra
     threshold = float(params.get("decision_threshold", 0.5))
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("decision_threshold must be between 0 and 1")
-    model = make_zia_model(spec["model"], classes, config=iter_config, dataset=dataset,
+    model = make_zia_model(model_name, classes, config=iter_config, dataset=dataset,
                            decision_threshold=threshold, model_params=dataset_model_params(dataset))
     if model.name == "xgboost" and "max_depth" in params:
         model.params["max_depth"] = int(params["max_depth"])
@@ -329,7 +427,6 @@ def native_pipeline_job(command):
     import hashlib
     import shutil
 
-    from continual_bench.datasets.zia import DATASETS
     from continual_bench.infrastructure.aws.native_tracking import track_native_job
 
     uri = os.environ["MLFLOW_TRACKING_URI"]
@@ -347,10 +444,17 @@ def native_pipeline_job(command):
         params = hyperparameters()
         scope = str(params.get("scope", "smoke"))
         model_dir = PREFIX / "model"
-        manifest = _training_manifest(PREFIX / "input" / "data" / "train", scope)
-        dataset = manifest["dataset"]
+        channel = PREFIX / "input" / "data" / "train"
+        manifest_file = channel / f"{scope}.json"
+        if manifest_file.is_file():
+            manifest = _training_manifest(channel, scope)
+            dataset = manifest["dataset"]
+            model_name, _ = _resolve_spec(dataset, manifest, params)
+        else:
+            dataset = str(params.get("dataset", os.environ.get("BENCH_DATASET", "generic")))
+            model_name = str(params.get("model", os.environ.get("BENCH_MODEL", "generic")))
         with track_native_job(uri, execution, stage, job_name, dataset=dataset, scope=scope,
-                              model_name=DATASETS[dataset]["model"]) as tracker:
+                              model_name=model_name) as tracker:
             tracker.log_hyperparameters(params)
             result = train(model_dir=model_dir, params=params, tracker=tracker, finish_tracker=False)
             tracker.publish_training_evidence(result, model_dir)
@@ -364,9 +468,11 @@ def native_pipeline_job(command):
     dataset = manifest["dataset"]
     with data_path.open("rb") as data:
         digest = hashlib.file_digest(data, "sha256").hexdigest()
-    if dataset not in DATASETS or manifest["sha256"] != digest:
+    if manifest["sha256"] != digest:
         raise ValueError("Prepared snapshot manifest does not match the pipeline input")
-    with track_native_job(uri, execution, stage, job_name, dataset=dataset, scope=scope) as tracker:
+    model_name, _ = _resolve_spec(dataset, manifest, {})
+    with track_native_job(uri, execution, stage, job_name, dataset=dataset, scope=scope,
+                          model_name=model_name) as tracker:
         tracker.log_hyperparameters({"scope": scope, "dataset_sha256": digest})
         report = process(data_path.parent, directory / "output", tracker=tracker)
         if report[data_path.name]["rows"] != manifest["rows"]:

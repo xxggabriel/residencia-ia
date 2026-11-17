@@ -124,6 +124,47 @@ def _matrix_units(request, release, project_root):
             for case in cases
         ]
         matrix_id = "project-suite-v1"
+    elif request.matrix.kind == "benchmark":
+        workload = request.matrix
+        datasets = [
+            {
+                "name": name,
+                **({"samples": workload.samples} if workload.samples is not None else {}),
+                **({"label_delay": workload.label_delay} if workload.label_delay is not None else {}),
+                **({"params": dict(workload.dataset_params)} if workload.dataset_params else {}),
+            }
+            for name in workload.datasets
+        ]
+        models = [
+            {"name": name, **({"params": dict(workload.model_params)} if workload.model_params else {})}
+            for name in workload.models
+        ]
+        strategies = [
+            {
+                "detector": {"name": detector},
+                "policy": {"name": policy, **dict(workload.policy_params)},
+            }
+            for detector in workload.detectors
+            for policy in workload.policies
+        ]
+        typed_policies = tuple(p for p in workload.policies if p in ("none", "online", "periodic")) or (
+            "online",
+        )
+        plan = ExperimentMatrix.model_validate(
+            {
+                "name": request.campaign_id,
+                "evaluator": workload.evaluator,
+                "datasets": datasets,
+                "models": models,
+                "strategies": strategies,
+                "modes": workload.modes,
+                "typed_policies": typed_policies,
+                "seeds": workload.seeds,
+                "base": workload.base,
+                "on_incompatible": workload.on_incompatible,
+            }
+        ).plan()
+        configs, matrix_id = plan["cases"], plan["matrix"]
     else:
         plan = load_model(ExperimentMatrix, str(Path(project_root) / request.matrix.path)).plan()
         configs, matrix_id = plan["cases"], plan["matrix"]
