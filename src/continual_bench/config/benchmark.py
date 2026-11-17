@@ -6,7 +6,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from continual_bench.core.policies import BATCH_POLICY_KINDS, POLICIES, PolicyStrategy
+from continual_bench.core.policies import (
+    BATCH_POLICY_KINDS,
+    POLICIES,
+    PolicyStrategy,
+    validate_batch_policy_params,
+)
 from continual_bench.core.tasks import BINARY
 
 
@@ -46,15 +51,7 @@ class PolicyConfig(Strict):
     @model_validator(mode="after")
     def validate_builtin_policy(self):
         if self.name in BATCH_POLICY_KINDS:
-            PolicyStrategy(
-                kind=self.name,
-                params=self.params,
-                every=self.every,
-                cooldown=self.cooldown,
-                min_samples=self.min_samples,
-                min_window=self.min_window,
-                action=self.action,
-            )
+            validate_batch_policy_params(self.name, self.action, self.params)
             return self
         if self.name in POLICIES and self.params:
             PolicyStrategy(kind=self.name, **self.model_dump(exclude={"name"}))

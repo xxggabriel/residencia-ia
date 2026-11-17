@@ -16,6 +16,34 @@ PERMITTED_PARAMS = SCENARIO_PARAMS | {"monitor_window"}
 # Cost-aware model-update policies (CARA, UPF) and the retrospective Oracle decide per *batch* from a
 # performance matrix; the per-sample Engine cannot host them. They live in `continual_bench.retraining`.
 BATCH_POLICY_KINDS = ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle")
+BATCH_POLICY_PARAMS: dict[str, frozenset[str]] = {
+    "cara": frozenset({"alpha", "tau"}),
+    "cara_cumulative": frozenset({"alpha", "tau_cum"}),
+    "cara_periodic": frozenset({"alpha", "period"}),
+    "upf": frozenset({"alpha", "delta", "samples", "seed"}),
+    "oracle": frozenset({"alpha"}),
+}
+
+
+def validate_batch_policy_params(kind: str, action: str, params: dict) -> None:
+    """Validate batch policy parameters without importing numpy-backed retraining modules."""
+    if action != "reset_retrain":
+        raise ValueError("batch policies only retrain from scratch")
+    permitted = BATCH_POLICY_PARAMS.get(kind, frozenset({"alpha"}))
+    if params.keys() - permitted:
+        raise ValueError("unknown policy params")
+    for key, value in params.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"policy {key} must be numeric")
+        may_be_infinite = key in {"tau", "tau_cum", "period"}
+        if math.isnan(value) or value < 0 or (math.isinf(value) and not may_be_infinite):
+            raise ValueError(f"policy {key} must be nonnegative and finite")
+    if params.get("period", 1) < 1 or params.get("samples", 2) < 2:
+        raise ValueError("invalid policy period or sample count")
+    if not 0 < params.get("delta", 0.5) < 1:
+        raise ValueError("policy delta must be in (0, 1)")
+
+
 ZiaPolicy = Literal[
     "frozen",
     "online",
