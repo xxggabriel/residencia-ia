@@ -26,7 +26,7 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
             job_name=unit.job_name,
             git_sha=unit.contract["release"]["git_sha"],
             logger=log,
-            timeout_seconds=3,
+            timeout_seconds=15,
         )
         self.unit = unit
         self.job_id = job_id

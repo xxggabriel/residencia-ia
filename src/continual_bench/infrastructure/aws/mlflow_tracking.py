@@ -672,69 +672,78 @@ class SageMakerMlflowTracker:
         body_hash = sha256(body_bytes).hexdigest() if body_bytes else EMPTY_SHA256_HASH
 
         last_error: Exception | None = None
-        endpoints = [self._rest_endpoint] if self.spot and self._rest_endpoint else meta["endpoints"]
-        for endpoint in endpoints:
-            url = f"{endpoint}{path}{query}"
-            headers: dict[str, str] = {
-                "Accept": "application/json",
-                "X-Amz-Content-SHA256": body_hash,
-            }
-            if payload is not None:
-                headers["Content-Type"] = "application/json"
-            if meta.get("header_name") and meta.get("arn"):
-                headers[meta["header_name"]] = meta["arn"]
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            endpoints = [self._rest_endpoint] if self.spot and self._rest_endpoint else meta["endpoints"]
+            for endpoint in endpoints:
+                url = f"{endpoint}{path}{query}"
+                headers: dict[str, str] = {
+                    "Accept": "application/json",
+                    "X-Amz-Content-SHA256": body_hash,
+                }
+                if payload is not None:
+                    headers["Content-Type"] = "application/json"
+                if meta.get("header_name") and meta.get("arn"):
+                    headers[meta["header_name"]] = meta["arn"]
 
-            if meta.get("service_name"):
-                creds = self._session_credentials(meta["region"])
-                aws_req = AWSRequest(
-                    method=method.upper(),
-                    url=url,
+                if meta.get("service_name"):
+                    creds = self._session_credentials(meta["region"])
+                    aws_req = AWSRequest(
+                        method=method.upper(),
+                        url=url,
+                        data=body_bytes if body_bytes else None,
+                        headers=headers,
+                    )
+                    SigV4Auth(creds, meta["service_name"], meta["region"]).add_auth(aws_req)
+                    prepared = aws_req.prepare()
+                    req_headers = dict(prepared.headers)
+                    req_url = prepared.url
+                else:
+                    req_headers = headers
+                    req_url = url
+
+                http_req = urllib.request.Request(
+                    req_url,
                     data=body_bytes if body_bytes else None,
-                    headers=headers,
+                    headers=req_headers,
+                    method=method.upper(),
                 )
-                SigV4Auth(creds, meta["service_name"], meta["region"]).add_auth(aws_req)
-                prepared = aws_req.prepare()
-                req_headers = dict(prepared.headers)
-                req_url = prepared.url
-            else:
-                req_headers = headers
-                req_url = url
-
-            http_req = urllib.request.Request(
-                req_url,
-                data=body_bytes if body_bytes else None,
-                headers=req_headers,
-                method=method.upper(),
-            )
-            try:
-                with self._http_opener(http_req, timeout=self.timeout_seconds) as resp:
-                    raw_resp = resp.read()
-                    if self.spot:
+                try:
+                    with self._http_opener(http_req, timeout=self.timeout_seconds) as resp:
+                        raw_resp = resp.read()
+                        if self.spot:
+                            self._rest_endpoint = endpoint
+                        return json.loads(raw_resp.decode("utf-8")) if raw_resp else {}
+                except urllib.error.HTTPError as http_err:
+                    raw_body = ""
+                    try:
+                        raw_body = http_err.read().decode("utf-8", errors="ignore")
+                    except Exception:
+                        pass
+                    parsed_err = {}
+                    try:
+                        parsed_err = json.loads(raw_body) if raw_body else {}
+                    except Exception:
+                        pass
+                    error_code = parsed_err.get("error_code", f"HTTP_{http_err.code}")
+                    message = parsed_err.get("message", raw_body[:300] or str(http_err))
+                    err = MlflowRestError(http_err.code, error_code, message)
+                    if self.spot and parsed_err.get("error_code"):
                         self._rest_endpoint = endpoint
-                    return json.loads(raw_resp.decode("utf-8")) if raw_resp else {}
-            except urllib.error.HTTPError as http_err:
-                raw_body = ""
-                try:
-                    raw_body = http_err.read().decode("utf-8", errors="ignore")
-                except Exception:
-                    pass
-                parsed_err = {}
-                try:
-                    parsed_err = json.loads(raw_body) if raw_body else {}
-                except Exception:
-                    pass
-                error_code = parsed_err.get("error_code", f"HTTP_{http_err.code}")
-                message = parsed_err.get("message", raw_body[:300] or str(http_err))
-                err = MlflowRestError(http_err.code, error_code, message)
-                if self.spot and parsed_err.get("error_code"):
-                    self._rest_endpoint = endpoint
-                raise err from http_err
-            except urllib.error.URLError as url_err:
-                last_error = url_err
-                continue
-            except OSError as os_err:
-                last_error = os_err
-                continue
+                    if http_err.code in (429, 502, 503, 504) and attempt + 1 < max_attempts:
+                        last_error = err
+                        continue
+                    raise err from http_err
+                except urllib.error.URLError as url_err:
+                    last_error = url_err
+                    continue
+                except OSError as os_err:
+                    last_error = os_err
+                    continue
+            if attempt + 1 < max_attempts:
+                if self.spot:
+                    self._rest_endpoint = None
+                time.sleep(0.25 * (2**attempt))
 
         raise last_error or RuntimeError("All SageMaker MLflow endpoints failed")
 

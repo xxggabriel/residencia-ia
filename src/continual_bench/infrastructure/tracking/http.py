@@ -45,7 +45,7 @@ class PooledHttpOpener:
                 redirect=False,
                 preload_content=True,
             )
-        except self._urllib3.exceptions.HTTPError as error:
+        except (self._urllib3.exceptions.HTTPError, TimeoutError, OSError) as error:
             raise urllib.error.URLError(error) from error
         if response.status >= 400:
             raise urllib.error.HTTPError(
