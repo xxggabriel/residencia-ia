@@ -352,21 +352,33 @@ def test_matrix_mlflow_run_uses_short_sha_experiment_and_strategy_run_name():
         labels={
             "dataset": "electricity",
             "model": "logistic",
+            "mode": "streaming",
             "policy": "drift",
             "detector": "adwin",
         },
     )
     run = matrix_tracking.MatrixMlflowRun(unit, "job-1", "job", "http://fake", log=Mock())
     assert run.experiment_name == "075a88c-continual-bench-matrix"
-    assert run.run_name == "energy-airlines-1117-0912-1424bfc8ed2c-drift-adwin-job-1"
+    assert (
+        run.run_name == "energy-airlines-1117-0912-1424bfc8-electricity-logistic-streaming-drift-adwin-job-1"
+    )
 
     unit_online = unit.model_copy(
         update={
-            "labels": {"dataset": "electricity", "model": "logistic", "policy": "online", "detector": "none"}
+            "labels": {
+                "dataset": "electricity",
+                "model": "hoeffding_tree",
+                "mode": "incremental",
+                "policy": "online",
+                "detector": "none",
+            }
         }
     )
     run_online = matrix_tracking.MatrixMlflowRun(unit_online, "job-1", "job", "http://fake", log=Mock())
-    assert run_online.run_name == "energy-airlines-1117-0912-1424bfc8ed2c-online-job-1"
+    assert (
+        run_online.run_name
+        == "energy-airlines-1117-0912-1424bfc8-electricity-hoeffding_tree-incremental-online-job-1"
+    )
     assert run.timeout_seconds == 15
 
 
