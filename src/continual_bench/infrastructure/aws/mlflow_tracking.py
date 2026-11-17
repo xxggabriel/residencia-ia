@@ -21,7 +21,12 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
 from continual_bench.config.iterative import IterativeTrainingConfig
-from continual_bench.infrastructure.metric_tracking import metric_points, missing_metric_points
+from continual_bench.infrastructure.metric_tracking import (
+    DEFAULT_MAX_POINTS_PER_KEY,
+    downsample_points,
+    metric_points,
+    missing_metric_points,
+)
 from continual_bench.infrastructure.object_store import ObjectExists, sha256_path, split_uri
 from continual_bench.infrastructure.observation_tracking import (
     ARTIFACT_ROOT,
@@ -271,6 +276,8 @@ def report_metric_items(
     adapted=None,
     *,
     include_observations=True,
+    max_points_per_key: int | None = DEFAULT_MAX_POINTS_PER_KEY,
+    max_system_points: int | None = 200,
 ) -> list[dict[str, Any]]:
     """Finite metric points (key, value, timestamp, step) shared by both publishers."""
     metric_items: list[dict[str, Any]] = []
@@ -319,15 +326,27 @@ def report_metric_items(
     for idx, pair in enumerate(report.get("cost_sensitivity") or []):
         if isinstance(pair, (list, tuple)) and len(pair) == 2:
             _add_metric("cost_sensitivity/total_cost", pair[1], idx)
+    raw_system: list[tuple[str, int, float]] = []
+    system_stamps: dict[tuple[str, int], int] = {}
     for step_idx, sample in enumerate((report.get("system_metrics") or {}).get("samples") or []):
         sample_ts = int(sample.get("timestamp_ms", now_ms))
         for k, v in (sample.get("values") or {}).items():
-            _add_metric(f"system/{k}", v, step_idx, sample_ts)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)):
+                continue
+            key = f"system/{k}"
+            raw_system.append((key, step_idx, float(v)))
+            system_stamps[key, step_idx] = sample_ts
+    for key, step, value in downsample_points(raw_system, max_points_per_key=max_system_points):
+        _add_metric(key, value, step, system_stamps[key, step])
     if adapted and adapted.get("tracking"):
-        for key, step, value in metric_points(adapted["tracking"]):
+        for key, step, value in downsample_points(
+            metric_points(adapted["tracking"]), max_points_per_key=max_points_per_key
+        ):
             _add_metric(key, value, step)
     if include_observations:
-        for key, step, value in parent_observation_points(report):
+        for key, step, value in downsample_points(
+            parent_observation_points(report), max_points_per_key=max_points_per_key
+        ):
             _add_metric(key, value, step)
     return metric_items
 

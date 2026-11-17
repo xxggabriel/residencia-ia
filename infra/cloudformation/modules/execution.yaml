@@ -643,17 +643,17 @@ Resources:
       PropagateTags: true
       Tags: {cb-stack: !Ref Project, cb-component: benchmark}
       Timeout: {AttemptDurationSeconds: !Ref BenchmarkTimeoutSeconds}
-      # A reclaimed Fargate Spot task (or a worker that checkpointed after SIGTERM and exited
-      # 75) retries; the next attempt restores the newest confirmed checkpoint.
+      # A worker that checkpointed after the Spot SIGTERM exits 75; a task reclaimed before it
+      # could exit stops with the Fargate Spot reason. Both retry from the newest confirmed
+      # checkpoint. Batch accepts at most 5 conditions and only a trailing "*" in patterns;
+      # an unmatched interruption still resumes through the workflow's resubmission.
       RetryStrategy:
         Attempts: !Ref JobAttempts
         EvaluateOnExit:
           - {OnExitCode: "75", Action: RETRY}
-          - {OnStatusReason: "*Spot*", Action: RETRY}
-          - {OnStatusReason: "*interrupted*", Action: RETRY}
+          - {OnStatusReason: "Your Spot Task was interrupted*", Action: RETRY}
           - {OnStatusReason: "ResourceInitializationError*", Action: RETRY}
           - {OnStatusReason: "CannotPullContainerError*", Action: RETRY}
-          - {OnStatusReason: "Timeout waiting for network interface*", Action: RETRY}
           - {OnReason: "*", Action: EXIT}
       Parameters: {unit_uri: "s3://unset"}
       ContainerProperties:

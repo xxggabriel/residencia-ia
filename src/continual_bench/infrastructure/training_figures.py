@@ -1193,22 +1193,20 @@ def _write_html(path, panels, title, *, page=None):
     data = json.dumps(_chart_data(panels), ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
     page_json = json.dumps(page or {}, ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
     document = f"""<!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<script>try{{var s=localStorage.getItem("cb-color-scheme");
+if(s==="light"||s==="dark")document.querySelector('meta[name="color-scheme"]').content=s;
+}}catch(e){{}}</script>
 <title>{escape(title)}</title>
 <style>
-body {{margin:0 auto; max-width:1480px; padding:1.6rem; color:#10233c; background:#f5f8fd;
-  font:15px/1.45 system-ui,sans-serif}}
-main {{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr));gap:1.3rem}}
-section {{background:white;border:1px solid #ccd8e7;padding:1rem;border-radius:8px}}
-h1 {{font-size:1.75rem;margin:0 0 1.2rem}} h2 {{font-size:1.05rem;margin:0 0 .7rem}}
-fieldset {{border:0;margin:0;padding:0}} legend {{font-size:.82rem;color:#475569}}
-label {{display:inline-flex;align-items:center;gap:.22em;margin-right:.7em}}
-label span {{border-bottom:2px solid;padding-bottom:.08em}}
-svg {{width:100%}} svg text {{font:11px system-ui,sans-serif;fill:#233752}}
-output {{display:block;background:#f1f5fb;padding:.42rem .65rem;min-height:3rem;overflow-wrap:anywhere}}
 {PAGE_STYLE}
 </style></head><body>
-<header><h1>{escape(title)}</h1></header><div id="controls"></div><main></main>
+<header class="app-header">
+  <div class="header-top"><h1>{escape(title)}</h1><div class="header-actions"></div></div>
+</header>
+<div id="controls"></div><main></main>
 <noscript>Ative JavaScript para interagir ou abra a versão PNG da visão geral.</noscript>
 <script type="application/json" id="chart-data">{data}</script>
 <script type="application/json" id="page-data">{page_json}</script>

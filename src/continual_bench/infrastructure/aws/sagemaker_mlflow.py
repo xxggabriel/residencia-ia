@@ -19,6 +19,7 @@ tracker in ``mlflow_tracking.py``, which is also the fallback when this publishe
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import time
@@ -26,8 +27,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from continual_bench.evaluation.system_metrics import configure_mlflow_system_metrics
 from continual_bench.infrastructure.tracking import MlflowClientBackend
 from continual_bench.infrastructure.tracking.artifacts import artifact_plan, upload_concurrently
+from continual_bench.infrastructure.tracking.mlflow_async import async_logging_requested
 from continual_bench.infrastructure.tracking.rounds import publish_training_rounds
 from continual_bench.infrastructure.zia_model_bundle import (
     PYFUNC_LOADER,
@@ -291,6 +294,16 @@ def publish_with_library(
 
     try:
         mlflow.set_tracking_uri(tracker.tracking_uri)
+        config = getattr(mlflow, "config", None)
+        if async_logging_requested() and callable(getattr(config, "enable_async_logging", None)):
+            config.enable_async_logging(True)
+        enable_sys = os.environ.get("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        if not report.get("system_metrics") or enable_sys:
+            configure_mlflow_system_metrics()
         client = MlflowClient()
         backend = MlflowClientBackend(client)
         experiment = mlflow.set_experiment(tracker.experiment_name)

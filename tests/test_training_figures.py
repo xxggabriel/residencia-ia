@@ -317,3 +317,54 @@ def test_retraining_pages_keep_duplicate_positions_partial_fits_and_zeros(tmp_pa
     report["training_history"] = []
     write_observation_figures(tmp_path, report)
     assert load("retraining-explorer")["fits"] == []
+
+
+def test_modern_html_pages_include_confusion_drift_policy_and_system_metrics(tmp_path, monkeypatch):
+    monkeypatch.setattr("continual_bench.infrastructure.training_figures.matplotlib_available", lambda: False)
+    report = _binary_report()
+    report["system_metrics"] = {
+        "collector": "psutil",
+        "summary": {"cpu_percent_mean": 42.5, "memory_rss_mb_max": 512.0},
+        "samples": [{"step": i, "cpu_percent": float(i % 100), "memory_mb": 200.0 + i} for i in range(400)],
+    }
+    ids = {fit["fit_id"]: f"run-{i}" for i, fit in enumerate(report["training_history"], 1)}
+    write_observation_figures(tmp_path, report, parent_run_id="main", child_run_ids=ids)
+
+    def load_page(rel_path):
+        document = (tmp_path / rel_path).read_text()
+        payload = json.loads(
+            re.search(r'<script type="application/json" id="page-data">(.*?)</script>', document).group(1)
+        )
+        return document, payload
+
+    ov_doc, ov = load_page("overview/overview.html")
+    assert '<meta name="color-scheme" content="light dark">' in ov_doc
+    assert "<script src=" not in ov_doc and '<link rel="stylesheet"' not in ov_doc
+    assert 'role="tablist"' in ov_doc and "Exportar CSV" in ov_doc
+
+    assert len(ov["confusion_matrices"]["global"]) == 1
+    assert ov["confusion_matrices"]["global"][0]["split"] == "prequential"
+    assert set(ov["confusion_matrices"]["by_fit"]) == {f["fit_id"] for f in report["training_history"]}
+
+    assert ov["drift"]["alarms"] == [12]
+    assert ov["drift"]["changes"] == [10, 29]
+    assert ov["drift"]["delay_unit"] == "exemplos"
+    assert ov["policy"]["fit_counts"] == {"total": 3, "promoted": 2, "rejected": 1, "other": 0}
+    assert ov["policy"]["costs"]["cost_total"] == 0.25
+    assert ov["system_metrics"]["collector"] == "psutil"
+    assert ov["system_metrics"]["total_samples"] == 400
+    assert len(ov["system_metrics"]["samples"]) <= 240
+    assert ov["system_metrics"]["samples"][0]["step"] == 0
+    assert ov["system_metrics"]["samples"][-1]["step"] == 399
+
+    tl_doc, tl = load_page("retraining-timeline.html")
+    assert "retraining-explorer.html" in tl_doc
+    assert len(tl["fits"]) == 3
+
+    ex_doc, ex = load_page("retraining-explorer.html")
+    assert "Selecionar ajuste (fit_id)" in ex_doc
+    assert len(ex["fits"]) == 3
+    assert ex["fits"][0]["confusion_matrices"][0]["split"] == "validation"
+    assert "Esquecimento & Retenção" in ov_doc
+    assert "forgetting" in ov
+    assert ov["forgetting"]["series"] == report["tracking_observations"]["retention"]["series"]
