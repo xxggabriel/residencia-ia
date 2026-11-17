@@ -22,24 +22,39 @@ def read_events(path, start=0):
             yield Event(**json.loads(line))
 
 
-def continual_evaluation(source, factory, settings):
-    """Episode probes exist only for sources declaring synthetic generators and boundaries."""
-    if not hasattr(source, "generator") or not hasattr(source, "boundaries"):
-        return None
-    probes = {}
-    for task, function in enumerate(source.functions):
-        generator = source.generator(function, source.seed + 2_000_000 + task)
-        probes[task] = [
-            ({str(k): v for k, v in x.items()}, bool(y))
-            for x, y in itertools.islice(generator, settings["probe_samples"])
-        ]
-    return ContinualEvaluation(
-        factory,
-        probes,
-        source.boundaries + [source.samples],
-        reference_budget=settings["reference_budget"],
-        references_enabled=settings["continual_references"],
-    )
+def continual_evaluation(source, factory, settings, *, events=None, events_path=None):
+    """Build episode-level continual evaluation using independent synthetic probes."""
+    if hasattr(source, "generator") and hasattr(source, "boundaries"):
+        probes = {}
+        for task, function in enumerate(source.functions):
+            generator = source.generator(function, source.seed + 2_000_000 + task)
+            probes[task] = [
+                ({str(k): v for k, v in x.items()}, bool(y))
+                for x, y in itertools.islice(generator, settings["probe_samples"])
+            ]
+        return ContinualEvaluation(
+            factory,
+            probes,
+            source.boundaries + [source.samples],
+            reference_budget=settings["reference_budget"],
+            references_enabled=settings["continual_references"],
+        )
+
+    if hasattr(source, "episode_probes") and getattr(source, "samples", 0) >= 4:
+        total = source.samples
+        episodes = 3 if total >= 6 else 2
+        task_ends = [total * i // episodes for i in range(1, episodes)] + [total]
+        probe_count = max(1, int(settings.get("probe_samples", 32)))
+        probes = source.episode_probes(task_ends, probe_count)
+        return ContinualEvaluation(
+            factory,
+            probes,
+            task_ends,
+            reference_budget=settings["reference_budget"],
+            references_enabled=settings["continual_references"],
+        )
+
+    return None
 
 
 @dataclass

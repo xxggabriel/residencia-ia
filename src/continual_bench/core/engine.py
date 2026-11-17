@@ -364,10 +364,11 @@ class Engine:
             self.windows.append({"end_seq": end_seq, **self.current.values()})
             self.current = Metrics()
 
-    def probe(self, probes: dict[int, list[tuple[dict, bool]]]) -> None:
+    def probe(self, probes: dict[int, list[tuple[dict, bool]]], concepts=None) -> None:
         # Separate, never-trained synthetic reference probes, evaluated only for seen concepts.
         frozen = copy.deepcopy(self.model)
-        for concept in sorted(self.seen_concepts):
+        active = sorted(self.seen_concepts if concepts is None else concepts)
+        for concept in active:
             samples = probes.get(concept, [])
             if not samples:
                 continue

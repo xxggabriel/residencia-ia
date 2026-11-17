@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 
+from .dashboard_page import write_dashboard_html
 from .retraining_pages import HTML_REVISION, PAGE_PATHS
 from .storage import atomic_write
 
@@ -115,6 +116,7 @@ def write_observation_evidence(directory, report, parent_run_id=None, children=(
         return None
     from .training_figures import write_observation_figures
 
+    write_dashboard_html(directory, report)
     root = Path(directory) / ARTIFACT_ROOT
     payload = _json_bytes(data)
     manifest_path = root / "plots-manifest.json"
@@ -197,6 +199,9 @@ def publish_sdk_observations(
     client.log_batch(
         run_id, tags=[RunTag(key, value) for key, value in observation_tags(report).items()], synchronous=True
     )
+    dashboard_path = Path(directory) / "dashboard.html"
+    if dashboard_path.is_file():
+        client.log_artifact(run_id, str(dashboard_path))
     for path in sorted(root.iterdir()):
         if path.is_file():
             client.log_artifact(run_id, str(path), artifact_path=ARTIFACT_ROOT)

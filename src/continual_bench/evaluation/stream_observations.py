@@ -198,7 +198,7 @@ def quality_window(rows, quality, scope):
     }
 
 
-def typed_observations(report, quality, scored, *, unique_training, tracking_seconds):
+def typed_observations(report, quality, scored, *, unique_training, tracking_seconds, retention=None):
     tick = time.perf_counter()
     manifest, config = report["config"]["source"], report["config"]
     count = sum(len(rows) for rows in scored.values())
@@ -235,6 +235,7 @@ def typed_observations(report, quality, scored, *, unique_training, tracking_sec
         windows=windows,
         effort=effort,
         resources=resources,
+        retention=retention,
         lineage={
             "dataset": manifest.get("name"),
             "dataset_version": manifest.get("version") or config["samples_sha256"],

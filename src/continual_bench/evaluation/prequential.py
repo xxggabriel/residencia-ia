@@ -34,7 +34,7 @@ class Prequential(BinaryProtocol):
             versions=run.versions,
             observer=OnlineObservability(
                 settings,
-                continual_evaluation(run.source, run.model_factory, settings),
+                continual_evaluation(run.source, run.model_factory, settings, events_path=run.events_path),
                 current_rss_bytes,
                 warmup=config.warmup,
             ),
@@ -60,14 +60,30 @@ class Prequential(BinaryProtocol):
         previous_duration = getattr(engine, "evaluation_duration_seconds", 0.0)
         events = iter(self.stream(run, engine.next_seq))
         next_checkpoint = engine.next_seq + config.checkpoint_every
-        probes = run.source.probes() if hasattr(run.source, "probes") else {}
+        has_source_probes = hasattr(run.source, "probes")
+        probes = run.source.probes() if has_source_probes else {}
+
+        def _probe_now():
+            if has_source_probes:
+                engine.probe(probes)
+                return
+            continual = engine.observer.continual
+            if continual is not None:
+                task_ends = continual.task_ends
+                concepts = [
+                    idx
+                    for idx in range(len(task_ends))
+                    if engine.next_seq > (task_ends[idx - 1] if idx else 0)
+                ]
+                engine.probe(continual.probes, concepts=concepts)
+
         for batch in iter(lambda: list(itertools.islice(events, self.batch_size)), []):
             if time.monotonic() - run.started > config.max_seconds:
                 raise TimeoutError("benchmark deadline exceeded; resume from last checkpoint")
             before = len(engine.windows)
             engine.observe_batch(batch)
             if len(engine.windows) > before:
-                engine.probe(probes)
+                _probe_now()
                 if run.progress is not None:
                     for window in engine.windows[before:]:
                         run.progress(window["end_seq"], window)
@@ -83,7 +99,7 @@ class Prequential(BinaryProtocol):
             raise ValueError(f"source ended early at {engine.next_seq}")
         engine.finish()
         engine.observer.sample_memory()
-        engine.probe(probes)
+        _probe_now()
         engine.evaluation_duration_seconds = previous_duration + time.monotonic() - run.started
         if run.checkpoint_due is not None:
             engine.evaluation_finished = True
