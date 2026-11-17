@@ -126,9 +126,7 @@ def check(path: Path) -> list[str]:
             if compute.get("Type") not in ({"Ref": "FargateCapacity"}, "FARGATE", "FARGATE_SPOT"):
                 errors.append(f"{where}: compute environment must be Fargate")
         if kind == "AWS::Batch::JobDefinition":
-            errors.extend(
-                f"{where}: {error}" for error in retry_strategy_errors(props.get("RetryStrategy"))
-            )
+            errors.extend(f"{where}: {error}" for error in retry_strategy_errors(props.get("RetryStrategy")))
         if kind in (
             "AWS::EC2::Instance",
             "AWS::EC2::LaunchTemplate",
@@ -153,8 +151,10 @@ def retry_strategy_errors(strategy) -> list[str]:
     for condition in conditions:
         for key in ("OnStatusReason", "OnReason"):
             if key in condition and not BATCH_REASON.fullmatch(str(condition[key])):
-                errors.append(f"{key} {condition[key]!r} allows letters, digits, '.', ':', spaces and a "
-                              "trailing '*' only")
+                errors.append(
+                    f"{key} {condition[key]!r} allows letters, digits, '.', ':', spaces and a "
+                    "trailing '*' only"
+                )
         code = condition.get("OnExitCode")
         if code is not None and not BATCH_EXIT_CODE.fullmatch(str(code)):
             errors.append(f"OnExitCode {code!r} must be digits with an optional trailing '*'")
