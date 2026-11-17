@@ -27,10 +27,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from continual_bench.evaluation.system_metrics import configure_mlflow_system_metrics
 from continual_bench.infrastructure.tracking import MlflowClientBackend
 from continual_bench.infrastructure.tracking.artifacts import artifact_plan, upload_concurrently
-from continual_bench.infrastructure.tracking.mlflow_async import async_logging_requested
+from continual_bench.infrastructure.tracking.mlflow_async import (
+    async_logging_requested,
+    configure_mlflow_system_metrics,
+)
 from continual_bench.infrastructure.tracking.rounds import publish_training_rounds
 from continual_bench.infrastructure.zia_model_bundle import (
     PYFUNC_LOADER,

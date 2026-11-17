@@ -10,7 +10,7 @@ BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD)
 OVERRIDES ?= infra/params/runtime-overrides.example.json
 
 test:
-	uv run pytest -q
+	MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE=1 uv run --frozen pytest -q -n 6 --dist=loadfile
 
 lint:
 	uv run ruff check src tests dags examples scripts
