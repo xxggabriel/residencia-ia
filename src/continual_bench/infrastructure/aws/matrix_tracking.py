@@ -37,7 +37,10 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
 
     @property
     def experiment_name(self):
-        return sanitize_mlflow_name(f"{self.project}-matrix")
+        short = self.short_sha
+        prefix = f"{short}-" if short else ""
+        raw = f"{prefix}{self.project}-matrix" if self.project else f"{prefix}matrix"
+        return sanitize_mlflow_name(raw)
 
     @property
     def logical_run_id(self):
@@ -45,8 +48,10 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
 
     @property
     def run_name(self):
-        base = f"{self.campaign_id}-{self.unit.run_id[:12]}"
-        return base if self.spot else f"{base}-{self.attempt_key}"
+        detector = self.unit.labels.get("detector")
+        strategy = f"{self.policy}-{detector}" if detector and detector != "none" else self.policy
+        base = f"{self.campaign_id}-{self.unit.run_id[:12]}-{strategy}"
+        return sanitize_mlflow_name(base if self.spot else f"{base}-{self.attempt_key}")
 
     @property
     def mlflow_tags(self):

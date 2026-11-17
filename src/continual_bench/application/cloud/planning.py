@@ -243,8 +243,8 @@ def build_plan(
         raise ValueError("matrix produced duplicate execution contracts")
     if not units:
         raise ValueError("campaign matrix expanded to no runnable units")
-    # Fargate Spot submits every unit at once; Batch runs as many as the vCPU quota allows.
-    concurrency = min(request.max_parallel or (len(units) if spot else 4), len(units))
+    # Fargate Spot submits up to 32 units at once; Batch runs as many as the vCPU quota allows.
+    concurrency = min(request.max_parallel or (32 if spot else 4), len(units))
     recorded_request = request.model_dump(mode="json")
     if not spot:
         recorded_request.setdefault("max_parallel", 4)  # Match existing legacy plan documents.
