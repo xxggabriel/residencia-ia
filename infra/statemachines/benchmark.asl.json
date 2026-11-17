@@ -1,5 +1,5 @@
 {
-  "Comment": "Manual EC2 Spot benchmark campaign. Run one c6a.large Spot instance per policy and attempt, verify termination and volume deletion, then consolidate published results.",
+  "Comment": "Manual benchmark campaign on AWS Batch with Fargate Spot (serverless). Plan, provision the private interface endpoints, submit every run at once (Batch starts as many tasks as the Fargate Spot vCPU quota allows and queues the rest), reconcile before every submission, retry reclaimed tasks from their S3 checkpoints, consolidate the final manifests and verify that no campaign task is left running. Never triggered by events.",
   "StartAt": "Plan",
   "States": {
     "Plan": {
@@ -10,7 +10,6 @@
         "Payload": {
           "action": "plan_campaign",
           "request.$": "$.request",
-          "require_spot": true,
           "execution_arn.$": "$$.Execution.Id"
         }
       },
@@ -46,7 +45,7 @@
     "PreflightFailed": {
       "Type": "Fail",
       "Error": "PreflightFailed",
-      "Cause": "Request, release, snapshot or plan validation failed. No instance was submitted."
+      "Cause": "Request validation, release resolution, snapshot verification, capacity admission or plan publication failed; no job was submitted."
     },
     "EnsureEndpoints": {
       "Type": "Task",
@@ -89,54 +88,53 @@
           "Next": "EndpointSetupFailed"
         }
       ],
-      "Next": "DistributedRuns"
+      "Next": "ChooseFanOut"
     },
     "EndpointSetupFailed": {
       "Type": "Fail",
       "Error": "EndpointSetupFailed",
       "Cause": "Private interface endpoints could not be provisioned. Check the endpoint stack and lifecycle Lambda logs."
     },
-    "DistributedRuns": {
-      "Type": "Map",
-      "ItemReader": {
-        "Resource": "arn:aws:states:::s3:getObject",
-        "ReaderConfig": {
-          "InputType": "JSON"
-        },
-        "Parameters": {
-          "Bucket.$": "$.planned.plan.bucket",
-          "Key.$": "$.planned.plan.items_key"
+    "ChooseFanOut": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.planned.plan.mode",
+          "StringEquals": "distributed",
+          "Next": "DistributedRuns"
         }
-      },
+      ],
+      "Default": "InlineRuns"
+    },
+    "InlineRuns": {
+      "Type": "Map",
+      "ItemsPath": "$.planned.plan.items",
       "MaxConcurrencyPath": "$.planned.plan.concurrency",
-      "ToleratedFailurePercentage": 100,
       "ItemSelector": {
         "item.$": "$$.Map.Item.Value",
-        "control.$": "$.planned.plan.control_function",
-        "execution_arn.$": "$$.Execution.Id"
+        "control.$": "$.planned.plan.control_function"
       },
       "ItemProcessor": {
         "ProcessorConfig": {
-          "Mode": "DISTRIBUTED",
-          "ExecutionType": "STANDARD"
+          "Mode": "INLINE"
         },
-        "StartAt": "ReconcileSpotAttempt",
+        "StartAt": "Reconcile",
         "States": {
-          "ReconcileSpotAttempt": {
+          "Reconcile": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
             "Parameters": {
               "FunctionName.$": "$.control",
               "Payload": {
-                "action": "advance_spot_run",
-                "item.$": "$.item",
-                "execution_arn.$": "$.execution_arn"
+                "action": "reconcile_unit",
+                "item.$": "$.item"
               }
             },
             "ResultSelector": {
-              "state.$": "$.Payload"
+              "decision.$": "$.Payload.decision",
+              "job_id.$": "$.Payload.job_id"
             },
-            "ResultPath": "$.spot",
+            "ResultPath": "$.reconciled",
             "Retry": [
               {
                 "ErrorEquals": [
@@ -157,38 +155,532 @@
                   "States.ALL"
                 ],
                 "ResultPath": "$.error",
-                "Next": "SpotControllerFailed"
+                "Next": "UnitFailed"
               }
             ],
-            "Next": "SpotAttemptTerminal"
+            "Next": "Route"
           },
-          "SpotAttemptTerminal": {
+          "Route": {
             "Type": "Choice",
             "Choices": [
               {
-                "Variable": "$.spot.state.terminal",
-                "BooleanEquals": true,
-                "Next": "SpotAttemptResult"
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "skip",
+                "Next": "Reused"
+              },
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "wait",
+                "Next": "WaitForExistingJob"
+              },
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "exhausted",
+                "Next": "UnitFailed"
               }
             ],
-            "Default": "WaitForSpotAttempt"
+            "Default": "Submit"
           },
-          "WaitForSpotAttempt": {
+          "Submit": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::batch:submitJob.sync",
+            "Parameters": {
+              "JobName.$": "$.item.job_name",
+              "JobQueue": "${JobQueue}",
+              "JobDefinition.$": "$.item.job_definition",
+              "Timeout": {
+                "AttemptDurationSeconds.$": "$.item.run_timeout_seconds"
+              },
+              "Parameters": {
+                "unit_uri.$": "$.item.unit_uri"
+              },
+              "Tags": {
+                "cb-stack": "${Project}",
+                "cb-campaign.$": "$.item.campaign_id",
+                "cb-run-id.$": "$.item.run_id"
+              },
+              "PropagateTags": true
+            },
+            "TimeoutSecondsPath": "$.item.task_timeout_seconds",
+            "ResultSelector": {
+              "job_id.$": "$.JobId",
+              "status.$": "$.Status"
+            },
+            "ResultPath": "$.job",
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "RecordFailure"
+              }
+            ],
+            "Next": "RecordSuccess"
+          },
+          "WaitForExistingJob": {
             "Type": "Wait",
-            "SecondsPath": "$.spot.state.wait_seconds",
-            "Next": "ReconcileSpotAttempt"
+            "Seconds": 60,
+            "Next": "DescribeExistingJob"
           },
-          "SpotAttemptResult": {
-            "Type": "Pass",
-            "InputPath": "$.spot.state",
-            "End": true
+          "DescribeExistingJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.control",
+              "Payload": {
+                "action": "describe_job",
+                "job_id.$": "$.reconciled.job_id"
+              }
+            },
+            "ResultSelector": {
+              "terminal.$": "$.Payload.terminal",
+              "status.$": "$.Payload.status"
+            },
+            "ResultPath": "$.existing",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "RecordFailure"
+              }
+            ],
+            "Next": "ExistingJobDone"
           },
-          "SpotControllerFailed": {
+          "ExistingJobDone": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.existing.terminal",
+                "BooleanEquals": true,
+                "Next": "RecordSuccess"
+              }
+            ],
+            "Default": "WaitForExistingJob"
+          },
+          "RecordSuccess": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.control",
+              "Payload": {
+                "action": "record_attempt",
+                "item.$": "$.item"
+              }
+            },
+            "ResultSelector": {
+              "status.$": "$.Payload.status",
+              "final_uri.$": "$.Payload.final_uri"
+            },
+            "ResultPath": "$.outcome",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "UnitFailed"
+              }
+            ],
+            "Next": "Published"
+          },
+          "Published": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.outcome.status",
+                "StringEquals": "SUCCEEDED",
+                "Next": "UnitSucceeded"
+              }
+            ],
+            "Default": "Reconcile"
+          },
+          "RecordFailure": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.control",
+              "Payload": {
+                "action": "record_attempt",
+                "item.$": "$.item",
+                "error.$": "$.error"
+              }
+            },
+            "ResultPath": null,
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "UnitFailed"
+              }
+            ],
+            "Next": "Reconcile"
+          },
+          "Reused": {
             "Type": "Pass",
             "Parameters": {
               "run_id.$": "$.item.run_id",
-              "status": "CONTROL_FAILED",
-              "reason.$": "$.error.Error"
+              "status": "REUSED"
+            },
+            "End": true
+          },
+          "UnitSucceeded": {
+            "Type": "Pass",
+            "Parameters": {
+              "run_id.$": "$.item.run_id",
+              "status": "SUCCEEDED",
+              "final_uri.$": "$.outcome.final_uri"
+            },
+            "End": true
+          },
+          "UnitFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "run_id.$": "$.item.run_id",
+              "status": "FAILED"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.results",
+      "Next": "Consolidate"
+    },
+    "DistributedRuns": {
+      "Type": "Map",
+      "ItemReader": {
+        "Resource": "arn:aws:states:::s3:getObject",
+        "ReaderConfig": {
+          "InputType": "JSON"
+        },
+        "Parameters": {
+          "Bucket.$": "$.planned.plan.bucket",
+          "Key.$": "$.planned.plan.items_key"
+        }
+      },
+      "MaxConcurrencyPath": "$.planned.plan.concurrency",
+      "ToleratedFailurePercentage": 100,
+      "ItemSelector": {
+        "item.$": "$$.Map.Item.Value",
+        "control.$": "$.planned.plan.control_function"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "STANDARD"
+        },
+        "StartAt": "DistributedReconcile",
+        "States": {
+          "DistributedReconcile": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.control",
+              "Payload": {
+                "action": "reconcile_unit",
+                "item.$": "$.item"
+              }
+            },
+            "ResultSelector": {
+              "decision.$": "$.Payload.decision",
+              "job_id.$": "$.Payload.job_id"
+            },
+            "ResultPath": "$.reconciled",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "DistributedUnitFailed"
+              }
+            ],
+            "Next": "DistributedRoute"
+          },
+          "DistributedRoute": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "skip",
+                "Next": "DistributedReused"
+              },
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "wait",
+                "Next": "DistributedWaitForExistingJob"
+              },
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "exhausted",
+                "Next": "DistributedUnitFailed"
+              }
+            ],
+            "Default": "DistributedSubmit"
+          },
+          "DistributedSubmit": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::batch:submitJob.sync",
+            "Parameters": {
+              "JobName.$": "$.item.job_name",
+              "JobQueue": "${JobQueue}",
+              "JobDefinition.$": "$.item.job_definition",
+              "Timeout": {
+                "AttemptDurationSeconds.$": "$.item.run_timeout_seconds"
+              },
+              "Parameters": {
+                "unit_uri.$": "$.item.unit_uri"
+              },
+              "Tags": {
+                "cb-stack": "${Project}",
+                "cb-campaign.$": "$.item.campaign_id",
+                "cb-run-id.$": "$.item.run_id"
+              },
+              "PropagateTags": true
+            },
+            "TimeoutSecondsPath": "$.item.task_timeout_seconds",
+            "ResultSelector": {
+              "job_id.$": "$.JobId",
+              "status.$": "$.Status"
+            },
+            "ResultPath": "$.job",
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "DistributedRecordFailure"
+              }
+            ],
+            "Next": "DistributedRecordSuccess"
+          },
+          "DistributedWaitForExistingJob": {
+            "Type": "Wait",
+            "Seconds": 60,
+            "Next": "DistributedDescribeExistingJob"
+          },
+          "DistributedDescribeExistingJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.control",
+              "Payload": {
+                "action": "describe_job",
+                "job_id.$": "$.reconciled.job_id"
+              }
+            },
+            "ResultSelector": {
+              "terminal.$": "$.Payload.terminal",
+              "status.$": "$.Payload.status"
+            },
+            "ResultPath": "$.existing",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "DistributedRecordFailure"
+              }
+            ],
+            "Next": "DistributedExistingJobDone"
+          },
+          "DistributedExistingJobDone": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.existing.terminal",
+                "BooleanEquals": true,
+                "Next": "DistributedRecordSuccess"
+              }
+            ],
+            "Default": "DistributedWaitForExistingJob"
+          },
+          "DistributedRecordSuccess": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.control",
+              "Payload": {
+                "action": "record_attempt",
+                "item.$": "$.item"
+              }
+            },
+            "ResultSelector": {
+              "status.$": "$.Payload.status",
+              "final_uri.$": "$.Payload.final_uri"
+            },
+            "ResultPath": "$.outcome",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "DistributedUnitFailed"
+              }
+            ],
+            "Next": "DistributedPublished"
+          },
+          "DistributedPublished": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.outcome.status",
+                "StringEquals": "SUCCEEDED",
+                "Next": "DistributedUnitSucceeded"
+              }
+            ],
+            "Default": "DistributedReconcile"
+          },
+          "DistributedRecordFailure": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.control",
+              "Payload": {
+                "action": "record_attempt",
+                "item.$": "$.item",
+                "error.$": "$.error"
+              }
+            },
+            "ResultPath": null,
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "DistributedUnitFailed"
+              }
+            ],
+            "Next": "DistributedReconcile"
+          },
+          "DistributedReused": {
+            "Type": "Pass",
+            "Parameters": {
+              "run_id.$": "$.item.run_id",
+              "status": "REUSED"
+            },
+            "End": true
+          },
+          "DistributedUnitSucceeded": {
+            "Type": "Pass",
+            "Parameters": {
+              "run_id.$": "$.item.run_id",
+              "status": "SUCCEEDED",
+              "final_uri.$": "$.outcome.final_uri"
+            },
+            "End": true
+          },
+          "DistributedUnitFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "run_id.$": "$.item.run_id",
+              "status": "FAILED"
             },
             "End": true
           }
@@ -202,102 +694,7 @@
         }
       },
       "ResultPath": "$.results",
-      "Next": "InitVerification",
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.map_error",
-          "Next": "RecoverMapError"
-        }
-      ]
-    },
-    "RecoverMapError": {
-      "Type": "Pass",
-      "Result": [],
-      "ResultPath": "$.results",
-      "Next": "InitVerification"
-    },
-    "InitVerification": {
-      "Type": "Pass",
-      "Result": 0,
-      "ResultPath": "$.verification_checks",
-      "Next": "VerifyNoActiveInstances"
-    },
-    "VerifyNoActiveInstances": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName.$": "$.planned.plan.control_function",
-        "Payload": {
-          "action": "reconcile_campaign",
-          "campaign_id.$": "$.planned.plan.campaign_id",
-          "reason": "post-campaign verification",
-          "execution_arn.$": "$$.Execution.Id"
-        }
-      },
-      "ResultSelector": {
-        "clean.$": "$.Payload.clean",
-        "active_instances.$": "$.Payload.active_instances",
-        "remaining_volumes.$": "$.Payload.remaining_volumes"
-      },
-      "ResultPath": "$.reconciliation",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 6,
-          "BackoffRate": 2,
-          "JitterStrategy": "FULL"
-        }
-      ],
-      "Next": "InstancesTerminated"
-    },
-    "InstancesTerminated": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.reconciliation.clean",
-          "BooleanEquals": true,
-          "Next": "Consolidate"
-        },
-        {
-          "Variable": "$.verification_checks",
-          "NumericGreaterThanEquals": 10,
-          "Next": "CleanupIncomplete"
-        }
-      ],
-      "Default": "WaitForTermination"
-    },
-    "WaitForTermination": {
-      "Type": "Wait",
-      "Seconds": 60,
-      "Next": "CountVerification"
-    },
-    "CountVerification": {
-      "Type": "Pass",
-      "Parameters": {
-        "value.$": "States.MathAdd($.verification_checks, 1)"
-      },
-      "ResultPath": "$.verification_increment",
-      "Next": "ApplyVerificationCount"
-    },
-    "ApplyVerificationCount": {
-      "Type": "Pass",
-      "InputPath": "$.verification_increment.value",
-      "ResultPath": "$.verification_checks",
-      "Next": "VerifyNoActiveInstances"
-    },
-    "CleanupIncomplete": {
-      "Type": "Fail",
-      "Error": "CleanupIncomplete",
-      "Cause": "EC2 instances or temporary volumes remain. See campaigns/<id>/reconciliation/."
+      "Next": "Consolidate"
     },
     "Consolidate": {
       "Type": "Task",
@@ -331,7 +728,86 @@
           "JitterStrategy": "FULL"
         }
       ],
-      "Next": "CampaignResult"
+      "Next": "InitVerification"
+    },
+    "InitVerification": {
+      "Type": "Pass",
+      "Result": 0,
+      "ResultPath": "$.verification_checks",
+      "Next": "VerifyNoActiveTasks"
+    },
+    "VerifyNoActiveTasks": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.planned.plan.control_function",
+        "Payload": {
+          "action": "reconcile_campaign",
+          "campaign_id.$": "$.planned.plan.campaign_id",
+          "reason": "post-campaign verification"
+        }
+      },
+      "ResultSelector": {
+        "clean.$": "$.Payload.clean",
+        "active_jobs.$": "$.Payload.active_jobs",
+        "running_tasks.$": "$.Payload.running_tasks"
+      },
+      "ResultPath": "$.reconciliation",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "TasksStopped"
+    },
+    "TasksStopped": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.reconciliation.clean",
+          "BooleanEquals": true,
+          "Next": "CampaignResult"
+        },
+        {
+          "Variable": "$.verification_checks",
+          "NumericGreaterThanEquals": 10,
+          "Next": "TasksStillActive"
+        }
+      ],
+      "Default": "WaitForTermination"
+    },
+    "WaitForTermination": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "CountVerification"
+    },
+    "CountVerification": {
+      "Type": "Pass",
+      "Parameters": {
+        "value.$": "States.MathAdd($.verification_checks, 1)"
+      },
+      "ResultPath": "$.verification_increment",
+      "Next": "ApplyVerificationCount"
+    },
+    "ApplyVerificationCount": {
+      "Type": "Pass",
+      "InputPath": "$.verification_increment.value",
+      "ResultPath": "$.verification_checks",
+      "Next": "VerifyNoActiveTasks"
+    },
+    "TasksStillActive": {
+      "Type": "Fail",
+      "Error": "TasksStillActive",
+      "Cause": "Campaign jobs or ECS tasks are still active after reconciliation; inspect campaigns/<id>/reconciliation/."
     },
     "CampaignResult": {
       "Type": "Choice",
@@ -350,7 +826,7 @@
     "CampaignIncomplete": {
       "Type": "Fail",
       "Error": "CampaignIncomplete",
-      "Cause": "At least one benchmark failed, was cancelled or did not finish publication. See campaigns/<id>/summary.json."
+      "Cause": "At least one run has no final manifest; see campaigns/<id>/summary.json and the run events."
     }
   }
 }

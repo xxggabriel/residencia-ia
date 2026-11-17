@@ -7,7 +7,6 @@ the same campaign must reproduce it byte for byte, otherwise the request is refu
 """
 
 import hashlib
-import math
 from pathlib import Path
 
 from continual_bench.infrastructure.object_store import ObjectExists, get_json, put_json, put_json_once
@@ -49,8 +48,16 @@ def file_sha256(project_root, relative) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def admit_capacity(concurrency: int, vcpus_per_job: float, *, quota_vcpus: float, queue: dict) -> dict:
-    """Fail the preflight when the regional quota or the queue cannot hold the parallel tasks."""
+def admit_capacity(
+    concurrency: int, vcpus_per_job: float, *, quota_vcpus: float, queue: dict, queue_excess: bool = False,
+) -> dict:
+    """Check the regional quota and the queue against the parallel tasks.
+
+    On-demand campaigns fail when the requested parallelism does not fit. Spot campaigns
+    (``queue_excess``) submit every unit at once: Batch starts as many tasks as the quota and
+    the compute environment allow and keeps the rest RUNNABLE, so only a single task that can
+    never start is refused.
+    """
     required = concurrency * vcpus_per_job
     evidence = {
         "concurrency": concurrency,
@@ -61,11 +68,19 @@ def admit_capacity(concurrency: int, vcpus_per_job: float, *, quota_vcpus: float
     }
     if queue.get("queue_state") != "ENABLED" or queue.get("queue_status") != "VALID":
         raise CapacityError(f"job queue not usable: {queue.get('queue_state')}/{queue.get('queue_status')}")
+    limit = min(queue["max_vcpus"], quota_vcpus)
+    running = int(limit // vcpus_per_job)
+    evidence["max_parallel_admitted"] = running
+    if queue_excess:
+        if running < 1:
+            raise CapacityError(f"a {vcpus_per_job}-vCPU task exceeds the usable limit of {limit} vCPUs")
+        evidence["running_in_parallel"] = min(running, concurrency)
+        evidence["queued"] = max(0, concurrency - running)
+        return evidence
     if required > queue["max_vcpus"]:
         raise CapacityError(f"{required} vCPUs exceed the compute environment limit {queue['max_vcpus']}")
     if required > quota_vcpus:
         raise CapacityError(f"{required} vCPUs exceed the regional Fargate quota {quota_vcpus}")
-    evidence["max_parallel_admitted"] = int(min(queue["max_vcpus"], quota_vcpus) // vcpus_per_job)
     return evidence
 
 
@@ -183,7 +198,8 @@ def build_plan(
         raise ValueError("matrix produced duplicate execution contracts")
     if not units:
         raise ValueError("campaign matrix expanded to no runnable units")
-    concurrency = min(request.max_parallel or (256 if spot else 4), len(units))
+    # Fargate Spot submits every unit at once; Batch runs as many as the vCPU quota allows.
+    concurrency = min(request.max_parallel or (len(units) if spot else 4), len(units))
     recorded_request = request.model_dump(mode="json")
     if not spot:
         recorded_request.setdefault("max_parallel", 4)  # Match existing legacy plan documents.
@@ -203,7 +219,7 @@ def build_plan(
         ),
         "units": [u.model_dump(mode="json") for u in units],
         "concurrency": concurrency,
-        "mode": "distributed" if spot or len(units) > INLINE_LIMIT else "inline",
+        "mode": "distributed" if len(units) > INLINE_LIMIT else "inline",
         "timeouts": {
             "queue_seconds": request.queue_timeout_seconds,
             "run_seconds": request.run_timeout_seconds,
@@ -215,19 +231,6 @@ def build_plan(
 
 def map_items(plan: dict, store) -> list[dict]:
     """Only URIs and identifiers travel through Step Functions state; documents stay in S3."""
-    release = plan["release"]
-    options = {}
-    if release.get("benchmark_compute") == SPOT_BACKEND:
-        runtime, ml = release["images"]["runtime"], release["images"]["ml"]
-        timeouts = plan["timeouts"]
-        options = {
-            "runtime_image": f"{runtime['repository']}@{runtime['digest']}",
-            "inference_image": f"{ml['repository']}@{ml['digest']}",
-            "git_sha": release["git_sha"],
-            "queue_timeout_seconds": timeouts["queue_seconds"],
-            # Bound each Standard child’s execution history even at the maximum run timeout.
-            "poll_seconds": max(30, math.ceil(plan["max_attempts"] * timeouts["task_seconds"] / 1800)),
-        }
     return [
         {
             "campaign_id": plan["campaign_id"],
@@ -239,10 +242,8 @@ def map_items(plan: dict, store) -> list[dict]:
             "run_timeout_seconds": plan["timeouts"]["run_seconds"],
             "task_timeout_seconds": plan["timeouts"]["task_seconds"],
             "labels": u["labels"],
-            **({"contract_sha256": u["contract_sha256"], "placement_index": index} if options else {}),
-            **options,
         }
-        for index, u in enumerate(plan["units"])
+        for u in plan["units"]
     ]
 
 

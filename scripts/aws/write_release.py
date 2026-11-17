@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 
-SPOT_BACKEND = "ec2-spot-c6a.large"
+SPOT_BACKEND = "batch-fargate-spot"
 STABLE_FIELDS = (
     "version", "git_sha", "stack", "region", "images", "job_definitions", "control_function",
     "benchmark_compute",
@@ -56,8 +56,9 @@ def compose(outputs: dict, build: dict, git_sha: str, stack: str, execution_id: 
         "control_function": outputs["ControlFunctionVersionArn"],
         "pipeline_execution_id": execution_id or None,
     }
-    if backend := outputs.get("BenchmarkComputeBackend"):
-        manifest["benchmark_compute"] = backend
+    # Only resumable Fargate Spot releases are marked; on-demand Fargate keeps the legacy shape.
+    if outputs.get("BenchmarkComputeBackend") == SPOT_BACKEND:
+        manifest["benchmark_compute"] = SPOT_BACKEND
     validate(manifest)
     return manifest
 

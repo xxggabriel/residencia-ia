@@ -38,25 +38,27 @@ Parameters:
     Default: pl-63a5400a
   MaxVcpus:
     Type: Number
-    Default: 8
+    Default: 64
+    Description: Benchmark compute environment ceiling; match the Fargate Spot vCPU quota.
   FargateCapacity:
     Type: String
-    Default: FARGATE
+    Default: FARGATE_SPOT
     AllowedValues: [FARGATE, FARGATE_SPOT]
   BenchmarkVcpus:
     Type: String
-    Default: "1"
+    Default: "2"
   BenchmarkMemoryMiB:
     Type: Number
-    Default: 2048
+    Default: 4096
+    Description: Fargate requires 4096-16384 MiB with 2 vCPU.
   BenchmarkEphemeralGiB:
     Type: Number
     Default: 50
-  BenchmarkSpotDiskGiB:
+  BenchmarkCheckpointSeconds:
     Type: Number
-    Default: 50
-    MinValue: 30
-    MaxValue: 200
+    Default: 30
+    MinValue: 10
+    MaxValue: 600
   BenchmarkTimeoutSeconds:
     Type: Number
     Default: 14400
@@ -77,7 +79,7 @@ Parameters:
     Default: 3600
   JobAttempts:
     Type: Number
-    Default: 2
+    Default: 5
   LogRetentionDays:
     Type: Number
     Default: 14
@@ -86,11 +88,6 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: Use the Batch and acquisition log groups retained by a previous runtime stack.
-  ReuseBenchmarkSpotLogGroup:
-    Type: String
-    Default: "false"
-    AllowedValues: ["true", "false"]
-    Description: Use the benchmark Spot log group retained by a previous runtime stack.
   AcquisitionComputeType:
     Type: String
     Default: BUILD_GENERAL1_LARGE
@@ -224,7 +221,7 @@ Resources:
         BenchmarkVcpus: !Ref BenchmarkVcpus
         BenchmarkMemoryMiB: !Ref BenchmarkMemoryMiB
         BenchmarkEphemeralGiB: !Ref BenchmarkEphemeralGiB
-        BenchmarkSpotDiskGiB: !Ref BenchmarkSpotDiskGiB
+        BenchmarkCheckpointSeconds: !Ref BenchmarkCheckpointSeconds
         BenchmarkTimeoutSeconds: !Ref BenchmarkTimeoutSeconds
         PrepareVcpus: !Ref PrepareVcpus
         PrepareMemoryMiB: !Ref PrepareMemoryMiB
@@ -234,7 +231,6 @@ Resources:
         JobAttempts: !Ref JobAttempts
         LogRetentionDays: !Ref LogRetentionDays
         ReuseRuntimeLogGroups: !Ref ReuseRuntimeLogGroups
-        ReuseBenchmarkSpotLogGroup: !Ref ReuseBenchmarkSpotLogGroup
         AcquisitionComputeType: !Ref AcquisitionComputeType
         AcquisitionTimeoutMinutes: !Ref AcquisitionTimeoutMinutes
         EnableModelRegistry: !Ref EnableModelRegistry
@@ -356,8 +352,8 @@ Outputs:
     Value: !GetAtt Execution.Outputs.BenchmarkJobDefinitionArn
   BenchmarkComputeBackend:
     Value: !GetAtt Execution.Outputs.BenchmarkComputeBackend
-  BenchmarkSpotLogGroupName:
-    Value: !GetAtt Execution.Outputs.BenchmarkSpotLogGroupName
+  PrepareJobQueueArn:
+    Value: !GetAtt Execution.Outputs.PrepareJobQueueArn
   PrepareJobDefinitionArn:
     Value: !GetAtt Execution.Outputs.PrepareJobDefinitionArn
   ControlFunctionVersionArn:

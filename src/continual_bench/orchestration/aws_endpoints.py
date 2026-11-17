@@ -8,13 +8,12 @@ from uuid import uuid4
 
 from continual_bench.infrastructure.aws.batch import ACTIVE
 from continual_bench.infrastructure.aws.session import client, error_code
-from continual_bench.infrastructure.aws.spot import ACTIVE_STATES, COMPONENT
 
 TEMPLATE = Path("infra/cloudformation/modules/interface-endpoints.yaml")
 STATE_KEY = "runtime/interface-endpoints.json"
 LOCK_SECONDS = 180  # Longer than the Lambda timeout, including SDK retries.
 DRAIN_SECONDS = 120  # Let in-flight worker submissions/cancellations become visible.
-SPOT_DRAIN_SECONDS = 360  # Cover the control Lambda deadline and EC2 launch visibility after a stop.
+SPOT_DRAIN_SECONDS = 360  # Cover the control Lambda deadline and Spot tasks checkpointing after a stop.
 STACK_READY = {"CREATE_COMPLETE", "UPDATE_COMPLETE"}
 STACK_BUSY = {"CREATE_IN_PROGRESS", "ROLLBACK_IN_PROGRESS", "DELETE_IN_PROGRESS"}
 
@@ -33,6 +32,8 @@ class EndpointLifecycle:
         self.bucket = env["ENDPOINT_STATE_BUCKET"]
         self.kms_key = env["ENDPOINT_STATE_KMS_KEY"]
         self.queue = env["ENDPOINT_JOB_QUEUE"]
+        # Benchmarks (Fargate Spot) and preparation (on-demand Fargate) use separate queues.
+        self.queues = [self.queue, *filter(None, [env.get("ENDPOINT_PREPARE_JOB_QUEUE")])]
         self.benchmark_name = env["ENDPOINT_BENCHMARK_WORKFLOW"]
         self.name = env["ENDPOINT_STACK_NAME"]
         self.parameters = json.loads(env["ENDPOINT_PARAMETERS"])
@@ -135,15 +136,10 @@ class EndpointLifecycle:
             return active, None
         if active and deleting_stack != stack["StackId"]:
             return active, None
-        for status in ACTIVE:
-            if self.batch.list_jobs(jobQueue=self.queue, jobStatus=status, maxResults=1)["jobSummaryList"]:
-                return active, None
-        if self.project and self.ec2.describe_instances(Filters=[
-            {"Name": "tag:cb-stack", "Values": [self.project]},
-            {"Name": "tag:cb-component", "Values": [COMPONENT]},
-            {"Name": "instance-state-name", "Values": list(ACTIVE_STATES)},
-        ], MaxResults=5)["Reservations"]:
-            return active, None
+        for queue in self.queues:
+            for status in ACTIVE:
+                if self.batch.list_jobs(jobQueue=queue, jobStatus=status, maxResults=1)["jobSummaryList"]:
+                    return active, None
         return active, stack["StackId"]
 
     def reconcile(self, execution_arn=None):

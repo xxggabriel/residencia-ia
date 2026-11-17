@@ -164,6 +164,7 @@ def run_unit(args):
 def selftest(args):
     """Image contract: imports, CLI entry point, locked runtime and scientific stack."""
     import importlib
+    import importlib.util
     import platform
 
     checks = {"python": platform.python_version(), "machine": platform.machine()}
@@ -195,6 +196,11 @@ def selftest(args):
     }[args.role]
     for name in modules:
         importlib.import_module(name)
+    if args.role == "runtime":
+        # MLflow's native async logging must be installed, yet only imported once a run logs.
+        missing = [m for m in ("mlflow", "sagemaker_mlflow") if importlib.util.find_spec(m) is None]
+        if missing:
+            raise SystemExit(f"runtime image lacks MLflow async logging packages: {missing}")
     forbidden = [m for m in ("mlflow", "zenml", "confluent_kafka", "airflow") if m in sys.modules]
     if forbidden:
         raise SystemExit(f"AWS profile imported forbidden services: {forbidden}")
@@ -305,26 +311,13 @@ def query(args):
 
 
 def reconcile(args):
-    from continual_bench.application.cloud import lifecycle, spot_lifecycle
-    from continual_bench.orchestration.aws_control import _uses_spot
+    from continual_bench.application.cloud import lifecycle
+    from continual_bench.infrastructure.aws.batch import BatchJobs
 
     store = _store(args)
-    if _uses_spot(store, args.campaign):
-        from continual_bench.infrastructure.aws.spot import SpotJobs
-
-        jobs = SpotJobs.from_env({**os.environ, "BENCH_STACK": args.project})
-        reconcile_campaign = spot_lifecycle.reconcile_campaign
-        options = {}
-        if execution_arn := getattr(args, "execution_arn", None):
-            options["owner"] = spot_lifecycle.stop_execution(store, args.campaign, execution_arn, args.reason)
-    else:
-        from continual_bench.infrastructure.aws.batch import BatchJobs
-
-        jobs = BatchJobs(args.queue or os.environ["BENCH_JOB_QUEUE"])
-        reconcile_campaign = lifecycle.reconcile_campaign
-        options = {}
+    jobs = BatchJobs(args.queue or os.environ["BENCH_JOB_QUEUE"])
     for attempt in range(args.checks):
-        report = reconcile_campaign(store, jobs, args.campaign, args.reason, **options)
+        report = lifecycle.reconcile_campaign(store, jobs, args.campaign, args.reason)
         if report["clean"]:
             break
         if attempt + 1 < args.checks:
@@ -334,7 +327,7 @@ def reconcile(args):
 
 
 def cancel(args):
-    from continual_bench.application.cloud.spot_lifecycle import cancel_campaign
+    from continual_bench.application.cloud.lifecycle import cancel_campaign
     from continual_bench.infrastructure.aws.session import client
 
     execution_name = args.execution_arn.rsplit(":", 1)[-1]

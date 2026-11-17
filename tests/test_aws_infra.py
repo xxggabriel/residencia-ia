@@ -60,8 +60,9 @@ def test_job_definitions_match_the_reference_campaign():
     resources = template("modules/execution.yaml")["Resources"]
     root = template("root.yaml")["Parameters"]
     params = template("modules/execution.yaml")["Parameters"]
-    assert (params["BenchmarkVcpus"]["Default"], params["BenchmarkMemoryMiB"]["Default"]) == ("1", 2048)
-    assert (root["BenchmarkVcpus"]["Default"], root["BenchmarkMemoryMiB"]["Default"]) == ("1", 2048)
+    # 2 vCPU on Fargate Spot; 4096 MiB is the smallest memory Fargate accepts with 2 vCPU.
+    assert (params["BenchmarkVcpus"]["Default"], params["BenchmarkMemoryMiB"]["Default"]) == ("2", 4096)
+    assert (root["BenchmarkVcpus"]["Default"], root["BenchmarkMemoryMiB"]["Default"]) == ("2", 4096)
     benchmark = resources["BenchmarkJobDefinition"]["Properties"]["ContainerProperties"]
     assert benchmark["Command"][:4] == ["continual-bench", "aws", "run-unit", "--unit-uri"]
     assert benchmark["User"] == "1000" and benchmark["NetworkConfiguration"]["AssignPublicIp"] == "DISABLED"
@@ -172,13 +173,15 @@ def test_only_tagged_jobs_can_be_terminated():
                 assert statement["Condition"] == {
                     "StringEquals": {"aws:ResourceTag/cb-stack": {"Ref": "Project"}}
                 }
-    submit = next(s for s in statements(resources["StatesRole"]) if s.get("Sid") == "SubmitToThisQueueOnly")
-    assert {"Ref": "JobQueue"} in submit["Resource"] and len(submit["Resource"]) == 3
+    sid = "SubmitToThisStacksQueues"
+    submit = next(s for s in statements(resources["StatesRole"]) if s.get("Sid") == sid)
+    assert {"Ref": "JobQueue"} in submit["Resource"] and {"Ref": "PrepareJobQueue"} in submit["Resource"]
+    assert len(submit["Resource"]) == 4
 
 
 def test_tagged_submission_can_authorize_the_job_queue_and_definitions():
     role = template("modules/execution.yaml")["Resources"]["StatesRole"]
-    submit = next(s for s in statements(role) if s.get("Sid") == "SubmitToThisQueueOnly")
+    submit = next(s for s in statements(role) if s.get("Sid") == "SubmitToThisStacksQueues")
     tag = next(s for s in statements(role) if s["Action"] == "batch:TagResource")
     assert tag["Resource"] == [
         *submit["Resource"],
@@ -384,9 +387,8 @@ def test_cfn_execution_role_can_lookup_and_clean_up_runtime_roles_without_iam_pa
     }
 
     prefix = "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/"
-    spot_suffix = template("modules/spot.yaml")["Parameters"]["WorkerResourceSuffix"]["Default"]
     expected = {
-        prefix + resource["Properties"]["RoleName"]["Fn::Sub"].replace("${WorkerResourceSuffix}", spot_suffix)
+        prefix + resource["Properties"]["RoleName"]["Fn::Sub"]
         for module in (CFN / "modules").glob("*.yaml")
         for resource in template(f"modules/{module.name}")["Resources"].values()
         if resource["Type"] == "AWS::IAM::Role"
@@ -455,27 +457,31 @@ def test_state_machines_validate_offline():
 def test_asl_validator_rejects_unsafe_definitions(tmp_path):
     definition = json.loads((ROOT / "infra" / "statemachines" / "benchmark.asl.json").read_text())
     broken = copy.deepcopy(definition)
-    states = broken["States"]["DistributedRuns"]["ItemProcessor"]["States"]
-    states["SpotControllerFailed"] = {"Type": "Fail", "Error": "X"}
-    states["ReconcileSpotAttempt"]["Retry"] = []
+    states = broken["States"]["InlineRuns"]["ItemProcessor"]["States"]
+    states["UnitFailed"] = {"Type": "Fail", "Error": "X"}
+    del states["Submit"]["Parameters"]["Tags"]
+    states["Reconcile"]["Retry"] = []
     broken["States"]["Orphan"] = {"Type": "Succeed"}
     path = tmp_path / "benchmark.asl.json"
     path.write_text(json.dumps(broken))
     errors = "\n".join(ASL.validate_file(path))
     assert (
         "Fail inside a Map" in errors
+        and "tags" in errors
         and "transient" in errors
         and "unreachable" in errors
     )
-    path.write_text(json.dumps(definition).replace("${MapResultsBucket}", "${UnknownBucket}"))
+    path.write_text(json.dumps(definition).replace("${JobQueue}", "${UnknownQueue}"))
     assert any("undefined substitutions" in e for e in ASL.validate_file(path))
     # Step Functions rejects a state name reused in another Map processor (DUPLICATE_STATE_NAME).
     reused = copy.deepcopy(definition)
     distributed = reused["States"]["DistributedRuns"]["ItemProcessor"]
-    distributed["States"]["Plan"] = distributed["States"].pop("SpotAttemptTerminal")
+    distributed["States"]["Route"] = distributed["States"].pop("DistributedRoute")
     path.write_text(json.dumps(reused))
-    assert any("duplicate state name 'Plan'" in e for e in ASL.validate_file(path))
-
+    assert any("duplicate state name 'Route'" in e for e in ASL.validate_file(path))
+    # Benchmarks never fall back to EC2 capacity.
+    path.write_text(json.dumps(definition).replace("reconcile_unit", "advance_spot_run"))
+    assert any("never EC2" in e for e in ASL.validate_file(path))
 
 def test_runtime_parameters_pin_build_outputs():
     compose = script("runtime_parameters").compose
@@ -514,11 +520,14 @@ def test_release_manifest_composition_refuses_mismatched_deploys():
 
     assert ReleaseManifest(**manifest).job_definitions["benchmark"].endswith(":4")
     spot = release.compose(
-        {**outputs, "BenchmarkComputeBackend": "ec2-spot-c6a.large"}, build, "a" * 40, "stack", None,
+        {**outputs, "BenchmarkComputeBackend": "batch-fargate-spot"}, build, "a" * 40, "stack", None,
     )
-    assert ReleaseManifest(**spot).benchmark_compute == "ec2-spot-c6a.large"
-    with pytest.raises(SystemExit, match="unsupported benchmark backend"):
-        release.compose({**outputs, "BenchmarkComputeBackend": "fargate"}, build, "a" * 40, "stack", None)
+    assert ReleaseManifest(**spot).benchmark_compute == "batch-fargate-spot"
+    # On-demand Fargate releases keep the legacy (non-resumable) manifest shape.
+    on_demand = release.compose(
+        {**outputs, "BenchmarkComputeBackend": "batch-fargate"}, build, "a" * 40, "stack", None,
+    )
+    assert ReleaseManifest(**on_demand).benchmark_compute is None
     with pytest.raises(SystemExit):
         release.compose({**outputs, "GitSha": "b" * 40}, build, "a" * 40, "stack", None)
     with pytest.raises(SystemExit):
@@ -598,7 +607,9 @@ def test_aws_lock_excludes_service_stack():
     lock = (ROOT / "requirements-aws.lock").read_text()
     for package in ("mlflow", "zenml", "confluent-kafka", "apache-airflow", "s3fs"):
         assert f"\n{package}==" not in lock
-    for package in ("boto3", "duckdb", "pyarrow", "xgboost-cpu", "pandas", "scipy"):
+    # MLflow's native async logging (skinny client + SageMaker auth plugin) ships in the image.
+    for package in ("boto3", "duckdb", "pyarrow", "xgboost-cpu", "pandas", "scipy", "mlflow-skinny",
+                    "sagemaker-mlflow"):
         assert f"\n{package}==" in lock
 
 
@@ -697,17 +708,52 @@ def test_timeouts_are_standardized_to_14400_seconds():
     assert dataset_asl["States"]["Prepare"]["TimeoutSeconds"] == 14400
 
 
-def test_benchmark_map_passes_durable_run_coordinates_to_the_spot_controller():
+def test_benchmark_submits_every_unit_at_once_to_fargate_spot():
     states = json.loads((ROOT / "infra" / "statemachines" / "benchmark.asl.json").read_text())["States"]
-    distributed = states["DistributedRuns"]
-    assert distributed["MaxConcurrencyPath"] == "$.planned.plan.concurrency"
-    assert distributed["ItemSelector"]["execution_arn.$"] == "$$.Execution.Id"
-    advance = distributed["ItemProcessor"]["States"]["ReconcileSpotAttempt"]
-    assert advance["Parameters"]["Payload"] == {
-        "action": "advance_spot_run", "item.$": "$.item", "execution_arn.$": "$.execution_arn",
-    }
-    assert "batch:submitJob" not in json.dumps(states)
+    assert states["Plan"]["Next"] == "EnsureEndpoints" and states["EnsureEndpoints"]["Next"] == "ChooseFanOut"
+    for name, prefix in (("InlineRuns", ""), ("DistributedRuns", "Distributed")):
+        fan_out = states[name]
+        # The plan sets concurrency to the number of units: Batch queues what exceeds the quota.
+        assert fan_out["MaxConcurrencyPath"] == "$.planned.plan.concurrency"
+        processor = fan_out["ItemProcessor"]["States"]
+        submit = processor[f"{prefix}Submit"]
+        assert submit["Resource"] == "arn:aws:states:::batch:submitJob.sync"
+        assert submit["Parameters"]["JobQueue"] == "${JobQueue}"
+        assert processor[f"{prefix}Reconcile"]["Parameters"]["Payload"]["action"] == "reconcile_unit"
+    assert "ec2:" not in json.dumps(states) and "advance_spot_run" not in json.dumps(states)
 
+
+def test_benchmarks_run_serverless_on_fargate_spot_and_resume_after_interruption():
+    module = template("modules/execution.yaml")
+    params, resources = module["Parameters"], module["Resources"]
+    assert params["FargateCapacity"]["Default"] == "FARGATE_SPOT" and params["MaxVcpus"]["Default"] == 64
+    assert template("root.yaml")["Parameters"]["MaxVcpus"]["Default"] == 64
+    assert not any(
+        r["Type"].startswith(("AWS::EC2::Instance", "AWS::EC2::LaunchTemplate", "AWS::AutoScaling"))
+        or r["Type"] == "AWS::CloudFormation::Stack"
+        for r in resources.values()
+    )
+    compute = resources["ComputeEnvironment"]["Properties"]["ComputeResources"]
+    assert compute["Type"] == {"Ref": "FargateCapacity"} and compute["MaxvCpus"] == {"Ref": "MaxVcpus"}
+    # Preparation is not resumable: it keeps on-demand Fargate on its own queue.
+    prepare = resources["PrepareComputeEnvironment"]["Properties"]["ComputeResources"]
+    assert prepare["Type"] == "FARGATE"
+    dataset = resources["DatasetStateMachine"]["Properties"]["DefinitionSubstitutions"]
+    assert dataset["JobQueue"] == {"Ref": "PrepareJobQueue"}
+    definition = resources["BenchmarkJobDefinition"]["Properties"]
+    retry = definition["RetryStrategy"]
+    assert retry["Attempts"] == {"Ref": "JobAttempts"} and params["JobAttempts"]["Default"] == 5
+    assert {"OnExitCode": "75", "Action": "RETRY"} in retry["EvaluateOnExit"]
+    assert {"OnStatusReason": "*Spot*", "Action": "RETRY"} in retry["EvaluateOnExit"]
+    assert retry["EvaluateOnExit"][-1] == {"OnReason": "*", "Action": "EXIT"}
+    env = {item["Name"]: item["Value"] for item in definition["ContainerProperties"]["Environment"]}
+    assert env["BENCH_FARGATE_SPOT"] == {"Fn::If": ["Spot", "true", "false"]}
+    assert env["BENCH_CHECKPOINT_INTERVAL_SECONDS"] == {"Ref": "BenchmarkCheckpointSeconds"}
+    assert env["MLFLOW_ENABLE_ASYNC_LOGGING"] == "true"
+    outputs = module["Outputs"]
+    assert outputs["BenchmarkComputeBackend"]["Value"] == {
+        "Fn::If": ["Spot", "batch-fargate-spot", "batch-fargate"]
+    }
 
 def test_launch_input_pins_campaign_and_optional_snapshot_preparation_to_same_release():
     prepare = script("campaign_request").prepare

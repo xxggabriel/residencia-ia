@@ -38,6 +38,11 @@ from continual_bench.infrastructure.tracking.artifacts import (
     upload_concurrently,
 )
 from continual_bench.infrastructure.tracking.http import shared_opener
+from continual_bench.infrastructure.tracking.mlflow_async import (
+    NativeAsyncLogger,
+    async_logging_requested,
+    native_logging_available,
+)
 from continual_bench.infrastructure.tracking.rounds import publish_training_rounds as publish_child_runs
 from continual_bench.infrastructure.training_tracking import sanitize_mlflow_name
 
@@ -366,6 +371,8 @@ class SageMakerMlflowTracker:
         self.concurrency = max(1, PUBLISH_CONCURRENCY)
         self.async_progress = async_progress
         self._live_writer: AsyncMetricWriter | None = None
+        self._native: NativeAsyncLogger | None = None
+        self._native_checked = False
         self.timeout_seconds = timeout_seconds
         self.logger = logger or logging.getLogger("continual_bench.aws.mlflow")
 
@@ -475,7 +482,7 @@ class SageMakerMlflowTracker:
         self.bind_attempt(attempt_key)
         prefix = f"cb-spot-attempt-{attempt_key}"
         self._spot_attempt_tags = {
-            "cb-compute": "ec2-spot",
+            "cb-compute": "batch-fargate-spot",
             "cb-spot-attempt": attempt_key,
             f"{prefix}-number": str(attempt),
             f"{prefix}-instance-id": instance_id,
@@ -508,7 +515,49 @@ class SageMakerMlflowTracker:
             tags[f"{prefix}-reason"] = reason
         if checkpoint:
             tags[f"{prefix}-last-checkpoint"] = checkpoint
+        # Queued live metrics land before the attempt state that summarizes them.
+        self.flush()
         return self.log_batch(tags=[{"key": key, "value": value[:4500]} for key, value in tags.items()])
+
+    @property
+    def native_logger(self) -> NativeAsyncLogger | None:
+        """MLflow's own async client when MLFLOW_ENABLE_ASYNC_LOGGING is on and MLflow is installed."""
+        if not self._native_checked:
+            self._native_checked = True
+            if async_logging_requested() and native_logging_available(self.tracking_uri):
+                try:
+                    self._native = NativeAsyncLogger(self.tracking_uri)
+                except Exception as error:  # Fall back to the REST transport.
+                    self._record_error("mlflow_async_logging", error)
+        return self._native
+
+    def log_live(self, metrics: list[dict[str, Any]]) -> bool:
+        """Send live points without blocking training: MLflow async queue, else the REST batch."""
+        native = self.native_logger
+        if native is None:
+            return self.log_batch(metrics=metrics)
+        run_id = self.ensure_run()
+        if not run_id:
+            return False
+        try:
+            native.log_batch(run_id, metrics=metrics)
+            return True
+        except Exception as error:
+            self._record_error("mlflow_async_log_batch", error)
+            return self.log_batch(metrics=metrics)
+
+    def flush(self) -> bool:
+        """Drain every asynchronous write (MLflow queue and the REST live writer)."""
+        ok = True
+        if self._live_writer is not None:
+            self._live_writer.flush()
+        if self._native is not None:
+            try:
+                self._native.flush()
+            except Exception as error:
+                self._record_error("mlflow_async_flush", error)
+                ok = False
+        return ok
 
     @property
     def mlflow_tags(self) -> list[dict[str, str]]:
@@ -841,6 +890,10 @@ class SageMakerMlflowTracker:
         if not points:
             return
         self._progress_step = step
+        if self.native_logger is not None:
+            # MLflow buffers and sends from its own thread pool; no extra coalescing needed.
+            self.log_progress_metrics(points)
+            return
         if self.async_progress and not self.spot:
             # Training never waits on the network; a daemon thread sends coalesced snapshots.
             if self._live_writer is None:
@@ -853,8 +906,7 @@ class SageMakerMlflowTracker:
             self._flush_progress()
 
     def _flush_progress(self) -> None:
-        if self._live_writer is not None:
-            self._live_writer.flush()
+        self.flush()
         if self._pending_progress:
             points = list(self._pending_progress.values())
             self._pending_progress.clear()
@@ -863,7 +915,7 @@ class SageMakerMlflowTracker:
 
     def log_progress_metrics(self, points) -> bool:
         if not self.spot:
-            return self.log_batch(metrics=points)
+            return self.log_live(points)
         run_id = self.ensure_run()
         if run_id is None:
             return False
@@ -885,7 +937,8 @@ class SageMakerMlflowTracker:
             return True
         if self._known_remote_metrics is not None:
             self._known_remote_metrics.update(key for key, _ in written)
-        if not self.log_batch(metrics=list(written.values())):
+        # A resumed attempt skips steps its predecessor already stored, then queues the rest.
+        if not self.log_live(list(written.values())):
             # A failed response can have persisted some points. Reconcile those series on the next flush.
             for key, _ in written:
                 self._recorded_progress.pop(key, None)
@@ -970,7 +1023,7 @@ class SageMakerMlflowTracker:
             )
         if not mlflow_metrics:
             return True
-        return self.log_batch(metrics=mlflow_metrics)
+        return self.log_live(mlflow_metrics)
 
     log_epoch = log_epoch_metrics
 
@@ -1002,6 +1055,7 @@ class SageMakerMlflowTracker:
     def finish(self, status: str = "FINISHED") -> bool:
         if not self.mlflow_run_id:
             return False
+        self.flush()
         if self._live_writer is not None:
             self._live_writer.close()
         mlflow_status = {

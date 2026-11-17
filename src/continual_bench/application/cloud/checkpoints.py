@@ -1,4 +1,4 @@
-"""Confirmed Spot snapshots and publication receipts in the campaign object store."""
+"""Fargate Spot attempts, confirmed checkpoints and publication receipts in the object store."""
 
 import json
 import logging
@@ -33,7 +33,7 @@ class CheckpointError(ValueError):
 
 
 class SpotGrantError(ValueError):
-    """The instance is unauthorized to work on this attempt."""
+    """The worker does not own the current attempt of this run."""
 
 
 class CampaignCancelled(InterruptedError):
@@ -53,20 +53,30 @@ def output_files(directory, *, private=False):
 
 
 class SpotAttempt:
-    def __init__(self, store, unit, instance_id, attempt, notice_file, *, stop_requested):
+    """One resumable Fargate Spot attempt of a run.
+
+    Attempts are numbered by a write-once S3 claim, so the order survives Batch retries
+    (``AWS_BATCH_JOB_ATTEMPT`` restarts per job) and workflow resubmissions. The attempt is
+    interrupted by SIGTERM, which Fargate sends when it reclaims Spot capacity; the evaluator
+    then checkpoints at its next safe point and the next attempt restores that checkpoint.
+    """
+
+    MAX_ATTEMPTS = 999
+
+    def __init__(self, store, unit, worker_id, attempt_key, *, stop_requested, clock=time.time):
         self.store = store
         self.unit = unit
-        self.instance_id = instance_id
-        self.attempt = attempt
-        self.notice_file = Path(notice_file) if notice_file else None
+        self.worker_id = worker_id
+        self.attempt_key = attempt_key
         self.signal_received = stop_requested
+        self.clock = clock
+        self.attempt = None
         self.grant = None
         self._cancelled = False
         self._last_poll = -math.inf
 
-    @property
-    def grant_key(self):
-        return layout.spot_instance_key(self.unit.campaign_id, self.unit.run_id, self.attempt)
+    def claim_key(self, attempt):
+        return layout.spot_claim_key(self.unit.campaign_id, self.unit.run_id, attempt)
 
     def _poll_cancellation(self, *, force=False):
         if not self._cancelled and (force or time.monotonic() - self._last_poll >= 5):
@@ -77,10 +87,8 @@ class SpotAttempt:
     def reason(self):
         if self._poll_cancellation():
             return "cancelled"
-        if self.notice_file and self.notice_file.is_file():
-            return "spot_interruption_notice"
         if self.signal_received():
-            return "sigterm"
+            return "spot_interruption"
         return None
 
     def check_cancellation(self):
@@ -90,37 +98,51 @@ class SpotAttempt:
     def check_publication(self, *, strict=False):
         if strict:
             self.check_cancellation()
-            next_grant = layout.spot_instance_key(self.unit.campaign_id, self.unit.run_id, self.attempt + 1)
-            if self.store.head(next_grant) is not None:
-                raise SpotGrantError("A replacement instance already owns this run")
+            if self.attempt is not None and self.store.head(self.claim_key(self.attempt + 1)) is not None:
+                raise SpotGrantError("A newer attempt already owns this run")
         reason = self.reason()
         if reason == "cancelled":
             raise CampaignCancelled("Campaign cancellation marker exists")
         if reason:
-            raise InterruptedError("Instance interrupted before publishing benchmark evidence")
+            raise InterruptedError("Fargate Spot interruption before publishing benchmark evidence")
 
-    def acquire(self, *, timeout=60):
-        deadline = time.monotonic() + timeout
-        while True:
-            self.check_publication(strict=True)
+    def acquire(self):
+        """Claim the next attempt number; the predecessor's claim names the recovered attempt."""
+        self.check_publication()
+        previous = None
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            claim = {
+                "attempt": attempt,
+                "attempt_key": self.attempt_key,
+                "worker_id": self.worker_id,
+                "claimed_at": self.clock(),
+            }
             try:
-                grant = get_json(self.store, self.grant_key)
-            except FileNotFoundError:
-                if time.monotonic() >= deadline:
-                    raise SpotGrantError("The control plane did not confirm the instance grant") from None
-                time.sleep(1)
-                continue
-            if grant.get("instance_id") != self.instance_id or grant.get("attempt") != self.attempt:
-                raise SpotGrantError("The instance grant belongs to another worker")
-            # A new attempt only receives a grant once the predecessor is confirmed terminated.
-            # This conditional create prevents two processes inside one grant from running at once.
-            claim = self.grant_key.removesuffix("instance.json") + "worker.claim"
-            try:
-                self.store.put_bytes(claim, b"1", if_absent=True)
+                self.store.put_bytes(
+                    self.claim_key(attempt), json.dumps(claim, sort_keys=True).encode(), if_absent=True,
+                )
             except ObjectExists:
-                raise SpotGrantError("The instance grant was already used by a worker") from None
-            self.grant = grant
+                previous = get_json(self.store, self.claim_key(attempt))
+                if previous.get("attempt_key") == self.attempt_key:
+                    raise SpotGrantError("This Batch attempt already claimed the run") from None
+                continue
+            grant = dict(claim)
+            if previous is not None:
+                grant["previous_attempt_key"] = previous["attempt_key"]
+                grant["recovery_reason"] = self._previous_state(previous["attempt_key"])
+            self.attempt, self.grant = attempt, grant
             return grant
+        raise SpotGrantError("The run exhausted its resumable attempts")
+
+    def _previous_state(self, attempt_key):
+        try:
+            status = get_json(
+                self.store, layout.attempt_status_key(self.unit.campaign_id, self.unit.run_id, attempt_key),
+            )
+        except FileNotFoundError:
+            return "LOST"  # Stopped before its status reached S3 (e.g. SIGKILL after the Spot notice).
+        state = status.get("state", "LOST")
+        return "LOST" if state == "RUNNING" else state
 
 
 class SpotCheckpoint:

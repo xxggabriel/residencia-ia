@@ -17,7 +17,8 @@ DIGEST = r"^sha256:[0-9a-f]{64}$"
 ZIA_POLICIES = ("frozen", "drift", "incremental", "periodic")
 EVALUATION_PROTOCOL = "zia-batch-prequential-holdout-v1"
 OFFLINE_MATRIX_FAMILIES = ("river_abrupt", "river_moving", "river_regression")
-SPOT_BACKEND = "ec2-spot-c6a.large"
+# Serverless resumable backend: AWS Batch on FARGATE_SPOT, checkpoints in S3 between attempts.
+SPOT_BACKEND = "batch-fargate-spot"
 
 
 def canonical(value) -> bytes:
@@ -93,7 +94,7 @@ class ReleaseManifest(Strict):
     images: dict[Literal["runtime", "ml"], ImageRef]
     job_definitions: dict[Literal["benchmark", "prepare"], str]
     control_function: str
-    benchmark_compute: Literal["ec2-spot-c6a.large"] | None = Field(
+    benchmark_compute: Literal["batch-fargate-spot"] | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
     pipeline_execution_id: str | None = None

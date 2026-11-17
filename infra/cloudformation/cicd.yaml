@@ -168,7 +168,6 @@ Resources:
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-mlflow"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-prepare-job"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-sagemaker"
-                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-spot-worker"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-states"
                   - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-task-execution"
               - Sid: PassProjectRolesToTheirServices
@@ -177,7 +176,7 @@ Resources:
                 Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}/${Project}-*"
                 Condition:
                   StringEquals:
-                    iam:PassedToService: [ec2.amazonaws.com, ecs-tasks.amazonaws.com, lambda.amazonaws.com, states.amazonaws.com,
+                    iam:PassedToService: [ecs-tasks.amazonaws.com, lambda.amazonaws.com, states.amazonaws.com,
                                           codebuild.amazonaws.com, firehose.amazonaws.com,
                                           kinesisanalytics.amazonaws.com, sagemaker.amazonaws.com, glue.amazonaws.com]
               - Sid: PassItselfToNestedStacks
@@ -191,18 +190,7 @@ Resources:
                 Resource: "*"
                 Condition:
                   StringLike:
-                    iam:AWSServiceName: [batch.amazonaws.com, ecs.amazonaws.com, sagemaker.amazonaws.com, spot.amazonaws.com]
-              - Sid: ManageSpotWorkerProfile
-                Effect: Allow
-                Action: [iam:CreateInstanceProfile, iam:GetInstanceProfile, iam:DeleteInstanceProfile,
-                         iam:AddRoleToInstanceProfile, iam:RemoveRoleFromInstanceProfile]
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/${Project}/${Project}-spot-worker"
-                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/${Project}-spot-worker"
-              - Sid: ReadPublicSpotWorkerAmiParameter
-                Effect: Allow
-                Action: [ssm:GetParameter, ssm:GetParameters]
-                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::parameter/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id"
+                    iam:AWSServiceName: [batch.amazonaws.com, ecs.amazonaws.com, sagemaker.amazonaws.com]
               - Sid: ManagedServicesOfTheRuntimeStack
                 Effect: Allow
                 Action: [ec2:*, batch:*, lambda:*, states:*, events:*, sns:*, logs:*, cloudwatch:*,

@@ -72,6 +72,10 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
             for key, value in values.items()
             if type(value) in (float, int) and math.isfinite(value)
         ]
+        if self.native_logger is not None:
+            # MLflow's async queue keeps every step and sends it from its own thread pool.
+            self.log_progress_metrics(points)
+            return
         if not self.spot:
             # Every step is kept (no coalescing); a daemon thread sends them off the training thread.
             if self._live_writer is None:
@@ -88,12 +92,11 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
             self.flush()
 
     def flush(self):
-        if self._live_writer is not None:
-            self._live_writer.flush()
         if self.pending:
             self.log_progress_metrics(self.pending)
             self.pending.clear()
             self.last_flush = time.monotonic()
+        return super().flush()
 
     def finish(self, status="FINISHED"):
         self.flush()

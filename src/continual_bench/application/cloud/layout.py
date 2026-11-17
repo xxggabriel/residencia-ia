@@ -105,8 +105,9 @@ def spot_attempt_prefix(campaign_id, run_id, attempt):
     return f"{run_prefix(campaign_id, run_id)}/spot/attempt-{attempt:03d}"
 
 
-def spot_instance_key(campaign_id, run_id, attempt):
-    return f"{spot_attempt_prefix(campaign_id, run_id, attempt)}/instance.json"
+def spot_claim_key(campaign_id, run_id, attempt):
+    """Write-once claim that numbers resumable attempts across Batch retries and resubmissions."""
+    return f"{spot_attempt_prefix(campaign_id, run_id, attempt)}/claim.json"
 
 
 def event_key(campaign_id, run_id, stamp, job_id, status):

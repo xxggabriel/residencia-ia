@@ -34,9 +34,9 @@ services = [
 replication = []
 # Detailed matplotlib figures logged with mlflow.log_figure().
 plots = ["matplotlib==3.11.2"]
-# Opt-in: SageMaker managed MLflow through the official `sagemaker-mlflow` plugin (tracking,
-# dataset lineage, model registry, figures). The default AWS profile below stays MLflow-free
-# and falls back to the REST/SigV4 tracker.
+# SageMaker managed MLflow through the official `sagemaker-mlflow` plugin (tracking, dataset
+# lineage, model registry, figures and MLflow's native async logging). The AWS image installs it
+# (requirements-aws.lock); without it the workers fall back to the REST/SigV4 tracker.
 aws-mlflow = [
   "boto3==1.43.117",
   "pandas==2.3.3",
@@ -44,8 +44,8 @@ aws-mlflow = [
   "sagemaker-mlflow==0.5.0",
   "matplotlib==3.11.2",
 ]
-# AWS managed profile: S3/Batch/SageMaker adapters and the native loader, without MLflow,
-# ZenML, Kafka, MinIO or Airflow.
+# AWS managed profile: S3/Batch/SageMaker adapters and the native loader, without ZenML,
+# Kafka, MinIO or Airflow (the image adds `aws-mlflow`).
 aws = ["boto3==1.43.117", "pandas==2.3.3"]
 dev = ["pytest==9.1.1", "ruff==0.15.7"]
 

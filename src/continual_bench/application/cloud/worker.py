@@ -276,6 +276,13 @@ def restore_benchmark_evidence(store, final, directory, *, report_path="report.j
     return directory
 
 
+def flush_tracking(tracker):
+    """Drain asynchronous MLflow writes (native async queue or the REST live writer)."""
+    flush = getattr(tracker, "flush", None)
+    if callable(flush):
+        flush()
+
+
 def start_zia_tracking(tracker, attempt_key, log, *, spot=False):
     start_live = getattr(tracker, "start_live", None)
     if not callable(start_live):
@@ -302,7 +309,7 @@ def stop_zia_tracking(tracker, log):
 
 
 def complete_zia_tracking(tracker, store, final, output, report, adapted):
-    if hasattr(tracker, "bind_attempt") and not final["attempt"].get("instance_id"):
+    if hasattr(tracker, "bind_attempt") and not final["attempt"].get("worker_id"):
         tracker.bind_attempt(final["attempt"]["attempt_key"])
     result = tracker.publish_run_report(
         report,
@@ -486,12 +493,12 @@ def run_unit(
     workdir = Path(workdir)
     key = split_uri(unit_ref)[1] if "://" in unit_ref else unit_ref
     unit = RunUnit(**get_json(store, key))
-    instance_id = env.get("BENCH_EC2_INSTANCE_ID")
-    if instance_id:
-        job_id, attempt = instance_id, int(env["BENCH_EC2_ATTEMPT"])
-    else:
-        job_id, attempt = env.get("AWS_BATCH_JOB_ID"), env.get("AWS_BATCH_JOB_ATTEMPT")
+    job_id, attempt = env.get("AWS_BATCH_JOB_ID"), env.get("AWS_BATCH_JOB_ATTEMPT")
     attempt_key = layout.attempt_key_for(job_id, attempt)
+    # Fargate Spot attempts are resumable: checkpoints in S3, one logical MLflow run.
+    resumable = bool(job_id) and env.get("BENCH_FARGATE_SPOT", "false") == "true"
+    task_arn = ecs_task_arn(env)
+    worker_id = task_arn or job_id
     context = {
         "campaign_id": unit.campaign_id,
         "run_id": unit.run_id,
@@ -507,13 +514,13 @@ def run_unit(
         "attempt_key": attempt_key,
         "job_id": job_id,
         "attempt": attempt,
-        "task_arn": ecs_task_arn(env),
+        "task_arn": task_arn,
         "image_digest": env.get("BENCH_IMAGE_DIGEST"),
         "git_sha": env.get("BENCH_GIT_REVISION"),
         "started_at": clock(),
         "labels": unit.labels,
     }
-    if not instance_id and store.head(final_key) is not None:
+    if not resumable and store.head(final_key) is not None:
         return reuse_final(store, final_key, status_key, status, log, clock)
     started = time.monotonic()
     prefix = layout.attempt_prefix(unit.campaign_id, unit.run_id, attempt_key)
@@ -523,7 +530,7 @@ def run_unit(
     tracking_uri = env.get("MLFLOW_TRACKING_URI")
     tracking_required = bool(tracking_uri or (unit.kind == "zia" and tracker is not None))
     publication_required = bool(
-        instance_id or tracking_required or (unit.kind == "zia" and registry is not None)
+        resumable or tracking_required or (unit.kind == "zia" and registry is not None)
     )
     resuming = False
     live_attempt = None
@@ -532,8 +539,9 @@ def run_unit(
     publishing = False
 
     def on_terminate(_signal):
-        if instance_id or unit.kind == "zia":
-            return  # Zia stops at the next training step before flushing its last recorded metrics.
+        if resumable or unit.kind == "zia":
+            # The evaluator checkpoints at its next safe point, then the attempt flushes MLflow.
+            return
         flush_partial_state(store, workdir / "run", prefix, status_key, status, started=started, clock=clock)
         if matrix_tracker is not None:
             matrix_tracker.finish("KILLED")
@@ -553,12 +561,10 @@ def run_unit(
     def bind_spot_tracking(active):
         if active is not None and spot:
             active.bind_spot_attempt(
-                attempt_key, instance_id=instance_id, attempt=attempt,
+                attempt_key, instance_id=worker_id, attempt=spot.attempt,
                 resumed_checkpoint=status.get("resumed_checkpoint"),
                 previous_attempt_key=status.get("previous_attempt_key"),
                 recovery_reason=status.get("recovery_reason"),
-                log_group=status.get("log_group"),
-                log_stream=status.get("log_stream"),
             )
 
     def record_spot_tracking(state, reason=None):
@@ -569,37 +575,34 @@ def run_unit(
         return True
 
     try:
-        if instance_id or unit.kind == "zia":
+        if resumable or unit.kind == "zia":
             zia_signal_scope.enter_context(sigterm_handler)
-        with nullcontext() if instance_id or unit.kind == "zia" else sigterm_handler:
+        with nullcontext() if resumable or unit.kind == "zia" else sigterm_handler:
             snapshot_manifest = None
-            if instance_id:
+            if resumable:
                 spot = SpotAttempt(
-                    store, unit, instance_id, attempt, env.get("BENCH_SPOT_NOTICE_FILE"),
-                    stop_requested=lambda: sigterm_handler.received,
+                    store, unit, worker_id, attempt_key, stop_requested=lambda: sigterm_handler.received,
                 )
                 try:
                     grant = spot.acquire()
                 except SpotGrantError:
-                    log.error("worker could not acquire exclusive EC2 attempt", exc_info=True)
+                    log.error("worker could not claim the next resumable attempt", exc_info=True)
                     return EXIT_CONTRACT
                 except CampaignCancelled:
                     return EXIT_CANCELLED
                 except InterruptedError:
                     return EXIT_INTERRUPTED
-                status["instance_id"] = instance_id
-                status.update({
-                    key: grant.get(key)
-                    for key in ("log_group", "log_stream", "previous_attempt_key", "recovery_reason")
-                })
+                status["worker_id"] = worker_id
+                status["spot_attempt"] = spot.attempt
+                status.update({key: grant.get(key) for key in ("previous_attempt_key", "recovery_reason")})
                 put_json(store, status_key, {**status, "state": "RUNNING"})
                 snapshot_manifest = verify_spot_inputs(store, key, unit, env)
                 if store.head(final_key) is not None:
                     check_stop()
                     return reuse_final(store, final_key, status_key, status, log, clock)
                 checkpoint = SpotCheckpoint(
-                    store, unit, workdir / "run", attempt, requested=stop_requested, logger=log,
-                    interval=float(env.get("BENCH_CHECKPOINT_INTERVAL_SECONDS", "60")),
+                    store, unit, workdir / "run", spot.attempt, requested=stop_requested, logger=log,
+                    interval=float(env.get("BENCH_CHECKPOINT_INTERVAL_SECONDS", "30")),
                 )
                 if store.head(pending_key) is not None:
                     status["resumed_checkpoint"] = store.uri(pending_key)
@@ -678,7 +681,7 @@ def run_unit(
         }
         if spot:
             final["attempt"].update({name: status.get(name) for name in (
-                "instance_id", "log_group", "log_stream", "previous_attempt_key", "recovery_reason",
+                "worker_id", "spot_attempt", "previous_attempt_key", "recovery_reason",
                 "resumed_checkpoint",
             )})
             final["attempt"]["checkpoint"] = checkpoint.receipt
@@ -925,9 +928,9 @@ def run_unit(
             if analytics not in {"present", "repaired"}:
                 raise TrackingPublicationError("Could not publish benchmark analytics")
             if not record_spot_tracking("SUCCEEDED"):
-                raise TrackingPublicationError("Could not record the completed EC2 attempt in MLflow")
+                raise TrackingPublicationError("Could not record the completed Spot attempt in MLflow")
             final["publication_attempt"] = {
-                "attempt_key": attempt_key, "instance_id": instance_id, "attempt": attempt,
+                "attempt_key": attempt_key, "worker_id": worker_id, "attempt": spot.attempt,
             }
             spot.check_publication(strict=True)
         try:
@@ -1010,7 +1013,7 @@ def run_unit(
             try:
                 reason = spot.reason()
             except Exception:
-                log.warning("could not verify the current EC2 interruption state", exc_info=True)
+                log.warning("could not verify the current Spot interruption state", exc_info=True)
         if isinstance(error, CampaignCancelled):
             reason = "cancelled"
         code = (
@@ -1066,6 +1069,8 @@ def run_unit(
         if spot and not isinstance(error, SpotGrantError):
             try:
                 record_spot_tracking(failure_state, reason=reason or str(error)[:1000])
+                # Every queued MLflow write reaches the server before the task is reclaimed.
+                flush_tracking(active_tracker)
                 if code == EXIT_CANCELLED:
                     stop_zia_tracking(active_tracker, log)
                 elif failure_state == "FAILED" and callable(
@@ -1073,7 +1078,7 @@ def run_unit(
                 ):
                     mark_failed(str(error)[:1000])
             except Exception:
-                log.warning("could not record the failed EC2 attempt in MLflow", exc_info=True)
+                log.warning("could not record the failed Spot attempt in MLflow", exc_info=True)
         if emit:
             emit(
                 {"RunFailed": 1},

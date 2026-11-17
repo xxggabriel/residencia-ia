@@ -1,6 +1,8 @@
-"""Worker recovery against an object store with the same conditional-create contract as S3."""
+"""Fargate Spot worker recovery against an object store with the S3 conditional-create contract."""
 
 import json
+import os
+import signal
 
 import pytest
 
@@ -25,22 +27,21 @@ def spot_case(tmp_path):
     return store, unit, release
 
 
-def grant(store, unit, release, attempt, notice, **extra):
-    instance_id = f"i-{attempt:017d}"
-    put_json(
-        store, layout.spot_instance_key(unit.campaign_id, unit.run_id, attempt),
-        {"instance_id": instance_id, "attempt": attempt, "log_group": "worker-logs",
-         "log_stream": f"campaign/{instance_id}", **extra},
-        if_absent=True,
-    )
+def fargate_env(release, job_id, batch_attempt=1):
+    """The environment AWS Batch gives a Fargate Spot benchmark task."""
     return {
-        "BENCH_EC2_INSTANCE_ID": instance_id,
-        "BENCH_EC2_ATTEMPT": str(attempt),
-        "BENCH_SPOT_NOTICE_FILE": str(notice),
+        "AWS_BATCH_JOB_ID": job_id,
+        "AWS_BATCH_JOB_ATTEMPT": str(batch_attempt),
+        "BENCH_FARGATE_SPOT": "true",
         "BENCH_GIT_REVISION": release.git_sha,
         "BENCH_IMAGE_DIGEST": release.images["runtime"].digest,
         "BENCH_IMAGE_URI": release.images["runtime"].uri,
     }
+
+
+def spot_notice():
+    """Fargate reclaims Spot capacity with SIGTERM, then SIGKILL after the stop timeout."""
+    os.kill(os.getpid(), signal.SIGTERM)
 
 
 def test_worker_restores_the_last_complete_and_valid_checkpoint(spot_case, tmp_path, monkeypatch):
@@ -85,7 +86,7 @@ def test_worker_restores_the_last_complete_and_valid_checkpoint(spot_case, tmp_p
 
 
 class HostLost(BaseException):
-    """Simulate a host loss that cannot run exception/finalization handlers."""
+    """Simulate a SIGKILL that cannot run exception/finalization handlers."""
 
 
 def evaluate_result(root, values):
@@ -106,9 +107,8 @@ def test_spot_recovery_keeps_results_and_original_publication_path(
     spot_case, tmp_path, monkeypatch, fault,
 ):
     store, unit, release = spot_case
-    notice_file = tmp_path / "notice.json"
-    first = grant(store, unit, release, 1, notice_file)
-    first_attempt = layout.attempt_key_for(first["BENCH_EC2_INSTANCE_ID"], 1)
+    first = fargate_env(release, "job-first")
+    first_attempt = layout.attempt_key_for("job-first", "1")
     first_status = layout.attempt_status_key(unit.campaign_id, unit.run_id, first_attempt)
     visits = []
     calls = 0
@@ -125,7 +125,7 @@ def test_spot_recovery_keeps_results_and_original_publication_path(
                 checkpoint.save(state, force=True)
             if calls == 1 and n == 2:
                 if fault == "notice":
-                    notice_file.touch()
+                    spot_notice()
                     assert checkpoint.requested()
                     checkpoint.save(state, force=True)
                     raise InterruptedError("interruption notice")
@@ -154,7 +154,7 @@ def test_spot_recovery_keeps_results_and_original_publication_path(
         status = get_json(store, first_status)
         if fault == "notice":
             assert exit_code == worker.EXIT_INTERRUPTED
-            assert status["interruption_reason"] == "spot_interruption_notice"
+            assert status["interruption_reason"] == "spot_interruption"
             assert status["checkpoint"].endswith("/000001/00000002.json")
         else:
             assert exit_code == worker.EXIT_FAILED
@@ -162,13 +162,16 @@ def test_spot_recovery_keeps_results_and_original_publication_path(
     final_key = layout.final_key(unit.campaign_id, unit.run_id)
     assert store.head(final_key) is None
 
-    second = grant(
-        store, unit, release, 2, tmp_path / "next-notice",
-        previous_attempt_key=first_attempt, recovery_reason=fault,
-    )
+    # Batch retries the same job (attempt 2); the claim numbers it as the run's second attempt.
+    second = fargate_env(release, "job-first", batch_attempt=2)
     assert worker.run_unit(store, unit.unit_key, tmp_path / "second", env=second) == worker.EXIT_OK
     final = get_json(store, final_key)
-    assert final["publication_attempt"]["instance_id"] == second["BENCH_EC2_INSTANCE_ID"]
+    assert final["publication_attempt"] == {
+        "attempt_key": layout.attempt_key_for("job-first", "2"), "worker_id": "job-first", "attempt": 2,
+    }
+    if fault != "publication":  # A resumed publication keeps the evaluating attempt's record.
+        assert final["attempt"]["recovery_reason"] == {"notice": "INTERRUPTED", "no_notice": "LOST"}[fault]
+        assert final["attempt"]["previous_attempt_key"] == first_attempt
     assert store.head(layout.analytics_marker_key(unit.campaign_id, unit.run_id))
     report = get_json(store, split_uri(final["report_uri"])[1])
     assert report["predictions"] == [0, 1, 2, 3]
@@ -190,12 +193,15 @@ def test_spot_recovery_keeps_results_and_original_publication_path(
 @pytest.mark.parametrize("blocker", ["cancelled", "replaced"])
 def test_ineligible_attempt_cannot_start_evaluation(spot_case, tmp_path, monkeypatch, blocker):
     store, unit, release = spot_case
-    env = grant(store, unit, release, 1, tmp_path / "notice")
+    env = fargate_env(release, "job-blocked")
     if blocker == "cancelled":
         put_json(store, layout.cancelled_key(unit.campaign_id), {"state": "CANCELLED"}, if_absent=True)
         expected = worker.EXIT_CANCELLED
     else:
-        grant(store, unit, release, 2, tmp_path / "next-notice")
+        # A duplicate execution of the same Batch attempt must not evaluate a second time.
+        attempt_key = layout.attempt_key_for("job-blocked", "1")
+        put_json(store, layout.spot_claim_key(unit.campaign_id, unit.run_id, 1),
+                 {"attempt": 1, "attempt_key": attempt_key}, if_absent=True)
         expected = worker.EXIT_CONTRACT
 
     def forbidden(*args, **kwargs):
@@ -224,11 +230,11 @@ def test_zia_spot_worker_recovers_real_predictions_and_fit_lineage(tmp_path, mon
         return unit
 
     reference = unit_for("spot-reference")
-    ref_env = grant(store, reference, release, 1, tmp_path / "ref-notice")
+    ref_env = fargate_env(release, "job-reference")
     assert worker.run_unit(store, reference.unit_key, tmp_path / "reference", env=ref_env) == worker.EXIT_OK
 
     candidate = unit_for("spot-resumed")
-    first = grant(store, candidate, release, 1, tmp_path / "first-notice")
+    first = fargate_env(release, "job-candidate")
     original = SpotCheckpoint.save
 
     def crash_at_confirmed_checkpoint(self, state, **kwargs):
@@ -241,7 +247,7 @@ def test_zia_spot_worker_recovers_real_predictions_and_fit_lineage(tmp_path, mon
         patch.setattr(SpotCheckpoint, "save", crash_at_confirmed_checkpoint)
         with pytest.raises(HostLost):
             worker.run_unit(store, candidate.unit_key, tmp_path / "first", env=first)
-    second = grant(store, candidate, release, 2, tmp_path / "second-notice", recovery_reason="instance_lost")
+    second = fargate_env(release, "job-candidate-resubmitted")
     assert worker.run_unit(store, candidate.unit_key, tmp_path / "resumed", env=second) == worker.EXIT_OK
 
     def documents(unit):
@@ -261,3 +267,51 @@ def test_zia_spot_worker_recovers_real_predictions_and_fit_lineage(tmp_path, mon
     ]
     assert actual_report["holdout_confusion"] == expected_report["holdout_confusion"]
     assert not any("/.zia-resume/" in key for key in store.list(final["published"]["prefix"] + "/"))
+
+
+def test_spot_notice_flushes_mlflow_async_queue_before_the_task_stops(spot_case, tmp_path, monkeypatch):
+    """SIGTERM: checkpoint at the next safe point, drain queued MLflow writes, exit 75 for a retry."""
+    store, unit, release = spot_case
+    events = []
+
+    class Tracker:
+        mlflow_run_id = "run"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def bind_spot_attempt(self, *args, **kwargs):
+            events.append("bind")
+
+        def start_live(self):
+            return True
+
+        def metrics(self, step, values, prefix="progress"):
+            events.append(("metric", step))
+
+        def record_spot_attempt(self, state, reason=None, checkpoint=None):
+            events.append(("state", state, bool(checkpoint)))
+            return True
+
+        def flush(self):
+            events.append("flush")
+            return True
+
+    def evaluate(_store, _unit, workdir, *, checkpoint, progress=None):
+        progress(1, {"rows": 1})
+        spot_notice()
+        checkpoint.save({"cursor": 1}, force=True)
+        raise InterruptedError("Spot interruption")
+
+    from continual_bench.infrastructure.aws import matrix_tracking
+
+    monkeypatch.setattr(matrix_tracking, "MatrixMlflowRun", Tracker)
+    monkeypatch.setattr(worker, "execute_matrix_case", evaluate)
+    env = {**fargate_env(release, "job-notice"), "MLFLOW_TRACKING_URI": "http://mlflow.example"}
+    assert worker.run_unit(store, unit.unit_key, tmp_path / "run", env=env) == worker.EXIT_INTERRUPTED
+    assert ("state", "INTERRUPTED", True) in events
+    assert events.index("flush") > events.index(("state", "INTERRUPTED", True))
+    status = get_json(store, layout.attempt_status_key(
+        unit.campaign_id, unit.run_id, layout.attempt_key_for("job-notice", "1"),
+    ))
+    assert status["state"] == "INTERRUPTED" and status["checkpoint"].endswith("/000001/00000001.json")

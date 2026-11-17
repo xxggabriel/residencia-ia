@@ -1,8 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  Execution: private EC2 Spot benchmark workers and AWS Batch on Fargate for preparation
-  and historical releases, the acquisition CodeBuild project (outside the VPC), the
-  versioned control Lambda and the two manual Standard state machines.
+  Execution: serverless benchmark workers on AWS Batch with Fargate Spot (resumable from
+  S3 checkpoints), on-demand Fargate for dataset preparation, the acquisition CodeBuild
+  project (outside the VPC), the versioned control Lambda and the two manual Standard
+  state machines. No EC2 instance is managed by this stack.
 
 Metadata:
   AWSToolsMetrics:
@@ -58,30 +59,41 @@ Parameters:
     Description: Base64 SHA-256 of the control Lambda zip; a change publishes a new version.
   MaxVcpus:
     Type: Number
-    Default: 8
+    Default: 64
     MinValue: 1
     MaxValue: 256
+    Description: >-
+      vCPU ceiling of the benchmark compute environment. Match the regional Fargate Spot vCPU
+      quota (L-36FBB829) so every task that fits starts at once; the rest stays RUNNABLE.
   FargateCapacity:
     Type: String
-    Default: FARGATE
+    Default: FARGATE_SPOT
     AllowedValues: [FARGATE, FARGATE_SPOT]
+    Description: FARGATE_SPOT runs resumable benchmark attempts; FARGATE is on-demand.
   BenchmarkVcpus:
     Type: String
-    Default: "1"
+    Default: "2"
     AllowedValues: ["0.25", "0.5", "1", "2", "4", "8", "16"]
   BenchmarkMemoryMiB:
     Type: Number
-    Default: 2048
+    Default: 4096
+    Description: >-
+      Task memory. Fargate accepts 4096-16384 MiB (1 GiB steps) with 2 vCPU; 2048 MiB is
+      only valid with 0.25, 0.5 or 1 vCPU.
   BenchmarkEphemeralGiB:
     Type: Number
     Default: 50
     MinValue: 21
     MaxValue: 200
-  BenchmarkSpotDiskGiB:
+  BenchmarkCheckpointSeconds:
     Type: Number
-    Default: 50
-    MinValue: 30
-    MaxValue: 200
+    Default: 30
+    MinValue: 10
+    MaxValue: 600
+    Description: >-
+      Longest interval between confirmed S3 checkpoints. Batch on Fargate keeps the default
+      30-second stopTimeout after the Spot SIGTERM, which bounds the final checkpoint and the
+      MLflow flush.
   BenchmarkTimeoutSeconds:
     Type: Number
     Default: 14400
@@ -109,18 +121,15 @@ Parameters:
     MaxValue: 86400
   JobAttempts:
     Type: Number
-    Default: 2
+    Default: 5
     MinValue: 1
     MaxValue: 10
+    Description: Batch attempts per job; Spot interruptions retry from the last checkpoint.
   LogRetentionDays:
     Type: Number
     Default: 14
     AllowedValues: [7, 14, 30, 60, 90, 180, 365, 731]
   ReuseRuntimeLogGroups:
-    Type: String
-    Default: "false"
-    AllowedValues: ["true", "false"]
-  ReuseBenchmarkSpotLogGroup:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
@@ -149,23 +158,6 @@ Conditions:
   CreateRuntimeLogGroups: !Equals [!Ref ReuseRuntimeLogGroups, "false"]
 
 Resources:
-  SpotBenchmark:
-    Type: AWS::CloudFormation::Stack
-    Properties:
-      TemplateURL: spot.yaml
-      Parameters:
-        Project: !Ref Project
-        DataBucketArn: !Ref DataBucketArn
-        DataKeyArn: !Ref DataKeyArn
-        S3GatewayEndpointId: !Ref S3GatewayEndpointId
-        RuntimeRepositoryArn: !Ref RuntimeRepositoryArn
-        MlRepositoryArn: !Ref MlRepositoryArn
-        EnableModelRegistry: !Ref EnableModelRegistry
-        LogRetentionDays: !Ref LogRetentionDays
-        ReuseWorkerLogs: !Ref ReuseBenchmarkSpotLogGroup
-        WorkerDiskGiB: !Ref BenchmarkSpotDiskGiB
-      Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: benchmark-spot}]
-
   JobLogGroup:
     Type: AWS::Logs::LogGroup
     Condition: CreateRuntimeLogGroups
@@ -249,14 +241,21 @@ Resources:
                 Effect: Allow
                 Action: [s3:GetObject, s3:GetObjectVersion]
                 Resource:
+                  - !Sub "${DataBucketArn}/releases/*"
                   - !Sub "${DataBucketArn}/datasets/*/manifests/*"
                   - !Sub "${DataBucketArn}/datasets/*/prepared/*"
                   - !Sub "${DataBucketArn}/datasets/matrix/*"
                   - !Sub "${DataBucketArn}/campaigns/*/units/*"
+                  - !Sub "${DataBucketArn}/campaigns/*/cancelled.json"
                   - !Sub "${DataBucketArn}/campaigns/*/runs/*"
+                  - !Sub "${DataBucketArn}/analytics/runs/*"
+                  - !Sub "${DataBucketArn}/analytics/metrics/*"
+                  - !Sub "${DataBucketArn}/analytics/windows/*"
+                  - !Sub "${DataBucketArn}/analytics/model_versions/*"
                   - !Sub "${DataBucketArn}/mlflow/*"
                 Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
               - Sid: WriteRunEvidence
+                # Includes the Spot attempt claims and the checkpoints under campaigns/*/runs/*/spot/.
                 Effect: Allow
                 Action: [s3:PutObject, s3:AbortMultipartUpload]
                 Resource:
@@ -474,90 +473,6 @@ Resources:
                 Action: [batch:TerminateJob, batch:CancelJob]
                 Resource: !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*"
                 Condition: {StringEquals: {aws:ResourceTag/cb-stack: !Ref Project}}
-              - Sid: ObserveSpotBenchmarks
-                Effect: Allow
-                Action: [ec2:DescribeInstances, ec2:DescribeVolumes]
-                Resource: "*"
-              - Sid: RunFromSpotBenchmarkTemplate
-                Effect: Allow
-                Action: ec2:RunInstances
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}::image/*"
-                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:launch-template/${SpotBenchmark.Outputs.LaunchTemplateId}"
-                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:security-group/${WorkerSecurityGroupId}"
-                Condition:
-                  ArnEquals:
-                    ec2:LaunchTemplate: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:launch-template/${SpotBenchmark.Outputs.LaunchTemplateId}"
-              - Sid: RunInConfiguredBenchmarkSubnets
-                Effect: Allow
-                Action: ec2:RunInstances
-                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/*"
-                Condition:
-                  StringEquals: {ec2:SubnetID: !Ref PrivateSubnets}
-                  ArnEquals:
-                    ec2:LaunchTemplate: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:launch-template/${SpotBenchmark.Outputs.LaunchTemplateId}"
-              - Sid: UsePrivateBenchmarkInterfaces
-                Effect: Allow
-                Action: ec2:RunInstances
-                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*"
-                Condition:
-                  ArnEquals:
-                    ec2:Vpc: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:vpc/${VpcId}"
-                    ec2:LaunchTemplate: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:launch-template/${SpotBenchmark.Outputs.LaunchTemplateId}"
-                  Bool: {ec2:AssociatePublicIpAddress: "false"}
-              - Sid: RunOnlyTaggedC6aLargeSpot
-                Effect: Allow
-                Action: ec2:RunInstances
-                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
-                Condition:
-                  ArnEquals:
-                    ec2:LaunchTemplate: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:launch-template/${SpotBenchmark.Outputs.LaunchTemplateId}"
-                  StringEquals:
-                    ec2:InstanceType: c6a.large
-                    ec2:InstanceMarketType: spot
-                    ec2:MetadataHttpTokens: required
-                    aws:RequestTag/cb-stack: !Ref Project
-                    aws:RequestTag/cb-component: benchmark-spot
-              - Sid: RunOnlyEncryptedTaggedBenchmarkVolumes
-                Effect: Allow
-                Action: ec2:RunInstances
-                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*"
-                Condition:
-                  ArnEquals:
-                    ec2:LaunchTemplate: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:launch-template/${SpotBenchmark.Outputs.LaunchTemplateId}"
-                  Bool: {ec2:Encrypted: "true"}
-                  StringEquals:
-                    aws:RequestTag/cb-stack: !Ref Project
-                    aws:RequestTag/cb-component: benchmark-spot
-              - Sid: TagOnSpotLaunch
-                Effect: Allow
-                Action: ec2:CreateTags
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
-                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*"
-                Condition:
-                  StringEquals:
-                    ec2:CreateAction: RunInstances
-                    aws:RequestTag/cb-stack: !Ref Project
-                    aws:RequestTag/cb-component: benchmark-spot
-              - Sid: TerminateOnlyThisStacksSpotWorkers
-                Effect: Allow
-                Action: ec2:TerminateInstances
-                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
-                Condition:
-                  StringEquals:
-                    aws:ResourceTag/cb-stack: !Ref Project
-                    aws:ResourceTag/cb-component: benchmark-spot
-              - Sid: UseSpotWorkerProfile
-                Effect: Allow
-                Action: iam:PassRole
-                Resource: !GetAtt SpotBenchmark.Outputs.WorkerRoleArn
-                Condition: {StringEquals: {iam:PassedToService: ec2.amazonaws.com}}
-              - Sid: BootstrapSpotServiceLinkedRole
-                Effect: Allow
-                Action: iam:CreateServiceLinkedRole
-                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/spot.amazonaws.com/AWSServiceRoleForEC2Spot"
-                Condition: {StringEquals: {iam:AWSServiceName: spot.amazonaws.com}}
               - Effect: Allow
                 Action: ecs:DescribeTasks
                 Resource: !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/*"
@@ -592,11 +507,12 @@ Resources:
               - Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt EndpointsFunction.Arn
-              - Sid: SubmitToThisQueueOnly
+              - Sid: SubmitToThisStacksQueues
                 Effect: Allow
                 Action: batch:SubmitJob
                 Resource:
                   - !Ref JobQueue
+                  - !Ref PrepareJobQueue
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-benchmark:*"
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-prepare:*"
               - Sid: TagJobsOnSubmission
@@ -605,6 +521,7 @@ Resources:
                 # A tagged SubmitJob also checks TagResource against the queue and job definition.
                 Resource:
                   - !Ref JobQueue
+                  - !Ref PrepareJobQueue
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-benchmark:*"
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${Project}-prepare:*"
                   - !Sub "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*"
@@ -654,7 +571,8 @@ Resources:
                          logs:DescribeLogGroups]
                 Resource: "*"
 
-  # ---------------------------------------------------------------- Batch on Fargate
+  # ---------------------------------------------------------------- Batch on Fargate (Spot)
+  # Serverless: Batch places every task on Fargate; no instance, AMI or launch template exists.
   ComputeEnvironment:
     Type: AWS::Batch::ComputeEnvironment
     Properties:
@@ -667,6 +585,33 @@ Resources:
         SecurityGroupIds: [!Ref WorkerSecurityGroupId]
       Tags: {cb-stack: !Ref Project, cb-component: batch}
 
+  # Dataset preparation is not resumable, so it never runs on reclaimable capacity.
+  PrepareComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      Type: MANAGED
+      State: ENABLED
+      ComputeResources:
+        Type: FARGATE
+        MaxvCpus: 16
+        Subnets: !Ref PrivateSubnets
+        SecurityGroupIds: [!Ref WorkerSecurityGroupId]
+      Tags: {cb-stack: !Ref Project, cb-component: prepare}
+
+  PrepareJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      JobQueueName: !Sub "${Project}-prepare"
+      Priority: 1
+      State: ENABLED
+      ComputeEnvironmentOrder: [{Order: 1, ComputeEnvironment: !Ref PrepareComputeEnvironment}]
+      JobStateTimeLimitActions:
+        - {Action: CANCEL, State: RUNNABLE, MaxTimeSeconds: !Ref QueueWaitTimeoutSeconds,
+           Reason: "MISCONFIGURATION:COMPUTE_ENVIRONMENT_MAX_RESOURCE"}
+        - {Action: CANCEL, State: RUNNABLE, MaxTimeSeconds: !Ref QueueWaitTimeoutSeconds,
+           Reason: "MISCONFIGURATION:JOB_RESOURCE_REQUIREMENT"}
+      Tags: {cb-stack: !Ref Project}
+
   JobQueue:
     Type: AWS::Batch::JobQueue
     Properties:
@@ -675,6 +620,8 @@ Resources:
       State: ENABLED
       ComputeEnvironmentOrder: [{Order: 1, ComputeEnvironment: !Ref ComputeEnvironment}]
       # Bounded queue wait: jobs stuck RUNNABLE for these reasons are cancelled by Batch.
+      # Jobs beyond the vCPU quota wait RUNNABLE by design; only misconfiguration is cancelled.
+      # Spot capacity shortages wait too, up to the campaign's queue timeout.
       JobStateTimeLimitActions:
         - {Action: CANCEL, State: RUNNABLE, MaxTimeSeconds: !Ref QueueWaitTimeoutSeconds,
            Reason: "MISCONFIGURATION:COMPUTE_ENVIRONMENT_MAX_RESOURCE"}
@@ -696,9 +643,14 @@ Resources:
       PropagateTags: true
       Tags: {cb-stack: !Ref Project, cb-component: benchmark}
       Timeout: {AttemptDurationSeconds: !Ref BenchmarkTimeoutSeconds}
+      # A reclaimed Fargate Spot task (or a worker that checkpointed after SIGTERM and exited
+      # 75) retries; the next attempt restores the newest confirmed checkpoint.
       RetryStrategy:
         Attempts: !Ref JobAttempts
         EvaluateOnExit:
+          - {OnExitCode: "75", Action: RETRY}
+          - {OnStatusReason: "*Spot*", Action: RETRY}
+          - {OnStatusReason: "*interrupted*", Action: RETRY}
           - {OnStatusReason: "ResourceInitializationError*", Action: RETRY}
           - {OnStatusReason: "CannotPullContainerError*", Action: RETRY}
           - {OnStatusReason: "Timeout waiting for network interface*", Action: RETRY}
@@ -735,6 +687,13 @@ Resources:
           - {Name: MLFLOW_TRACKING_URI, Value: !If [MlflowTracking, !GetAtt MlflowApp.Arn, ""]}
           - {Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region}
           - {Name: BENCH_BENCHMARK_VCPUS, Value: !Ref BenchmarkVcpus}
+          - {Name: BENCH_FARGATE_SPOT, Value: !If [Spot, "true", "false"]}
+          - {Name: BENCH_CHECKPOINT_INTERVAL_SECONDS, Value: !Ref BenchmarkCheckpointSeconds}
+          # MLflow's own async logging (mlflow.config.enable_async_logging): training never
+          # blocks on the tracking server; workers flush the queue on SIGTERM and at publication.
+          - {Name: MLFLOW_ENABLE_ASYNC_LOGGING, Value: "true"}
+          - {Name: MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE, Value: "4"}
+          - {Name: MLFLOW_ASYNC_LOGGING_BUFFERING_SECONDS, Value: "5"}
           - {Name: OMP_NUM_THREADS, Value: "2"}
           - {Name: OPENBLAS_NUM_THREADS, Value: "2"}
           - {Name: MKL_NUM_THREADS, Value: "2"}
@@ -894,11 +853,6 @@ Resources:
           BENCH_BENCHMARK_VCPUS: !Ref BenchmarkVcpus
           BENCH_FARGATE_SPOT: !If [Spot, "true", "false"]
           BENCH_STACK: !Ref Project
-          BENCH_SPOT_SUBNETS: !Join [",", !Ref PrivateSubnets]
-          BENCH_SPOT_SECURITY_GROUP_ID: !Ref WorkerSecurityGroupId
-          BENCH_SPOT_LAUNCH_TEMPLATE_ID: !GetAtt SpotBenchmark.Outputs.LaunchTemplateId
-          BENCH_SPOT_LAUNCH_TEMPLATE_VERSION: !GetAtt SpotBenchmark.Outputs.LaunchTemplateVersion
-          BENCH_SPOT_LOG_GROUP: !GetAtt SpotBenchmark.Outputs.LogGroupName
           BENCH_MODEL_REGISTRY: !Ref EnableModelRegistry
           MLFLOW_TRACKING_URI: !If [MlflowTracking, !GetAtt MlflowApp.Arn, ""]
           BENCH_BENCHMARK_STATE_MACHINE_SUFFIX: !Sub ":${Project}-benchmark"
@@ -970,7 +924,7 @@ Resources:
                 Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${Project}-interface-endpoints/*"
               - Effect: Allow
                 Action: [ec2:DescribeVpcEndpoints, ec2:DescribeVpcs, ec2:DescribeSubnets,
-                         ec2:DescribeSecurityGroups, ec2:DescribeInstances]
+                         ec2:DescribeSecurityGroups]
                 Resource: "*"
               - Effect: Allow
                 Action: ec2:CreateVpcEndpoint
@@ -1021,6 +975,7 @@ Resources:
           ENDPOINT_STATE_BUCKET: !Ref DataBucketName
           ENDPOINT_STATE_KMS_KEY: !Ref DataKeyArn
           ENDPOINT_JOB_QUEUE: !Ref JobQueue
+          ENDPOINT_PREPARE_JOB_QUEUE: !Ref PrepareJobQueue
           BENCH_STACK: !Ref Project
           ENDPOINT_BENCHMARK_WORKFLOW: !Sub "${Project}-benchmark"
           ENDPOINT_STACK_NAME: !Sub "${Project}-interface-endpoints"
@@ -1084,7 +1039,7 @@ Resources:
       DefinitionSubstitutions:
         ControlFunction: !Ref ControlVersion
         EndpointsFunction: !GetAtt EndpointsFunction.Arn
-        JobQueue: !Ref JobQueue
+        JobQueue: !Ref PrepareJobQueue
         AcquisitionProject: !Ref AcquisitionProject
         Project: !Ref Project
       LoggingConfiguration:
@@ -1099,13 +1054,12 @@ Outputs:
     Value: !Ref DataKeyArn
   JobQueueArn:
     Value: !Ref JobQueue
+  PrepareJobQueueArn:
+    Value: !Ref PrepareJobQueue
   BenchmarkJobDefinitionArn:
-    Description: Legacy revision-qualified Fargate definition for historical releases
     Value: !Ref BenchmarkJobDefinition
   BenchmarkComputeBackend:
-    Value: ec2-spot-c6a.large
-  BenchmarkSpotLogGroupName:
-    Value: !GetAtt SpotBenchmark.Outputs.LogGroupName
+    Value: !If [Spot, batch-fargate-spot, batch-fargate]
   PrepareJobDefinitionArn:
     Value: !Ref PrepareJobDefinition
   ControlFunctionName:

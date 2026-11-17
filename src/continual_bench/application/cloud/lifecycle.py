@@ -190,6 +190,27 @@ def _publish_zia_comparisons(store, campaign_id, units):
     return store.uri(index_key)
 
 
+def verify_publication(store, final, contract_sha256):
+    """A resumable attempt is only a success once its report, index and analytics verify."""
+    from continual_bench.infrastructure.object_store import split_uri
+
+    run_id = final["run_id"]
+    tracking = final.get("tracking") or {}
+    if final.get("contract_sha256") != contract_sha256 or (
+        tracking.get("required") and not tracking.get("complete")
+    ):
+        raise ValueError(f"Invalid final manifest for {run_id}")
+    report = store.head(split_uri(final["report_uri"])[1])
+    if report is None or report.sha256 != final["report_sha256"]:
+        raise ValueError(f"Published report failed its checksum for {run_id}")
+    if store.head(split_uri(final["artifacts_index_uri"])[1]) is None:
+        raise ValueError(f"Artifact index is missing for {run_id}")
+    status = ensure_rows(store, final)
+    if status != "present" and status != "repaired":
+        raise ValueError(f"Analytics publication incomplete for {run_id}")
+    return status
+
+
 def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> dict:
     plan = get_json(store, layout.plan_key(campaign_id))
     spot = plan["release"].get("benchmark_compute") == SPOT_BACKEND
@@ -201,8 +222,6 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
             final = get_json(store, final_key)
             try:
                 if spot:
-                    from .spot_lifecycle import verify_publication
-
                     analytics = verify_publication(store, final, unit["contract_sha256"])
                 else:
                     analytics = ensure_rows(store, final)
@@ -228,12 +247,6 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
             )
         else:
             reported = reported_by_run.get(unit["run_id"], {})
-            if spot:
-                state_key = f"{layout.run_prefix(campaign_id, unit['run_id'])}/spot/state.json"
-                try:
-                    reported = get_json(store, state_key)
-                except FileNotFoundError:
-                    pass
             units.append(
                 {
                     "run_id": unit["run_id"],
@@ -280,6 +293,18 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
     if "artifacts_index_uri" in summary:
         result["artifacts_index_uri"] = summary["artifacts_index_uri"]
     return result
+
+
+def cancel_campaign(store, campaign_id: str, *, clock=time.time) -> dict:
+    """Write the cancellation marker once; workers stop at their next safe point."""
+    from continual_bench.infrastructure.object_store import ObjectExists
+
+    record = {"state": "CANCELLED", "cancelled_at": clock()}
+    try:
+        put_json(store, layout.cancelled_key(campaign_id), record, if_absent=True)
+    except ObjectExists:
+        return get_json(store, layout.cancelled_key(campaign_id))
+    return record
 
 
 def campaign_job_name(campaign_id: str):

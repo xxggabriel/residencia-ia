@@ -11,10 +11,11 @@ O perfil AWS separa quatro grandezas e nunca as soma entre si:
 
 ## Por tentativa
 
-Nas campanhas Spot, `analytics/attempts/` registra a instância, a zona, o lifecycle Spot
-e os volumes associados. Consulte `cur_campaign_spot.sql` após a atualização do CUR para
-obter os valores faturados de EC2 e EBS por política. Ative também a tag `cb-component`
-no Cost Allocation Tags da conta pagadora. As tarifas Spot variam por zona e tempo.
+Nas campanhas Fargate Spot, cada tentativa interrompida e retomada aparece como uma tentativa
+do job Batch em `analytics/attempts/`. Consulte `cur_campaign_spot.sql` após a atualização do
+CUR para obter os valores faturados de vCPU, memória e armazenamento efêmero do Fargate Spot
+por política. Ative também a tag `cb-component` no Cost Allocation Tags da conta pagadora.
+As tarifas Fargate Spot variam por região e tempo.
 
 `record_attempt` grava em `analytics/attempts/` o ID do job, o ARN da task ECS, o código de
 saída, `createdAt`, `startedAt` e `stoppedAt`, a job definition com revisão, vCPU, memória e

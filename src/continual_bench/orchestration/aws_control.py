@@ -12,7 +12,7 @@ import os
 import re
 import time
 
-from continual_bench.application.cloud import layout, lifecycle, planning, snapshots, spot_lifecycle
+from continual_bench.application.cloud import layout, lifecycle, planning, snapshots
 from continual_bench.application.cloud.contracts import (
     CAMPAIGN_ID,
     SPOT_BACKEND,
@@ -20,7 +20,7 @@ from continual_bench.application.cloud.contracts import (
     DatasetRequest,
     SnapshotRef,
 )
-from continual_bench.infrastructure.object_store import get_json, put_json
+from continual_bench.infrastructure.object_store import put_json
 
 TERMINAL_EXECUTION = ("FAILED", "TIMED_OUT", "ABORTED")
 
@@ -30,7 +30,7 @@ class Context:
 
     def __init__(self, env=None):
         self.env = os.environ if env is None else env
-        self._store = self._jobs = self._spot_jobs = self._sns = None
+        self._store = self._jobs = self._sns = None
 
     @property
     def store(self):
@@ -48,14 +48,6 @@ class Context:
             self._jobs = BatchJobs(self.env["BENCH_JOB_QUEUE"])
         return self._jobs
 
-    @property
-    def spot_jobs(self):
-        if self._spot_jobs is None:
-            from continual_bench.infrastructure.aws.spot import SpotJobs
-
-            self._spot_jobs = SpotJobs.from_env(self.env)
-        return self._spot_jobs
-
     def notify(self, subject, message):
         topic = self.env.get("BENCH_SNS_TOPIC")
         if not topic:
@@ -68,7 +60,7 @@ class Context:
             TopicArn=topic, Subject=subject[:100], Message=json.dumps(message, default=str)
         )
 
-    def capacity(self, concurrency):
+    def capacity(self, concurrency, *, queue_excess=False):
         from continual_bench.infrastructure.aws.quotas import fargate_vcpu_quota, queue_capacity
 
         spot = self.env.get("BENCH_FARGATE_SPOT", "false") == "true"
@@ -77,19 +69,8 @@ class Context:
             float(self.env.get("BENCH_BENCHMARK_VCPUS", "1")),
             quota_vcpus=fargate_vcpu_quota(spot=spot),
             queue=queue_capacity(self.env["BENCH_JOB_QUEUE"]),
+            queue_excess=queue_excess,
         )
-
-    def spot_capacity(self, concurrency):
-        from continual_bench.infrastructure.aws.quotas import standard_spot_vcpu_quota
-
-        quota = standard_spot_vcpu_quota()
-        return {
-            "compute": SPOT_BACKEND,
-            "requested_instances": concurrency,
-            "required_vcpus": 2 * concurrency,
-            "standard_spot_vcpu_quota": quota,
-            "quota_supports_full_parallelism": quota >= 2 * concurrency,
-        }
 
     @property
     def project_root(self):
@@ -116,13 +97,14 @@ def plan_campaign(ctx, event):
     release = planning.resolve_release(ctx.store, request.release)
     spot = release.benchmark_compute == SPOT_BACKEND
     if event.get("require_spot") and not spot:
-        raise planning.CampaignConflict(f"Release {release.git_sha} does not support Spot benchmarks")
+        raise planning.CampaignConflict(f"Release {release.git_sha} does not run benchmarks on Fargate Spot")
     if ctx.store.head(layout.cancelled_key(request.campaign_id)) is not None:
         raise planning.CampaignConflict(f"Campaign {request.campaign_id} was explicitly cancelled")
     snapshot = snapshots.verify_snapshot(ctx.store, request.snapshot) if request.snapshot else None
     plan = planning.build_plan(request, release, snapshot_manifest=snapshot, project_root=ctx.project_root)
     verify_plan_sources(ctx.store, plan["units"])
-    evidence = ctx.spot_capacity(plan["concurrency"]) if spot else ctx.capacity(plan["concurrency"])
+    # Spot campaigns submit every unit at once; Batch queues what exceeds the vCPU quota.
+    evidence = ctx.capacity(plan["concurrency"], queue_excess=spot)
 
     put_json(
         ctx.store,
@@ -130,18 +112,17 @@ def plan_campaign(ctx, event):
         {"capacity": evidence, "snapshot": plan["snapshot"], "release": release.git_sha},
     )
     published = planning.publish_plan(ctx.store, plan)
-    if spot:
-        execution_arn = event["execution_arn"]
-        if not spot_lifecycle.admit_execution(ctx.store, request.campaign_id, execution_arn):
-            raise planning.CampaignConflict(f"Campaign {request.campaign_id} already has an active workflow")
     return {
         **published,
         "timeouts": plan["timeouts"],
         "max_attempts": plan["max_attempts"],
         "bucket": ctx.env["BENCH_BUCKET"],
         "control_function": release.control_function,
-        "capacity": evidence if spot else {
-            k: evidence[k] for k in ("required_vcpus", "fargate_vcpu_quota", "max_parallel_admitted")
+        "capacity": {
+            k: evidence[k]
+            for k in ("required_vcpus", "fargate_vcpu_quota", "max_parallel_admitted", "running_in_parallel",
+                      "queued")
+            if k in evidence
         },
     }
 
@@ -161,10 +142,6 @@ def record_attempt(ctx, event):
     return lifecycle.record_attempt(ctx.store, ctx.jobs, event["item"], error=error, prices=ctx.prices())
 
 
-def advance_spot_run(ctx, event):
-    return spot_lifecycle.SpotRun(ctx.store, ctx.spot_jobs, event["item"], event["execution_arn"]).advance()
-
-
 def consolidate(ctx, event):
     result = lifecycle.consolidate(ctx.store, event["campaign_id"], event.get("results"))
     if not result["complete"] and event.get("notify", True):
@@ -175,21 +152,8 @@ def consolidate(ctx, event):
 def reconcile_campaign(ctx, event):
     campaign, reason = event["campaign_id"], event.get("reason", "requested")
     if event.get("cancel"):
-        spot_lifecycle.cancel_campaign(ctx.store, campaign)
-    if _uses_spot(ctx.store, campaign):
-        owner = None
-        if execution_arn := event.get("execution_arn"):
-            owner = spot_lifecycle.stop_execution(ctx.store, campaign, execution_arn, reason)
-        return spot_lifecycle.reconcile_campaign(ctx.store, ctx.spot_jobs, campaign, reason, owner=owner)
+        lifecycle.cancel_campaign(ctx.store, campaign)
     return lifecycle.reconcile_campaign(ctx.store, ctx.jobs, campaign, reason)
-
-
-def _uses_spot(store, campaign):
-    try:
-        plan = get_json(store, layout.plan_key(campaign))
-    except FileNotFoundError:
-        return False
-    return plan["release"].get("benchmark_compute") == SPOT_BACKEND
 
 
 # Dataset pipeline -----------------------------------------------------------------------------------
@@ -285,29 +249,11 @@ def observe(ctx, event):
         ):
             # Execution names are `<campaign_id>` or `<campaign_id>--<retry-suffix>`.
             campaign = _observed_campaign(detail, name)
-            if _uses_spot(ctx.store, campaign):
-                arn = detail["executionArn"]
-                if not spot_lifecycle.owns_execution(ctx.store, campaign, spot_lifecycle.execution_key(arn)):
-                    return result
-                owner = spot_lifecycle.stop_execution(
-                    ctx.store, campaign, arn, f"execution {status}"
-                )
-                if status == "ABORTED":
-                    spot_lifecycle.cancel_campaign(ctx.store, campaign)
-                # Give in-flight launch requests time to become visible after fencing new launches.
-                for delay in (0, 15, 30, 60):
-                    time.sleep(delay)
-                    result["reconciliation"] = spot_lifecycle.reconcile_campaign(
-                        ctx.store, ctx.spot_jobs, campaign, f"execution {status}", owner=owner
-                    )
-                    if delay and result["reconciliation"]["clean"]:
-                        break
-                if not result["reconciliation"]["clean"]:
-                    raise RuntimeError(f"Spot reconciliation still pending for {campaign}")
-            else:
-                result["reconciliation"] = lifecycle.reconcile_campaign(
-                    ctx.store, ctx.jobs, campaign, f"execution {status}"
-                )
+            if status == "ABORTED":
+                lifecycle.cancel_campaign(ctx.store, campaign)
+            result["reconciliation"] = lifecycle.reconcile_campaign(
+                ctx.store, ctx.jobs, campaign, f"execution {status}"
+            )
         if status in TERMINAL_EXECUTION:
             ctx.notify(f"continual-bench execution {status}: {name}", result)
         return result
@@ -321,7 +267,6 @@ ACTIONS = {
         reconcile_unit,
         describe_job,
         record_attempt,
-        advance_spot_run,
         consolidate,
         reconcile_campaign,
         resolve_dataset,
