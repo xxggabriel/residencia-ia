@@ -744,7 +744,8 @@ def test_benchmarks_run_serverless_on_fargate_spot_and_resume_after_interruption
     retry = definition["RetryStrategy"]
     assert retry["Attempts"] == {"Ref": "JobAttempts"} and params["JobAttempts"]["Default"] == 5
     assert {"OnExitCode": "75", "Action": "RETRY"} in retry["EvaluateOnExit"]
-    assert {"OnStatusReason": "*Spot*", "Action": "RETRY"} in retry["EvaluateOnExit"]
+    assert {"OnStatusReason": "Your Spot Task was interrupted*", "Action": "RETRY"} in retry["EvaluateOnExit"]
+    assert len(retry["EvaluateOnExit"]) <= 5
     assert retry["EvaluateOnExit"][-1] == {"OnReason": "*", "Action": "EXIT"}
     env = {item["Name"]: item["Value"] for item in definition["ContainerProperties"]["Environment"]}
     assert env["BENCH_FARGATE_SPOT"] == {"Fn::If": ["Spot", "true", "false"]}
@@ -935,3 +936,19 @@ sys.exit(0)
     assert "execute-change-set" not in calls
 
 
+
+
+def test_batch_retry_strategies_respect_the_api_limits():
+    """Batch rejects more than 5 EvaluateOnExit entries and any '*' that is not trailing."""
+    for module in (CFN / "modules").glob("*.yaml"):
+        for name, resource in template(f"modules/{module.name}")["Resources"].items():
+            if resource["Type"] == "AWS::Batch::JobDefinition":
+                strategy = resource["Properties"].get("RetryStrategy")
+                assert TEMPLATES.retry_strategy_errors(strategy) == [], name
+    too_many = {"EvaluateOnExit": [{"OnReason": "a", "Action": "RETRY"}] * 6}
+    assert any("allows 5" in e for e in TEMPLATES.retry_strategy_errors(too_many))
+    leading = {"EvaluateOnExit": [{"OnStatusReason": "*Spot*", "Action": "RETRY"}]}
+    assert any("trailing" in e for e in TEMPLATES.retry_strategy_errors(leading))
+    assert TEMPLATES.retry_strategy_errors(
+        {"EvaluateOnExit": [{"OnExitCode": "75", "Action": "RETRY"}, {"OnReason": "*", "Action": "EXIT"}]}
+    ) == []
