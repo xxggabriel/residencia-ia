@@ -199,3 +199,25 @@ Os dashboards em PNG dependem de matplotlib no ambiente publicador.
 O caminho REST/SigV4 foi usado na validação das integrações com o app AWS.
 O caminho opcional do SDK foi exercitado com o file store local. Consulte o escopo
 em [validação na AWS](aws/validation.md).
+
+## Páginas de retreinamento em Artifacts
+
+| Caminho na run principal | Conteúdo |
+| --- | --- |
+| `tracking-observations/overview/overview.html` | Dataset, política, protocolo, gráficos e tabela pesquisável com unidade, split e posição. |
+| `tracking-observations/retraining-timeline.html` | Ordem do histórico, treino inicial identificado, decisões de promoção, alarmes, filtro de status e zoom por eixo. |
+| `tracking-observations/retraining-explorer.html` | Seleção por slider ou posição numérica, evolução por step e época, métricas por split e checkpoint do ajuste. |
+
+Cada HTML incorpora os dados necessários à visualização, o CSS e o JavaScript.
+O MLflow 3.17.2 abre a prévia HTML em um iframe com `allow-scripts`. Os arquivos
+baixados também funcionam sem acesso à rede. O suporte à prévia depende do
+servidor que hospeda a UI. Se a prévia estiver indisponível, baixe o HTML pela
+aba Artifacts. [Implementação da prévia no MLflow 3.17.2](https://github.com/mlflow/mlflow/blob/v3.17.2/mlflow/server/js/src/experiment-tracking/components/artifact-view-components/ShowArtifactHtmlView.tsx)
+
+O `plots-manifest.json` identifica as fontes das páginas. Os pontos originais
+continuam em `observations.json`, `training-history.json` e nos dados por ajuste.
+A timeline usa a sequência registrada da promoção ou do fim dos dados do
+ajuste. Para protocolos com coordenadas compatíveis, alinha os marcadores
+às métricas. Quando a posição estiver ausente, o ajuste continua na tabela.
+O intervalo opera no eixo selecionado. O explorador começa no primeiro
+ajuste e indica séries indisponíveis separadamente.

@@ -16,6 +16,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from .mlflow_figures import FIGURE_DPI, MARKER_STYLE, PALETTE, _pyplot, matplotlib_available
+from .retraining_pages import PAGE_SCRIPT, PAGE_STYLE, page_data
 from .storage import atomic_write
 
 VERSION = "benchmark-plots-v1"
@@ -812,7 +813,6 @@ def _detection_delays(plt, delays, unit, note):
 
 _HTML_SCRIPT = """
 const NS = 'http://www.w3.org/2000/svg';
-const panels = JSON.parse(document.querySelector('#chart-data').textContent);
 function svg(tag, attrs, parent, content) {
   const el = document.createElementNS(NS, tag);
   Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, value));
@@ -833,18 +833,21 @@ function extent(values) {
   values.forEach(v => { low = Math.min(low, v); high = Math.max(high, v); });
   return low === high ? [low - 1, high + 1] : [low, high];
 }
+function renderPanels(panels, target) {
 panels.forEach(panel => {
-  const section = node('section', document.querySelector('main'));
+  const section = node('section', target);
   node('h2', section, panel.title);
   const legend = node('fieldset', section);
   node('legend', legend, 'Séries visíveis');
   const plot = svg('svg', {viewBox: '0 0 720 310', role: 'group', 'aria-label': panel.title}, section);
   const readout = node('output', section, 'Aponte ou selecione um ponto para ver os detalhes.');
   const visible = panel.series.flatMap(series => series.points.filter(p => p.y !== null));
-  const xr = extent(panel.series.flatMap(series => series.points.map(p => p.x)).concat(
+  const xrange = panel.xRange || extent(panel.series.flatMap(series => series.points.map(p => p.x)).concat(
     panel.markers.map(m => m.x)
   ));
-  const yr = panel.yLim || extent(visible.map(p => p.y).concat(panel.zero ? [0] : []));
+  const xr = xrange.every(Number.isFinite) ? xrange : [0, 1];
+  const yr = panel.yLim || (visible.length ? extent(visible.map(p => p.y)
+    .concat(panel.zero ? [0] : [])) : [0, 1]);
   const integerX = panel.integerX || panel.fitAxis;
   const formatX = integerX ? integerFormat : format;
   const px = x => 76 + 604 * (x - xr[0]) / (xr[1] - xr[0]);
@@ -869,7 +872,22 @@ panels.forEach(panel => {
       panel.yLabel);
   if (panel.zero) svg('line', {x1: 76, y1: py(0), x2: 680, y2: py(0), stroke: '#52627a',
                               'stroke-dasharray': '3 3'}, plot);
+  const duplicateLanes = new Map();
   panel.markers.forEach(marker => {
+    if (marker.fitIndex !== undefined) {
+      const lane = duplicateLanes.get(marker.x) || 0;
+      duplicateLanes.set(marker.x, lane + 1);
+      const point = svg('circle', {cx:px(marker.x), cy:18 + 11 * (lane % 20), r:5,
+        fill:marker.color, stroke:'#fff', tabindex:0, role:'button', 'aria-label':marker.label,
+        'data-fit-marker':marker.fitIndex}, plot);
+      svg('title', {}, point, marker.label);
+      const activate = () => panel.selectFit(marker.fitIndex);
+      point.addEventListener('click', activate);
+      point.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); }
+      });
+      return;
+    }
     const ruler = svg('line', {x1: px(marker.x), y1: 24, x2: px(marker.x), y2: 252,
       stroke: marker.color, 'stroke-dasharray': '5 4'}, plot);
     svg('title', {}, ruler, marker.label);
@@ -917,12 +935,13 @@ panels.forEach(panel => {
     node('p', section, 'Séries reduzidas no desenho. Valores completos nos artefatos de dados.');
   }
 });
+}
 """
 
 
-def _write_html(path, panels, title):
+def _chart_data(panels):
     dash = ("none", "7 4", "7 3 2 3", "2 3")
-    chart_data = [{
+    return [{
         "title": panel.title, "xLabel": panel.x_label, "yLabel": panel.y_label,
         "yLim": panel.y_lim, "zero": panel.zero, "fitAxis": panel.fit_axis, "integerX": panel.integer_x,
         "markers": [{"x": m["x"], "color": EVENT_STYLES[m["kind"]][0],
@@ -932,7 +951,11 @@ def _write_html(path, panels, title):
                     "count": series.input_count, "retained": len(series.points)}
                    for index, series in enumerate(panel.series)],
     } for panel in panels]
-    data = json.dumps(chart_data, ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
+
+
+def _write_html(path, panels, title, *, page=None):
+    data = json.dumps(_chart_data(panels), ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
+    page_json = json.dumps(page or {}, ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
     document = f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>{escape(title)}</title>
@@ -947,11 +970,15 @@ label {{display:inline-flex;align-items:center;gap:.22em;margin-right:.7em}}
 label span {{border-bottom:2px solid;padding-bottom:.08em}}
 svg {{width:100%}} svg text {{font:11px system-ui,sans-serif;fill:#233752}}
 output {{display:block;background:#f1f5fb;padding:.42rem .65rem;min-height:3rem;overflow-wrap:anywhere}}
+{PAGE_STYLE}
 </style></head><body>
-<h1>{escape(title)}</h1><main></main>
+<header><h1>{escape(title)}</h1></header><div id="controls"></div><main></main>
 <noscript>Ative JavaScript para interagir ou abra a versão PNG da visão geral.</noscript>
 <script type="application/json" id="chart-data">{data}</script>
-<script>{_HTML_SCRIPT}</script></body></html>
+<script type="application/json" id="page-data">{page_json}</script>
+<script type="application/json" id="run-lineage">{{}}</script>
+<script>{_HTML_SCRIPT}
+{PAGE_SCRIPT}</script></body></html>
 """
     atomic_write(path, document.encode())
 
@@ -1125,7 +1152,7 @@ class _Publication:
         return value
 
 
-def _parent_charts(publication, observations, fits):
+def _parent_charts(publication, observations, fits, report):
     task = observations.get("task")
     windows = _window_panels(observations, fits)
     fit_quality = _fit_quality_panels(observations, fits)
@@ -1139,10 +1166,21 @@ def _parent_charts(publication, observations, fits):
             ("../training-history.json", ["/fits/*/observation_scopes"]),
         ]
     publication.line("overview/overview", panels, title, **metadata)
-    publication.chart(
-        "overview/overview", partial(_write_html, panels=panels, title=title) if panels else None,
-        html=True, panels=panels, **metadata,
-    )
+    pages = page_data(report, fits, _chart_data, _window_panels, _fit_series)
+    for stem, page_title, page_panels in (
+        ("overview/overview", title, panels),
+        ("retraining-timeline", "Timeline de retreinamentos", []),
+        ("retraining-explorer", "Explorador de retreinamentos", []),
+    ):
+        kind = stem.rsplit("/", 1)[-1]
+        publication.chart(
+            stem, partial(_write_html, panels=page_panels, title=page_title, page=pages[kind]),
+            html=True, panels=page_panels, source="observations.json",
+            source_pointer=["/lineage", "/scopes", "/windows", "/drift", "/effort", "/resources"],
+            additional_sources=[("../training-history.json", ["/fits"]),
+                                ("mlflow-lineage.json", ["/children"])],
+            scope="run",
+        )
     publication.scoped("overview", observations.get("scopes") or {}, task, source="observations.json",
                        pointer="/scopes")
 
@@ -1224,7 +1262,7 @@ def write_observation_figures(directory, report, *, parent_run_id=None, child_ru
     started = time.perf_counter()
     publication = _Publication(Path(directory), observations, parent_run_id, child_run_ids or {}, allow_html)
     fits = report.get("training_history") or []
-    _parent_charts(publication, observations, fits)
+    _parent_charts(publication, observations, fits, report)
     for fit in fits:
         _child_charts(publication, observations, fit)
     return publication.manifest(time.perf_counter() - started)

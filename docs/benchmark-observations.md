@@ -135,3 +135,7 @@ detalhes. O recorte de escala executou 10 milhões de predições no caminho de
 avaliação da fraude em 40 blocos nativos, sob limite de memória de 2 GiB, com
 pico de RSS do processo de 485.257.216 bytes. Esse recorte mediu o avaliador
 e excluiu o arquivo de predições e a publicação remota.
+
+A visão geral, a timeline e o explorador são publicados na run principal.
+Os caminhos e o comportamento da prévia estão na seção
+[Páginas de retreinamento em Artifacts](mlflow-tracking.md#páginas-de-retreinamento-em-artifacts).

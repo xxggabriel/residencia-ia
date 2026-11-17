@@ -212,3 +212,38 @@ def test_step_and_epoch_panels_use_integer_coordinates_with_unscoped_loss():
         panels = _fit_series(fit, dimension)
         assert panels[0].integer_x
         assert [point["x"] for point in panels[0].series[0].points] == [1, 2, 3]
+
+
+def test_retraining_pages_keep_duplicate_positions_partial_fits_and_zeros(tmp_path, monkeypatch):
+    monkeypatch.setattr("continual_bench.infrastructure.training_figures.matplotlib_available", lambda: False)
+    report = _binary_report()
+    fits = report["training_history"]
+    fits[1]["end_seq"] = fits[0]["end_seq"]
+    fits[1]["status"] = "partial"
+    fits[1]["observation_steps"] = None
+    fits[1]["observation_epochs"] = None
+    fits[2]["observation_resources"]["duration_seconds"] = 0
+    report["tracking_observations"]["lineage"]["dataset"] = "</script><script>unsafe()</script>"
+    manifest = write_observation_figures(tmp_path, report)
+
+    def load(name):
+        path = tmp_path / f"{name}.html"
+        document = path.read_text()
+        assert "<script>unsafe()" not in document
+        return json.loads(re.search(
+            r'<script type="application/json" id="page-data">(.*?)</script>', document,
+        ).group(1))
+
+    timeline = load("retraining-timeline")
+    explorer = load("retraining-explorer")
+    assert [fit["id"] for fit in timeline["fits"]] == [fit["fit_id"] for fit in fits]
+    assert timeline["fits"][0]["x"] == timeline["fits"][1]["x"]
+    assert timeline["fits"][1]["status"] == "partial"
+    assert explorer["fits"][1]["series"] == {"step": [], "epoch": []}
+    assert explorer["fits"][2]["duration"] == 0
+    assert "retraining-explorer.html" in manifest["parent"]
+    assert "retraining-timeline.html" in manifest["parent"]
+
+    report["training_history"] = []
+    write_observation_figures(tmp_path, report)
+    assert load("retraining-explorer")["fits"] == []

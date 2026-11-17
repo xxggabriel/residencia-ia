@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 
+from .retraining_pages import HTML_REVISION, PAGE_PATHS
 from .storage import atomic_write
 
 ARTIFACT_ROOT = "tracking-observations"
@@ -116,6 +117,7 @@ def write_observation_evidence(directory, report, parent_run_id=None, children=(
     signature = {
         "observations_sha256": hashlib.sha256(payload).hexdigest(),
         "training_history_sha256": _fit_source_checksum(directory),
+        "html_revision": HTML_REVISION,
     }
     manifest = json.loads(manifest_path.read_bytes()) if manifest_path.is_file() else {}
     if manifest.get("source_checksums") != signature or not (root / "observations.json").is_file():
@@ -142,6 +144,15 @@ def write_observation_evidence(directory, report, parent_run_id=None, children=(
         }
         atomic_write(root / "mlflow-lineage.json", _json_bytes(bindings))
         _bind_plot_manifest(manifest_path, bindings)
+        lineage = _json_bytes(bindings).replace(b"<", br"\u003c")
+        for relative in PAGE_PATHS:
+            page = root / relative
+            if page.is_file():
+                marker = b'<script type="application/json" id="run-lineage">'
+                start, separator, tail = page.read_bytes().partition(marker)
+                if separator:
+                    suffix = tail.split(b"</script>", 1)[1]
+                    atomic_write(page, start + separator + lineage + b"</script>" + suffix)
         for child in children:
             fit_root = root / "fits" / child["fit_id"]
             if fit_root.is_dir():
