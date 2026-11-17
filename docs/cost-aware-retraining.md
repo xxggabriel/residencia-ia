@@ -126,21 +126,31 @@ são escolhas locais. A fórmula de Gauss tem um parêntese ausente no artigo e 
 baselines locais, além do Oracle. Os números do pipeline prequential usam a temporização
 operacional descrita acima.
 
-## Comparação pareada de CARA, UPF e os dois Oracles em Electricity
+## Comparação pareada de CARA, UPF e os dois Oracles em Electricity e Airlines
 
 ```bash
-python scripts/replicate_upf.py electricity --electricity ~/Downloads/electricity-normalized.arff \
-  --compare-oracles --decision-timing next-batch --output /path/to/electricity-next-batch.json
-python scripts/replicate_upf.py electricity --electricity ~/Downloads/electricity-normalized.arff \
-  --compare-oracles --decision-timing same-batch --output /path/to/electricity-same-batch.json
-python scripts/plot_replication.py /path/to/electricity-next-batch.json \
-  /path/to/electricity-same-batch.json --output /path/to/plots
+uv sync --locked --inexact --extra replication
+out=state/cara-upf-pareado
+mkdir -p "$out"
+uv run --no-sync python scripts/prepare_real_sources.py --directory "$out/inputs"
+for timing in next-batch same-batch; do
+  uv run --no-sync python scripts/replicate_upf.py electricity airlines \
+    --electricity "$out/inputs/electricity.arff" --airlines "$out/inputs/airlines.arff" \
+    --compare-oracles --decision-timing "$timing" --trials 10 --samples 100 \
+    --output "$out/$timing.json"
+done
+uv run --no-sync python scripts/plot_replication.py "$out/next-batch.json" \
+  "$out/same-batch.json" --output "$out/plots"
 ```
 
-Em cada execução, todas as políticas usam os mesmos modelos XGBoost e lotes de Electricity.
-São sete lotes offline e oito online, com 2.000 linhas por lote e partições 80/20. O CARA usa
-rótulos da partição de treino para estimar obsolescência e apenas atributos da partição de teste
-para as queries. O UPF usa quantil de 95% e 100 amostras Monte Carlo por padrão.
+Em cada dataset e semente, todas as políticas usam os mesmos candidatos XGBoost e os mesmos lotes.
+São sete lotes offline e oito online, com 2.000 linhas por lote, partições 80/20 e 100 rodadas de
+boosting por candidato. A janela de 15 lotes é contígua na ordem publicada. Janelas de sementes
+diferentes podem se sobrepor. O CARA usa rótulos da partição de treino para estimar obsolescência
+e apenas atributos da partição de teste para as queries. O UPF usa quantil de 95% e 100 amostras de
+Monte Carlo por padrão. O JSON registra
+o SHA-256 da fonte por dataset. Para manter a mesma codificação de Airlines entre execuções,
+use sempre o mesmo arquivo. O CLI também aceita o CSV numérico do Scikit-Multiflow.
 
 Em `next-batch`, ambas as políticas decidem após o mesmo lote e o modelo novo serve o seguinte.
 Em `same-batch`, o modelo novo pode servir o teste do próprio lote. Nesse protocolo, o CARA usa
@@ -151,7 +161,9 @@ Oracles otimizam seus respectivos objetivos com a mesma temporização das polí
 as curvas, os desvios nos pontos 0,1 e 0,9 e os cronogramas por semente. A grade numérica de 20
 preços é comum, com resolução maior perto de zero. A escala de α difere da escala de κ, e o
 gráfico por frequência mostra o erro e a obsolescência sem a parcela do preço do retreino. A AUC
-dessa grade descreve a comparação local.
+dessa grade de 0 a 1 descreve a comparação local. Compare cada política com o Oracle do mesmo
+objetivo, dataset e temporização. A reprodução da Tabela 1 do UPF usa o comando da seção anterior,
+com lotes de 3.000 linhas e grade de 0 a 0,7 em Airlines.
 
 ## Benchmark do CARA com o protocolo dos autores
 

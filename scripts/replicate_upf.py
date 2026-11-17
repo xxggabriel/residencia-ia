@@ -5,7 +5,12 @@ import json
 from hashlib import file_digest
 from pathlib import Path
 
-from continual_bench.evaluation.retraining_replication import ALPHA_MAX, replicate
+from continual_bench.evaluation.retraining_replication import (
+    ALPHA_MAX,
+    COMPARISON_DATASETS,
+    DEFAULT_CACHE,
+    replicate,
+)
 
 
 def main():
@@ -13,16 +18,17 @@ def main():
     parser.add_argument("datasets", nargs="+", choices=sorted(ALPHA_MAX))
     parser.add_argument("--trials", type=int, default=10)
     parser.add_argument("--electricity")
-    parser.add_argument("--airlines", help="numeric Scikit-Multiflow CSV or OpenML ARFF")
+    parser.add_argument("--airlines", type=Path, default=Path(DEFAULT_CACHE).expanduser() / "airlines.arff",
+                        help="numeric Scikit-Multiflow CSV or OpenML ARFF")
     parser.add_argument("--samples", type=int, default=100)
     parser.add_argument("--compare-oracles", action="store_true",
-                        help="score CARA/UPF and both Oracles on the same Electricity windows")
+                        help="score CARA/UPF and both Oracles on shared Electricity or Airlines windows")
     parser.add_argument("--decision-timing", choices=("same-batch", "next-batch"),
                         help="shared benchmark deployment timing")
     parser.add_argument("--output")
     args = parser.parse_args()
-    if args.compare_oracles and args.datasets != ["electricity"]:
-        parser.error("--compare-oracles requires electricity")
+    if args.compare_oracles and any(name not in COMPARISON_DATASETS for name in args.datasets):
+        parser.error("--compare-oracles supports electricity and airlines")
     if args.decision_timing and not args.compare_oracles:
         parser.error("--decision-timing requires --compare-oracles")
     if "electricity" in args.datasets and not args.electricity:
@@ -31,6 +37,12 @@ def main():
         parser.error("use at least one trial and two Monte Carlo samples")
     if args.electricity:
         args.electricity = Path(args.electricity).expanduser()
+    args.airlines = args.airlines.expanduser()
+    if args.compare_oracles:
+        paths = {"electricity": args.electricity, "airlines": args.airlines}
+        for name in args.datasets:
+            if not paths[name].is_file():
+                parser.error(f"{name} input file does not exist: {paths[name]}")
     results = []
     for name in args.datasets:
         result = replicate(name, args.trials, electricity_path=args.electricity,
@@ -40,7 +52,7 @@ def main():
         if args.compare_oracles:
             import xgboost
 
-            path = Path(args.electricity).expanduser()
+            path = paths[name]
             with path.open("rb") as source:
                 digest = file_digest(source, "sha256").hexdigest()
             result["comparison"]["source"] = {"file": path.name, "sha256": digest}
@@ -57,7 +69,7 @@ def main():
                       f"AUC staleness {row['strategy_auc_mean']:.4f}")
                 continue
             print(f"  {rule:16s} ours {row['auc_mean']:.4f} +- {row['auc_std']:.4f}   paper {paper}")
-        if name == "electricity":
+        if args.compare_oracles or name == "electricity":
             for by_rule in result["table"].values():
                 print(f"  α = {by_rule['upf']['alpha']:g}")
                 selected = ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle", "oracle_staleness")
