@@ -122,9 +122,15 @@ def test_metrics_and_probabilities():
 
 @pytest.mark.parametrize("size", [1, 7])
 def test_online_updates_every_released_label_and_drains_delays(size):
-    subject = Engine(SpyModel, SpyDetector,
-                     PolicyStrategy("online", cooldown=100, min_samples=100, min_window=50),
-                     warmup=3, window=5, metric_window=4, training_budget=17)
+    subject = Engine(
+        SpyModel,
+        SpyDetector,
+        PolicyStrategy("online", cooldown=100, min_samples=100, min_window=50),
+        warmup=3,
+        window=5,
+        metric_window=4,
+        training_budget=17,
+    )
     for start in range(0, 20, size):
         subject.observe_batch([event(i, delay=3) for i in range(start, min(start + size, 20))])
         assert len(subject.model.learned) == max(0, subject.last_timestamp - 2)
@@ -135,9 +141,16 @@ def test_online_updates_every_released_label_and_drains_delays(size):
 
 
 def test_budget_caps_replayed_examples_and_resume_accounting():
-    subject = Engine(SpyModel, SpyDetector,
-                     PolicyStrategy("periodic", every=2, cooldown=0, min_samples=1, min_window=1),
-                     warmup=1, window=5, metric_window=2, training_budget=7, min_retrain_window=1)
+    subject = Engine(
+        SpyModel,
+        SpyDetector,
+        PolicyStrategy("periodic", every=2, cooldown=0, min_samples=1, min_window=1),
+        warmup=1,
+        window=5,
+        metric_window=2,
+        training_budget=7,
+        min_retrain_window=1,
+    )
     for i in range(7):
         subject.observe_batch([event(i)])
     subject = pickle.loads(pickle.dumps(subject))

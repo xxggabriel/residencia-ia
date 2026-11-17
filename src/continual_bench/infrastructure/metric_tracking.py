@@ -108,12 +108,20 @@ def publish_tracking(client, run_id, report, directory, objects=None, derived=Fa
     missing = missing_metric_points(client, run_id, points)
     directory = Path(directory)
     report_path = directory / "report.json"
-    original = report_path.read_bytes() if report_path.exists() else _json_bytes(
-        {key: value for key, value in report.items() if key != "tracking"}
+    original = (
+        report_path.read_bytes()
+        if report_path.exists()
+        else _json_bytes({key: value for key, value in report.items() if key != "tracking"})
     )
     extra_paths = []
-    for name in ("predictions.jsonl", "predictions-manifest.json", "metric-definitions.json",
-                 "continual-probes.json", "task_evaluation-metrics.json", "tracking/execution-v1.json"):
+    for name in (
+        "predictions.jsonl",
+        "predictions-manifest.json",
+        "metric-definitions.json",
+        "continual-probes.json",
+        "task_evaluation-metrics.json",
+        "tracking/execution-v1.json",
+    ):
         path = directory / name
         if path.is_file():
             extra_paths.append(path)
@@ -125,8 +133,9 @@ def publish_tracking(client, run_id, report, directory, objects=None, derived=Fa
         if path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()):
             raise ValueError("tracking evidence must be an ordinary file inside the run directory")
         blob = path.read_bytes()
-        files.append({"path": path.relative_to(directory).as_posix(), "sha256": _sha(blob),
-                      "bytes": len(blob)})
+        files.append(
+            {"path": path.relative_to(directory).as_posix(), "sha256": _sha(blob), "bytes": len(blob)}
+        )
     envelope = {
         "version": VERSION,
         "derived": bool(derived),
@@ -165,16 +174,24 @@ def publish_tracking(client, run_id, report, directory, objects=None, derived=Fa
     completion = {"tracking_v1_settings_sha256": envelope["settings_sha256"]}
     if tracking.get("definitions_sha256"):
         completion["tracking_v1_definitions_sha256"] = tracking["definitions_sha256"]
-    completion.update({
-        "tracking_v1_origin": "derived" if derived else "native",
-        "tracking_v1_unavailable_count": str(sum(value is None for value in tracking["metrics"].values())),
-        "tracking_v1_payload_sha256": payload_sha,
-        "tracking_v1_status": "complete",
-    })
+    completion.update(
+        {
+            "tracking_v1_origin": "derived" if derived else "native",
+            "tracking_v1_unavailable_count": str(
+                sum(value is None for value in tracking["metrics"].values())
+            ),
+            "tracking_v1_payload_sha256": payload_sha,
+            "tracking_v1_status": "complete",
+        }
+    )
     # One request instead of six set_tag calls; it follows the synchronous metric writes.
     as_backend(client).log_batch(run_id, tags=completion)
-    return {"payload_sha256": payload_sha, "artifact_path": artifact_path,
-            "sidecar_path": str(sidecar), "object_uris": uris}
+    return {
+        "payload_sha256": payload_sha,
+        "artifact_path": artifact_path,
+        "sidecar_path": str(sidecar),
+        "object_uris": uris,
+    }
 
 
 def publish_execution(client, run_id, report, directory, elapsed_seconds, objects=None):
@@ -190,30 +207,41 @@ def publish_execution(client, run_id, report, directory, elapsed_seconds, object
         raise ValueError("execution elapsed seconds must be finite and nonnegative")
     directory = Path(directory)
     report_path = directory / "report.json"
-    original = report_path.read_bytes() if report_path.exists() else _json_bytes(
-        {key: value for key, value in report.items() if key != "tracking"}
+    original = (
+        report_path.read_bytes()
+        if report_path.exists()
+        else _json_bytes({key: value for key, value in report.items() if key != "tracking"})
     )
     source_report_sha = _sha(original)
     cache_path = directory / "tracking" / "execution-v1.json"
     if cache_path.exists():
         cached = json.loads(cache_path.read_bytes())
-        if (cached.get("version") != "execution-v1"
-                or cached.get("source_report_sha256") != source_report_sha
-                or cached.get("run_id") != run_id
-                or cached.get("scope") != EXECUTION_SCOPE
-                or not _finite(cached.get("elapsed_seconds"))
-                or cached["elapsed_seconds"] < 0):
+        if (
+            cached.get("version") != "execution-v1"
+            or cached.get("source_report_sha256") != source_report_sha
+            or cached.get("run_id") != run_id
+            or cached.get("scope") != EXECUTION_SCOPE
+            or not _finite(cached.get("elapsed_seconds"))
+            or cached["elapsed_seconds"] < 0
+        ):
             raise ValueError("execution cache provenance or elapsed time mismatch")
     else:
-        cached = {"version": "execution-v1", "source_report_sha256": source_report_sha,
-                  "run_id": run_id, "elapsed_seconds": elapsed_seconds, "scope": EXECUTION_SCOPE}
+        cached = {
+            "version": "execution-v1",
+            "source_report_sha256": source_report_sha,
+            "run_id": run_id,
+            "elapsed_seconds": elapsed_seconds,
+            "scope": EXECUTION_SCOPE,
+        }
         atomic_write(cache_path, _json_bytes(cached))
     supplemental = dict(report)
     supplemental["tracking"] = copy.deepcopy(report["tracking"])
     tracking = supplemental["tracking"]
     tracking["metrics"]["pipeline_elapsed_seconds"] = cached["elapsed_seconds"]
     tracking["availability"]["pipeline_elapsed_seconds"] = {
-        "status": "available", "reason": None, "scope": EXECUTION_SCOPE,
+        "status": "available",
+        "reason": None,
+        "scope": EXECUTION_SCOPE,
     }
     tracking["execution_scope"] = EXECUTION_SCOPE
     return publish_tracking(client, run_id, supplemental, directory, objects=objects, derived=False)

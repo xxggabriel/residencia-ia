@@ -125,7 +125,8 @@ class Metrics:
             "f1_weighted": (positives * f1 + negatives * negative_f1) / self.n if self.n else 0.0,
             "mcc": (self.tp * tn - self.fp * self.fn) / math.sqrt(mcc_denom) if mcc_denom else None,
             "cohen_kappa": (self.n * self.correct - agreement_expected) / kappa_denom
-            if kappa_denom else None,
+            if kappa_denom
+            else None,
             "positive_rate": positives / self.n if self.n else 0.0,
             "predicted_positive_rate": predicted_positives / self.n if self.n else 0.0,
             "roc_auc": roc_auc,

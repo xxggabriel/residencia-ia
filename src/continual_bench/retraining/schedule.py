@@ -11,8 +11,9 @@ from __future__ import annotations
 import numpy as np
 
 
-def schedule_cost(cost: np.ndarray, initial: int, first: int, last: int,
-                  retrains: list[int], alpha: float) -> float:
+def schedule_cost(
+    cost: np.ndarray, initial: int, first: int, last: int, retrains: list[int], alpha: float
+) -> float:
     """``alpha * |schedule| + sum_j cost[deployed(j), j]`` for batches ``first..last``."""
     deployed, total, points = initial, 0.0, set(retrains)
     for j in range(first, last + 1):
@@ -23,8 +24,9 @@ def schedule_cost(cost: np.ndarray, initial: int, first: int, last: int,
     return total
 
 
-def optimal_schedule(cost: np.ndarray, initial: int, first: int, last: int,
-                     alpha: float) -> tuple[list[int], float]:
+def optimal_schedule(
+    cost: np.ndarray, initial: int, first: int, last: int, alpha: float
+) -> tuple[list[int], float]:
     """Minimum-cost retraining points in ``[first, last - 1]`` for batches ``first..last``."""
     if not first <= last or alpha < 0:
         raise ValueError("invalid phase or retraining cost")
@@ -51,14 +53,15 @@ def optimal_schedule(cost: np.ndarray, initial: int, first: int, last: int,
     return schedule, best[initial][0]
 
 
-def min_error_by_retrains(cost: np.ndarray, initial: int, first: int, last: int,
-                          max_retrains: int) -> list[float]:
+def min_error_by_retrains(
+    cost: np.ndarray, initial: int, first: int, last: int, max_retrains: int
+) -> list[float]:
     """``E_r``: minimum summed cost with exactly ``r`` retrains, ``r = 0..max_retrains`` (inf: impossible)."""
     models = sorted({initial, *range(first, last)})
     prefix = {}
     for m in models:
         start = max(first, m + 1)
-        sums = np.concatenate([[0.0], np.cumsum(cost[m, start:last + 1])])
+        sums = np.concatenate([[0.0], np.cumsum(cost[m, start : last + 1])])
         prefix[m] = (start, sums)
 
     def segment(m, upto):  # serve batches start..upto with model m
@@ -107,9 +110,15 @@ def alpha_for_retrain_bound(retrains: int, lipschitz: float, horizon: int) -> fl
     return lipschitz * max(0, horizon - retrains) ** 2
 
 
-def optimal_schedule_same_batch(stale: np.ndarray, initial: int, first: int, last: int,
-                                alpha: float, *, retrain_errors: np.ndarray | None = None
-                                ) -> tuple[list[int], float]:
+def optimal_schedule_same_batch(
+    stale: np.ndarray,
+    initial: int,
+    first: int,
+    last: int,
+    alpha: float,
+    *,
+    retrain_errors: np.ndarray | None = None,
+) -> tuple[list[int], float]:
     """CARA's accounting (Eq. 4-6, 13-14): a retrain at ``t`` costs ``alpha`` *instead of* the staleness of
     batch ``t`` (the new model is trained on it and serves it with staleness 0) and is allowed at ``last``.
 
@@ -138,12 +147,15 @@ def optimal_schedule_same_batch(stale: np.ndarray, initial: int, first: int, las
     return sorted(retrains), total
 
 
-def alpha_max_same_batch(stale: np.ndarray, initial: int, first: int, last: int,
-                         *, retrain_errors: np.ndarray | None = None) -> float:
+def alpha_max_same_batch(
+    stale: np.ndarray, initial: int, first: int, last: int, *, retrain_errors: np.ndarray | None = None
+) -> float:
     """Smallest ``alpha`` at which :func:`optimal_schedule_same_batch` stops retraining (bisection)."""
+
     def switches(alpha):
-        schedule, _ = optimal_schedule_same_batch(stale, initial, first, last, alpha,
-                                                  retrain_errors=retrain_errors)
+        schedule, _ = optimal_schedule_same_batch(
+            stale, initial, first, last, alpha, retrain_errors=retrain_errors
+        )
         return schedule
 
     high = 1.0

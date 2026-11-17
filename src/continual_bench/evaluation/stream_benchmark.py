@@ -147,8 +147,9 @@ def chronological_blocks(path, size, *, start=0, use_threads=False):
             if any(batch[i].null_count for i in (0, 1)):
                 raise ValueError("null timestamp or label")
             timestamps, y = (batch[i].to_numpy() for i in (0, 1))
-            x = np.column_stack([col.cast(pa.float32()).to_numpy(zero_copy_only=False)
-                                 for col in batch.columns[2:]])
+            x = np.column_stack(
+                [col.cast(pa.float32()).to_numpy(zero_copy_only=False) for col in batch.columns[2:]]
+            )
             end = int(np.searchsorted(timestamps, timestamps[-1]))
             if end:
                 tail.append((timestamps[:end], x[:end], y[:end]))
@@ -236,10 +237,18 @@ def run(
     split = manifest["rows"] - int(manifest["rows"] * HOLDOUT_FRACTION)
     identity = resume = None
     if checkpoint is not None:
-        identity = sha256(encoded({
-            "manifest": manifest, "policy": policy, "split": split, "block_rows": block_rows,
-            "tracking": tracking_settings, "iterative_training": iter_config.model_dump(),
-        })).hexdigest()
+        identity = sha256(
+            encoded(
+                {
+                    "manifest": manifest,
+                    "policy": policy,
+                    "split": split,
+                    "block_rows": block_rows,
+                    "tracking": tracking_settings,
+                    "iterative_training": iter_config.model_dump(),
+                }
+            )
+        ).hexdigest()
         resume = checkpoint.load()
         if resume is not None and (resume["version"], resume["identity"]) != (CHECKPOINT_VERSION, identity):
             raise ValueError("checkpoint does not match the Zia evaluation contract")
@@ -248,6 +257,7 @@ def run(
 
         def stop_requested():
             return checkpoint.requested() or (external_stop is not None and external_stop())
+
     if progress is not None and resume is None:
         publish_progress(0, {"rows_processed": 0, "rows_total": manifest["rows"], "evaluated": 0})
 
@@ -262,9 +272,14 @@ def run(
 
     costs = profile(tracking_settings["costs"])
     threshold = decision_threshold(costs) if classes == 2 else None
-    model = make_zia_model(spec.model, labels, config=iter_config, dataset=dataset,
-                           model_params=spec.model_params,
-                           decision_threshold=threshold)
+    model = make_zia_model(
+        spec.model,
+        labels,
+        config=iter_config,
+        dataset=dataset,
+        model_params=spec.model_params,
+        decision_threshold=threshold,
+    )
     history = TrainingHistory(output, stop_requested)
     if resume is not None:
         history.fits = resume["fits"]
@@ -283,14 +298,22 @@ def run(
         return max(previous_peak_rss or 0, peak_rss_bytes() or 0) or None
 
     def save_checkpoint(phase, state, *, force):
-        checkpoint.save({
-            "version": CHECKPOINT_VERSION, "identity": identity, "phase": phase, "state": state,
-            "fits": history.fits, "global_fit_step": history.global_step,
-            "tracking_seconds": tracking_seconds,
-            "elapsed_seconds": previous_seconds + time.monotonic() - started,
-            "system_samples": system_report()["samples"], "system_segment": segment,
-            "process_peak_rss_bytes": peak_rss(),
-        }, force=force)
+        checkpoint.save(
+            {
+                "version": CHECKPOINT_VERSION,
+                "identity": identity,
+                "phase": phase,
+                "state": state,
+                "fits": history.fits,
+                "global_fit_step": history.global_step,
+                "tracking_seconds": tracking_seconds,
+                "elapsed_seconds": previous_seconds + time.monotonic() - started,
+                "system_samples": system_report()["samples"],
+                "system_segment": segment,
+                "process_peak_rss_bytes": peak_rss(),
+            },
+            force=force,
+        )
         history.check_interrupted()
 
     detector = None
@@ -302,8 +325,11 @@ def run(
     elif policy in ("drift", "drift_adwin"):
         params = {"delta": ADWIN_DELTA, "clock": 1 if policy == "drift" else ADWIN_CLOCK}
         detector = ADWIN(**params)
-        policy_settings = {"detector": "adwin", "params": params,
-                           "signal": "block_error_rate" if policy == "drift" else "binary_error_per_example"}
+        policy_settings = {
+            "detector": "adwin",
+            "params": params,
+            "signal": "block_error_rate" if policy == "drift" else "binary_error_per_example",
+        }
     elif policy == "drift_ddm":
         detector = DDM(**DDM_PARAMS)
         policy_settings = {"detector": "ddm", "params": DDM_PARAMS, "signal": "binary_error_per_example"}
@@ -311,12 +337,19 @@ def run(
         alpha = tracking_settings["upf_alpha"]
         params = {"alpha": alpha}
         if policy == "upf":
-            params.update(delta=retraining_options["delta"], samples=retraining_options["mc_samples"],
-                          seed=retraining_options["seed"])
+            params.update(
+                delta=retraining_options["delta"],
+                samples=retraining_options["mc_samples"],
+                seed=retraining_options["seed"],
+            )
         batch_policy = PolicyStrategy(policy, params=params)
-        policy_settings = {**params, "replay_blocks": REPLAY_BLOCKS, "objective": "error_rate_0_1",
-                           "offline_blocks": retraining_options["offline_blocks"],
-                           "timing": "retrain after block t serves t+1 onward"}
+        policy_settings = {
+            **params,
+            "replay_blocks": REPLAY_BLOCKS,
+            "objective": "error_rate_0_1",
+            "offline_blocks": retraining_options["offline_blocks"],
+            "timing": "retrain after block t serves t+1 onward",
+        }
     matrix = states = None
 
     def scores():
@@ -343,13 +376,22 @@ def run(
             scratch.mkdir(parents=True, exist_ok=True)
             candidate_dir = nullcontext(scratch)
     progress_offset = 0
-    with monitoring, candidate_dir as scratch, PredictionArchive(
-        output, labels, manifest["sha256"], "native", tracking_settings["fading_factor"],
-        threshold=threshold,
-        staging=checkpoint_dir / "predictions" if checkpoint_dir is not None else None,
-        resume=evaluation["predictions"] if evaluation is not None else None,
-    ) as predictions:
+    with (
+        monitoring,
+        candidate_dir as scratch,
+        PredictionArchive(
+            output,
+            labels,
+            manifest["sha256"],
+            "native",
+            tracking_settings["fading_factor"],
+            threshold=threshold,
+            staging=checkpoint_dir / "predictions" if checkpoint_dir is not None else None,
+            resume=evaluation["predictions"] if evaluation is not None else None,
+        ) as predictions,
+    ):
         if batch_policy is not None:
+
             def save_matrix(partial):
                 build, _, _ = partial
                 complete = len(build.states) < len(build.rows)
@@ -361,11 +403,21 @@ def run(
                 matrix_start = partial[0].processed_rows if partial is not None else 0
                 matrix, states = zia_retraining.stream_matrix(
                     training_blocks(matrix_start),
-                    make_zia_model(spec.model, labels, config=iter_config, dataset=dataset,
-                                   model_params=spec.model_params,
-                                   decision_threshold=threshold),
-                    threshold, iter_config, REPLAY_BLOCKS, retraining_options,
-                    history=history, scratch=Path(scratch), tracker=tracker,
+                    make_zia_model(
+                        spec.model,
+                        labels,
+                        config=iter_config,
+                        dataset=dataset,
+                        model_params=spec.model_params,
+                        decision_threshold=threshold,
+                    ),
+                    threshold,
+                    iter_config,
+                    REPLAY_BLOCKS,
+                    retraining_options,
+                    history=history,
+                    scratch=Path(scratch),
+                    tracker=tracker,
                     progress=publish_progress if progress is not None else None,
                     resume=partial,
                     checkpoint=save_matrix if checkpoint is not None else None,
@@ -378,18 +430,28 @@ def run(
         def save_evaluation(force=False):
             online_iterations = (
                 model.online_iterations
-                if policy == "online" and model.name == "multinomial_logistic" else None
+                if policy == "online" and model.name == "multinomial_logistic"
+                else None
             )
-            save_checkpoint("evaluation", {
-                "stream": state, "candidates": states, "policy": batch_policy,
-                "online_iterations": online_iterations,
-                "predictions": predictions.snapshot(),
-            }, force=force or checkpoint.requested())
+            save_checkpoint(
+                "evaluation",
+                {
+                    "stream": state,
+                    "candidates": states,
+                    "policy": batch_policy,
+                    "online_iterations": online_iterations,
+                    "predictions": predictions.snapshot(),
+                },
+                force=force or checkpoint.requested(),
+            )
 
         for step, (timestamps, x, y, is_holdout) in enumerate(stream(state.rows), start=state.next_step):
             history.check_interrupted()
-            if ((state.last_timestamp is not None and timestamps[0] < state.last_timestamp)
-                    or np.any(timestamps[1:] < timestamps[:-1]) or np.any((y < 0) | (y >= classes))):
+            if (
+                (state.last_timestamp is not None and timestamps[0] < state.last_timestamp)
+                or np.any(timestamps[1:] < timestamps[:-1])
+                or np.any((y < 0) | (y >= classes))
+            ):
                 raise ValueError("unordered timestamps or invalid labels")
             state.last_timestamp = int(timestamps[-1])
             start, state.rows = state.rows, state.rows + len(y)
@@ -411,20 +473,32 @@ def run(
                 predictions.add(start, timestamps, y, probabilities, is_holdout, serving["end_seq"])
                 (state.holdout if is_holdout else state.online).merge(window)
                 metrics, _ = window.metrics()
-                state.windows.append({
-                    "end_seq": state.rows, "scope": "holdout" if is_holdout else "prequential",
-                    "start_time_ms": int(timestamps[0]), "end_time_ms": state.last_timestamp,
-                    "prediction_seconds": elapsed, "prediction_throughput_per_second": len(y) / elapsed,
-                    **metrics,
-                })
+                state.windows.append(
+                    {
+                        "end_seq": state.rows,
+                        "scope": "holdout" if is_holdout else "prequential",
+                        "start_time_ms": int(timestamps[0]),
+                        "end_time_ms": state.last_timestamp,
+                        "prediction_seconds": elapsed,
+                        "prediction_throughput_per_second": len(y) / elapsed,
+                        **metrics,
+                    }
+                )
                 mark = time.monotonic()
-                state.observed_windows.append({
-                    "step": state.rows, "start_seq": start, "scope": state.windows[-1]["scope"],
-                    "quality": window.quality(labels), "model_version": len(state.versions) - 1,
-                    "fit_id": serving["fit_id"], "checkpoint": serving["sha256"],
-                    "inference_seconds": elapsed, "start_time_ms": int(timestamps[0]),
-                    "end_time_ms": state.last_timestamp,
-                })
+                state.observed_windows.append(
+                    {
+                        "step": state.rows,
+                        "start_seq": start,
+                        "scope": state.windows[-1]["scope"],
+                        "quality": window.quality(labels),
+                        "model_version": len(state.versions) - 1,
+                        "fit_id": serving["fit_id"],
+                        "checkpoint": serving["sha256"],
+                        "inference_seconds": elapsed,
+                        "start_time_ms": int(timestamps[0]),
+                        "end_time_ms": state.last_timestamp,
+                    }
+                )
                 if is_holdout:
                     state.probes.add(start, timestamps, x, y)
                 tracking_seconds += time.monotonic() - mark
@@ -436,14 +510,25 @@ def run(
                     if state.detector is not None:
                         alarm_offsets = []
                         block_alarms = drift_alarms(
-                            state.detector, policy, probabilities, y, metrics, threshold,
+                            state.detector,
+                            policy,
+                            probabilities,
+                            y,
+                            metrics,
+                            threshold,
                             on_alarm=alarm_offsets.append,
                         )
-                        state.alarms.extend({
-                            "seq": start + offset + 1, "block_index": step, "block_end_seq": state.rows,
-                            "timestamp_ms": int(timestamps[offset]), "detector": policy_settings["detector"],
-                            "signal": policy_settings["signal"],
-                        } for offset in alarm_offsets)
+                        state.alarms.extend(
+                            {
+                                "seq": start + offset + 1,
+                                "block_index": step,
+                                "block_end_seq": state.rows,
+                                "timestamp_ms": int(timestamps[offset]),
+                                "detector": policy_settings["detector"],
+                                "signal": policy_settings["signal"],
+                            }
+                            for offset in alarm_offsets
+                        )
                     if policy == "online":
                         action = "online"
                     elif policy == "incremental":
@@ -454,8 +539,9 @@ def run(
                         if step == matrix.offline - 1:
                             action, chosen, phase = "reset_retrain", states[step], "offline_final"
                         elif matrix.offline <= step <= matrix.batches - 2:
-                            decision = batch_policy.decide(DecisionContext(
-                                labeled=step, window_size=len(y), drift=False, batch=step))
+                            decision = batch_policy.decide(
+                                DecisionContext(labeled=step, window_size=len(y), drift=False, batch=step)
+                            )
                             if decision.action == "reset_retrain":
                                 action, chosen, phase = decision.action, states[step], "online"
             if action:
@@ -479,14 +565,24 @@ def run(
                         model.fit_online(fit_x, fit_y, tracker=tracker, stop_requested=stop_requested)
                     else:
                         model.fit(
-                            fit_x, fit_y, action == "continue", config=iter_config, tracker=tracker,
-                            timestamps=fit_timestamps, capture_sigterm=stop_requested is None,
+                            fit_x,
+                            fit_y,
+                            action == "continue",
+                            config=iter_config,
+                            tracker=tracker,
+                            timestamps=fit_timestamps,
+                            capture_sigterm=stop_requested is None,
                             stop_requested=stop_requested,
                         )
                     fit = history.capture(
-                        model.training_summary, action=action, block_index=step, start=train_start,
-                        timestamps=fit_timestamps, seconds=time.monotonic() - timer,
-                        current_block_start=start, source_model_version=(
+                        model.training_summary,
+                        action=action,
+                        block_index=step,
+                        start=train_start,
+                        timestamps=fit_timestamps,
+                        seconds=time.monotonic() - timer,
+                        current_block_start=start,
+                        source_model_version=(
                             len(state.versions) - 1 if action in ("continue", "online") else None
                         ),
                     )
@@ -503,35 +599,51 @@ def run(
                 fit["promotion_status"] = "promoted"
                 fit["replaces_model_version"] = len(state.versions) - 1 if state.versions else None
                 fit["checkpoint"] = {
-                    "file": filename, "sha256": sha256(payload).hexdigest(), "bytes": len(payload),
+                    "file": filename,
+                    "sha256": sha256(payload).hexdigest(),
+                    "bytes": len(payload),
                 }
                 history.save_partial(fit)
-                state.versions.append({
-                    "end_seq": state.rows, "action": action, "start_seq": fit["start_seq"],
-                    "fit_id": fit["fit_id"],
-                    **fit["checkpoint"],
-                    "train_samples": fit["train_samples"], "validation_samples": fit["validation_samples"],
-                    "training_presentations": fit["training_presentations"],
-                    "train_seconds": fit["train_seconds"],
-                    "iterations": fit["summary"]["iterations"],
-                    "iteration_unit": fit["steps"][0]["kind"],
-                    **({"phase": phase} if phase else {}),
-                })
+                state.versions.append(
+                    {
+                        "end_seq": state.rows,
+                        "action": action,
+                        "start_seq": fit["start_seq"],
+                        "fit_id": fit["fit_id"],
+                        **fit["checkpoint"],
+                        "train_samples": fit["train_samples"],
+                        "validation_samples": fit["validation_samples"],
+                        "training_presentations": fit["training_presentations"],
+                        "train_seconds": fit["train_seconds"],
+                        "iterations": fit["summary"]["iterations"],
+                        "iteration_unit": fit["steps"][0]["kind"],
+                        **({"phase": phase} if phase else {}),
+                    }
+                )
                 if action == "reset_retrain" and chosen is None:
                     gc.collect()
             if step % 10 == 0:
-                atomic_write(output / "progress.json", encoded({
-                    "rows": state.rows, "total_rows": manifest["rows"],
-                    "model_versions_count": len(state.versions),
-                    "elapsed_seconds": previous_seconds + time.monotonic() - started,
-                }))
+                atomic_write(
+                    output / "progress.json",
+                    encoded(
+                        {
+                            "rows": state.rows,
+                            "total_rows": manifest["rows"],
+                            "model_versions_count": len(state.versions),
+                            "elapsed_seconds": previous_seconds + time.monotonic() - started,
+                        }
+                    ),
+                )
             if progress is not None:
                 mark = time.monotonic()
                 live = {
-                    "rows_processed": state.rows, "rows_total": manifest["rows"],
+                    "rows_processed": state.rows,
+                    "rows_total": manifest["rows"],
                     "evaluated": state.rows - state.warmup,
-                    "updates": len(state.versions) - 1, "retrain_count": state.resets,
-                    "train_seconds": state.train_seconds, "prediction_seconds": state.predict_seconds,
+                    "updates": len(state.versions) - 1,
+                    "retrain_count": state.resets,
+                    "train_seconds": state.train_seconds,
+                    "prediction_seconds": state.predict_seconds,
                 }
                 if state.detector is not None:
                     live["drift_alarms"] = len(state.alarms)
@@ -559,7 +671,8 @@ def run(
     if batch_policy is not None:
         zia_retraining.verify_realised(matrix, windows, batch_policy)
         retraining, retraining_metrics = zia_retraining.finalize(
-            batch_policy, matrix, states, retraining_options)
+            batch_policy, matrix, states, retraining_options
+        )
         for fit in history.fits:
             if fit["deployed_version"] is None:
                 fit["promotion_status"] = "rejected"
@@ -578,18 +691,32 @@ def run(
             fit["training_presentations"] for fit in history.fits
         )
     model_bytes = sum(v["bytes"] for v in versions)
-    error_units = (summary["fp"] * costs["false_positive"] + summary["fn"] * costs["false_negative"]
-                   if classes == 2 else errors * costs["classification_error"])
-    cost_report = account(costs, errors=error_units, presentations=presentations, updates=updates,
-                          train_seconds=train_seconds, predict_seconds=predict_seconds,
-                          model_storage_bytes=model_bytes)
+    error_units = (
+        summary["fp"] * costs["false_positive"] + summary["fn"] * costs["false_negative"]
+        if classes == 2
+        else errors * costs["classification_error"]
+    )
+    cost_report = account(
+        costs,
+        errors=error_units,
+        presentations=presentations,
+        updates=updates,
+        train_seconds=train_seconds,
+        predict_seconds=predict_seconds,
+        model_storage_bytes=model_bytes,
+    )
     attempt_seconds = time.monotonic() - started
     compute_seconds = previous_seconds + attempt_seconds
     system = system_report()
     rss_samples = [
-        (sample["elapsed_seconds"], sample["values"]["process_memory_rss_megabytes"] * 1024**2,
-         sample.get("segment"))
-                   for sample in system["samples"] if "process_memory_rss_megabytes" in sample["values"]]
+        (
+            sample["elapsed_seconds"],
+            sample["values"]["process_memory_rss_megabytes"] * 1024**2,
+            sample.get("segment"),
+        )
+        for sample in system["samples"]
+        if "process_memory_rss_megabytes" in sample["values"]
+    ]
     rss_intervals = [
         (end - start) * (before + after) / 2
         for (start, before, segment_before), (end, after, segment_after) in zip(rss_samples, rss_samples[1:])
@@ -598,33 +725,50 @@ def run(
     peak_memory = peak_rss()
     wall_cost = (
         aws_account(
-            costs["aws"], train_seconds=compute_seconds, predict_seconds=0, model_storage_bytes=model_bytes,
+            costs["aws"],
+            train_seconds=compute_seconds,
+            predict_seconds=0,
+            model_storage_bytes=model_bytes,
         )
-        if costs["aws"] is not None else None
+        if costs["aws"] is not None
+        else None
     )
     summary.update(
-        dataset_rows=rows, initial_train_rows=warmup, holdout_rows=final["n"],
-        training_presentations=presentations, training_used_post_warmup=after_warmup,
-        training_unique_examples=unique, training_repeated_presentations=presentations - unique,
-        update_count=updates, retrain_count=resets, alarm_count=alarms,
+        dataset_rows=rows,
+        initial_train_rows=warmup,
+        holdout_rows=final["n"],
+        training_presentations=presentations,
+        training_used_post_warmup=after_warmup,
+        training_unique_examples=unique,
+        training_repeated_presentations=presentations - unique,
+        update_count=updates,
+        retrain_count=resets,
+        alarm_count=alarms,
         updates_per_1000_evaluated=1000 * updates / summary["n"],
-        train_seconds=train_seconds, initial_train_seconds=versions[0]["train_seconds"],
+        train_seconds=train_seconds,
+        initial_train_seconds=versions[0]["train_seconds"],
         update_train_seconds=train_seconds - versions[0]["train_seconds"],
-        postwarmup_train_samples_per_second=ratio(after_warmup,
-                                                  train_seconds - versions[0]["train_seconds"]),
+        postwarmup_train_samples_per_second=ratio(after_warmup, train_seconds - versions[0]["train_seconds"]),
         prediction_seconds=predict_seconds,
         prediction_latency_mean_seconds=ratio(predict_seconds, rows - warmup),
         prediction_throughput_per_second=ratio(rows - warmup, predict_seconds),
-        evaluation_compute_seconds=compute_seconds, evaluation_attempt_wall_seconds=attempt_seconds,
-        process_peak_rss_bytes=peak_memory, model_versions_count=len(versions),
-        model_storage_bytes=model_bytes, mean_window_accuracy=sum(
-            w["accuracy"] for w in windows if w["scope"] == "prequential"
-        ) / stream_blocks,
-        drift_alarm_count=alarms, peak_rss_bytes=peak_memory,
+        evaluation_compute_seconds=compute_seconds,
+        evaluation_attempt_wall_seconds=attempt_seconds,
+        process_peak_rss_bytes=peak_memory,
+        model_versions_count=len(versions),
+        model_storage_bytes=model_bytes,
+        mean_window_accuracy=sum(w["accuracy"] for w in windows if w["scope"] == "prequential")
+        / stream_blocks,
+        drift_alarm_count=alarms,
+        peak_rss_bytes=peak_memory,
         sampled_rss_byte_seconds=sum(rss_intervals) if rss_intervals else None,
         samples_to_target_accuracy=next(
-            (w["end_seq"] for w in windows if w["scope"] == "prequential"
-             and w["accuracy"] >= tracking_settings["target_accuracy"]), None
+            (
+                w["end_seq"]
+                for w in windows
+                if w["scope"] == "prequential" and w["accuracy"] >= tracking_settings["target_accuracy"]
+            ),
+            None,
         ),
         scenario_total_cost=cost_report["metrics"]["cost_total"],
         **retraining_metrics,
@@ -639,37 +783,64 @@ def run(
     )
     summary["posthoc_update_event_cost"] = alpha * updates + error_sum
     sensitivity = [[a, a * updates + error_sum] for a in tracking_settings["upf_alphas"]]
-    summary["cost_sensitivity_auc"] = sum((b - a) * (v + w) / 2
-                                          for (a, v), (b, w) in zip(sensitivity, sensitivity[1:]))
+    summary["cost_sensitivity_auc"] = sum(
+        (b - a) * (v + w) / 2 for (a, v), (b, w) in zip(sensitivity, sensitivity[1:])
+    )
     availability = {
         name: {"status": "unavailable", "reason": "undefined_or_requires_other_evaluation_evidence"}
         for name in metric_catalog()[0]["definitions"]
         if summary.get(name) is None
     }
-    decision_rule = (f"binary: p>={threshold:.6g} (c_FP/(c_FP+c_FN))" if classes == 2
-                     else "multiclass: argmax, ties favor lower class ID")
+    decision_rule = (
+        f"binary: p>={threshold:.6g} (c_FP/(c_FP+c_FN))"
+        if classes == 2
+        else "multiclass: argmax, ties favor lower class ID"
+    )
     env = environment()
     if model.name == "xgboost":
         env["packages"]["xgboost"] = model.xgb.__version__
     report = {
-        "complete": True, "protocol": "batch_prequential_with_final_temporal_holdout",
-        "dataset": dataset, "scope": scope, "policy": policy, "model": model.name,
-        "model_params": {**model.params, "initial_rounds": model.initial_rounds,
-                         "continued_rounds": model.continued_rounds},
-        "contract": {"input": manifest, "environment": env, "block_rows": block_rows,
-                     "holdout_start": rows - final["n"], "replay_blocks": REPLAY_BLOCKS,
-                     "adwin_delta": ADWIN_DELTA, "score_bins": SCORE_BINS, "policy_settings": policy_settings,
-                     "iterative_training": iter_config.model_dump(),
-                     "decision_threshold": threshold, "decision_rule": decision_rule},
+        "complete": True,
+        "protocol": "batch_prequential_with_final_temporal_holdout",
+        "dataset": dataset,
+        "scope": scope,
+        "policy": policy,
+        "model": model.name,
+        "model_params": {
+            **model.params,
+            "initial_rounds": model.initial_rounds,
+            "continued_rounds": model.continued_rounds,
+        },
+        "contract": {
+            "input": manifest,
+            "environment": env,
+            "block_rows": block_rows,
+            "holdout_start": rows - final["n"],
+            "replay_blocks": REPLAY_BLOCKS,
+            "adwin_delta": ADWIN_DELTA,
+            "score_bins": SCORE_BINS,
+            "policy_settings": policy_settings,
+            "iterative_training": iter_config.model_dump(),
+            "decision_threshold": threshold,
+            "decision_rule": decision_rule,
+        },
         "class_counts": state.class_counts.tolist(),
-        "metrics": summary, "holdout": final, "windows": windows,
-        "prequential_confusion": online.confusion.tolist(), "holdout_confusion": holdout.confusion.tolist(),
+        "metrics": summary,
+        "holdout": final,
+        "windows": windows,
+        "prequential_confusion": online.confusion.tolist(),
+        "holdout_confusion": holdout.confusion.tolist(),
         "class_metrics": dict(zip(labels, by_class, strict=True)),
         "holdout_class_metrics": dict(zip(labels, final_by_class, strict=True)),
-        "model_versions": versions, "model_explanation": model.explanation(manifest["features"]),
-        "training_history": history.fits, "alarms": alarm_events,
-        "costs": cost_report, "evaluation_aws_cost": wall_cost, "cost_sensitivity": sensitivity,
-        "availability": availability, "system_metrics": system,
+        "model_versions": versions,
+        "model_explanation": model.explanation(manifest["features"]),
+        "training_history": history.fits,
+        "alarms": alarm_events,
+        "costs": cost_report,
+        "evaluation_aws_cost": wall_cost,
+        "cost_sensitivity": sensitivity,
+        "availability": availability,
+        "system_metrics": system,
         **({"retraining": retraining} if retraining is not None else {}),
     }
     mark = time.monotonic()
@@ -678,9 +849,14 @@ def run(
     retention = state.probes.evaluate(model, output, versions, threshold)
     tracking_seconds += time.monotonic() - mark
     report["tracking_observations"] = run_observations(
-        report=report, history=history, windows=state.observed_windows,
-        prequential=prequential_observation, holdout=holdout_observation, retention=retention,
-        has_detector=state.detector is not None, overhead=tracking_seconds,
+        report=report,
+        history=history,
+        windows=state.observed_windows,
+        prequential=prequential_observation,
+        holdout=holdout_observation,
+        retention=retention,
+        has_detector=state.detector is not None,
+        overhead=tracking_seconds,
         started=started - previous_seconds,
     )
     history.check_interrupted()
@@ -701,8 +877,11 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--tracking", type=Path, default=Path("configs/base/tracking.yaml"))
     parser.add_argument("--campaign", help="Publish the run to the configured MLflow server")
-    parser.add_argument("--prepare", action="store_true",
-                        help="Prepare the ordered Parquet input first (catalog datasets need no raw files)")
+    parser.add_argument(
+        "--prepare",
+        action="store_true",
+        help="Prepare the ordered Parquet input first (catalog datasets need no raw files)",
+    )
     args = parser.parse_args()
     if args.prepare:
         prepare_stream(args.root, args.dataset, args.scope)
@@ -721,7 +900,12 @@ def _run_cli(args, settings):
 
         client = MlflowClient()
         run_id, experiment_id = begin(
-            client, args.output, args.dataset, args.scope, args.policy, args.campaign,
+            client,
+            args.output,
+            args.dataset,
+            args.scope,
+            args.policy,
+            args.campaign,
         )
         try:
             report_path = args.output / "report.json"
@@ -732,7 +916,12 @@ def _run_cli(args, settings):
                     raise ValueError("existing report does not match the requested stream run")
             else:
                 report = run(
-                    args.root, args.dataset, args.scope, args.policy, args.output, settings,
+                    args.root,
+                    args.dataset,
+                    args.scope,
+                    args.policy,
+                    args.output,
+                    settings,
                 )
             publish(client, args.output, run_id, experiment_id, report, args.root)
         except Exception:

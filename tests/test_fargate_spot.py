@@ -31,9 +31,13 @@ def spot_release(store):
 
 def test_spot_plan_submits_every_unit_in_parallel(tmp_path):
     release = spot_release(LocalObjectStore(tmp_path))
-    request = CampaignRequest(campaign_id="fargate-all-at-once", matrix={
-        "kind": "experiment_matrix", "path": "configs/matrices/binary-comparison.yaml",
-    })
+    request = CampaignRequest(
+        campaign_id="fargate-all-at-once",
+        matrix={
+            "kind": "experiment_matrix",
+            "path": "configs/matrices/binary-comparison.yaml",
+        },
+    )
     plan = planning.build_plan(request, release)
     assert plan["concurrency"] == len(plan["units"]) > 4
     assert all(unit["contract"]["release"]["compute"] == SPOT_BACKEND for unit in plan["units"])
@@ -44,20 +48,32 @@ def test_spot_plan_submits_every_unit_in_parallel(tmp_path):
 def test_attempts_are_numbered_across_batch_retries_and_resubmissions(tmp_path):
     store = LocalObjectStore(tmp_path)
     release = spot_release(store)
-    request = CampaignRequest(campaign_id="fargate-claims", matrix={
-        "kind": "experiment_matrix", "path": "configs/matrices/binary-comparison.yaml",
-    })
+    request = CampaignRequest(
+        campaign_id="fargate-claims",
+        matrix={
+            "kind": "experiment_matrix",
+            "path": "configs/matrices/binary-comparison.yaml",
+        },
+    )
     unit = RunUnit(**planning.build_plan(request, release)["units"][0])
     received = []
 
     def attempt(job, batch_attempt):
-        return SpotAttempt(store, unit, job, layout.attempt_key_for(job, batch_attempt),
-                           stop_requested=lambda: bool(received))
+        return SpotAttempt(
+            store,
+            unit,
+            job,
+            layout.attempt_key_for(job, batch_attempt),
+            stop_requested=lambda: bool(received),
+        )
 
     first = attempt("job-a", 1)
     assert first.acquire()["attempt"] == 1 and first.reason() is None
-    put_json(store, layout.attempt_status_key(unit.campaign_id, unit.run_id, first.attempt_key),
-             {"state": "INTERRUPTED"})
+    put_json(
+        store,
+        layout.attempt_status_key(unit.campaign_id, unit.run_id, first.attempt_key),
+        {"state": "INTERRUPTED"},
+    )
     retry = attempt("job-a", 2)
     grant = retry.acquire()
     assert grant["attempt"] == 2
@@ -87,8 +103,9 @@ def test_live_metrics_use_mlflow_native_async_logging_and_flush(tmp_path, monkey
     experiment = client.create_experiment("async")
     run_id = client.create_run(experiment).info.run_id
 
-    tracker = SageMakerMlflowTracker(tracking_uri=uri, dataset="sea", policy="periodic",
-                                     model_name="xgboost", run_id="unit")
+    tracker = SageMakerMlflowTracker(
+        tracking_uri=uri, dataset="sea", policy="periodic", model_name="xgboost", run_id="unit"
+    )
     tracker.mlflow_run_id = run_id
     rest_calls = []
     monkeypatch.setattr(tracker, "_request", lambda *a, **k: rest_calls.append(a) or {})
@@ -107,6 +124,11 @@ def test_without_async_logging_the_rest_transport_is_kept(monkeypatch):
     from continual_bench.infrastructure.aws.mlflow_tracking import SageMakerMlflowTracker
 
     monkeypatch.delenv("MLFLOW_ENABLE_ASYNC_LOGGING", raising=False)
-    tracker = SageMakerMlflowTracker(tracking_uri="http://mlflow.example", dataset="sea",
-                                     policy="periodic", model_name="xgboost", run_id="unit")
+    tracker = SageMakerMlflowTracker(
+        tracking_uri="http://mlflow.example",
+        dataset="sea",
+        policy="periodic",
+        model_name="xgboost",
+        run_id="unit",
+    )
     assert tracker.native_logger is None

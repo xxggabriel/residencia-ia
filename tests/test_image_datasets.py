@@ -12,8 +12,12 @@ from continual_bench.datasets import images as images
 
 
 def asset(path):
-    return {"filename": path.name, "url": "https://example.org/" + path.name,
-            "bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    return {
+        "filename": path.name,
+        "url": "https://example.org/" + path.name,
+        "bytes": path.stat().st_size,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
 
 
 def mnist_cache(tmp_path, monkeypatch):
@@ -31,8 +35,12 @@ def mnist_cache(tmp_path, monkeypatch):
             stream.write(struct.pack(">II", 2049, count))
             stream.write(bytes(i % 10 for i in range(count)))
         assets.extend((asset(image_file), asset(label_file)))
-    specification = {"source": "https://example.org/fixture", "license": "synthetic-fixture-only",
-                     "license_reference": "https://example.org/license", "assets": assets}
+    specification = {
+        "source": "https://example.org/fixture",
+        "license": "synthetic-fixture-only",
+        "license_reference": "https://example.org/license",
+        "assets": assets,
+    }
     monkeypatch.setattr(images, "image_dataset_locks", lambda: {"datasets": {"mnist": specification}})
     return directory
 
@@ -64,28 +72,38 @@ def test_mnist_preserves_100_originals_official_splits_and_reproducible_tasks(tm
 
 def test_permutation_changes_only_features_not_original_ids_splits_or_labels(tmp_path, monkeypatch):
     mnist_cache(tmp_path, monkeypatch)
-    first = {s.sample_id: s for s in images.prepare_image_dataset(
-        "permuted_mnist", tmp_path, seed=42).samples_iter()}
-    second = {s.sample_id: s for s in images.prepare_image_dataset(
-        "permuted_mnist", tmp_path, seed=43).samples_iter()}
+    first = {
+        s.sample_id: s
+        for s in images.prepare_image_dataset("permuted_mnist", tmp_path, seed=42).samples_iter()
+    }
+    second = {
+        s.sample_id: s
+        for s in images.prepare_image_dataset("permuted_mnist", tmp_path, seed=43).samples_iter()
+    }
     assert first.keys() == second.keys()
-    assert all((s.y, s.split, s.group) == (second[k].y, second[k].split, second[k].group)
-               for k, s in first.items())
+    assert all(
+        (s.y, s.split, s.group) == (second[k].y, second[k].split, second[k].group) for k, s in first.items()
+    )
     assert all(s.x == second[k].x for k, s in first.items() if s.task_id == 0)
     assert any(s.x != second[k].x for k, s in first.items() if s.task_id == 1)
     sample = next(iter(first.values()))
     sample.x["pixel_0000"] = -1
-    assert all(v >= 0 for s in images.prepare_image_dataset("permuted_mnist", tmp_path).samples_iter()
-               for v in s.x.values())
+    assert all(
+        v >= 0
+        for s in images.prepare_image_dataset("permuted_mnist", tmp_path).samples_iter()
+        for v in s.x.values()
+    )
 
 
 def cifar_archive(path, dataset, *, invalid_label=False, symlink=False):
     with tarfile.open(path, "w:gz") as archive:
         for split, count in (("train", 32), ("test", 8)):
-            name = (f"cifar-100-binary/{split}.bin" if dataset == "cifar100" else
-                    "cifar-10-batches-bin/" + ("data_batch_1.bin" if split == "train" else "test_batch.bin"))
-            labels = (bytes([0, i % 100]) if dataset == "cifar100" else bytes([i % 10])
-                      for i in range(count))
+            name = (
+                f"cifar-100-binary/{split}.bin"
+                if dataset == "cifar100"
+                else "cifar-10-batches-bin/" + ("data_batch_1.bin" if split == "train" else "test_batch.bin")
+            )
+            labels = (bytes([0, i % 100]) if dataset == "cifar100" else bytes([i % 10]) for i in range(count))
             payload = b"".join(label + bytes([i % 256]) * 3072 for i, label in enumerate(labels))
             if invalid_label:
                 payload = bytes([255]) + payload[1:]
@@ -104,8 +122,12 @@ def test_cifar_binary_loader_keeps_fine_classes_and_bounded_official_splits(tmp_
     root.mkdir(parents=True)
     path = root / f"{dataset}.tar.gz"
     cifar_archive(path, dataset)
-    spec = {"assets": [asset(path)], "source": "https://example.org/fixture",
-            "license": "synthetic-fixture-only", "license_reference": "https://example.org/license"}
+    spec = {
+        "assets": [asset(path)],
+        "source": "https://example.org/fixture",
+        "license": "synthetic-fixture-only",
+        "license_reference": "https://example.org/license",
+    }
     monkeypatch.setattr(images, "image_dataset_locks", lambda: {"datasets": {dataset: spec}})
     source = images.prepare_image_dataset("split_" + dataset, tmp_path, limit=20)
     samples = list(source.samples_iter())
@@ -140,8 +162,12 @@ def test_idx_rejects_header_mismatch_and_truncation(tmp_path):
 
 def test_download_is_explicit_atomic_checked_and_cache_reuse_does_not_call_network(tmp_path):
     payload = b"small pinned fixture"
-    spec = {"filename": "fixture.gz", "url": "https://example.org/fixture.gz",
-            "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+    spec = {
+        "filename": "fixture.gz",
+        "url": "https://example.org/fixture.gz",
+        "bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
 
     class Response(io.BytesIO):
         status = 200
@@ -169,8 +195,7 @@ def test_download_is_explicit_atomic_checked_and_cache_reuse_does_not_call_netwo
 
 
 def test_http_denials_do_not_retry_and_failed_download_leaves_no_asset(tmp_path):
-    spec = {"filename": "fixture.gz", "url": "https://example.org/fixture.gz",
-            "bytes": 5, "sha256": "0" * 64}
+    spec = {"filename": "fixture.gz", "url": "https://example.org/fixture.gz", "bytes": 5, "sha256": "0" * 64}
     calls = []
 
     def denied(request, timeout):
@@ -184,8 +209,7 @@ def test_http_denials_do_not_retry_and_failed_download_leaves_no_asset(tmp_path)
 
 
 def test_download_rejects_oversized_body_and_no_final_asset_is_committed(tmp_path):
-    spec = {"filename": "fixture.gz", "url": "https://example.org/fixture.gz",
-            "bytes": 5, "sha256": "0" * 64}
+    spec = {"filename": "fixture.gz", "url": "https://example.org/fixture.gz", "bytes": 5, "sha256": "0" * 64}
 
     class Response(io.BytesIO):
         status, headers = 200, {}
@@ -194,8 +218,9 @@ def test_download_rejects_oversized_body_and_no_final_asset_is_committed(tmp_pat
             return spec["url"]
 
     with pytest.raises(ValueError, match="byte budget"):
-        images.acquire_asset(tmp_path, spec, download=True,
-                             opener=lambda *args, **kwargs: Response(b"too many bytes"))
+        images.acquire_asset(
+            tmp_path, spec, download=True, opener=lambda *args, **kwargs: Response(b"too many bytes")
+        )
     assert not (tmp_path / spec["filename"]).exists()
     assert not [path for path in tmp_path.glob(".download-*") if path.is_file()]
 
@@ -203,8 +228,11 @@ def test_download_rejects_oversized_body_and_no_final_asset_is_committed(tmp_pat
 def test_lock_catalog_pins_real_assets_and_loaders_reject_unknown_budget():
     locks = images.image_dataset_locks()
     assert set(locks["datasets"]) == {"mnist", "cifar10", "cifar100"}
-    assert all(a["url"].startswith("https://") and len(a["sha256"]) == 64
-               for spec in locks["datasets"].values() for a in spec["assets"])
+    assert all(
+        a["url"].startswith("https://") and len(a["sha256"]) == 64
+        for spec in locks["datasets"].values()
+        for a in spec["assets"]
+    )
     with pytest.raises(ValueError, match="unknown"):
         images.prepare_image_dataset("not_mnist", "/unused")
     with pytest.raises(ValueError, match="budget"):

@@ -51,11 +51,13 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
     @property
     def mlflow_tags(self):
         tags = {tag["key"]: tag["value"] for tag in super().mlflow_tags}
-        tags.update({
-            "cb-unit-id": self.unit.run_id,
-            "cb-evaluator": self.scope,
-            "cb-contract-sha256": self.unit.contract_sha256,
-        })
+        tags.update(
+            {
+                "cb-unit-id": self.unit.run_id,
+                "cb-evaluator": self.scope,
+                "cb-contract-sha256": self.unit.contract_sha256,
+            }
+        )
         if not self.spot:
             tags.update({"cb-batch-job-id": self.job_id, "cb-attempt": self.attempt_key})
         if self.unit.params.get("source_sha256"):
@@ -80,7 +82,10 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
             # Every step is kept (no coalescing); a daemon thread sends them off the training thread.
             if self._live_writer is None:
                 self._live_writer = AsyncMetricWriter(
-                    self.log_progress_metrics, FLUSH_SECONDS, coalesce=False, max_pending=FLUSH_POINTS,
+                    self.log_progress_metrics,
+                    FLUSH_SECONDS,
+                    coalesce=False,
+                    max_pending=FLUSH_POINTS,
                 )
             self._live_writer.submit(points)
             return

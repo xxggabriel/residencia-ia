@@ -43,9 +43,14 @@ def training_round_mlflow(parent_run_id, report, now_ms=0):
         params = {
             key: str(fit[key])
             for key in (
-                "start_seq", "end_seq", "block_index", "train_samples",
-                "validation_samples", "training_presentations",
-            ) if fit.get(key) is not None
+                "start_seq",
+                "end_seq",
+                "block_index",
+                "train_samples",
+                "validation_samples",
+                "training_presentations",
+            )
+            if fit.get(key) is not None
         }
         if checkpoint.get("sha256"):
             params["checkpoint_sha256"] = checkpoint["sha256"]
@@ -90,7 +95,9 @@ def training_round_mlflow(parent_run_id, report, now_ms=0):
         for key, value in fit["summary"].items():
             add(f"fit_summary/{key}", value, 0)
         evidence = {
-            "params": params, "kind": kind, "action": action,
+            "params": params,
+            "kind": kind,
+            "action": action,
             "metrics": [[key, step, point["value"]] for (key, step), point in sorted(metrics.items())],
         }
         tags["cb-fit-evidence-sha256"] = hashlib.sha256(
@@ -98,9 +105,10 @@ def training_round_mlflow(parent_run_id, report, now_ms=0):
         ).hexdigest()
         if report.get("tracking_observations") is not None:
             tags["cb-fit-status"] = str(fit.get("status", "complete"))
-            tags["cb-fit-promotion"] = str(fit.get("promotion_status") or (
-                "promoted" if fit.get("deployed_version") is not None else "unrecorded"
-            ))
+            tags["cb-fit-promotion"] = str(
+                fit.get("promotion_status")
+                or ("promoted" if fit.get("deployed_version") is not None else "unrecorded")
+            )
             tags["cb-observed-step-kind"] = str(fit.get("observed_step_kind") or "unavailable")[:500]
             tags["cb-fit-observations-sha256"] = hashlib.sha256(
                 json.dumps(fit, sort_keys=True, allow_nan=False).encode()

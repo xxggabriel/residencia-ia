@@ -102,10 +102,18 @@ def publish_matrix_source(args):
     if not args.local_root and not os.environ.get("BENCH_KMS_KEY_ID"):
         raise SystemExit("BENCH_KMS_KEY_ID must contain the data bucket KMS key ARN")
     with tempfile.TemporaryDirectory() as workdir:
-        _emit(publish_source(
-            _store(args), args.dataset, cache=args.cache, workdir=workdir, examples=args.examples,
-            seed=args.seed, real_directory=args.real_directory, download=args.download,
-        ))
+        _emit(
+            publish_source(
+                _store(args),
+                args.dataset,
+                cache=args.cache,
+                workdir=workdir,
+                examples=args.examples,
+                seed=args.seed,
+                real_directory=args.real_directory,
+                download=args.download,
+            )
+        )
 
 
 def run_unit(args):

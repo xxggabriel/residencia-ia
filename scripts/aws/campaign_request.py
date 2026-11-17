@@ -42,8 +42,9 @@ def main():
     campaign = json.loads(input_path.read_text())
     dataset = json.loads(dataset_paths[0].read_text()) if dataset_paths else None
     try:
-        campaign_id = prepare(campaign, release=os.getenv("RELEASE_SHA"),
-                              campaign_id=os.getenv("CAMPAIGN_ID"), dataset=dataset)
+        campaign_id = prepare(
+            campaign, release=os.getenv("RELEASE_SHA"), campaign_id=os.getenv("CAMPAIGN_ID"), dataset=dataset
+        )
     except (KeyError, TypeError, ValueError) as error:
         raise SystemExit(f"Invalid campaign input: {error}") from error
     output_path.write_text(json.dumps(campaign))

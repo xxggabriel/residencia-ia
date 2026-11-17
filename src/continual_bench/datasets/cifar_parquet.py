@@ -19,27 +19,47 @@ from .temporal_vision import RangeReader
 
 SOURCES = {
     "split_cifar10": {
-        "repo": "uoft-cs/cifar10", "revision": "0b2714987fa478483af9968de7c934580d0bb9a2",
-        "dataset": "cifar10", "label": "label", "classes": 10, "classes_per_task": 2,
+        "repo": "uoft-cs/cifar10",
+        "revision": "0b2714987fa478483af9968de7c934580d0bb9a2",
+        "dataset": "cifar10",
+        "label": "label",
+        "classes": 10,
+        "classes_per_task": 2,
         "splits": {
-            "train": {"path": "plain_text/train-00000-of-00001.parquet", "bytes": 119705255,
-                      "rows": 50000,
-                      "lfs_sha256": "8428b53a88a11ac374111006708df51469e315a22ac6d66470afd9c78d2ae883"},
-            "test": {"path": "plain_text/test-00000-of-00001.parquet", "bytes": 23940850,
-                     "rows": 10000,
-                     "lfs_sha256": "841389e6f2d64f28bf17310e430aebac20ec3ba611a3c5e231dc93c645ce84de"},
+            "train": {
+                "path": "plain_text/train-00000-of-00001.parquet",
+                "bytes": 119705255,
+                "rows": 50000,
+                "lfs_sha256": "8428b53a88a11ac374111006708df51469e315a22ac6d66470afd9c78d2ae883",
+            },
+            "test": {
+                "path": "plain_text/test-00000-of-00001.parquet",
+                "bytes": 23940850,
+                "rows": 10000,
+                "lfs_sha256": "841389e6f2d64f28bf17310e430aebac20ec3ba611a3c5e231dc93c645ce84de",
+            },
         },
     },
     "split_cifar100": {
-        "repo": "uoft-cs/cifar100", "revision": "aadb3af77e9048adbea6b47c21a81e47dd092ae5",
-        "dataset": "cifar100", "label": "fine_label", "classes": 100, "classes_per_task": 10,
+        "repo": "uoft-cs/cifar100",
+        "revision": "aadb3af77e9048adbea6b47c21a81e47dd092ae5",
+        "dataset": "cifar100",
+        "label": "fine_label",
+        "classes": 100,
+        "classes_per_task": 10,
         "splits": {
-            "train": {"path": "cifar100/train-00000-of-00001.parquet", "bytes": 118518617,
-                      "rows": 50000,
-                      "lfs_sha256": "694865d6b990e234804f01268586c41e88bcbbb75e20858432c05ad4081aca23"},
-            "test": {"path": "cifar100/test-00000-of-00001.parquet", "bytes": 23772751,
-                     "rows": 10000,
-                     "lfs_sha256": "98776c529bb146a9c791229df74a5cf076be9b43d82dbbd334b6a7788d73dc68"},
+            "train": {
+                "path": "cifar100/train-00000-of-00001.parquet",
+                "bytes": 118518617,
+                "rows": 50000,
+                "lfs_sha256": "694865d6b990e234804f01268586c41e88bcbbb75e20858432c05ad4081aca23",
+            },
+            "test": {
+                "path": "cifar100/test-00000-of-00001.parquet",
+                "bytes": 23772751,
+                "rows": 10000,
+                "lfs_sha256": "98776c529bb146a9c791229df74a5cf076be9b43d82dbbd334b6a7788d73dc68",
+            },
         },
     },
 }
@@ -83,8 +103,9 @@ def _parquet_prefix(reader, specification, count, label_name, classes, decode=No
             # Arrow decodes column chunks; reject unexpectedly huge row groups before allocation.
             if parquet.metadata.row_group(group).total_byte_size > 64 * 1024**2:
                 raise ValueError("CIFAR Parquet row group exceeds decoded memory budget")
-            batches = parquet.iter_batches(batch_size=min(count, 128), row_groups=[group],
-                                            columns=["img", label_name], use_threads=False)
+            batches = parquet.iter_batches(
+                batch_size=min(count, 128), row_groups=[group], columns=["img", label_name], use_threads=False
+            )
             for batch in batches:
                 for row in batch.to_pylist():
                     label, image = row[label_name], row["img"]
@@ -130,8 +151,17 @@ def prepare_cifar_parquet(name, cache, limit=100, seed=42, *, download=False):
     if type(seed) is not int or not 0 <= seed < 2**31:
         raise ValueError("CIFAR Parquet seed must be a valid integer")
     source = SOURCES[name]
-    contract = json.loads(_json({"adapter": "cifar-parquet-ranges-v1", "name": name,
-                                 "limit": limit, "seed": seed, "source": source}))
+    contract = json.loads(
+        _json(
+            {
+                "adapter": "cifar-parquet-ranges-v1",
+                "name": name,
+                "limit": limit,
+                "seed": seed,
+                "source": source,
+            }
+        )
+    )
     identity = _sha(_json(contract))
     root = Path(cache) / "cifar-parquet"
     directory = root / "prepared" / identity
@@ -156,24 +186,45 @@ def prepare_cifar_parquet(name, cache, limit=100, seed=42, *, download=False):
                     original = [source["repo"], source["revision"], split, index]
                     rows.append((task, split, index, _sha(_json(original)), pixels, label, image_sha))
                 details = reader.provenance()
-                details.update({"split": split, "published_lfs_sha256_reference": spec["lfs_sha256"],
-                                "whole_archive_checksum_verified": False,
-                                "integrity": "SHA-256 ranges/images; full Parquet LFS hash unverified"})
+                details.update(
+                    {
+                        "split": split,
+                        "published_lfs_sha256_reference": spec["lfs_sha256"],
+                        "whole_archive_checksum_verified": False,
+                        "integrity": "SHA-256 ranges/images; full Parquet LFS hash unverified",
+                    }
+                )
                 provenance.append(details)
                 remaining -= reader.transferred
             finally:
                 reader.close()
         rows.sort(key=lambda row: (row[0], row[1] != "train", row[2]))
-        samples = [TaskSample(original_id, seq, seq, seq, pixels, label, task_id=task,
-                              split=split, group=f"{source['dataset']}:{split}:{index}")
-                   for seq, (task, split, index, original_id, pixels, label, _) in enumerate(rows)]
+        samples = [
+            TaskSample(
+                original_id,
+                seq,
+                seq,
+                seq,
+                pixels,
+                label,
+                task_id=task,
+                split=split,
+                group=f"{source['dataset']}:{split}:{index}",
+            )
+            for seq, (task, split, index, original_id, pixels, label, _) in enumerate(rows)
+        ]
         if len(samples) != limit or len({s.sample_id for s in samples}) != limit:
             raise ValueError("CIFAR Parquet selected IDs/count violate the original-example budget")
         payload = b"".join(_json(asdict(sample)) + b"\n" for sample in samples)
         manifest = {
-            "name": name, "task": "multiclass", "version": identity,
-            "adapter": contract["adapter"], "acquisition_contract": contract,
-            "samples": limit, "samples_sha256": _sha(payload), "seed": seed,
+            "name": name,
+            "task": "multiclass",
+            "version": identity,
+            "adapter": contract["adapter"],
+            "acquisition_contract": contract,
+            "samples": limit,
+            "samples_sha256": _sha(payload),
+            "seed": seed,
             "seed_usage": "recorded only; numeric class order and within-split prefixes fixed",
             "source": "https://huggingface.co/datasets/" + source["repo"],
             "source_version": source["revision"],
@@ -181,10 +232,12 @@ def prepare_cifar_parquet(name, cache, limit=100, seed=42, *, download=False):
             "license": "unknown (Hugging Face dataset card); no new SPDX grant inferred",
             "license_reference": "https://huggingface.co/datasets/" + source["repo"],
             "source_variant": "explicit HF-hosted Parquet mirror; not original Toronto archive bytes",
-            "split_counts": counts, "selection": "unshuffled prefix within each official mirror split",
+            "split_counts": counts,
+            "selection": "unshuffled prefix within each official mirror split",
             "class_order": list(range(source["classes"])),
             "protocol": {"kind": "class_incremental", "classes_per_task": source["classes_per_task"]},
-            "natural_chronology": False, "changepoints": None,
+            "natural_chronology": False,
+            "changepoints": None,
             "timestamp_kind": "artificial ordinal task replay, not collection time",
             "preprocessing": "decoded RGB32x32, channel-planar uint8 pixels /255; no resizing or fitting",
             "schema": {"features": 3072, "pixel_range": [0, 1], "target": "fine class string"},
@@ -231,11 +284,11 @@ def prepare_cifar_arrays(name, cache, limit, *, download=False):
         for split, count in counts.items():
             spec = source["splits"][split]
             url = f"https://huggingface.co/datasets/{source['repo']}/resolve/{source['revision']}/{spec['path']}"
-            reader = RangeReader(url, root / "ranges", max_bytes=1024**3, max_requests=100_000,
-                                 max_blocks=32)
+            reader = RangeReader(url, root / "ranges", max_bytes=1024**3, max_requests=100_000, max_blocks=32)
             try:
-                for index, raw, label, _ in _parquet_prefix(reader, spec, count, source["label"],
-                                                            source["classes"], _planar_bytes):
+                for index, raw, label, _ in _parquet_prefix(
+                    reader, spec, count, source["label"], source["classes"], _planar_bytes
+                ):
                     pixels[filled] = raw
                     labels.append(label)
                     tasks.append(int(label) // source["classes_per_task"])
@@ -245,9 +298,12 @@ def prepare_cifar_arrays(name, cache, limit, *, download=False):
             finally:
                 reader.close()
         order = sorted(range(limit), key=lambda i: (tasks[i], splits[i] != "train", indexes[i]))
-        result = {"x": pixels[order], "y": np.array([labels[i] for i in order]),
-                  "task": np.array([tasks[i] for i in order], dtype=np.int64),
-                  "split": np.array([splits[i] for i in order])}
+        result = {
+            "x": pixels[order],
+            "y": np.array([labels[i] for i in order]),
+            "task": np.array([tasks[i] for i in order], dtype=np.int64),
+            "split": np.array([splits[i] for i in order]),
+        }
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(target.name + ".tmp.npz")
         np.savez_compressed(tmp, **result)

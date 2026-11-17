@@ -7,8 +7,12 @@ from continual_bench.infrastructure.storage import atomic_write
 
 HISTORY_FILE = "training-history.json"
 OBSERVATION_FIELDS = {
-    "observation_steps", "observation_epochs", "observed_step_kind", "observation_scopes",
-    "observation_effort", "observation_resources",
+    "observation_steps",
+    "observation_epochs",
+    "observed_step_kind",
+    "observation_scopes",
+    "observation_effort",
+    "observation_resources",
 }
 
 
@@ -25,12 +29,21 @@ class TrainingHistory:
             raise InterruptedError("Zia evaluation was interrupted")
 
     def capture(
-        self, result, *, action, block_index, start, timestamps, seconds,
-        current_block_start=None, source_model_version=None,
+        self,
+        result,
+        *,
+        action,
+        block_index,
+        start,
+        timestamps,
+        seconds,
+        current_block_start=None,
+        source_model_version=None,
     ):
         history = result["history"]
-        summary = {key: value for key, value in result.items()
-                   if key != "history" and key not in OBSERVATION_FIELDS}
+        summary = {
+            key: value for key, value in result.items() if key != "history" and key not in OBSERVATION_FIELDS
+        }
         kind = "minibatch" if action == "online" else "epoch"
         step_field = "minibatch_step" if kind == "minibatch" else "epoch"
         steps = []
@@ -38,20 +51,27 @@ class TrainingHistory:
             if metrics[step_field] != step:
                 raise ValueError(f"invalid {kind} step sequence in the training summary")
             self.global_step += 1
-            steps.append({"step": step, "global_step": self.global_step, "kind": kind,
-                          "metrics": metrics})
+            steps.append({"step": step, "global_step": self.global_step, "kind": kind, "metrics": metrics})
         interrupted = result["stopped_by_signal"]
         if not steps and not interrupted:
             raise ValueError("completed fit has no training steps")
         fit = {
             "fit_id": f"fit-{len(self.fits) + 1:06d}",
-            "block_index": block_index, "action": action,
+            "block_index": block_index,
+            "action": action,
             "status": "interrupted" if interrupted else "complete",
-            "start_seq": start, "end_seq": start + len(timestamps),
-            "start_time_ms": int(timestamps[0]), "end_time_ms": int(timestamps[-1]),
-            "train_samples": result["train_rows"], "validation_samples": result["validation_rows"],
-            "training_presentations": result["training_presentations"], "train_seconds": seconds,
-            "steps": steps, "summary": summary, "checkpoint": None, "deployed_version": None,
+            "start_seq": start,
+            "end_seq": start + len(timestamps),
+            "start_time_ms": int(timestamps[0]),
+            "end_time_ms": int(timestamps[-1]),
+            "train_samples": result["train_rows"],
+            "validation_samples": result["validation_rows"],
+            "training_presentations": result["training_presentations"],
+            "train_seconds": seconds,
+            "steps": steps,
+            "summary": summary,
+            "checkpoint": None,
+            "deployed_version": None,
             "source_model_version": source_model_version,
             "source_model_reason": "fresh_initialization" if action not in ("continue", "online") else None,
             "promotion_status": "interrupted" if interrupted else "candidate",
@@ -67,15 +87,20 @@ class TrainingHistory:
         effort["examples_observed"] = len(timestamps)
         if kind == "minibatch":
             fit["epoch_availability"] = {
-                "status": "unavailable", "reason": "online_minibatches_have_no_epoch",
+                "status": "unavailable",
+                "reason": "online_minibatches_have_no_epoch",
             }
         if fit.get("observation_steps") and all(
             row["metrics"]["training/native_loss"] is None for row in fit["observation_steps"]
         ):
-            reason = ("complete_tree_regularized_native_objective_not_exposed"
-                      if fit["observed_step_kind"].startswith("xgboost") else "native_objective_not_observed")
+            reason = (
+                "complete_tree_regularized_native_objective_not_exposed"
+                if fit["observed_step_kind"].startswith("xgboost")
+                else "native_objective_not_observed"
+            )
             fit["native_loss_availability"] = {
-                "status": "unavailable", "reason": reason,
+                "status": "unavailable",
+                "reason": reason,
             }
         self.fits.append(fit)
         if interrupted:

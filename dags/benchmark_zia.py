@@ -15,8 +15,12 @@ WAIT_SECONDS = 2 * 24 * 3600 + 600
 
 def build(dataset):
     @dag(
-        dag_id=f"benchmark_zia_{dataset}", schedule=None, catchup=False,
-        max_active_runs=1, max_active_tasks=4, tags=["benchmark", "zia", dataset, "mlflow"],
+        dag_id=f"benchmark_zia_{dataset}",
+        schedule=None,
+        catchup=False,
+        max_active_runs=1,
+        max_active_tasks=4,
+        tags=["benchmark", "zia", dataset, "mlflow"],
         params={
             "scope": Param("smoke", enum=["smoke", "full"]),
             "campaign": Param("v1", type="string", pattern="^[A-Za-z0-9_-]{1,64}$"),
@@ -27,8 +31,15 @@ def build(dataset):
         @task(priority_weight=10)
         def plan(params=None):
             require_dependencies()
-            return [{"dataset": dataset, "scope": params["scope"], "policy": policy,
-                     "campaign": params["campaign"]} for policy in ZIA_POLICIES]
+            return [
+                {
+                    "dataset": dataset,
+                    "scope": params["scope"],
+                    "policy": policy,
+                    "campaign": params["campaign"],
+                }
+                for policy in ZIA_POLICIES
+            ]
 
         @task(max_active_tis_per_dagrun=3, execution_timeout=timedelta(seconds=WAIT_SECONDS + 60))
         def evaluate(config):

@@ -48,9 +48,15 @@ def execute_campaign(campaign, root, *, services=False, zenml=False, executor=No
     journal = directory / "campaign.json"
     contract = {"campaign": campaign.model_dump(mode="json"), "services": services, "zenml": zenml}
     with run_lock(root, "campaign-" + campaign.identity()):
-        state = json.loads(journal.read_text()) if journal.exists() else {
-            "contract": contract, "cases": {}, "complete": False,
-        }
+        state = (
+            json.loads(journal.read_text())
+            if journal.exists()
+            else {
+                "contract": contract,
+                "cases": {},
+                "complete": False,
+            }
+        )
         if state["contract"] != contract:
             raise ValueError("campaign execution contract changed")
         state["complete"] = False
@@ -78,7 +84,8 @@ def execute_campaign(campaign, root, *, services=False, zenml=False, executor=No
                 save()
                 raise
             state["cases"][key] = {
-                "status": "passed", "metrics": report["metrics"],
+                "status": "passed",
+                "metrics": report["metrics"],
                 "report": str(directory / "runs" / key / "report.json"),
             }
             save()

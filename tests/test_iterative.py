@@ -69,9 +69,20 @@ def test_tracker_receives_sagemaker_metric_contract(tmp_path):
     data = ListDataset("toy", "multiclass", xs, ys, [None] * 200, {})
     tracker = FakeTracker()
     report = run_iterative(data, tmp_path, max_epochs=3, patience=2, log=lambda _: None, tracker=tracker)
-    expected = {"epoch", "train:log_loss", "train:accuracy", "validation:log_loss", "validation:accuracy",
-                "validation:f1_macro", "validation:balanced_accuracy", "early_stopped",
-                "best_epoch", "patience_consumed", "best_validation_loss", "peak_rss_mb"}
+    expected = {
+        "epoch",
+        "train:log_loss",
+        "train:accuracy",
+        "validation:log_loss",
+        "validation:accuracy",
+        "validation:f1_macro",
+        "validation:balanced_accuracy",
+        "early_stopped",
+        "best_epoch",
+        "patience_consumed",
+        "best_validation_loss",
+        "peak_rss_mb",
+    }
     assert expected <= set(tracker.epochs[0])
     assert any("validation:pr_auc" in row and "train:pr_auc" in row for row in tracker.epochs)
     assert len(tracker.rounds) == len(report["updates"]) == 10

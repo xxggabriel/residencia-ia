@@ -37,20 +37,32 @@ def test_training_plots_keep_fit_local_axes_and_global_coordinates(tmp_path):
 
 
 def test_multiclass_plots_select_macro_series_and_keep_detector_events():
-    figures = {fig.name: fig for fig in binary_figures({
-        "classes": ["follow", "friend", "block", "mute"],
-        "windows": [{
-            "end_seq": 100, "accuracy": 0.8, "macro_roc_auc": 0.9, "macro_pr_auc": 0.7,
-            "macro_precision": 0.65, "macro_recall": 0.6,
-        }],
-        "alarms": [{"seq": 85}, {"seq": 94}],
-    })}
+    figures = {
+        fig.name: fig
+        for fig in binary_figures(
+            {
+                "classes": ["follow", "friend", "block", "mute"],
+                "windows": [
+                    {
+                        "end_seq": 100,
+                        "accuracy": 0.8,
+                        "macro_roc_auc": 0.9,
+                        "macro_pr_auc": 0.7,
+                        "macro_precision": 0.65,
+                        "macro_recall": 0.6,
+                    }
+                ],
+                "alarms": [{"seq": 85}, {"seq": 94}],
+            }
+        )
+    }
     assert figures["ranking"].data["series"] == [
         {"name": "macro_roc_auc", "points": [[100, 0.9]]},
         {"name": "macro_pr_auc", "points": [[100, 0.7]]},
     ]
     assert [line["name"] for line in figures["precision_recall"].data["series"]] == [
-        "macro_precision", "macro_recall",
+        "macro_precision",
+        "macro_recall",
     ]
     assert "class_balance" not in figures
     assert [event["x"] for event in figures["timeline"].data["markers"]] == [85, 94]
@@ -58,10 +70,20 @@ def test_multiclass_plots_select_macro_series_and_keep_detector_events():
 
 def test_campaign_comparison_uses_completed_runs_and_separate_partitions(tmp_path):
     units = [
-        {"run_id": "a", "labels": {"policy": "frozen"}, "status": "SUCCEEDED",
-         "metrics": {"accuracy": 0.4}, "holdout": {"accuracy": 0.7}},
-        {"run_id": "b", "labels": {"policy": "online"}, "status": "SUCCEEDED",
-         "metrics": {"accuracy": 0.6}, "holdout": {"accuracy": 0.5}},
+        {
+            "run_id": "a",
+            "labels": {"policy": "frozen"},
+            "status": "SUCCEEDED",
+            "metrics": {"accuracy": 0.4},
+            "holdout": {"accuracy": 0.7},
+        },
+        {
+            "run_id": "b",
+            "labels": {"policy": "online"},
+            "status": "SUCCEEDED",
+            "metrics": {"accuracy": 0.6},
+            "holdout": {"accuracy": 0.5},
+        },
         {"run_id": "c", "labels": {"policy": "incremental"}, "status": "FAILED"},
     ]
     write_zia_campaign_artifacts(tmp_path, units)

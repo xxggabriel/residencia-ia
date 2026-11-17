@@ -82,8 +82,10 @@ def test_paper_timing_trains_own_batch_and_exposes_only_observed_errors():
 
 def test_airlines_csv_preserves_reference_category_codes(tmp_path):
     csv = tmp_path / "airlines.csv"
-    csv.write_text("Airline,Flight,AirportFrom,AirportTo,DayOfWeek,Time,Length,Delay\n"
-                   "4,269,253,135,3,15,205,1\n14,35,0,90,6,10,30,0\n")
+    csv.write_text(
+        "Airline,Flight,AirportFrom,AirportTo,DayOfWeek,Time,Length,Delay\n"
+        "4,269,253,135,3,15,205,1\n14,35,0,90,6,10,30,0\n"
+    )
     x, y = data.airlines_arrays(str(csv))
     np.testing.assert_array_equal(x, [[4, 269, 253, 135, 3, 15, 205], [14, 35, 0, 90, 6, 10, 30]])
     np.testing.assert_array_equal(y, [1, 0])
@@ -113,10 +115,13 @@ def test_electricity_article_figures_include_table_2():
 
     metrics = {metric: {"mean": 0.2, "std": 0.01} for metric in ("cost", "retrains", "average_accuracy")}
     report = {
-        "dataset": "electricity", "trials": 2,
+        "dataset": "electricity",
+        "trials": 2,
         "summary": {rule: {"auc_mean": 2.0, "auc_std": 0.1} for rule in ("upf", "oracle")},
-        "table": {level: {rule: {"alpha": alpha, **metrics} for rule in ("upf", "oracle")}
-                  for level, alpha in (("low", 0.1), ("high", 0.9))},
+        "table": {
+            level: {rule: {"alpha": alpha, **metrics} for rule in ("upf", "oracle")}
+            for level, alpha in (("low", 0.1), ("high", 0.9))
+        },
     }
     figures = dict(upf_figures([report]))
     table = figures["upf_table2_electricity.png"]
@@ -161,8 +166,17 @@ def test_shared_benchmark_scores_both_objectives_with_their_oracles(tmp_path, ti
         else:
             rows.append(f"{i % 3},{i},{i % 11},{batch},{batch % 7},{i * 5},205,{int(positive)}")
     path.write_text(header + "\n" + "\n".join(rows))
-    report = replicate(dataset, trials=1, electricity_path=path, airlines_path=path, size=48, samples=10,
-                       rules=("cara", "upf"), compare_oracles=True, decision_timing=timing)
+    report = replicate(
+        dataset,
+        trials=1,
+        electricity_path=path,
+        airlines_path=path,
+        size=48,
+        samples=10,
+        rules=("cara", "upf"),
+        compare_oracles=True,
+        decision_timing=timing,
+    )
     assert report["alphas"] == list(COMPARISON_GRID)
     assert report["alpha_max"] == COMPARISON_GRID[-1]
     assert report["comparison"]["batch_size"] == 48
@@ -172,11 +186,12 @@ def test_shared_benchmark_scores_both_objectives_with_their_oracles(tmp_path, ti
     curves = report["curves"]
     strategy_reference = curves["oracle_staleness"]["strategy_cost"]
     for rule in curves.values():
-        np.testing.assert_allclose(rule["error_oracle_gap"],
-                                   np.asarray(rule["cost"]) - curves["oracle"]["cost"], atol=1e-10)
-        np.testing.assert_allclose(rule["strategy_oracle_gap"],
-                                   np.asarray(rule["strategy_cost"]) - strategy_reference,
-                                   atol=1e-10)
+        np.testing.assert_allclose(
+            rule["error_oracle_gap"], np.asarray(rule["cost"]) - curves["oracle"]["cost"], atol=1e-10
+        )
+        np.testing.assert_allclose(
+            rule["strategy_oracle_gap"], np.asarray(rule["strategy_cost"]) - strategy_reference, atol=1e-10
+        )
         assert min(rule["error_oracle_gap"]) >= -1e-10
         assert min(rule["strategy_oracle_gap"]) >= -1e-10
         assert max(rule["retrains"]) <= decisions
@@ -208,9 +223,19 @@ def test_schedule_figure_draws_models_and_retrain_marks():
 
     size = 6
     mean = [[0.9 - 0.02 * abs(i - j) for j in range(size)] for i in range(size)]
-    showcase = {"dataset": "toy", "rule": "cara", "seeds": 2, "batches": size, "offline": 2, "alpha": 0.1,
-                "accuracy_mean": mean, "accuracy_std": [[0.01] * size for _ in range(size)],
-                "schedule_mean": [0.8, 0.85, 0.8, 0.82], "schedule_std": [0.0] * 4, "retrain_batches": [4]}
+    showcase = {
+        "dataset": "toy",
+        "rule": "cara",
+        "seeds": 2,
+        "batches": size,
+        "offline": 2,
+        "alpha": 0.1,
+        "accuracy_mean": mean,
+        "accuracy_std": [[0.01] * size for _ in range(size)],
+        "schedule_mean": [0.8, 0.85, 0.8, 0.82],
+        "schedule_std": [0.0] * 4,
+        "retrain_batches": [4],
+    }
     name, figure = schedule_figure(showcase)
     assert name == "cara_schedule_toy.png"
     axis = figure.axes[0]

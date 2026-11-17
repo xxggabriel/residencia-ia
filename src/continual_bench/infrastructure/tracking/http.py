@@ -37,15 +37,22 @@ class PooledHttpOpener:
     def __call__(self, request, timeout=None):
         try:
             response = self._pool.request(
-                request.get_method(), request.full_url, body=request.data,
-                headers=dict(request.header_items()), timeout=timeout,
-                redirect=False, preload_content=True,
+                request.get_method(),
+                request.full_url,
+                body=request.data,
+                headers=dict(request.header_items()),
+                timeout=timeout,
+                redirect=False,
+                preload_content=True,
             )
         except self._urllib3.exceptions.HTTPError as error:
             raise urllib.error.URLError(error) from error
         if response.status >= 400:
             raise urllib.error.HTTPError(
-                request.full_url, response.status, response.reason, response.headers,
+                request.full_url,
+                response.status,
+                response.reason,
+                response.headers,
                 io.BytesIO(response.data),
             )
         return _Response(response.status, response.data, response.headers)

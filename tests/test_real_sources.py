@@ -24,10 +24,16 @@ ELECTRICITY_HEADER = """@relation fixture
 @pytest.fixture
 def admitted_fixture(tmp_path, monkeypatch):
     path = tmp_path / "electricity.arff"
-    path.write_text(ELECTRICITY_HEADER + "0,2,0,.1,.2,.3,.4,.5,UP\n"
-                    ".1,3,.5,.2,.3,.4,.5,.6,DOWN\n.2,4,1,.3,.4,.5,.6,.7,UP\n")
-    spec = {**REAL_SOURCES["electricity"], "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "rows": 3, "bytes": path.stat().st_size}
+    path.write_text(
+        ELECTRICITY_HEADER + "0,2,0,.1,.2,.3,.4,.5,UP\n"
+        ".1,3,.5,.2,.3,.4,.5,.6,DOWN\n.2,4,1,.3,.4,.5,.6,.7,UP\n"
+    )
+    spec = {
+        **REAL_SOURCES["electricity"],
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "rows": 3,
+        "bytes": path.stat().st_size,
+    }
     monkeypatch.setitem(REAL_SOURCES, "electricity", spec)
     return tmp_path, path
 
@@ -80,13 +86,16 @@ def test_source_admission_checks_full_cardinality(admitted_fixture, monkeypatch)
         list(source(directory, samples=4).events())
 
 
-@pytest.mark.parametrize("row,error", [
-    ("?,2,0,.1,.2,.3,.4,.5,UP", "Missing"),
-    ("nan,2,0,.1,.2,.3,.4,.5,UP", "Non-finite"),
-    ("0,9,0,.1,.2,.3,.4,.5,UP", "categories"),
-    ("0,2,0,.1,.2,.3,.4,.5,INVALID", "categories"),
-    ("0,2,0,.1,.2,.3,.4,UP", "schema"),
-])
+@pytest.mark.parametrize(
+    "row,error",
+    [
+        ("?,2,0,.1,.2,.3,.4,.5,UP", "Missing"),
+        ("nan,2,0,.1,.2,.3,.4,.5,UP", "Non-finite"),
+        ("0,9,0,.1,.2,.3,.4,.5,UP", "categories"),
+        ("0,2,0,.1,.2,.3,.4,.5,INVALID", "categories"),
+        ("0,2,0,.1,.2,.3,.4,UP", "schema"),
+    ],
+)
 def test_parser_rejects_missing_nonfinite_and_invalid_categories(tmp_path, row, error):
     path = tmp_path / "bad.arff"
     path.write_text(ELECTRICITY_HEADER + row + "\n")

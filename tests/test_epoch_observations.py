@@ -18,8 +18,9 @@ class _Source:
 
     def samples_iter(self):
         for index in range(8):
-            yield TaskSample(str(index), index, index, index, {"x": float(index)}, self.holdout[0],
-                             split="train")
+            yield TaskSample(
+                str(index), index, index, index, {"x": float(index)}, self.holdout[0], split="train"
+            )
         for index, y in enumerate(self.holdout, 8):
             yield TaskSample(str(index), index, index, index, {"x": float(index)}, y, split="test")
 
@@ -74,7 +75,9 @@ def test_epoch_observation_counts_and_fixed_macro_universe(tmp_path):
 
 def test_binary_epoch_scores_ties_and_regression_keeps_target_units(tmp_path):
     classifier = _Source(
-        ["1", "0"], task="multiclass", labels=["0", "1"],
+        ["1", "0"],
+        task="multiclass",
+        labels=["0", "1"],
         target_conversion="explicit binary boolean to class strings, no information loss",
     )
     config = EpochConfig(dataset="sea", examples=10, epochs=1)
@@ -97,7 +100,8 @@ def test_binary_epoch_scores_ties_and_regression_keeps_target_units(tmp_path):
 
 def test_retention_scores_share_fixed_heldout_cohorts():
     retention = reserved_retention(
-        [[0.8, None, None], [0.9, 0.4, None], [0.7, 0.5, 0.9]], ["first", "middle", "last"],
+        [[0.8, None, None], [0.9, 0.4, None], [0.7, 0.5, 0.9]],
+        ["first", "middle", "last"],
     )
     assert retention["series"][0]["gem_bwt"] is None
     assert retention["absolute_retention"] == pytest.approx(0.6)

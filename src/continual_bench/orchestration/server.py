@@ -71,15 +71,27 @@ def perform(config):
             from continual_bench.infrastructure.services import S3Objects
 
             with run_lock(ROOT, identity):
-                publish_execution(MlflowClient(), status["receipt"]["mlflow_run_id"], report, directory,
-                                  time.time() - status["started_at"], objects=S3Objects())
+                publish_execution(
+                    MlflowClient(),
+                    status["receipt"]["mlflow_run_id"],
+                    report,
+                    directory,
+                    time.time() - status["started_at"],
+                    objects=S3Objects(),
+                )
         status["summary"] = {
-            "complete": report["complete"], "protocol": report["protocol"],
-            "dataset": config.dataset.name, "seed": config.dataset.seed,
-            "model": config.model.name, "model_params": config.model.params,
-            "samples": config.dataset.samples, "policy": config.policy.name,
-            "detector": config.detector.name, "metrics": report["metrics"],
-            "alarm_count": len(report["alarms"]), "update_count": len(report["updates"]),
+            "complete": report["complete"],
+            "protocol": report["protocol"],
+            "dataset": config.dataset.name,
+            "seed": config.dataset.seed,
+            "model": config.model.name,
+            "model_params": config.model.params,
+            "samples": config.dataset.samples,
+            "policy": config.policy.name,
+            "detector": config.detector.name,
+            "metrics": report["metrics"],
+            "alarm_count": len(report["alarms"]),
+            "update_count": len(report["updates"]),
             "transport": report["transport"],
             "training_budget": config.training_budget,
             "training_used": sum(u["train_samples"] for u in report["updates"]),
@@ -96,8 +108,13 @@ def perform(config):
 
 def health_snapshot():
     with GUARD:
-        return {"status": "ok", "queue": len(JOBS), "active": len(ACTIVE),
-                "peak_active": PEAK_ACTIVE, "concurrency": CONCURRENCY}
+        return {
+            "status": "ok",
+            "queue": len(JOBS),
+            "active": len(ACTIVE),
+            "peak_active": PEAK_ACTIVE,
+            "concurrency": CONCURRENCY,
+        }
 
 
 def submit_job(root, identity, config, perform_job, *, key_field="run_key"):

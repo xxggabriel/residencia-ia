@@ -19,13 +19,21 @@ def jobs_module():
     return module
 
 
-@pytest.mark.parametrize("suite,count", [
-    ("full", 33), ("streaming", 15), ("incremental", 15), ("offline", 3), ("strategies", 30),
-])
+@pytest.mark.parametrize(
+    "suite,count",
+    [
+        ("full", 33),
+        ("streaming", 15),
+        ("incremental", 15),
+        ("offline", 3),
+        ("strategies", 30),
+    ],
+)
 def test_matrix_validates_and_covers_strategies(suite, count):
-    configs = [Config.model_validate(c) for c in jobs_module().configurations(
-        {"samples": 3000, "seeds": [42], "label_delay": 3}, suite
-    )]
+    configs = [
+        Config.model_validate(c)
+        for c in jobs_module().configurations({"samples": 3000, "seeds": [42], "label_delay": 3}, suite)
+    ]
     assert len(configs) == count
     assert len({c.identity() for c in configs}) == count
     for config in configs:
@@ -39,26 +47,38 @@ def test_matrix_validates_and_covers_strategies(suite, count):
 
 def test_job_requires_complete_publication(monkeypatch):
     jobs = jobs_module()
-    monkeypatch.setattr(jobs, "request_json", lambda *args: {
-        "run_key": "fixture", "status": "succeeded", "receipt": {},
-    })
+    monkeypatch.setattr(
+        jobs,
+        "request_json",
+        lambda *args: {
+            "run_key": "fixture",
+            "status": "succeeded",
+            "receipt": {},
+        },
+    )
     with pytest.raises(RuntimeError, match="Incomplete publication"):
         jobs.execute_job({})
 
 
 def test_consolidation_rejects_duplicates_and_retains_protocols():
     jobs = jobs_module()
-    result = {"run_key": "fixture", "summary": {"complete": True, "protocol": "temporal_holdout"},
-              "receipt": {"mlflow_run_id": "tracked"}}
+    result = {
+        "run_key": "fixture",
+        "summary": {"complete": True, "protocol": "temporal_holdout"},
+        "receipt": {"mlflow_run_id": "tracked"},
+    }
     assert jobs.consolidate([result])["results"][0]["protocol"] == "temporal_holdout"
     with pytest.raises(ValueError):
         jobs.consolidate([result, result])
 
 
 def test_controlled_campaign_is_unique_and_preserves_online_budget():
-    configs = [Config.model_validate(c) for c in jobs_module().configurations(
-        {"samples": 3000, "seeds": [42, 43, 44, 45, 46], "label_delay": 3}, "controlled"
-    )]
+    configs = [
+        Config.model_validate(c)
+        for c in jobs_module().configurations(
+            {"samples": 3000, "seeds": [42, 43, 44, 45, 46], "label_delay": 3}, "controlled"
+        )
+    ]
     assert len(configs) == len({c.identity() for c in configs}) == 261
     online = [c for c in configs if c.policy.name == "online"]
     assert len(online) == 30
@@ -67,9 +87,12 @@ def test_controlled_campaign_is_unique_and_preserves_online_budget():
 
 
 def test_versioned_campaign_covers_real_data_without_duplicate_seed_trials():
-    configs = [Config.model_validate(c) for c in jobs_module().configurations(
-        {"samples": 3000, "seeds": [42, 43, 44, 45, 46], "label_delay": 3}, "versioned"
-    )]
+    configs = [
+        Config.model_validate(c)
+        for c in jobs_module().configurations(
+            {"samples": 3000, "seeds": [42, 43, 44, 45, 46], "label_delay": 3}, "versioned"
+        )
+    ]
     assert len(configs) == len({c.identity() for c in configs}) == 289
     assert {c.dataset.name for c in configs} == {"sea", "agrawal", "stagger", "electricity", "airlines"}
     real = [c for c in configs if c.dataset.name in {"electricity", "airlines"}]
@@ -99,19 +122,27 @@ def test_nonlinear_campaign_pairs_all_models_with_v4_data_protocols_and_budgets(
             assert len(real) == 17
             assert {c.dataset.seed for c in real} == {42}
     for start in range(0, len(configs), 3):
-        batch = configs[start:start + 3]
+        batch = configs[start : start + 3]
         assert tuple(c.model.name for c in batch) == models
         assert len({protocol_key(c) for c in batch}) == 1
 
 
 def test_nonlinear_campaign_records_model_parameters_and_keeps_budget_semantics():
-    configs = [Config.model_validate(c) for c in jobs_module().configurations(
-        {"samples": 3000, "seeds": [42, 43, 44, 45, 46], "label_delay": 3}, "nonlinear"
-    )]
+    configs = [
+        Config.model_validate(c)
+        for c in jobs_module().configurations(
+            {"samples": 3000, "seeds": [42, 43, 44, 45, 46], "label_delay": 3}, "nonlinear"
+        )
+    ]
     expected = {
         "logistic": {"learning_rate": 0.05},
-        "hoeffding_tree": {"grace_period": 50, "max_depth": 8, "max_size": 8,
-                           "memory_estimate_period": 100, "leaf_prediction": "nba"},
+        "hoeffding_tree": {
+            "grace_period": 50,
+            "max_depth": 8,
+            "max_size": 8,
+            "memory_estimate_period": 100,
+            "leaf_prediction": "nba",
+        },
         "knn": {"n_neighbors": 11, "window_size": 256, "weighted": True},
     }
     for config in configs:
@@ -144,14 +175,28 @@ def test_nonlinear_campaign_fails_early_above_airflow_mapping_limit():
 
 
 def test_real_dataset_policy_suite_covers_every_policy_and_detector_in_one_experiment():
-    params = {"samples": 10000, "seeds": [42], "label_delay": 3, "dataset": "electricity",
-              "models": ["logistic", "hoeffding_tree", "knn"], "campaign": "", "experiment": ""}
+    params = {
+        "samples": 10000,
+        "seeds": [42],
+        "label_delay": 3,
+        "dataset": "electricity",
+        "models": ["logistic", "hoeffding_tree", "knn"],
+        "campaign": "",
+        "experiment": "",
+    }
     configs = [Config.model_validate(c) for c in jobs_module().configurations(params, "policies")]
     assert len(configs) == len({c.identity() for c in configs}) == 69
     assert {c.dataset.name for c in configs} == {"electricity"}
     assert {c.policy.name for c in configs} == {"none", "online", "periodic", "drift", "performance"}
     assert {c.detector.name for c in configs if c.policy.name == "drift"} == {
-        "adwin", "ddm", "eddm", "hddm_a", "hddm_w", "page_hinkley", "kswin"}
+        "adwin",
+        "ddm",
+        "eddm",
+        "hddm_a",
+        "hddm_w",
+        "page_hinkley",
+        "kswin",
+    }
     assert {c.mlflow_experiment for c in configs} == {"continual-bench/policies-electricity-v1"}
     assert all(c.tracking is None for c in configs)  # Full default metric profile on the worker.
     assert Counter(c.mode for c in configs) == {"streaming": 33, "incremental": 33, "offline": 3}
@@ -162,8 +207,15 @@ def test_real_dataset_policy_suite_covers_every_policy_and_detector_in_one_exper
 
 @pytest.mark.parametrize("dataset", ["airlines", "sea", "agrawal", "stagger", "hyperplane", "rbf_drift"])
 def test_policy_suite_runs_on_every_binary_dataset_in_its_own_experiment(dataset):
-    params = {"samples": 3000, "seeds": [42], "label_delay": 3, "dataset": dataset,
-              "models": ["logistic", "hoeffding_tree", "knn"], "campaign": "", "experiment": ""}
+    params = {
+        "samples": 3000,
+        "seeds": [42],
+        "label_delay": 3,
+        "dataset": dataset,
+        "models": ["logistic", "hoeffding_tree", "knn"],
+        "campaign": "",
+        "experiment": "",
+    }
     configs = [Config.model_validate(c) for c in jobs_module().configurations(params, "policies")]
     assert len({c.identity() for c in configs}) == 69
     assert {c.mlflow_experiment for c in configs} == {f"continual-bench/policies-{dataset}-v1"}

@@ -16,8 +16,15 @@ class Fixture:
 
     def samples_iter(self):
         for seq in range(100):
-            yield TaskSample(str(seq), seq, seq, seq + 3, {"x": seq % 2}, str(seq % 2),
-                             split="test" if self.official and seq >= 80 else "train")
+            yield TaskSample(
+                str(seq),
+                seq,
+                seq,
+                seq + 3,
+                {"x": seq % 2},
+                str(seq % 2),
+                split="test" if self.official and seq >= 80 else "train",
+            )
 
 
 def test_two_epochs_reuse_only_training_records_and_keep_test_isolated(tmp_path):
@@ -109,16 +116,22 @@ def test_failed_all_dataset_repeat_revokes_prior_success(tmp_path, monkeypatch):
 
 
 def test_epoch_costs_count_repeated_presentations(tmp_path):
-    report = run_epochs(EpochConfig(dataset="sea", costs={"train_sample": 2, "update": 3}),
-                        tmp_path, tmp_path, source=Fixture(official=True))
+    report = run_epochs(
+        EpochConfig(dataset="sea", costs={"train_sample": 2, "update": 3}),
+        tmp_path,
+        tmp_path,
+        source=Fixture(official=True),
+    )
     costs = report["costs"]
-    assert costs["aws"]["consumption"]["model_storage_bytes"] == (
-        tmp_path / report["run_key"] / "model.pkl"
-    ).stat().st_size
+    assert (
+        costs["aws"]["consumption"]["model_storage_bytes"]
+        == (tmp_path / report["run_key"] / "model.pkl").stat().st_size
+    )
     assert costs["aws"]["consumption"]["billed_compute_seconds"] == 60
     assert all("aws" not in epoch["costs"] for epoch in report["epochs"])
     assert costs["consumption"]["training_presentations"] == 160
     assert costs["metrics"]["cost_training_presentations"] == 320
     assert costs["metrics"]["cost_update_events"] == 6
-    assert costs["metrics"]["cost_total"] == sum(e["costs"]["metrics"]["cost_total"]
-                                               for e in report["epochs"])
+    assert costs["metrics"]["cost_total"] == sum(
+        e["costs"]["metrics"]["cost_total"] for e in report["epochs"]
+    )

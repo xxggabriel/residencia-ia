@@ -255,7 +255,8 @@ class IterativeTrainingLoop:
                 selection_key = selection_metric
                 if selection_key not in selection_metrics:
                     selection_key = {"macro_f1": "f1_macro", "f1_macro": "macro_f1"}.get(
-                        selection_metric, selection_metric,
+                        selection_metric,
+                        selection_metric,
                     )
                 if selection_key not in selection_metrics:
                     name = f"{selection_scope}:{selection_metric}"
@@ -263,7 +264,9 @@ class IterativeTrainingLoop:
                 target = selection_metrics[selection_key]
                 prev_best_epoch = self.strategy.best_epoch
                 should_stop = target is not None and self.strategy.step(
-                    epoch, float(target), state=model.get_state,
+                    epoch,
+                    float(target),
+                    state=model.get_state,
                 )
                 # A scorer belongs to this epoch's observed predictions. Only retain
                 # the most recent and best-checkpoint score histograms for curves.
@@ -316,32 +319,39 @@ class IterativeTrainingLoop:
                 evaluation_counts.extend(scope["evaluated_examples"] for scope in scopes.values())
                 learner_seconds = max(0.0, train_duration - train_overhead - (train_prediction or 0.0))
                 train_values = {f"train/{key}": value for key, value in train_metrics.items()}
-                observation_steps.append(training_step(
-                    epoch, examples=train_rows,
-                    cumulative=epoch * train_rows if train_rows is not None else None,
-                    duration_seconds=learner_seconds,
-                    native_loss=train_metrics.get("native_loss"), metrics=train_values,
-                ))
+                observation_steps.append(
+                    training_step(
+                        epoch,
+                        examples=train_rows,
+                        cumulative=epoch * train_rows if train_rows is not None else None,
+                        duration_seconds=learner_seconds,
+                        native_loss=train_metrics.get("native_loss"),
+                        metrics=train_values,
+                    )
+                )
                 if "train" in scopes:
                     observation_steps[-1]["scopes"] = {"train": scopes["train"]}
-                observation_epochs.append({
-                    "epoch": epoch,
-                    "first_step": epoch,
-                    "last_step": epoch,
-                    "metrics": {
-                        **train_values,
-                        **{f"validation/{key}": value for key, value in val_metrics.items()},
-                        "training/examples_processed": train_rows,
-                        "training/duration_seconds": learner_seconds,
-                        "validation/duration_seconds": max(0.0, val_duration - validation_overhead),
-                        "epoch/duration_seconds": max(0.0, train_duration + val_duration
-                                                       - train_overhead - validation_overhead),
-                        "train/inference_seconds": train_prediction,
-                        "validation/inference_seconds": val_prediction,
-                        "resources/peak_rss_bytes": int(rss_mb * 2**20),
-                    },
-                    "scopes": scopes,
-                })
+                observation_epochs.append(
+                    {
+                        "epoch": epoch,
+                        "first_step": epoch,
+                        "last_step": epoch,
+                        "metrics": {
+                            **train_values,
+                            **{f"validation/{key}": value for key, value in val_metrics.items()},
+                            "training/examples_processed": train_rows,
+                            "training/duration_seconds": learner_seconds,
+                            "validation/duration_seconds": max(0.0, val_duration - validation_overhead),
+                            "epoch/duration_seconds": max(
+                                0.0, train_duration + val_duration - train_overhead - validation_overhead
+                            ),
+                            "train/inference_seconds": train_prediction,
+                            "validation/inference_seconds": val_prediction,
+                            "resources/peak_rss_bytes": int(rss_mb * 2**20),
+                        },
+                        "scopes": scopes,
+                    }
+                )
                 tracking_overhead_seconds += (
                     time.perf_counter() - tracking_started + train_overhead + validation_overhead
                 )
@@ -369,9 +379,7 @@ class IterativeTrainingLoop:
 
             if sigterm.received and self.on_sigterm_checkpoint is not None:
                 state_bytes = (
-                    self.strategy.best_state
-                    if self.strategy.best_state is not None
-                    else model.get_state()
+                    self.strategy.best_state if self.strategy.best_state is not None else model.get_state()
                 )
                 self.on_sigterm_checkpoint(
                     state_bytes,
@@ -439,8 +447,11 @@ class IterativeTrainingLoop:
                 "inference_seconds": measured_inference,
                 "inference_scope": "training_and_validation_split_predictions",
                 "predictions_per_second": (
-                    evaluated_examples / measured_inference if evaluated_examples is not None
-                    and measured_inference and len(inference_seconds) == len(evaluation_counts) else None
+                    evaluated_examples / measured_inference
+                    if evaluated_examples is not None
+                    and measured_inference
+                    and len(inference_seconds) == len(evaluation_counts)
+                    else None
                 ),
                 "peak_rss_bytes": int(current_peak_rss_mb() * 2**20),
                 "rss_scope": "process_lifetime_high_water_mark",

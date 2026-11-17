@@ -34,14 +34,20 @@ def test_matrix_and_native_parent_points_preserve_scope_and_coordinates():
     report = {
         "metrics": {"test": {"n": 12, "f1": 0.88}, "train": {"f1": 0.9}},
         "validation": {"log_loss": 0.42},
-        "windows": [{"end_seq": 31, "scope": "prequential", "accuracy": 0.7},
-                    {"end_seq": 40, "scope": "holdout", "accuracy": 0.9}],
-        "epochs": [{"epoch": 1, "metrics": {"f1": 0.6}, "training_seconds": 1.0},
-                   {"epoch": 2, "metrics": {"f1": 0.8}, "training_seconds": 1.1}],
+        "windows": [
+            {"end_seq": 31, "scope": "prequential", "accuracy": 0.7},
+            {"end_seq": 40, "scope": "holdout", "accuracy": 0.9},
+        ],
+        "epochs": [
+            {"epoch": 1, "metrics": {"f1": 0.6}, "training_seconds": 1.0},
+            {"epoch": 2, "metrics": {"f1": 0.8}, "training_seconds": 1.1},
+        ],
         "system_metrics": {"samples": [{"timestamp_ms": 800, "values": {"cpu": 36.2}}]},
     }
-    points = {(v["key"], v["step"]): (v["value"], v["timestamp"])
-              for v in aws_metric_points(report, {"f1": 0.88, "split": "test"})}
+    points = {
+        (v["key"], v["step"]): (v["value"], v["timestamp"])
+        for v in aws_metric_points(report, {"f1": 0.88, "split": "test"})
+    }
     assert points["summary/test/f1", 0] == (0.88, 0)
     assert points["summary/train/f1", 0] == (0.9, 0)
     assert points["validation/log_loss", 0] == (0.42, 0)
@@ -57,7 +63,8 @@ def test_matrix_and_native_parent_points_preserve_scope_and_coordinates():
 def test_native_uploads_fit_checkpoint_and_reuses_matching_parent(tmp_path, monkeypatch):
     calls = []
     parent = {
-        "run_id": "parent", "status": "RUNNING",
+        "run_id": "parent",
+        "status": "RUNNING",
         "artifact_uri": "s3://artifacts/mlflow/parent",
     }
 
@@ -83,8 +90,11 @@ def test_native_uploads_fit_checkpoint_and_reuses_matching_parent(tmp_path, monk
     (work / "artifacts" / "data" / "index.json").write_text('{"figures":[]}')
     (work / "model.ubj").write_bytes(b"model state")
     fit = {
-        "fit_id": "fit-000001", "action": "initial", "checkpoint": {
-            "file": "model.ubj", "sha256": sha256_path(work / "model.ubj"),
+        "fit_id": "fit-000001",
+        "action": "initial",
+        "checkpoint": {
+            "file": "model.ubj",
+            "sha256": sha256_path(work / "model.ubj"),
         },
         "steps": [{"step": 1, "global_step": 1, "kind": "epoch", "metrics": {"validation:log_loss": 0.5}}],
         "summary": {},
@@ -101,14 +111,16 @@ def test_native_uploads_fit_checkpoint_and_reuses_matching_parent(tmp_path, monk
     assert store.head("mlflow/parent/data/index.json")
     assert store.head("mlflow/parent/training-history.json")
     assert tracker().ensure_run() == "parent"
-    parent_creates = [data for url, data in calls
-                      if url.endswith("/runs/create") and data["run_name"] == "job"]
+    parent_creates = [
+        data for url, data in calls if url.endswith("/runs/create") and data["run_name"] == "job"
+    ]
     assert len(parent_creates) == 1
     assert {"key": "cb-dataset", "value": "ecommerce"} in parent_creates[0]["tags"]
     assert {"key": "cb_training_run_key", "value": "job"} in parent_creates[0]["tags"]
     assert any(
         p["step"] == 1 and p["key"] == "validation/log_loss"
-        for _, data in calls if data and data.get("run_id") == "child"
+        for _, data in calls
+        if data and data.get("run_id") == "child"
         for p in data.get("metrics", [])
     )
     (work / "model.ubj").write_bytes(b"wrong state")
@@ -118,9 +130,13 @@ def test_native_uploads_fit_checkpoint_and_reuses_matching_parent(tmp_path, monk
 
 def test_matrix_retries_only_publication_and_keeps_the_original_training_attempt(tmp_path, monkeypatch):
     store = LocalObjectStore(tmp_path)
-    request = CampaignRequest(campaign_id="matrix-retry", matrix={
-        "kind": "experiment_matrix", "path": "configs/matrices/binary-comparison.yaml",
-    })
+    request = CampaignRequest(
+        campaign_id="matrix-retry",
+        matrix={
+            "kind": "experiment_matrix",
+            "path": "configs/matrices/binary-comparison.yaml",
+        },
+    )
     plan = planning.build_plan(request, publish_fixture_release(store))
     unit = plan["units"][0]
     planning.publish_plan(store, {**plan, "units": [unit]})
@@ -145,8 +161,11 @@ def test_matrix_retries_only_publication_and_keeps_the_original_training_attempt
             if len(attempts) == 1:
                 raise RuntimeError("Temporary tracking error")
             return {
-                "mlflow_run_id": "original-parent", "mlflow_experiment_id": "1",
-                "artifact_uri": "s3://artifacts/mlflow/parent", "child_runs": [], "artifacts": {"files": 4},
+                "mlflow_run_id": "original-parent",
+                "mlflow_experiment_id": "1",
+                "artifact_uri": "s3://artifacts/mlflow/parent",
+                "child_runs": [],
+                "artifacts": {"files": 4},
             }
 
         def finish_publication(self):
@@ -179,28 +198,48 @@ def test_matrix_retries_only_publication_and_keeps_the_original_training_attempt
     assert final["training_history_uri"].endswith("/binary/retained/training-history.json")
 
 
-@pytest.mark.parametrize(("evaluator", "options", "step_kind"), [
-    ("binary", {
-        "modes": ["streaming"], "strategies": [{"policy": {"name": "online", "action": "learn_one"}}],
-        "base": {"warmup": 20, "metric_window": 10},
-    }, "update"),
-    ("typed", {"typed_policies": ["online"]}, "update"),
-    pytest.param("epochs", {"base": {"epochs": 2}}, "epoch", marks=pytest.mark.observation_pngs),
-])
+@pytest.mark.parametrize(
+    ("evaluator", "options", "step_kind"),
+    [
+        (
+            "binary",
+            {
+                "modes": ["streaming"],
+                "strategies": [{"policy": {"name": "online", "action": "learn_one"}}],
+                "base": {"warmup": 20, "metric_window": 10},
+            },
+            "update",
+        ),
+        ("typed", {"typed_policies": ["online"]}, "update"),
+        pytest.param("epochs", {"base": {"epochs": 2}}, "epoch", marks=pytest.mark.observation_pngs),
+    ],
+)
 def test_batch_publishes_a_real_matrix_case(evaluator, options, step_kind, tmp_path, monkeypatch):
     snapshot = tmp_path / "configs"
     (snapshot / "matrices").mkdir(parents=True)
     (snapshot / "base").mkdir()
     (snapshot / "base" / "tracking.yaml").write_text("{}")
-    (snapshot / "matrices" / "smoke.yaml").write_text(yaml.safe_dump({
-        "name": "smoke", "seeds": [42], "evaluator": evaluator, "models": [{"name": "logistic"}],
-        "on_incompatible": "error",
-        "datasets": [{"name": "sea", "samples": 120}], **options,
-    }))
+    (snapshot / "matrices" / "smoke.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "smoke",
+                "seeds": [42],
+                "evaluator": evaluator,
+                "models": [{"name": "logistic"}],
+                "on_incompatible": "error",
+                "datasets": [{"name": "sea", "samples": 120}],
+                **options,
+            }
+        )
+    )
     store = LocalObjectStore(tmp_path / "store")
-    request = CampaignRequest(campaign_id="matrix-smoke", matrix={
-        "kind": "experiment_matrix", "path": "configs/matrices/smoke.yaml",
-    })
+    request = CampaignRequest(
+        campaign_id="matrix-smoke",
+        matrix={
+            "kind": "experiment_matrix",
+            "path": "configs/matrices/smoke.yaml",
+        },
+    )
     plan = planning.build_plan(request, publish_fixture_release(store), project_root=tmp_path)
     planning.publish_plan(store, plan)
     [unit] = plan["units"]
@@ -213,9 +252,15 @@ def test_batch_publishes_a_real_matrix_case(evaluator, options, step_kind, tmp_p
             tags = {tag["key"]: tag["value"] for tag in payload["tags"]}
             created.append(tags)
             run = f"run-{len(created)}"
-            return {"run": {"info": {
-                "run_id": run, "status": "RUNNING", "artifact_uri": f"s3://artifacts/mlflow/{run}",
-            }}}
+            return {
+                "run": {
+                    "info": {
+                        "run_id": run,
+                        "status": "RUNNING",
+                        "artifact_uri": f"s3://artifacts/mlflow/{run}",
+                    }
+                }
+            }
         return {}
 
     monkeypatch.setattr(matrix_tracking.MatrixMlflowRun, "_request", rest)
@@ -242,29 +287,47 @@ def test_studio_verifies_per_run_matrix_indices_without_a_cross_dataset_plot(mon
     sfn, sm, s3 = Mock(), Mock(), Mock()
     sm.describe_pipeline_execution.return_value = {"PipelineExecutionStatus": "Executing"}
     summary = {
-        "complete": True, "snapshot": None, "tracking": {"required": True, "complete": True},
+        "complete": True,
+        "snapshot": None,
+        "tracking": {"required": True, "complete": True},
         "units": [{"tracking": {"mlflow_run_id": "parent"}}],
     }
     s3.get_object.side_effect = lambda **_: {"Body": BytesIO(json.dumps(summary).encode())}
     message = {
-        "token": "abc", "pipelineExecutionArn": "arn:studio-execution",
+        "token": "abc",
+        "pipelineExecutionArn": "arn:studio-execution",
         "arguments": {"stage": "verify", "summary_uri": "s3://data/campaigns/matrix/summary.json"},
     }
     assert callback["tick"](message, sfn, sm, s3) == {"done": True}
     sm.send_pipeline_execution_step_failure.assert_called_once()
-    summary["units"][0]["artifacts_index_uri"] = "s3://data/campaigns/matrix/runs/run/attempt/artifacts/index.json"
+    summary["units"][0]["artifacts_index_uri"] = (
+        "s3://data/campaigns/matrix/runs/run/attempt/artifacts/index.json"
+    )
     assert callback["tick"](message, sfn, sm, s3) == {"done": True}
     sm.send_pipeline_execution_step_success.assert_called_once()
 
 
-@pytest.mark.parametrize(("kind", "name"), [("training", "TrainingJobName"),
-                                           ("tuning", "HyperParameterTuningJobName")])
+@pytest.mark.parametrize(
+    ("kind", "name"), [("training", "TrainingJobName"), ("tuning", "HyperParameterTuningJobName")]
+)
 def test_direct_native_requests_use_configured_tracking_and_bucket_key(kind, name):
     script = Path(__file__).parents[1] / "scripts" / "aws" / "sagemaker_jobs.py"
-    request = json.loads(subprocess.check_output([
-        sys.executable, str(script), kind, "--release", "example", "--dry-run",
-        "--mlflow-arn", "app", "--kms-key-arn", "data-key",
-    ]))
+    request = json.loads(
+        subprocess.check_output(
+            [
+                sys.executable,
+                str(script),
+                kind,
+                "--release",
+                "example",
+                "--dry-run",
+                "--mlflow-arn",
+                "app",
+                "--kms-key-arn",
+                "data-key",
+            ]
+        )
+    )
     definition = request["TrainingJobDefinition"] if kind == "tuning" else request
     env = definition["Environment"]
     assert env["MLFLOW_TRACKING_URI"] == "app"

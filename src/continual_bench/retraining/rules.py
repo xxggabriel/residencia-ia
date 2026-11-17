@@ -154,6 +154,7 @@ class CaraCT(_CaraRule):
         def trigger(t, stale, state):
             state["cumulative"] += stale
             return state["cumulative"] >= tau
+
         return trigger
 
     def _optimise(self, psi, last):
@@ -226,20 +227,30 @@ class Oracle(Rule):
     def fit_future(self, matrix, alpha):
         if self.same_batch or (matrix.paper_timing and self.objective == "staleness"):
             self.schedule, self.cost = optimal_schedule_same_batch(
-                np.nan_to_num(matrix.staleness_matrix(), nan=0.0), matrix.initial, matrix.offline,
-                matrix.batches - 1, alpha)
+                np.nan_to_num(matrix.staleness_matrix(), nan=0.0),
+                matrix.initial,
+                matrix.offline,
+                matrix.batches - 1,
+                alpha,
+            )
             return
         if self.objective == "error" and matrix.paper_timing:
             self.schedule, self.cost = optimal_schedule_same_batch(
-                matrix.err.T, matrix.initial, matrix.offline, matrix.batches - 1, alpha,
-                retrain_errors=matrix.err.diagonal())
+                matrix.err.T,
+                matrix.initial,
+                matrix.offline,
+                matrix.batches - 1,
+                alpha,
+                retrain_errors=matrix.err.diagonal(),
+            )
             return
         if self.objective == "error":
             cost = matrix.err
         else:
             cost = matrix.staleness_matrix().T  # cost[model, batch]
         self.schedule, self.cost = optimal_schedule(
-            np.nan_to_num(cost, nan=0.0), matrix.initial, matrix.offline, matrix.batches - 1, alpha)
+            np.nan_to_num(cost, nan=0.0), matrix.initial, matrix.offline, matrix.batches - 1, alpha
+        )
 
     def decide(self, t, deployed, view):
         return t in self.schedule
@@ -307,9 +318,14 @@ class UPF(Rule):
         trained, served = t + u_index, first + k_index
         features = np.column_stack([trained, served, served - trained, np.full(len(trained), shift)])
         mean_new = model.predict(features)
-        old_features = np.column_stack([
-            np.full(future, deployed), first + np.arange(future), first + np.arange(future) - deployed,
-            np.full(future, shift)])
+        old_features = np.column_stack(
+            [
+                np.full(future, deployed),
+                first + np.arange(future),
+                first + np.arange(future) - deployed,
+                np.full(future, shift),
+            ]
+        )
         mean_old = model.predict(old_features)
         rng = np.random.default_rng([self.seed, view.upto])
         a, b = self._beta(mean_new, std)
@@ -318,12 +334,18 @@ class UPF(Rule):
         a, b = self._beta(mean_old, std)
         old = rng.beta(a, b, size=(self.samples, future))
         retrain_cost, keep_cost = self._branch_costs(new, old)
-        self.forecasts.append({
-            "t": t, "predicted_new": mean_new.tolist(), "predicted_old": mean_old.tolist(),
-            "trained": trained.tolist(), "served": served.tolist(), "deployed": deployed,
-            "quantile_retrain": float(np.quantile(retrain_cost, self.delta)),
-            "quantile_keep": float(np.quantile(keep_cost, self.delta)),
-        })
+        self.forecasts.append(
+            {
+                "t": t,
+                "predicted_new": mean_new.tolist(),
+                "predicted_old": mean_old.tolist(),
+                "trained": trained.tolist(),
+                "served": served.tolist(),
+                "deployed": deployed,
+                "quantile_retrain": float(np.quantile(retrain_cost, self.delta)),
+                "quantile_keep": float(np.quantile(keep_cost, self.delta)),
+            }
+        )
         return self.forecasts[-1]["quantile_retrain"] < self.forecasts[-1]["quantile_keep"]
 
     def _branch_costs(self, new: np.ndarray, old: np.ndarray):
@@ -333,9 +355,9 @@ class UPF(Rule):
         for k in range(future - 1, -1, -1):
             retrain = self.alpha + new[:, k, k] + continuation[:, k + 1]
             errors = np.column_stack((old[:, k], new[:, :k, k]))
-            keep = errors + continuation[:, :k + 1]
+            keep = errors + continuation[:, : k + 1]
             choose_retrain = np.quantile(retrain, self.delta) < np.quantile(keep, self.delta, axis=0)
-            continuation[:, :k + 1] = np.where(choose_retrain, retrain[:, None], keep)
+            continuation[:, : k + 1] = np.where(choose_retrain, retrain[:, None], keep)
         return retrain, keep[:, 0]
 
     def parameters(self):

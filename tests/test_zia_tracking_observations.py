@@ -59,9 +59,13 @@ def test_histogram_ranking_coarsens_distinct_scores_in_the_same_bin():
     assert stream.quality([0, 1])["average_precision"] == 0.5
 
 
-@pytest.mark.parametrize(("learner", "labels"), [
-    ("xgboost", ["other", "returned"]), ("multinomial_logistic", ["follow", "friend", "block", "mute"]),
-])
+@pytest.mark.parametrize(
+    ("learner", "labels"),
+    [
+        ("xgboost", ["other", "returned"]),
+        ("multinomial_logistic", ["follow", "friend", "block", "mute"]),
+    ],
+)
 def test_online_aggregate_is_computed_from_every_preupdate_prediction(monkeypatch, learner, labels):
     if learner == "xgboost":
         pytest.importorskip("xgboost")
@@ -107,7 +111,9 @@ def test_online_aggregate_is_computed_from_every_preupdate_prediction(monkeypatc
     assert summary["observation_effort"]["epochs"] is None
     assert [row["metrics"]["training/batch_size"] for row in summary["observation_steps"]] == [4, 4, 3]
     assert [row["metrics"]["training/presentations_cumulative"] for row in summary["observation_steps"]] == [
-        4, 8, 11,
+        4,
+        8,
+        11,
     ]
 
 
@@ -121,9 +127,14 @@ def test_temporal_diagnostic_compares_identical_reserved_period_prefixes_within_
     probes.add(103, timestamps[3:], x[3:], labels[3:])
     versions = []
     for index in range(MAX_CHECKPOINTS + 3):
-        versions.append({
-            "file": str(index), "fit_id": f"fit-{index:06d}", "sha256": str(index), "end_seq": index,
-        })
+        versions.append(
+            {
+                "file": str(index),
+                "fit_id": f"fit-{index:06d}",
+                "sha256": str(index),
+                "end_seq": index,
+            }
+        )
         (tmp_path / str(index)).write_bytes(bytes([index]))
 
     class Model:

@@ -8,8 +8,16 @@ from .reconcile import missing_metric_points
 EVIDENCE_TAGS = ("cb-fit-evidence-sha256", "cb-fit-observations-sha256", "cb-fit-checkpoint-uri")
 
 
-def publish_training_rounds(client, experiment_id, parent_run_id, report, *, now_ms=0,
-                            checkpoint_base_uri=None, include_artifact_uri=False):
+def publish_training_rounds(
+    client,
+    experiment_id,
+    parent_run_id,
+    report,
+    *,
+    now_ms=0,
+    checkpoint_base_uri=None,
+    include_artifact_uri=False,
+):
     """Publish fits as child runs keyed by ``cb-fit-id``; replay is idempotent.
 
     Each child needs at most create + one log-batch (metrics, params and tags
@@ -51,14 +59,19 @@ def publish_training_rounds(client, experiment_id, parent_run_id, report, *, now
             extending |= not created and remote is None
         if run.status != "FINISHED" or extending:
             missing = missing_metric_points(
-                backend, run.run_id, [(p["key"], p["step"], p["value"]) for p in metrics],
-                known_keys=set() if created else set(run.metric_keys), max_workers=1,
+                backend,
+                run.run_id,
+                [(p["key"], p["step"], p["value"]) for p in metrics],
+                known_keys=set() if created else set(run.metric_keys),
+                max_workers=1,
             )
             stamps = {(p["key"], p["step"]): p.get("timestamp", now_ms) for p in metrics}
             backend.log_batch(
                 run.run_id,
-                metrics=[_point({"key": k, "value": v, "step": s, "timestamp": stamps.get((k, s), now_ms)})
-                         for k, s, v in missing],
+                metrics=[
+                    _point({"key": k, "value": v, "step": s, "timestamp": stamps.get((k, s), now_ms)})
+                    for k, s, v in missing
+                ],
                 params=params,
                 tags=tags,
             )

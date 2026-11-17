@@ -16,8 +16,15 @@ from continual_bench.infrastructure.storage import atomic_write
 from .figures import Figure, binary_figures, epoch_figures, retraining_figures, system_figures, typed_figures
 
 ROOT = "artifacts"
-__all__ = ["Figure", "binary_figures", "epoch_figures", "retraining_figures", "system_figures",
-           "typed_figures", "write_artifacts"]
+__all__ = [
+    "Figure",
+    "binary_figures",
+    "epoch_figures",
+    "retraining_figures",
+    "system_figures",
+    "typed_figures",
+    "write_artifacts",
+]
 
 
 def _dump(value) -> bytes:
@@ -25,7 +32,11 @@ def _dump(value) -> bytes:
 
 
 def write_artifacts(
-    directory, figures: list[Figure], dumps: dict[str, object], *, preserve_existing=False,
+    directory,
+    figures: list[Figure],
+    dumps: dict[str, object],
+    *,
+    preserve_existing=False,
 ) -> dict:
     """Render every figure, save its data and the raw dumps; return the index."""
     root = Path(directory) / ROOT
@@ -36,9 +47,7 @@ def write_artifacts(
         if index["version"] != "run-artifacts-v1":
             raise ValueError("unsupported artifact index")
     replaced = {(figure.group, figure.name) for figure in figures}
-    index["figures"] = [
-        item for item in index["figures"] if (item["group"], item["name"]) not in replaced
-    ]
+    index["figures"] = [item for item in index["figures"] if (item["group"], item["name"]) not in replaced]
     seen = set()
     for figure in figures:
         key = (figure.group, figure.name)

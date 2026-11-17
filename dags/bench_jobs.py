@@ -36,10 +36,20 @@ def configurations(params, suite):
                 ("agrawal", "hoeffding_tree", "offline", "none", "none"),
                 ("stagger", "knn", "offline", "none", "none"),
             }
-            cases = [c for c in cases if (c["dataset"]["name"], c["model"]["name"], c["mode"],
-                                          c["policy"]["name"], c["detector"]["name"]) in selected
-                     and c["dataset"]["seed"] == params["seeds"][0]
-                     and c.get("training_budget") in (0, None, params["samples"] - 100)]
+            cases = [
+                c
+                for c in cases
+                if (
+                    c["dataset"]["name"],
+                    c["model"]["name"],
+                    c["mode"],
+                    c["policy"]["name"],
+                    c["detector"]["name"],
+                )
+                in selected
+                and c["dataset"]["seed"] == params["seeds"][0]
+                and c.get("training_budget") in (0, None, params["samples"] - 100)
+            ]
             # Periodic/drift have two caps: keep only the lower cap in this bounded check.
             assert len(cases) == 8
         profile = params.get("tracking", tracking_profile())
@@ -53,8 +63,10 @@ def configurations(params, suite):
         return versioned_configurations(params)
     if suite == "controlled":
         return controlled_configurations(params)
-    modes = ("streaming", "incremental", "offline") if suite == "full" else (
-        ("streaming", "incremental") if suite == "strategies" else (suite,)
+    modes = (
+        ("streaming", "incremental", "offline")
+        if suite == "full"
+        else (("streaming", "incremental") if suite == "strategies" else (suite,))
     )
     result = []
     for seed in params["seeds"]:
@@ -62,24 +74,42 @@ def configurations(params, suite):
             for mode in modes:
                 variants = [("none", "none")]
                 if mode != "offline":
-                    variants += [("none", "periodic"), ("none", "online"),
-                                 ("adwin", "drift"), ("ddm", "drift")]
+                    variants += [
+                        ("none", "periodic"),
+                        ("none", "online"),
+                        ("adwin", "drift"),
+                        ("ddm", "drift"),
+                    ]
                 for detector, policy in variants:
-                    result.append({
-                        "name": "benchmark-v2", "mode": mode,
-                        "dataset": {"name": dataset, "samples": params["samples"],
-                                    "seed": seed, "label_delay": params["label_delay"]},
-                        "detector": {"name": detector},
-                        "policy": {"name": policy,
-                                   "action": "learn_one" if policy == "online" else "reset_retrain"},
-                    })
+                    result.append(
+                        {
+                            "name": "benchmark-v2",
+                            "mode": mode,
+                            "dataset": {
+                                "name": dataset,
+                                "samples": params["samples"],
+                                "seed": seed,
+                                "label_delay": params["label_delay"],
+                            },
+                            "detector": {"name": detector},
+                            "policy": {
+                                "name": policy,
+                                "action": "learn_one" if policy == "online" else "reset_retrain",
+                            },
+                        }
+                    )
     return result
 
 
 POLICY_MODELS = {
     "logistic": {"learning_rate": 0.05},
-    "hoeffding_tree": {"grace_period": 50, "max_depth": 8, "max_size": 8, "memory_estimate_period": 100,
-                       "leaf_prediction": "nba"},
+    "hoeffding_tree": {
+        "grace_period": 50,
+        "max_depth": 8,
+        "max_size": 8,
+        "memory_estimate_period": 100,
+        "leaf_prediction": "nba",
+    },
     "knn": {"n_neighbors": 11, "window_size": 256, "weighted": True},
 }
 # Binary streams accepted by the drift/retraining engine (multiclass/regression use other evaluators).
@@ -92,12 +122,15 @@ DRIFT_DETECTORS = ("adwin", "ddm", "eddm", "hddm_a", "hddm_w", "page_hinkley", "
 def policy_strategies():
     """Every retraining policy; drift-triggered retraining once per River detector."""
     guards = {"every": 500, "cooldown": 100, "min_samples": 100, "min_window": 50, "action": "reset_retrain"}
-    strategies = [("none", {"name": "none"}),
-                  ("none", {"name": "online", "action": "learn_one"}),
-                  ("none", {"name": "periodic", **guards})]
+    strategies = [
+        ("none", {"name": "none"}),
+        ("none", {"name": "online", "action": "learn_one"}),
+        ("none", {"name": "periodic", **guards}),
+    ]
     strategies += [(detector, {"name": "drift", **guards}) for detector in DRIFT_DETECTORS]
-    strategies.append(("none", {"name": "performance", **guards,
-                                "params": {"monitor_window": 200, "error_threshold": 0.3}}))
+    strategies.append(
+        ("none", {"name": "performance", **guards, "params": {"monitor_window": 200, "error_threshold": 0.3}})
+    )
     return strategies
 
 
@@ -113,10 +146,20 @@ def policy_configurations(params):
     campaign = params.get("campaign") or f"policies-{dataset}-v1"
     experiment = params.get("experiment") or f"continual-bench/{campaign}"
     models = params.get("models") or list(POLICY_MODELS)
-    data = {"name": dataset, "samples": params["samples"], "seed": params["seeds"][0],
-            "label_delay": params["label_delay"]}
-    common = {"name": campaign, "mlflow_experiment": experiment, "warmup": 100, "metric_window": 100,
-              "replay_window": 256, "max_seconds": 1800}
+    data = {
+        "name": dataset,
+        "samples": params["samples"],
+        "seed": params["seeds"][0],
+        "label_delay": params["label_delay"],
+    }
+    common = {
+        "name": campaign,
+        "mlflow_experiment": experiment,
+        "warmup": 100,
+        "metric_window": 100,
+        "replay_window": 256,
+        "max_seconds": 1800,
+    }
     result = []
     for model in models:
         component = {"name": model, "params": deepcopy(POLICY_MODELS[model])}
@@ -124,10 +167,26 @@ def policy_configurations(params):
             component["params"]["nominal_attributes"] = NOMINAL_FEATURES[dataset]
         for mode in ("streaming", "incremental"):
             for detector, policy in policy_strategies():
-                result.append({**common, "mode": mode, "dataset": dict(data), "model": deepcopy(component),
-                               "detector": {"name": detector}, "policy": deepcopy(policy)})
-        result.append({**common, "mode": "offline", "dataset": dict(data), "model": deepcopy(component),
-                       "detector": {"name": "none"}, "policy": {"name": "none"}})
+                result.append(
+                    {
+                        **common,
+                        "mode": mode,
+                        "dataset": dict(data),
+                        "model": deepcopy(component),
+                        "detector": {"name": detector},
+                        "policy": deepcopy(policy),
+                    }
+                )
+        result.append(
+            {
+                **common,
+                "mode": "offline",
+                "dataset": dict(data),
+                "model": deepcopy(component),
+                "detector": {"name": "none"},
+                "policy": {"name": "none"},
+            }
+        )
     return result
 
 
@@ -163,8 +222,9 @@ def consolidate(results):
         summary = result["summary"]
         if not summary["complete"] or not result["receipt"]["mlflow_run_id"]:
             raise RuntimeError("Cannot consolidate an incomplete benchmark")
-        rows.append({"run_key": result["run_key"], **summary,
-                     "mlflow_run_id": result["receipt"]["mlflow_run_id"]})
+        rows.append(
+            {"run_key": result["run_key"], **summary, "mlflow_run_id": result["receipt"]["mlflow_run_id"]}
+        )
     if not rows or len({r["run_key"] for r in rows}) != len(rows):
         raise ValueError("Expected a nonempty matrix of unique runs")
     # Protocol is retained per row: temporal holdout is never pooled with prequential scores.

@@ -36,11 +36,15 @@ def _assert_history(directory, report):
 
 @pytest.mark.parametrize("mode", ["streaming", "incremental", "offline"])
 def test_binary_protocols_record_real_training_and_shared_journal(tmp_path, mode):
-    config = Config.model_validate({
-        "mode": mode, "dataset": {"name": "sea", "samples": 150, "label_delay": 3}, "warmup": 20,
-        "metric_window": 33,
-        "policy": {"name": "none" if mode == "offline" else "online", "action": "learn_one"},
-    })
+    config = Config.model_validate(
+        {
+            "mode": mode,
+            "dataset": {"name": "sea", "samples": 150, "label_delay": 3},
+            "warmup": 20,
+            "metric_window": 33,
+            "policy": {"name": "none" if mode == "offline" else "online", "action": "learn_one"},
+        }
+    )
     report = run(config, tmp_path)
     directory = tmp_path / config.identity()
     fits = _assert_history(directory, report)
@@ -59,11 +63,26 @@ def test_binary_protocols_record_real_training_and_shared_journal(tmp_path, mode
 
 
 def test_historical_gate_preserves_rejected_fit_and_original_validation_scope():
-    report = {"config": {"warmup": 2, "metric_window": 5}, "labeled": 6, "updates": [], "candidates": [
-        {"seq": 5, "action": "reset_retrain", "train_samples": 3, "seconds": .1, "promoted": False,
-         "train_seq_range": [2, 5], "validation_samples": 1, "validation_seq_range": [5, 6],
-         "candidate_accuracy": 0., "incumbent_accuracy": 1., "accuracy_gain": -1.},
-    ]}
+    report = {
+        "config": {"warmup": 2, "metric_window": 5},
+        "labeled": 6,
+        "updates": [],
+        "candidates": [
+            {
+                "seq": 5,
+                "action": "reset_retrain",
+                "train_samples": 3,
+                "seconds": 0.1,
+                "promoted": False,
+                "train_seq_range": [2, 5],
+                "validation_samples": 1,
+                "validation_seq_range": [5, 6],
+                "candidate_accuracy": 0.0,
+                "incumbent_accuracy": 1.0,
+                "accuracy_gain": -1.0,
+            },
+        ],
+    }
     initial, rejected = stream_training_history(report)
     assert initial["start_seq"] == 0
     assert initial["steps"][0]["metrics"]["training_seconds"] is None
@@ -76,8 +95,15 @@ def test_historical_gate_preserves_rejected_fit_and_original_validation_scope():
 class _TypedSource:
     def samples_iter(self):
         yield from (
-            TaskSample(str(i), i, i, i + 2, {"x": float(i)}, str(i % 2),
-                       split="validation" if i % 5 == 1 else "train")
+            TaskSample(
+                str(i),
+                i,
+                i,
+                i + 2,
+                {"x": float(i)},
+                str(i % 2),
+                split="validation" if i % 5 == 1 else "train",
+            )
             for i in range(16)
         )
 
@@ -96,7 +122,7 @@ def test_typed_periodic_keeps_one_reloadable_checkpoint_per_fit(tmp_path):
         assert fit["training_presentations"] == update["train_samples"]
         assert fit["validation_samples"] == 0
     with (directory / fits[-1]["checkpoint"]["file"]).open("rb") as stream:
-        assert pickle.load(stream).predict_one({"x": 2.}) in ("0", "1")
+        assert pickle.load(stream).predict_one({"x": 2.0}) in ("0", "1")
 
     old_updates = [{k: v for k, v in row.items() if k != "train_seq_range"} for row in report["updates"]]
     old_report = {**report, "training": {"warmup_samples": 2}, "updates": old_updates}

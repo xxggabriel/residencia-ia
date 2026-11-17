@@ -23,8 +23,9 @@ def validate(environment):
     ):
         if not environment.get(name) or environment[name].startswith("CHANGE_ME"):
             raise ValueError(f"approved value required: {name}")
-    if (len(environment.get("MLFLOW_PASSWORD", "")) < 12
-            or environment["MLFLOW_PASSWORD"].startswith("CHANGE_ME")):
+    if len(environment.get("MLFLOW_PASSWORD", "")) < 12 or environment["MLFLOW_PASSWORD"].startswith(
+        "CHANGE_ME"
+    ):
         raise ValueError("MLflow 3.17.2 requires an admin password of at least 12 characters")
     if len(base64.urlsafe_b64decode(environment["AIRFLOW_FERNET_KEY"])) != 32:
         raise ValueError("AIRFLOW_FERNET_KEY must encode exactly 32 bytes")

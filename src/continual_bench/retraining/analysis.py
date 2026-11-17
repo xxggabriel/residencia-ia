@@ -24,9 +24,16 @@ from .schedule import (
 )
 from .simulate import SimResult, simulate
 
-LABELS = {"cara": "CARA", "cara_cumulative": "CARA cumul.", "cara_periodic": "CARA per.",
-          "upf": "UPF", "oracle": "oracle", "frozen": "frozen", "markov": "Markov",
-          "oracle_staleness": "oracle (CARA)"}
+LABELS = {
+    "cara": "CARA",
+    "cara_cumulative": "CARA cumul.",
+    "cara_periodic": "CARA per.",
+    "upf": "UPF",
+    "oracle": "oracle",
+    "frozen": "frozen",
+    "markov": "Markov",
+    "oracle_staleness": "oracle (CARA)",
+}
 DEFAULT_RULES = ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle", "frozen")
 # Fractions of alpha_max (UPF Table 2 uses alpha = 0.1 and 0.9 on a dataset with alpha_max = 1).
 LOW_HIGH = {"low": 0.1, "high": 0.9}
@@ -41,16 +48,21 @@ def _num(value):
 
 def json_parameters(parameters: dict) -> dict:
     """Rule parameters with non-finite values (``inf`` = never retrain) as ``None``."""
-    return {k: (_num(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
-            for k, v in parameters.items()}
+    return {
+        k: (_num(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+        for k, v in parameters.items()
+    }
 
 
-def make_rule(name: str, *, delta: float = 0.95, samples: int = 100, seed: int = 0,
-              same_batch: bool = False):
+def make_rule(name: str, *, delta: float = 0.95, samples: int = 100, seed: int = 0, same_batch: bool = False):
     if name == "upf":
         return UPF(delta=delta, samples=samples, seed=seed)
-    factories = {"cara": CaraT, "cara_cumulative": CaraCT, "cara_periodic": CaraP,
-                 "oracle_staleness": StalenessOracle}
+    factories = {
+        "cara": CaraT,
+        "cara_cumulative": CaraCT,
+        "cara_periodic": CaraP,
+        "oracle_staleness": StalenessOracle,
+    }
     if name in factories:
         return factories[name](same_batch=same_batch)
     return {"oracle": Oracle, "frozen": Frozen, "markov": Markov}[name]()
@@ -68,8 +80,9 @@ def forecast_quality(results: list[SimResult], matrix: PerformanceMatrix) -> dic
     for result in results:
         for forecast in result.forecasts:
             deployed = forecast["deployed"]
-            for i, j, mean in zip(forecast["trained"], forecast["served"], forecast["predicted_new"],
-                                  strict=True):
+            for i, j, mean in zip(
+                forecast["trained"], forecast["served"], forecast["predicted_new"], strict=True
+            ):
                 if math.isfinite(matrix.err[i, j]):
                     deltas.append(mean - matrix.err[i, j])
             for j, mean in zip(sorted(set(forecast["served"])), forecast["predicted_old"], strict=True):
@@ -112,8 +125,9 @@ def analyze(
     """``same_batch`` switches the CARA rules and the strategy Oracle to the paper's accounting."""
     first, last = matrix.offline, matrix.batches - 1
     if matrix.paper_timing:
-        top = alpha_max_same_batch(matrix.err.T, matrix.initial, first, last,
-                                   retrain_errors=matrix.err.diagonal())
+        top = alpha_max_same_batch(
+            matrix.err.T, matrix.initial, first, last, retrain_errors=matrix.err.diagonal()
+        )
     else:
         top = alpha_max(matrix.err, matrix.initial, first, last)
     oracle_top = top
@@ -123,8 +137,12 @@ def analyze(
         alphas = [float(a) for a in np.linspace(0.0, top, n_alphas)] if top > 0 else [0.0, 1.0]
     else:
         alphas = [float(a) for a in alpha_grid]
-        if (len(alphas) < 2 or alphas[0] != 0 or not all(math.isfinite(a) for a in alphas)
-                or any(a >= b for a, b in zip(alphas, alphas[1:]))):
+        if (
+            len(alphas) < 2
+            or alphas[0] != 0
+            or not all(math.isfinite(a) for a in alphas)
+            or any(a >= b for a, b in zip(alphas, alphas[1:]))
+        ):
             raise ValueError("alpha_grid must start at zero and be finite and strictly increasing")
         top = alphas[-1]
     focus = alphas[len(alphas) // 2] if focus_alpha is None else float(focus_alpha)
@@ -134,9 +152,17 @@ def analyze(
     for name in rules:
         for alpha in all_alphas:
             sims[name, alpha] = simulate(
-                make_rule(name, delta=delta, samples=samples, seed=seed,
-                          same_batch=same_batch or matrix.paper_timing),
-                matrix, alpha, same_batch=same_batch and name != "upf" and name != "oracle")
+                make_rule(
+                    name,
+                    delta=delta,
+                    samples=samples,
+                    seed=seed,
+                    same_batch=same_batch or matrix.paper_timing,
+                ),
+                matrix,
+                alpha,
+                same_batch=same_batch and name != "upf" and name != "oracle",
+            )
     staleness = matrix.staleness_matrix()
     stale_cost = np.nan_to_num(staleness.T, nan=0.0)
     strategy_oracle = {}
@@ -159,8 +185,11 @@ def analyze(
         oracle = sims["oracle", alpha]
         strategy = result.strategy_cost(matrix)
         return {
-            "alpha": alpha, "cost": _num(result.cost), "retrains": len(result.retrains),
-            "retrain_points": result.retrains, "average_accuracy": _num(result.average_accuracy),
+            "alpha": alpha,
+            "cost": _num(result.cost),
+            "retrains": len(result.retrains),
+            "retrain_points": result.retrains,
+            "average_accuracy": _num(result.average_accuracy),
             "scpe": _num(scpe(result.cost, oracle.cost)),
             "strategy_cost": _num(strategy),
             "error_oracle_gap": _num(result.cost - oracle.cost),
@@ -174,15 +203,20 @@ def analyze(
     for name in rules:
         curve = [row(name, a) for a in alphas]
         report_rules[name] = {
-            "label": LABELS[name], "curve": curve,
+            "label": LABELS[name],
+            "curve": curve,
             "auc": _num(trapezoid(alphas, [c["cost"] for c in curve])),
             "mean_scpe": _num(np.mean([c["scpe"] for c in curve if c["scpe"] is not None]))
-            if any(c["scpe"] is not None for c in curve) else None,
-            "mean_strategy_scpe": _num(np.mean([c["strategy_scpe"] for c in curve
-                                                if c["strategy_scpe"] is not None]))
-            if any(c["strategy_scpe"] is not None for c in curve) else None,
-            "online_decision_seconds": _num(np.mean(
-                [t for a in alphas for t in sims[name, a].decision_seconds] or [0.0])),
+            if any(c["scpe"] is not None for c in curve)
+            else None,
+            "mean_strategy_scpe": _num(
+                np.mean([c["strategy_scpe"] for c in curve if c["strategy_scpe"] is not None])
+            )
+            if any(c["strategy_scpe"] is not None for c in curve)
+            else None,
+            "online_decision_seconds": _num(
+                np.mean([t for a in alphas for t in sims[name, a].decision_seconds] or [0.0])
+            ),
             "offline_seconds": _num(np.mean([sims[name, a].offline_seconds for a in alphas])),
         }
         for key, fraction in LOW_HIGH.items():
@@ -194,12 +228,16 @@ def analyze(
         grid = []
         for provided in alphas:
             schedule = sims[name, provided]
-            grid.append([
-                None if (best := sims[name, real].cost) <= 0
-                else _num(100.0 * ((real * len(schedule.retrains) + sum(schedule.errors)) - best) / best)
-                for real in alphas])
+            grid.append(
+                [
+                    None
+                    if (best := sims[name, real].cost) <= 0
+                    else _num(100.0 * ((real * len(schedule.retrains) + sum(schedule.errors)) - best) / best)
+                    for real in alphas
+                ]
+            )
         wrong[name] = {"provided": alphas, "real": alphas, "pct_increase": grid}
-    forecast = (forecast_quality([sims["upf", a] for a in alphas], matrix) if "upf" in rules else None)
+    forecast = forecast_quality([sims["upf", a] for a in alphas], matrix) if "upf" in rules else None
     if forecast is not None:
         forecast["pairs"] = forecast_pairs(sims["upf", focus], matrix)
     cumulative = {}
@@ -214,20 +252,35 @@ def analyze(
         cumulative[name] = series
     return {
         "setup": {
-            "batches": matrix.batches, "offline_batches": matrix.offline, "online_batches": matrix.horizon,
+            "batches": matrix.batches,
+            "offline_batches": matrix.offline,
+            "online_batches": matrix.horizon,
             "decision_points": matrix.horizon if matrix.paper_timing else matrix.horizon - 1,
-            "oracle_alpha_max": _num(oracle_top), "initial_model": matrix.initial, "alpha_max": _num(top),
-            "focus_alpha": focus, "lipschitz_L": _num(lipschitz), "delta": delta, "samples": samples,
-            "timing": ("UPF decides before batch t; a retrain serves its held-out test split"
-                       if matrix.paper_timing else "CARA accounting: a retrain at t serves t with staleness 0"
-                       if same_batch else "retrain after batch t serves t+1 onward (test-then-train)"),
-            "bound_alphas": {f"r<={r}": _num(alpha_for_retrain_bound(r, lipschitz, horizon))
-                             for r in range(3)},
-            "retrain_upper_bound": {str(a): _num(retrain_upper_bound(a, lipschitz, horizon))
-                                    for a in alphas},
+            "oracle_alpha_max": _num(oracle_top),
+            "initial_model": matrix.initial,
+            "alpha_max": _num(top),
+            "focus_alpha": focus,
+            "lipschitz_L": _num(lipschitz),
+            "delta": delta,
+            "samples": samples,
+            "timing": (
+                "UPF decides before batch t; a retrain serves its held-out test split"
+                if matrix.paper_timing
+                else "CARA accounting: a retrain at t serves t with staleness 0"
+                if same_batch
+                else "retrain after batch t serves t+1 onward (test-then-train)"
+            ),
+            "bound_alphas": {
+                f"r<={r}": _num(alpha_for_retrain_bound(r, lipschitz, horizon)) for r in range(3)
+            },
+            "retrain_upper_bound": {str(a): _num(retrain_upper_bound(a, lipschitz, horizon)) for a in alphas},
         },
-        "alphas": alphas, "rules": report_rules, "table": tables, "wrong_alpha": wrong,
-        "forecast": forecast, "cumulative_strategy_cost": cumulative,
+        "alphas": alphas,
+        "rules": report_rules,
+        "table": tables,
+        "wrong_alpha": wrong,
+        "forecast": forecast,
+        "cumulative_strategy_cost": cumulative,
         "staleness_matrix": [[_num(v) for v in r] for r in staleness],
         "performance_matrix": matrix.to_dict(),
         "oracle_schedule_at_focus": sims["oracle", focus].retrains,
@@ -248,8 +301,9 @@ def deployed_metrics(analysis: dict, rule: str, result: SimResult, oracle: SimRe
         "retraining_oracle_retrains": len(oracle.retrains),
         "retraining_alpha_max": setup["alpha_max"],
         "retraining_lipschitz_L": setup["lipschitz_L"],
-        "retraining_retrain_upper_bound": _num(retrain_upper_bound(
-            result.alpha, setup["lipschitz_L"] or 0.0, setup["online_batches"])),
+        "retraining_retrain_upper_bound": _num(
+            retrain_upper_bound(result.alpha, setup["lipschitz_L"] or 0.0, setup["online_batches"])
+        ),
         "upf_paper_auc": curve["auc"],
         "retraining_mean_scpe": curve["mean_scpe"],
         "retraining_offline_seconds": curve["offline_seconds"],

@@ -135,7 +135,11 @@ class OnlineHistory:
         self.inference_seconds += inference_seconds
         self.counts.merge(counts)
         observation = training_step(
-            step, examples=rows, cumulative=self.examples, duration_seconds=seconds, native_loss=native_loss,
+            step,
+            examples=rows,
+            cumulative=self.examples,
+            duration_seconds=seconds,
+            native_loss=native_loss,
             metrics={
                 "batch/log_loss": values["log_loss"],
                 "batch/inference_seconds": inference_seconds,
@@ -144,13 +148,24 @@ class OnlineHistory:
         )
         quality = counts.quality(self.classes)
         # Fit metadata supplies the fixed class order, score method and availability rules.
-        observation["scopes"] = {"training_pre_update": {
-            key: quality[key] for key in (
-                "evaluated_examples", "macro_f1", "accuracy", "positive_precision", "positive_recall",
-                "average_precision", "recall_at_fpr_0_01", "confusion_matrix", "class_support",
-                "class_recall",
-            ) if key in quality
-        }}
+        observation["scopes"] = {
+            "training_pre_update": {
+                key: quality[key]
+                for key in (
+                    "evaluated_examples",
+                    "macro_f1",
+                    "accuracy",
+                    "positive_precision",
+                    "positive_recall",
+                    "average_precision",
+                    "recall_at_fpr_0_01",
+                    "confusion_matrix",
+                    "class_support",
+                    "class_recall",
+                )
+                if key in quality
+            }
+        }
         self.steps.append(observation)
         self.overhead_seconds += time.perf_counter() - timer
         if self.tracker is not None and hasattr(self.tracker, "log_minibatch_metrics"):
@@ -185,19 +200,28 @@ class OnlineHistory:
         self.overhead_seconds += time.perf_counter() - timer
         throughput = self.examples / self.inference_seconds if self.inference_seconds else None
         return TrainingResult(
-            **summary, history=self.history, observation_steps=self.steps, observation_epochs=[],
-            observed_step_kind=kind, observation_scopes={"training_pre_update": quality},
+            **summary,
+            history=self.history,
+            observation_steps=self.steps,
+            observation_epochs=[],
+            observed_step_kind=kind,
+            observation_scopes={"training_pre_update": quality},
             observation_effort={
-                "examples_observed": self.examples, "evaluated_examples": self.examples,
-                "unique_training_examples": self.examples, "training_presentations": self.examples,
-                "replay_presentations": 0, "steps": len(self.steps), "epochs": None,
+                "examples_observed": self.examples,
+                "evaluated_examples": self.examples,
+                "unique_training_examples": self.examples,
+                "training_presentations": self.examples,
+                "replay_presentations": 0,
+                "steps": len(self.steps),
+                "epochs": None,
             },
             observation_resources={
                 "duration_seconds": time.perf_counter() - self.started,
                 "training_seconds": optimizer_seconds,
                 "inference_seconds": self.inference_seconds,
                 "predictions_per_second": throughput,
-                "peak_rss_bytes": process_peak_rss_bytes(), "rss_scope": "process_lifetime_high_water_mark",
+                "peak_rss_bytes": process_peak_rss_bytes(),
+                "rss_scope": "process_lifetime_high_water_mark",
                 "tracking_overhead_seconds": self.overhead_seconds,
             },
         )
@@ -331,7 +355,8 @@ class FraudOrReturnBooster:
             history.record(counts, metrics, rounds, time.perf_counter() - timer, inference_seconds, None)
         self.last_training_result = history.finalize(
             interrupted=stop_requested is not None and stop_requested(),
-            kind="xgboost_tree_refresh_minibatch", booster_rounds=rounds,
+            kind="xgboost_tree_refresh_minibatch",
+            booster_rounds=rounds,
         )
         return int(self.last_training_result.optimizer_steps)
 
@@ -578,7 +603,8 @@ class MultinomialLogistic:
             self.weights = self._online_optimizer.step(self.weights, gradient)
             history.record(counts, metrics, 1, time.perf_counter() - timer, inference_seconds, native_loss)
         self.last_training_result = history.finalize(
-            interrupted=stop_requested is not None and stop_requested(), kind="river_sgd_minibatch",
+            interrupted=stop_requested is not None and stop_requested(),
+            kind="river_sgd_minibatch",
         )
         return int(self.last_training_result.iterations)
 
@@ -611,9 +637,7 @@ class MultinomialLogistic:
     def train_epoch(self, train_data: Any) -> dict[str, float | None]:
         x, y = unpack_split(train_data)
         shape = (x.shape[1] + 1, self.classes)
-        regularization = float(
-            self.params.get("l2", self.params.get("l2_regularization", 0.001))
-        )
+        regularization = float(self.params.get("l2", self.params.get("l2_regularization", 0.001)))
         learning_rate = float(self.params.get("learning_rate", 0.01))
         solver = str(self.params.get("solver", "L-BFGS-B"))
 
@@ -693,9 +717,7 @@ class MultinomialLogistic:
             "min_delta": float(self.params.get("min_delta", defaults.min_delta)),
             "eval_metric": defaults.eval_metric,
             "learning_rate": float(self.params.get("learning_rate", 0.01)),
-            "l2_regularization": float(
-                self.params.get("l2", self.params.get("l2_regularization", 0.001))
-            ),
+            "l2_regularization": float(self.params.get("l2", self.params.get("l2_regularization", 0.001))),
             "validation_fraction": self.params.get("validation_fraction", defaults.validation_fraction),
             "seed": int(self.params.get("seed", 42)),
             "restore_best_weights": self.params.get("restore_best_weights", defaults.restore_best_weights),
@@ -747,8 +769,7 @@ class MultinomialLogistic:
     def explanation(self, features: list[str]) -> dict[str, dict[str, list[float]]]:
         return {
             "coefficients": {
-                name: row.tolist()
-                for name, row in zip([*features, "intercept"], self.weights, strict=True)
+                name: row.tolist() for name, row in zip([*features, "intercept"], self.weights, strict=True)
             }
         }
 
@@ -765,7 +786,10 @@ def make_zia_model(
     """Build a stream model; ``model_params`` are the dataset defaults from its stream provider."""
     if name == "xgboost":
         return FraudOrReturnBooster(
-            config=config, dataset=dataset, classes=classes, decision_threshold=decision_threshold,
+            config=config,
+            dataset=dataset,
+            classes=classes,
+            decision_threshold=decision_threshold,
             model_params=model_params,
         )
     if name == "multinomial_logistic":

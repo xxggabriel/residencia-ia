@@ -110,8 +110,12 @@ class ModelVersions:
         blob = pickle.dumps(model, protocol=5)
         path = f"candidates/rejected-{seq:08d}.pkl"
         atomic_write(self.directory / path, blob)
-        return {"file": path, "sha256": hashlib.sha256(blob).hexdigest(),
-                "bytes": len(blob), "format": "pickle"}
+        return {
+            "file": path,
+            "sha256": hashlib.sha256(blob).hexdigest(),
+            "bytes": len(blob),
+            "format": "pickle",
+        }
 
     def finish(self, model, probe):
         if not self.entries:

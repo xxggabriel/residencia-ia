@@ -17,8 +17,16 @@ REPORT_NAMES = ("report.json", "epoch-report.json", "result.json")
 BACKFILL_SHA = "cb-training-backfill-sha256"
 BACKFILL_STATUS = "cb-training-backfill-status"
 NATIVE_EPOCH_KEYS = {
-    "epoch", "early_stopped", "best_epoch", "patience_consumed", "training_duration_seconds",
-    "validation_duration_seconds", "peak_rss_mb", "best_validation_loss", "best_score", "train_samples",
+    "epoch",
+    "early_stopped",
+    "best_epoch",
+    "patience_consumed",
+    "training_duration_seconds",
+    "validation_duration_seconds",
+    "peak_rss_mb",
+    "best_validation_loss",
+    "best_score",
+    "train_samples",
     "validation_samples",
 }
 
@@ -69,9 +77,10 @@ def _final_report_uri(uri, final):
         raise ValueError("unsupported final manifest format")
     outputs = str(final["outputs_uri"]).rstrip("/")
     base = uri.rsplit("/", 1)[0]
-    if not outputs.startswith(base + "/attempts/") or len(
-        _relative_path(outputs.removeprefix(base + "/")).parts
-    ) != 2:
+    if (
+        not outputs.startswith(base + "/attempts/")
+        or len(_relative_path(outputs.removeprefix(base + "/")).parts) != 2
+    ):
         raise ValueError("final manifest output must be inside its own attempt prefix")
     if final.get("report_uri"):
         path = final["report_uri"]
@@ -131,7 +140,11 @@ def _load_s3(uri, staging, read_s3):
     _cache_s3_sidecars(path, report, staging, read_s3)
     # The immutable attempt and the run link in final.json bind this report to its parent.
     return RetainedReport(
-        path, payload, staging, final.get("links", {}).get("mlflow_run_id"), final,
+        path,
+        payload,
+        staging,
+        final.get("links", {}).get("mlflow_run_id"),
+        final,
     )
 
 
@@ -163,12 +176,15 @@ def _retained_run_metrics(client, run):
     reason = "no report artifact or independently identifiable epoch history is retained"
     report = {"recovery_limitations": [reason]}
     if (
-        run.info.status == "FINISHED" and labels.get("cb-native-stage") in {"training", "tuning"}
+        run.info.status == "FINISHED"
+        and labels.get("cb-native-stage") in {"training", "tuning"}
         and "epoch" in keys
     ):
         coords = _points_by_step(client, run_id, "epoch")
-        if coords and sorted(coords) == list(range(1, len(coords) + 1)) and all(
-            step == epoch for step, epoch in coords.items()
+        if (
+            coords
+            and sorted(coords) == list(range(1, len(coords) + 1))
+            and all(step == epoch for step, epoch in coords.items())
         ):
             history = {step: {"epoch": step} for step in sorted(coords)}
             for name in sorted(keys):
@@ -186,7 +202,10 @@ def _retained_run_metrics(client, run):
                 ],
             }
     return RetainedReport(
-        f"runs:/{run_id}#metrics", _json_bytes(report), run_id=run_id, origin="mlflow_metric_history",
+        f"runs:/{run_id}#metrics",
+        _json_bytes(report),
+        run_id=run_id,
+        origin="mlflow_metric_history",
     )
 
 
@@ -198,13 +217,17 @@ def _download_run_report(client, run_id, staging, path=None):
     if path:
         path = str(_relative_path(path))
     else:
-        candidates = [info.path for info in client.list_artifacts(run_id)
-                      if not info.is_dir and info.path in REPORT_NAMES]
+        candidates = [
+            info.path
+            for info in client.list_artifacts(run_id)
+            if not info.is_dir and info.path in REPORT_NAMES
+        ]
         if not candidates:
             return _retained_run_metrics(client, run)
         if len(candidates) > 1:
             raise ValueError("select the retained report using --report-artifact")
         path = candidates[0]
+
     def download(artifact):
         downloaded = Path(client.download_artifacts(run_id, artifact, str(staging))).resolve()
         if not downloaded.is_relative_to(staging.resolve()) or not downloaded.is_file():
@@ -236,16 +259,25 @@ def _plan(retained):
             if (path := retained.directory / name).is_file():
                 sidecars[name] = _sha(path.read_bytes())
     evidence = {
-        "version": 1, "origin": retained.origin, "source_sha256": _sha(retained.payload),
-        "scheme": scheme, "limitations": limitations, "fits": fits, "auxiliary_sha256": sidecars,
+        "version": 1,
+        "origin": retained.origin,
+        "source_sha256": _sha(retained.payload),
+        "scheme": scheme,
+        "limitations": limitations,
+        "fits": fits,
+        "auxiliary_sha256": sidecars,
     }
     if retained.run_id:
         evidence["parent_run_id"] = retained.run_id
     details = {
-        "source": retained.source, "run_id": retained.run_id, "source_sha256": evidence["source_sha256"],
+        "source": retained.source,
+        "run_id": retained.run_id,
+        "source_sha256": evidence["source_sha256"],
         "scheme": scheme,
         "availability": "partial" if fits and limitations else "available" if fits else "unavailable",
-        "groups": len(fits), "steps": sum(len(fit["steps"]) for fit in fits), "limitations": limitations,
+        "groups": len(fits),
+        "steps": sum(len(fit["steps"]) for fit in fits),
+        "limitations": limitations,
     }
     return report, evidence, details
 
@@ -272,9 +304,11 @@ def _publish(client, retained, report, evidence, destination):
         if experiment := final["links"].get("mlflow_experiment_id"):
             if str(experiment) != str(run.info.experiment_id):
                 raise ValueError("final manifest differs from the selected MLflow experiment")
-        for key, value in (("cb-unit-id", final.get("run_id")),
-                           ("cb-attempt", final.get("attempt", {}).get("attempt_key")),
-                           ("cb-contract-sha256", final.get("contract_sha256"))):
+        for key, value in (
+            ("cb-unit-id", final.get("run_id")),
+            ("cb-attempt", final.get("attempt", {}).get("attempt_key")),
+            ("cb-contract-sha256", final.get("contract_sha256")),
+        ):
             if key in run.data.tags and run.data.tags[key] != value:
                 raise ValueError(f"final manifest differs from parent run tag {key}")
     fingerprint = _sha(_json_bytes(evidence))
@@ -285,7 +319,9 @@ def _publish(client, retained, report, evidence, destination):
         return "already_applied"
     if not previous:
         children = client.search_runs(
-            [run.info.experiment_id], f"tags.`mlflow.parentRunId` = '{run_id}'", max_results=1,
+            [run.info.experiment_id],
+            f"tags.`mlflow.parentRunId` = '{run_id}'",
+            max_results=1,
         )
         if children:
             raise ValueError("parent already has grouped training runs")
@@ -295,7 +331,10 @@ def _publish(client, retained, report, evidence, destination):
     prefix = f"training-backfill/v1/{fingerprint}"
     client.log_artifacts(run_id, str(destination), artifact_path=prefix)
     publish_sdk_training_rounds(
-        client, run.info.experiment_id, run_id, {**report, "training_history": evidence["fits"]},
+        client,
+        run.info.experiment_id,
+        run_id,
+        {**report, "training_history": evidence["fits"]},
     )
     client.set_tag(run_id, BACKFILL_STATUS, "complete")
     return "applied"
@@ -310,7 +349,8 @@ def _handle(retained, args, client):
     fingerprint = _sha(_json_bytes(evidence))
     lock_root = args.output_dir or Path("state/training-backfill")
     if (
-        args.output_dir and retained.directory
+        args.output_dir
+        and retained.directory
         and lock_root.resolve().is_relative_to(retained.directory.resolve())
     ):
         raise ValueError("backfill output must be outside the original run directory")

@@ -20,22 +20,30 @@ from continual_bench.core.contracts import TaskSample
 from continual_bench.infrastructure.storage import atomic_write
 
 CLEAR_REVISION = "b518a845a98f1c913497ab98a19727cb65b74e65"
-CLEAR_ROOT = ("https://huggingface.co/datasets/elvishelvis6/CLEAR-Continual_Learning_Benchmark/resolve/"
-              + CLEAR_REVISION)
+CLEAR_ROOT = (
+    "https://huggingface.co/datasets/elvishelvis6/CLEAR-Continual_Learning_Benchmark/resolve/"
+    + CLEAR_REVISION
+)
 SOURCES = {
     "core50": {
-        "source": "https://vlomonaco.github.io/core50/", "release": "128x128-original",
+        "source": "https://vlomonaco.github.io/core50/",
+        "release": "128x128-original",
         "train_url": "http://bias.csr.unibo.it/maltoni/download/core50/core50_128x128.zip",
-        "license": "CC-BY-4.0", "license_reference": "https://vlomonaco.github.io/core50/",
+        "license": "CC-BY-4.0",
+        "license_reference": "https://vlomonaco.github.io/core50/",
         "archive_md5_reference": "745f3373fed08d69343f1058ee559e13",
     },
-    **{name: {
-        "source": "https://clear-benchmark.github.io/", "release": "July-2022-" + CLEAR_REVISION,
-        "train_url": f"{CLEAR_ROOT}/{name}-train-image-only.zip",
-        "test_url": f"{CLEAR_ROOT}/{name}-test.zip",
-        "license": "CC-BY (benchmark); individual YFCC image rights retained",
-        "license_reference": "https://clear-benchmark.github.io/",
-    } for name in ("clear10", "clear100")},
+    **{
+        name: {
+            "source": "https://clear-benchmark.github.io/",
+            "release": "July-2022-" + CLEAR_REVISION,
+            "train_url": f"{CLEAR_ROOT}/{name}-train-image-only.zip",
+            "test_url": f"{CLEAR_ROOT}/{name}-test.zip",
+            "license": "CC-BY (benchmark); individual YFCC image rights retained",
+            "license_reference": "https://clear-benchmark.github.io/",
+        }
+        for name in ("clear10", "clear100")
+    },
 }
 
 
@@ -54,8 +62,9 @@ class DatasetAccessError(RuntimeError):
 class RangeReader(io.RawIOBase):
     """Seekable HTTP file with immutable range cache and a cumulative byte budget."""
 
-    def __init__(self, url, cache, *, max_bytes=64 * 1024**2, opener=None, max_requests=2048,
-                 max_blocks=None):
+    def __init__(
+        self, url, cache, *, max_bytes=64 * 1024**2, opener=None, max_requests=2048, max_blocks=None
+    ):
         super().__init__()
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
@@ -103,17 +112,24 @@ class RangeReader(io.RawIOBase):
                 raise ValueError("cached archive range checksum mismatch")
             size, validator = receipt["archive_bytes"], receipt["validator"]
         else:
-            request = urllib.request.Request(self.url, headers={
-                "Range": f"bytes={start}-{start + count - 1}", "User-Agent": "continual-bench/0.1",
-                "Accept-Encoding": "identity",
-            })
+            request = urllib.request.Request(
+                self.url,
+                headers={
+                    "Range": f"bytes={start}-{start + count - 1}",
+                    "User-Agent": "continual-bench/0.1",
+                    "Accept-Encoding": "identity",
+                },
+            )
             for attempt in range(3):
                 try:
                     with self.opener(request, timeout=30) as response:
                         content_range = response.headers.get("Content-Range", "")
                         match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", content_range)
-                        if (response.status != 206 or match is None
-                                or tuple(map(int, match.groups()[:2])) != (start, start + count - 1)):
+                        if (
+                            response.status != 206
+                            or match is None
+                            or tuple(map(int, match.groups()[:2])) != (start, start + count - 1)
+                        ):
                             raise DatasetAccessError(
                                 "archive server did not honor exact byte range; no full download"
                             )
@@ -131,8 +147,13 @@ class RangeReader(io.RawIOBase):
                         host = urllib.parse.urlsplit(self.url).hostname
                         raise DatasetAccessError(f"archive transport unavailable for {host}") from None
                 time.sleep(0.2 * (attempt + 1))
-            receipt = {"start": start, "bytes": count, "archive_bytes": size,
-                       "validator": validator, "sha256": _sha(payload)}
+            receipt = {
+                "start": start,
+                "bytes": count,
+                "archive_bytes": size,
+                "validator": validator,
+                "sha256": _sha(payload),
+            }
             atomic_write(key, payload)
             atomic_write(metadata, _json(receipt))
         if self.size is not None and (self.size != size or self.validator != validator):
@@ -156,7 +177,7 @@ class RangeReader(io.RawIOBase):
                         self.blocks.clear()  # bound resident memory on very large samplings
                     self.blocks[start] = self._range(start, block_size)
                 offset = self.position - start
-                payload = self.blocks[start][offset:offset + count]
+                payload = self.blocks[start][offset : offset + count]
             else:
                 payload = self._range(self.position, count)
         else:
@@ -165,10 +186,15 @@ class RangeReader(io.RawIOBase):
         return payload
 
     def provenance(self):
-        return {"url": self.url, "archive_bytes": self.size, "validator": self.validator,
-                "ranges_bytes": self.transferred, "ranges": self.ledger,
-                "whole_archive_checksum_verified": False,
-                "integrity": "ZIP member CRC plus SHA-256 of fetched ranges and selected members"}
+        return {
+            "url": self.url,
+            "archive_bytes": self.size,
+            "validator": self.validator,
+            "ranges_bytes": self.transferred,
+            "ranges": self.ledger,
+            "whole_archive_checksum_verified": False,
+            "integrity": "ZIP member CRC plus SHA-256 of fetched ranges and selected members",
+        }
 
 
 class _Archive:
@@ -206,10 +232,18 @@ class _Archive:
         return json.loads(self.member(self.find(suffix)))
 
     def provenance(self):
-        return {**(self.remote.provenance() if self.remote is not None else {
-            "url": self.url, "whole_archive_checksum_verified": False,
-            "integrity": "ZIP member CRC and selected-member SHA-256; locally supplied archive",
-        }), "members": self.members}
+        return {
+            **(
+                self.remote.provenance()
+                if self.remote is not None
+                else {
+                    "url": self.url,
+                    "whole_archive_checksum_verified": False,
+                    "integrity": "ZIP member CRC and selected-member SHA-256; locally supplied archive",
+                }
+            ),
+            "members": self.members,
+        }
 
 
 def _pixels(payload):
@@ -236,10 +270,16 @@ def _core_rows(archive):
         if not match:
             continue
         session, obj, _, _, frame = map(int, match.groups())
-        rows.append({"path": path, "label": str(obj - 1), "task": session - 1,
-                     "group": f"session-{session}:object-{obj}",
-                     "split": "test" if session in {3, 7, 10} else "train",
-                     "order": (session, obj, frame)})
+        rows.append(
+            {
+                "path": path,
+                "label": str(obj - 1),
+                "task": session - 1,
+                "group": f"session-{session}:object-{obj}",
+                "split": "test" if session in {3, 7, 10} else "train",
+                "order": (session, obj, frame),
+            }
+        )
     return sorted(rows, key=lambda row: row["order"])
 
 
@@ -250,9 +290,11 @@ def _clear_rows(archive, split, count):
         raise ValueError("CLEAR class names must be unique")
     metadata = archive.metadata("labeled_metadata.json")
     prefix = archive.find("labeled_metadata.json").rsplit("/", 1)[0]
-    groups = [(bucket, class_index, classes[label])
-              for bucket, classes in sorted(metadata.items(), key=lambda item: int(item[0]))
-              for class_index, label in enumerate(labels)]
+    groups = [
+        (bucket, class_index, classes[label])
+        for bucket, classes in sorted(metadata.items(), key=lambda item: int(item[0]))
+        for class_index, label in enumerate(labels)
+    ]
     # Bound metadata I/O too: touch at most count bucket/class metadata files.
     selected_groups = [groups[i] for i in _indices(len(groups), min(count, len(groups)))]
     rows = []
@@ -264,9 +306,16 @@ def _clear_rows(archive, split, count):
             path = f"{prefix}/{item['IMG_PATH']}"
             if path not in archive.name_set:
                 raise ValueError("CLEAR selected metadata references a missing frame")
-            rows.append({"path": path, "label": str(class_index), "task": int(bucket),
-                         "group": f"bucket-{bucket}", "split": split,
-                         "order": (int(bucket), class_index, offset)})
+            rows.append(
+                {
+                    "path": path,
+                    "label": str(class_index),
+                    "task": int(bucket),
+                    "group": f"bucket-{bucket}",
+                    "split": split,
+                    "order": (int(bucket), class_index, offset),
+                }
+            )
     return sorted(rows, key=lambda row: row["order"])
 
 
@@ -304,8 +353,11 @@ def prepare_temporal_dataset(name, cache, limit=100, seed=42, *, download=False,
             raise ValueError("prepared temporal sample checksum mismatch")
         manifest = saved["manifest"]
         descriptor = {k: v for k, v in manifest.items() if k not in {"requested_seed", "version"}}
-        if (manifest.get("adapter") != "temporal-vision-v1" or manifest.get("samples") != limit
-                or _sha(_json(descriptor)) != manifest.get("version")):
+        if (
+            manifest.get("adapter") != "temporal-vision-v1"
+            or manifest.get("samples") != limit
+            or _sha(_json(descriptor)) != manifest.get("version")
+        ):
             raise ValueError("prepared temporal manifest checksum/version mismatch")
         manifest["requested_seed"] = seed
         return TemporalVisionSource([TaskSample(**sample) for sample in raw], manifest)
@@ -318,12 +370,15 @@ def prepare_temporal_dataset(name, cache, limit=100, seed=42, *, download=False,
         train_count = limit * 4 // 5
         if name == "core50":
             all_rows = _core_rows(train)
-            streams = {split: (train, [r for r in all_rows if r["split"] == split])
-                       for split in ("train", "test")}
+            streams = {
+                split: (train, [r for r in all_rows if r["split"] == split]) for split in ("train", "test")
+            }
         else:
             test = _Archive(spec["test_url"], cache / "ranges", local_path=local_archives.get("test"))
-            streams = {"train": (train, _clear_rows(train, "train", train_count)),
-                       "test": (test, _clear_rows(test, "test", limit - train_count))}
+            streams = {
+                "train": (train, _clear_rows(train, "train", train_count)),
+                "test": (test, _clear_rows(test, "test", limit - train_count)),
+            }
         selected, samples = [], []
         for split, count in (("train", train_count), ("test", limit - train_count)):
             archive, rows = streams[split]
@@ -332,25 +387,44 @@ def prepare_temporal_dataset(name, cache, limit=100, seed=42, *, download=False,
                 payload = archive.member(row["path"], max_bytes=8 * 1024**2)
                 identity = _sha(_json([name, spec["release"], row["path"], _sha(payload)]))
                 seq = len(samples)
-                samples.append(TaskSample(identity, seq, seq, seq, _pixels(payload),
-                                          row["label"], row["task"], split, row["group"]))
+                samples.append(
+                    TaskSample(
+                        identity,
+                        seq,
+                        seq,
+                        seq,
+                        _pixels(payload),
+                        row["label"],
+                        row["task"],
+                        split,
+                        row["group"],
+                    )
+                )
                 selected.append({**row, "source_split_index": index, "image_sha256": _sha(payload)})
         if len({sample.sample_id for sample in samples}) != limit:
             raise ValueError("temporal dataset selected duplicate frames")
         manifest = {
-            "adapter": "temporal-vision-v1", "name": name, "task": "multiclass", **spec,
-            "samples": limit, "train_samples": train_count, "test_samples": limit - train_count,
+            "adapter": "temporal-vision-v1",
+            "name": name,
+            "task": "multiclass",
+            **spec,
+            "samples": limit,
+            "train_samples": train_count,
+            "test_samples": limit - train_count,
             "selection": "order-preserving deterministic stride in each official split",
-            "seed_ignored": True, "requested_seed": seed,
+            "seed_ignored": True,
+            "requested_seed": seed,
             "clock": "artificial ordinal replay; source session/bucket/position retained in selection",
             "representation": "RGB pixels bilinear-resized to16x16, divided by255; no pretrained features",
             "natural_order": "session/object/frame" if name == "core50" else "official metadata order",
             "protocol": (
-                "CORe50 session-ordered NI diagnostic subset" if name == "core50" else
-                "CLEAR July2022 official train/test buckets; not paper streaming test-on-next-bucket"
+                "CORe50 session-ordered NI diagnostic subset"
+                if name == "core50"
+                else "CLEAR July2022 official train/test buckets; not paper streaming test-on-next-bucket"
             ),
             "raw_archives": [a.provenance() for a in (train, test) if a is not None],
-            "selected": selected, "schema": {"features": 768, "target": "original class ID as string"},
+            "selected": selected,
+            "schema": {"features": 768, "target": "original class ID as string"},
             "license_note": "No new terms accepted; publisher attribution and image-specific rights retained",
         }
         raw = [asdict(sample) for sample in samples]
@@ -400,12 +474,15 @@ def prepare_temporal_arrays(name, cache, limit, *, download=False):
         train_count = limit * 4 // 5
         if name == "core50":
             all_rows = _core_rows(train)
-            streams = {split: (train, [r for r in all_rows if r["split"] == split])
-                       for split in ("train", "test")}
+            streams = {
+                split: (train, [r for r in all_rows if r["split"] == split]) for split in ("train", "test")
+            }
         else:
             test = _Archive(spec["test_url"], root / "ranges", **options)
-            streams = {"train": (train, _clear_rows(train, "train", train_count)),
-                       "test": (test, _clear_rows(test, "test", limit - train_count))}
+            streams = {
+                "train": (train, _clear_rows(train, "train", train_count)),
+                "test": (test, _clear_rows(test, "test", limit - train_count)),
+            }
         pixels = np.empty((limit, 768), dtype=np.uint8)
         labels, tasks, splits = [], [], []
         for split, count in (("train", train_count), ("test", limit - train_count)):
@@ -419,9 +496,12 @@ def prepare_temporal_arrays(name, cache, limit, *, download=False):
                 tasks.append(row["task"])
                 splits.append(split)
         order = sorted(range(limit), key=lambda i: (tasks[i], splits[i] != "train", i))
-        result = {"x": pixels[order], "y": np.array([labels[i] for i in order]),
-                  "task": np.array([tasks[i] for i in order], dtype=np.int64),
-                  "split": np.array([splits[i] for i in order])}
+        result = {
+            "x": pixels[order],
+            "y": np.array([labels[i] for i in order]),
+            "task": np.array([tasks[i] for i in order], dtype=np.int64),
+            "split": np.array([splits[i] for i in order]),
+        }
         tmp = target.with_name(target.name + ".tmp.npz")
         np.savez_compressed(tmp, **result)
         tmp.replace(target)

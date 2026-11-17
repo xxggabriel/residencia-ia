@@ -23,7 +23,8 @@ def rows(parquet, limit):
         {
             "event_id": f"edge-{i}",
             "event_time": datetime.fromtimestamp(r["event_time"] / 1000, UTC)
-            .isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z"),
             **{k: v for k, v in r.items() if k != "event_time"},
         }
         for i, r in enumerate(table)
@@ -51,11 +52,7 @@ def main():
     }
     if args.online:
         read = [store.get(r["event_id"]) for r in prepared]
-        materialized = [
-            {**r, "event_time": datetime.fromisoformat(r["event_time"])}
-            for r in read
-            if r
-        ]
+        materialized = [{**r, "event_time": datetime.fromisoformat(r["event_time"])} for r in read if r]
         features = [k for k in prepared[0] if k not in ("event_id", "event_time", "label")]
         result["parity"] = parity(prepared, materialized, features, tolerance=1e-6)
         requests = [

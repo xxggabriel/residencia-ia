@@ -15,8 +15,13 @@ def test_binary_quality_preserves_ties_and_operating_threshold():
     threshold = 0.03
     predictions = [int(score >= threshold) for score in scores]
     quality = batch_quality(
-        labels, predictions, classes=[0, 1], positive_class=1, decision_threshold=threshold,
-        scores=scores, low_fpr=True,
+        labels,
+        predictions,
+        classes=[0, 1],
+        positive_class=1,
+        decision_threshold=threshold,
+        scores=scores,
+        low_fpr=True,
     )
     assert quality["accuracy"] == accuracy_score(labels, predictions)
     assert quality["macro_f1"] == pytest.approx(f1_score(labels, predictions, labels=[0, 1], average="macro"))
@@ -106,11 +111,15 @@ def test_iterative_publisher_restarts_from_retained_report(tmp_path, monkeypatch
 def test_rest_uses_paginated_history_when_resuming_an_accepted_batch(monkeypatch):
     from continual_bench.infrastructure.aws.mlflow_tracking import SageMakerMlflowTracker
 
-    tracker = SageMakerMlflowTracker(tracking_uri="http://mlflow.example", dataset="sea",
-                                   policy="periodic", model_name="logistic", run_id="rest-retry")
+    tracker = SageMakerMlflowTracker(
+        tracking_uri="http://mlflow.example",
+        dataset="sea",
+        policy="periodic",
+        model_name="logistic",
+        run_id="rest-retry",
+    )
     tracker.mlflow_run_id = "original"
-    ledger = [{"key": "observations_v1/step/loss", "step": i, "value": 1 / i, "timestamp": 0}
-              for i in (1, 2)]
+    ledger = [{"key": "observations_v1/step/loss", "step": i, "value": 1 / i, "timestamp": 0} for i in (1, 2)]
     desired = ledger.copy() + [{"key": ledger[0]["key"], "step": 3, "value": 0.25, "timestamp": 0}]
     calls = []
 
@@ -119,7 +128,7 @@ def test_rest_uses_paginated_history_when_resuming_an_accepted_batch(monkeypatch
             return {"run": {"data": {"metrics": ledger[-1:]}}}
         if endpoint.endswith("/get-history"):
             page = int(params.get("page_token", "0"))
-            response = {"metrics": ledger[page:page + 1]}
+            response = {"metrics": ledger[page : page + 1]}
             if page + 1 < len(ledger):
                 response["next_page_token"] = str(page + 1)
             return response

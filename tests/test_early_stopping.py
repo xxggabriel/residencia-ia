@@ -152,7 +152,10 @@ def test_training_loop_runs_full_100_epochs_when_loss_continually_improves():
 def test_early_stopping_maximizes_accuracy_and_rejects_unknown_metrics():
     model = SyntheticScheduledModel([0.50, 0.30, 0.40, 0.60])
     result = train_iterative(
-        model, "train", "val", {"max_epochs": 4, "patience": 2, "eval_metric": "validation:accuracy"},
+        model,
+        "train",
+        "val",
+        {"max_epochs": 4, "patience": 2, "eval_metric": "validation:accuracy"},
     )
     assert result.best_epoch == model.weight_epoch == 2
     assert result.best_score == pytest.approx(0.85)
@@ -170,7 +173,9 @@ def test_training_loop_keeps_timestamps_together_and_counts_presentations():
 
     model = SyntheticScheduledModel([0.60, 0.55, 0.50])
     result = train_iterative(
-        model, (x, y), config={"max_epochs": 3, "validation_fraction": 0.25},
+        model,
+        (x, y),
+        config={"max_epochs": 3, "validation_fraction": 0.25},
         timestamps=timestamps,
     )
     assert result.train_rows == result.validation_rows == 4
@@ -178,7 +183,10 @@ def test_training_loop_keeps_timestamps_together_and_counts_presentations():
     assert result.training_presentations == 12
 
     result = train_iterative(
-        model, (x[:1], y[:1]), config={"max_epochs": 2}, timestamps=timestamps[:1],
+        model,
+        (x[:1], y[:1]),
+        config={"max_epochs": 2},
+        timestamps=timestamps[:1],
     )
     assert result.train_rows == 1 and result.validation_rows == 0
     assert result.selection_scope == "train"

@@ -262,13 +262,15 @@ def report_params(tracker: "SageMakerMlflowTracker", report: dict[str, Any]) -> 
     }
     for mp_key, mp_val in (report.get("model_params") or {}).items():
         param_dict[f"model_{mp_key}"] = mp_val
-    return {
-        sanitize_mlflow_name(k): str(v)[:500] for k, v in param_dict.items() if v is not None and v != ""
-    }
+    return {sanitize_mlflow_name(k): str(v)[:500] for k, v in param_dict.items() if v is not None and v != ""}
 
 
 def report_metric_items(
-    report: dict[str, Any], now_ms: int, adapted=None, *, include_observations=True,
+    report: dict[str, Any],
+    now_ms: int,
+    adapted=None,
+    *,
+    include_observations=True,
 ) -> list[dict[str, Any]]:
     """Finite metric points (key, value, timestamp, step) shared by both publishers."""
     metric_items: list[dict[str, Any]] = []
@@ -303,8 +305,14 @@ def report_metric_items(
     for version in report.get("model_versions") or []:
         v_step = int(version.get("end_seq", 0))
         for k in (
-            "train_samples", "validation_samples", "training_presentations", "train_seconds",
-            "epochs", "minibatches", "iterations", "bytes",
+            "train_samples",
+            "validation_samples",
+            "training_presentations",
+            "train_seconds",
+            "epochs",
+            "minibatches",
+            "iterations",
+            "bytes",
         ):
             if k in version:
                 _add_metric(f"training/{k}", version[k], v_step)
@@ -504,7 +512,10 @@ class SageMakerMlflowTracker:
                     self._spot_attempt_tags[f"{previous}-number"] = previous_number
 
     def record_spot_attempt(
-        self, state: str, reason: str | None = None, checkpoint: str | None = None,
+        self,
+        state: str,
+        reason: str | None = None,
+        checkpoint: str | None = None,
     ) -> bool:
         """Persist attempt-specific evidence without ending the logical run."""
         if self._spot_attempt_tags is None:
@@ -871,10 +882,12 @@ class SageMakerMlflowTracker:
         """Expose the Zia attempt before training or dataset materialization."""
         if self.spot and not self.record_spot_attempt("RUNNING"):
             return False
-        return self.log_batch(tags=[
-            {"key": "benchmark_complete", "value": "false"},
-            {"key": "zia_artifacts_status", "value": "running"},
-        ])
+        return self.log_batch(
+            tags=[
+                {"key": "benchmark_complete", "value": "false"},
+                {"key": "zia_artifacts_status", "value": "running"},
+            ]
+        )
 
     def progress(self, step: int, metrics: dict[str, float]) -> None:
         """Coalesce each live series between requests and keep final metric keys separate."""
@@ -882,8 +895,12 @@ class SageMakerMlflowTracker:
             return
         stamp = int(time.time() * 1000)
         points = [
-            {"key": sanitize_mlflow_name(f"progress/{key}"), "value": float(value), "step": step,
-             "timestamp": stamp}
+            {
+                "key": sanitize_mlflow_name(f"progress/{key}"),
+                "value": float(value),
+                "step": step,
+                "timestamp": stamp,
+            }
             for key, value in metrics.items()
             if type(value) in (int, float) and math.isfinite(value)
         ]
@@ -901,8 +918,10 @@ class SageMakerMlflowTracker:
             self._live_writer.submit(points)
             return
         self._pending_progress.update((point["key"], point) for point in points)
-        if (self._progress_attempted_at is None
-                or time.monotonic() - self._progress_attempted_at >= PROGRESS_INTERVAL_SECONDS):
+        if (
+            self._progress_attempted_at is None
+            or time.monotonic() - self._progress_attempted_at >= PROGRESS_INTERVAL_SECONDS
+        ):
             self._flush_progress()
 
     def _flush_progress(self) -> None:
@@ -986,9 +1005,7 @@ class SageMakerMlflowTracker:
         else:
             return False
         params = [
-            {"key": sanitize_mlflow_name(k), "value": str(v)[:500]}
-            for k, v in raw.items()
-            if v is not None
+            {"key": sanitize_mlflow_name(k), "value": str(v)[:500]} for k, v in raw.items() if v is not None
         ]
         return self.log_batch(params=params) if params else True
 
@@ -1091,10 +1108,12 @@ class SageMakerMlflowTracker:
     def mark_killed(self) -> bool:
         if not self.finish("KILLED"):
             return False
-        return self.log_batch(tags=[
-            {"key": "benchmark_complete", "value": "false"},
-            {"key": "zia_artifacts_status", "value": "interrupted"},
-        ])
+        return self.log_batch(
+            tags=[
+                {"key": "benchmark_complete", "value": "false"},
+                {"key": "zia_artifacts_status", "value": "interrupted"},
+            ]
+        )
 
     def get_metric_history(self, run_id, key):
         params = {"run_id": run_id, "metric_key": key, "max_results": 10_000}
@@ -1131,7 +1150,9 @@ class SageMakerMlflowTracker:
         """Use fit-local steps inside one child run per round of this parent run."""
         return publish_child_runs(
             RestBackend(self._request, concurrency=self.concurrency),
-            self.experiment_id, self.mlflow_run_id, report,
+            self.experiment_id,
+            self.mlflow_run_id,
+            report,
             checkpoint_base_uri=self.artifact_uri if self.spot else None,
             include_artifact_uri=True,
         )
@@ -1148,7 +1169,10 @@ class SageMakerMlflowTracker:
             if not target:
                 raise RuntimeError("MLflow child did not provide an artifact URI")
             uploaded = upload_directory_to_mlflow_artifacts(
-                store, fit_root, f"{target.rstrip('/')}/{ARTIFACT_ROOT}", immutable=self.spot,
+                store,
+                fit_root,
+                f"{target.rstrip('/')}/{ARTIFACT_ROOT}",
+                immutable=self.spot,
             )
             if not uploaded["files"]:
                 raise RuntimeError("MLflow did not publish fit observation artifacts")
@@ -1169,9 +1193,16 @@ class SageMakerMlflowTracker:
         `aws-mlflow` extra) and falls back to the REST/SigV4 client below otherwise or on failure.
         """
         self._flush_progress()
-        library = None if self.spot else self._publish_with_library(
-            report, adapted=adapted, output_dir=output_dir, outputs_uri=outputs_uri,
-            model_package_arn=model_package_arn,
+        library = (
+            None
+            if self.spot
+            else self._publish_with_library(
+                report,
+                adapted=adapted,
+                output_dir=output_dir,
+                outputs_uri=outputs_uri,
+                model_package_arn=model_package_arn,
+            )
         )
         if library is not None:
             return library
@@ -1184,9 +1215,7 @@ class SageMakerMlflowTracker:
         source = inp.get("source") or {}
 
         # 1. Parameters
-        params_payload = [
-            {"key": key, "value": value} for key, value in report_params(self, report).items()
-        ]
+        params_payload = [{"key": key, "value": value} for key, value in report_params(self, report).items()]
 
         # 2. Tags and rich Markdown note
         summary_metrics = report.get("metrics") or {}
@@ -1273,7 +1302,10 @@ class SageMakerMlflowTracker:
             if output_dir is not None:
                 self.stage_observation_artifacts(output_dir, report, child_runs, store)
                 uploaded = upload_directory_to_mlflow_artifacts(
-                    store, output_dir, self.artifact_uri, immutable=self.spot,
+                    store,
+                    output_dir,
+                    self.artifact_uri,
+                    immutable=self.spot,
                     exclude=child_artifact_prefixes(child_runs),
                 )
                 if not uploaded["files"]:
@@ -1294,11 +1326,13 @@ class SageMakerMlflowTracker:
             if self.spot:
                 return {"published": False, "errors": list(self.api_errors)}
 
-        if not self.finish("FINISHED") or not self.log_batch(tags=[
-            {"key": "benchmark_complete", "value": "true"},
-            {"key": "zia_artifacts_status", "value": "complete"},
-            {"key": "cb-training-rounds", "value": str(len(child_runs))},
-        ]):
+        if not self.finish("FINISHED") or not self.log_batch(
+            tags=[
+                {"key": "benchmark_complete", "value": "true"},
+                {"key": "zia_artifacts_status", "value": "complete"},
+                {"key": "cb-training-rounds", "value": str(len(child_runs))},
+            ]
+        ):
             return {"published": False, "errors": list(self.api_errors)}
         return {
             "published": True,
@@ -1411,10 +1445,14 @@ class SageMakerMlflowTracker:
             return
         if recovering:
             try:
-                existing = self._request(
-                    "GET", "/api/2.0/mlflow/registered-models/alias",
-                    params={"name": name, "alias": clean_alias},
-                ).get("model_version") or {}
+                existing = (
+                    self._request(
+                        "GET",
+                        "/api/2.0/mlflow/registered-models/alias",
+                        params={"name": name, "alias": clean_alias},
+                    ).get("model_version")
+                    or {}
+                )
             except MlflowRestError as err:
                 if err.error_code not in {"RESOURCE_DOES_NOT_EXIST", "INVALID_PARAMETER_VALUE"}:
                     raise
@@ -1517,8 +1555,12 @@ class SageMakerMlflowTracker:
                     if not v_num or existing_version.get("source") != source_uri:
                         raise ValueError(f"archive mismatch for MLflow model version {source_uri}")
                     self._policy_aliases(
-                        policy_model_name, v_num, idx=idx, end_seq=end_seq,
-                        is_final=is_final, recovering=True,
+                        policy_model_name,
+                        v_num,
+                        idx=idx,
+                        end_seq=end_seq,
+                        is_final=is_final,
+                        recovering=True,
                     )
                 if v_num:
                     created_versions.append(v_num)
@@ -1582,7 +1624,11 @@ class SageMakerMlflowTracker:
                 if v_num:
                     created_versions.append(v_num)
                     self._policy_aliases(
-                        policy_model_name, v_num, idx=idx, end_seq=end_seq, is_final=is_final,
+                        policy_model_name,
+                        v_num,
+                        idx=idx,
+                        end_seq=end_seq,
+                        is_final=is_final,
                     )
                 elif self.spot:
                     raise RuntimeError("MLflow did not return a model version")

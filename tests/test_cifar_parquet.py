@@ -22,13 +22,16 @@ def mirror(monkeypatch):
     for name in module.SOURCES:
         source = json.loads(json.dumps(module.SOURCES[name]))
         for split, count in (("train", 100), ("test", 30)):
-            rows = [{"img": {"bytes": png(), "path": None},
-                     source["label"]: i % source["classes"]} for i in range(count)]
+            rows = [
+                {"img": {"bytes": png(), "path": None}, source["label"]: i % source["classes"]}
+                for i in range(count)
+            ]
             sink = io.BytesIO()
             pq.write_table(pa.Table.from_pylist(rows), sink, row_group_size=10)
             payload = sink.getvalue()
-            source["splits"][split].update(bytes=len(payload), rows=count,
-                                           lfs_sha256=hashlib.sha256(payload).hexdigest())
+            source["splits"][split].update(
+                bytes=len(payload), rows=count, lfs_sha256=hashlib.sha256(payload).hexdigest()
+            )
             files[(name, split)] = payload
         monkeypatch.setitem(module.SOURCES, name, source)
 
@@ -44,9 +47,15 @@ def mirror(monkeypatch):
             calls.append(url)
 
         def provenance(self):
-            return {"url": self.url, "archive_bytes": self.size, "validator": "fixture-etag",
-                    "ranges_bytes": self.transferred, "ranges": [],
-                    "whole_archive_checksum_verified": False, "integrity": "fixture"}
+            return {
+                "url": self.url,
+                "archive_bytes": self.size,
+                "validator": "fixture-etag",
+                "ranges_bytes": self.transferred,
+                "ranges": [],
+                "whole_archive_checksum_verified": False,
+                "integrity": "fixture",
+            }
 
     monkeypatch.setattr(module, "RangeReader", Reader)
     return calls, files, Reader
@@ -121,8 +130,9 @@ def test_parquet_rejects_unexpected_pinned_size_count_and_class(tmp_path, mirror
 
 def test_missing_embedded_images_never_fetch_external_paths():
     sink = io.BytesIO()
-    table = pa.Table.from_pylist([{"img": {"bytes": None, "path": "https://untrusted.invalid/a.png"},
-                                  "label": 0}])
+    table = pa.Table.from_pylist(
+        [{"img": {"bytes": None, "path": "https://untrusted.invalid/a.png"}, "label": 0}]
+    )
     pq.write_table(table, sink)
     reader = io.BytesIO(sink.getvalue())
     reader.size = len(sink.getvalue())

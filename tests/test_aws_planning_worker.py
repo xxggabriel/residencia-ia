@@ -86,6 +86,7 @@ def test_zia_examples_plan_all_thirty_six_independent_jobs(campaign, scope):
     release = release.model_copy(update={"benchmark_compute": "ec2-spot-c6a.large"})
     jobs = set()
     for dataset in ("fraud", "social", "ecommerce"):
+
         def request(filename):
             path = Path("infra/examples") / f"{filename}-{dataset}-{scope}.json"
             return json.loads(path.read_text())["request"]
@@ -95,10 +96,15 @@ def test_zia_examples_plan_all_thirty_six_independent_jobs(campaign, scope):
         assert campaign_request.snapshot == prepare.snapshot() and campaign_request.snapshot.scope == scope
         assert campaign_request.campaign_id == f"zia-{dataset}-{scope}-spot-v1"
         assert campaign_request.run_timeout_seconds == (3600 if scope == "smoke" else 172800)
-        plan = planning.build_plan(campaign_request, release, snapshot_manifest={
-            "manifest_sha256": "a" * 64, "manifest_uri": "s3://bucket/snapshot.json",
-            "prepared": {"sha256": "b" * 64},
-        })
+        plan = planning.build_plan(
+            campaign_request,
+            release,
+            snapshot_manifest={
+                "manifest_sha256": "a" * 64,
+                "manifest_uri": "s3://bucket/snapshot.json",
+                "prepared": {"sha256": "b" * 64},
+            },
+        )
         assert plan["concurrency"] == 12 and len(plan["units"]) == 12
         assert tuple(u["params"]["policy"] for u in plan["units"]) == ZIA_POLICIES
         for unit in plan["units"]:
@@ -109,14 +115,25 @@ def test_zia_examples_plan_all_thirty_six_independent_jobs(campaign, scope):
 
 def test_cost_aware_example_plans_cara_upf_and_oracle(campaign):
     _, _, release, _, _ = campaign
-    request = CampaignRequest.model_validate(json.loads(
-        Path("infra/examples/campaign-social-full-cost-aware.json").read_text())["request"])
-    plan = planning.build_plan(request, release, snapshot_manifest={
-        "manifest_sha256": "a" * 64, "manifest_uri": "s3://bucket/snapshot.json",
-        "prepared": {"sha256": "b" * 64},
-    })
+    request = CampaignRequest.model_validate(
+        json.loads(Path("infra/examples/campaign-social-full-cost-aware.json").read_text())["request"]
+    )
+    plan = planning.build_plan(
+        request,
+        release,
+        snapshot_manifest={
+            "manifest_sha256": "a" * 64,
+            "manifest_uri": "s3://bucket/snapshot.json",
+            "prepared": {"sha256": "b" * 64},
+        },
+    )
     assert {u["params"]["policy"] for u in plan["units"]} == {
-        "cara", "cara_cumulative", "cara_periodic", "upf", "oracle"}
+        "cara",
+        "cara_cumulative",
+        "cara_periodic",
+        "upf",
+        "oracle",
+    }
 
 
 def test_latest_release_resolution_is_pinned_in_the_plan(campaign):
@@ -177,11 +194,14 @@ def test_project_suite_preserves_all_cases_and_binds_external_inputs(tmp_path):
     from continual_bench.datasets.catalog import CATALOG
 
     sources = {
-        spec.name: "a" * 64 for spec in CATALOG
+        spec.name: "a" * 64
+        for spec in CATALOG
         if spec.family in {"openml", "real_stream", "image", "temporal_vision"}
     }
     request = CampaignRequest(
-        campaign_id="suite", matrix={"kind": "project_suite"}, source_digests=sources,
+        campaign_id="suite",
+        matrix={"kind": "project_suite"},
+        source_digests=sources,
     )
     plan = planning.build_plan(request, publish_fixture_release(LocalObjectStore(tmp_path)))
     assert plan["mode"] == "distributed" and len(plan["units"]) == 518
@@ -197,16 +217,16 @@ def test_worker_executes_a_checksum_bound_external_epoch_source(tmp_path, monkey
 
     source = PreparedImageSource(
         [
-            TaskSample(str(i), i, i, i, {"f": float(i % 2)}, str(i % 2),
-                       split="train" if i < 80 else "test")
+            TaskSample(str(i), i, i, i, {"f": float(i % 2)}, str(i % 2), split="train" if i < 80 else "test")
             for i in range(100)
         ],
         {"name": "insects", "task": "multiclass", "labels": ["0", "1"], "version": "fixture"},
     )
     monkeypatch.setattr(matrix_sources, "load_dataset", lambda *a, **kw: source)
     store = LocalObjectStore(tmp_path / "store")
-    binding = matrix_sources.publish_source(store, "insects", cache=tmp_path, workdir=tmp_path,
-                                            examples=100, seed=42)
+    binding = matrix_sources.publish_source(
+        store, "insects", cache=tmp_path, workdir=tmp_path, examples=100, seed=42
+    )
     path = tmp_path / "configs" / "matrices"
     path.mkdir(parents=True)
     (path / "epochs.yaml").write_text(
@@ -216,7 +236,8 @@ def test_worker_executes_a_checksum_bound_external_epoch_source(tmp_path, monkey
     (tmp_path / "configs" / "base").mkdir()
     (tmp_path / "configs" / "base" / "tracking.yaml").write_text("{}")
     request = CampaignRequest(
-        campaign_id="epochs", matrix={"kind": "experiment_matrix", "path": "configs/matrices/epochs.yaml"},
+        campaign_id="epochs",
+        matrix={"kind": "experiment_matrix", "path": "configs/matrices/epochs.yaml"},
         source_digests={"insects": binding["sha256"]},
     )
     plan = planning.build_plan(request, publish_fixture_release(store), project_root=tmp_path)
@@ -242,14 +263,26 @@ def test_openml_is_materialized_from_pinned_arff_without_changing_the_run_config
         "@relation fixture\n@attribute x numeric\n@attribute class {UP,DOWN}\n@data\n"
         + "0,UP\n1,DOWN\n" * 150
     )
-    monkeypatch.setitem(REAL_SOURCES, "electricity", {
-        **REAL_SOURCES["electricity"], "sha256": sha256_path(raw), "rows": 300,
-        "columns": ["x", "class"], "nominal": ["class"],
-    })
+    monkeypatch.setitem(
+        REAL_SOURCES,
+        "electricity",
+        {
+            **REAL_SOURCES["electricity"],
+            "sha256": sha256_path(raw),
+            "rows": 300,
+            "columns": ["x", "class"],
+            "nominal": ["class"],
+        },
+    )
     store = LocalObjectStore(tmp_path / "store")
     result = matrix_sources.publish_source(
-        store, "electricity", cache=tmp_path, workdir=tmp_path, real_directory=tmp_path,
-        examples=100, seed=42,
+        store,
+        "electricity",
+        cache=tmp_path,
+        workdir=tmp_path,
+        real_directory=tmp_path,
+        examples=100,
+        seed=42,
     )
     config = Config(dataset={"name": "electricity", "samples": 300})
     source = matrix_sources.materialize_source(

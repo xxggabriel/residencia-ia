@@ -17,10 +17,11 @@ from continual_bench.datasets.real_streams import (
 
 
 def insects_fixture(path, *, rows=6):
-    path.write_text("".join(
-        ",".join([str(i + j / 100) for j in range(33)] + [str(i % 6 + 1)]) + "\n"
-        for i in range(rows)
-    ))
+    path.write_text(
+        "".join(
+            ",".join([str(i + j / 100) for j in range(33)] + [str(i % 6 + 1)]) + "\n" for i in range(rows)
+        )
+    )
     return path
 
 
@@ -60,11 +61,15 @@ def test_gas_parser_preserves_numeric_batch_order_and_128_features(tmp_path):
 def test_acquisition_admission_prefix_cache_replay_and_corruption(tmp_path, monkeypatch, name):
     import continual_bench.datasets.real_streams as module
 
-    fixture = (insects_fixture(tmp_path / "original.csv") if name == "insects" else
-               gas_fixture(tmp_path / "original.zip"))
+    fixture = (
+        insects_fixture(tmp_path / "original.csv")
+        if name == "insects"
+        else gas_fixture(tmp_path / "original.zip")
+    )
     raw_rows = 6 if name == "insects" else 10
-    monkeypatch.setitem(SPECS, name, {**SPECS[name], "expected_rows": raw_rows,
-                                    "expected_bytes": fixture.stat().st_size})
+    monkeypatch.setitem(
+        SPECS, name, {**SPECS[name], "expected_rows": raw_rows, "expected_bytes": fixture.stat().st_size}
+    )
     calls = []
 
     def download(url, path, **kwargs):
@@ -105,8 +110,9 @@ def test_failed_admission_removes_partial_cache_and_explicit_retry_is_clean(tmp_
     import continual_bench.datasets.real_streams as module
 
     original = insects_fixture(tmp_path / "fixture.csv")
-    monkeypatch.setitem(SPECS, "insects", {**SPECS["insects"], "expected_rows": 6,
-                                         "expected_bytes": original.stat().st_size})
+    monkeypatch.setitem(
+        SPECS, "insects", {**SPECS["insects"], "expected_rows": 6, "expected_bytes": original.stat().st_size}
+    )
     attempts = []
 
     def download(url, path, **kwargs):
@@ -134,12 +140,24 @@ def test_download_rejects_html_and_enforces_bytes_without_auth_bypass(tmp_path):
             self.headers = headers
 
     with pytest.raises(RuntimeError, match="HTML"):
-        _download("https://example.org", tmp_path / "bad", max_bytes=5,
-                  opener=lambda *a, **k: Response(b"html", {"Content-Type": "text/html"}))
+        _download(
+            "https://example.org",
+            tmp_path / "bad",
+            max_bytes=5,
+            opener=lambda *a, **k: Response(b"html", {"Content-Type": "text/html"}),
+        )
     with pytest.raises(ValueError, match="byte budget"):
-        _download("https://example.org", tmp_path / "large", max_bytes=3,
-                  opener=lambda *a, **k: Response(b"large", {}))
-    receipt = _download("https://example.org", tmp_path / "valid", max_bytes=5,
-                        opener=lambda *a, **k: Response(b"valid", {"ETag": "fixture"}))
+        _download(
+            "https://example.org",
+            tmp_path / "large",
+            max_bytes=3,
+            opener=lambda *a, **k: Response(b"large", {}),
+        )
+    receipt = _download(
+        "https://example.org",
+        tmp_path / "valid",
+        max_bytes=5,
+        opener=lambda *a, **k: Response(b"valid", {"ETag": "fixture"}),
+    )
     assert receipt["bytes"] == 5 and receipt["etag"] == "fixture"
     assert Path(tmp_path / "valid").read_bytes() == b"valid"

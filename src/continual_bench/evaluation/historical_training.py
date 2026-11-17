@@ -7,17 +7,37 @@ from .epoch_history import holdout_epoch_rows
 
 
 def _metrics(values):
-    return {key: value for key, value in values.items()
-            if isinstance(value, (int, float)) and isfinite(value)}
-
-
-def _fit(number, action, rows, units, *, seq_range=None, train_samples=None,
-         validation_samples=None, presentations=None, summary=None, checkpoint=None, deployed_version=None):
     return {
-        "fit_id": f"fit-{number:06d}", "action": action, "status": "complete", "block_index": None,
-        "start_seq": seq_range[0] if seq_range else None, "end_seq": seq_range[1] if seq_range else None,
-        "train_samples": train_samples, "validation_samples": validation_samples,
-        "training_presentations": presentations, "summary": summary or {}, "checkpoint": checkpoint,
+        key: value for key, value in values.items() if isinstance(value, (int, float)) and isfinite(value)
+    }
+
+
+def _fit(
+    number,
+    action,
+    rows,
+    units,
+    *,
+    seq_range=None,
+    train_samples=None,
+    validation_samples=None,
+    presentations=None,
+    summary=None,
+    checkpoint=None,
+    deployed_version=None,
+):
+    return {
+        "fit_id": f"fit-{number:06d}",
+        "action": action,
+        "status": "complete",
+        "block_index": None,
+        "start_seq": seq_range[0] if seq_range else None,
+        "end_seq": seq_range[1] if seq_range else None,
+        "train_samples": train_samples,
+        "validation_samples": validation_samples,
+        "training_presentations": presentations,
+        "summary": summary or {},
+        "checkpoint": checkpoint,
         "deployed_version": deployed_version,
         "steps": [{"step": index, "kind": units, "metrics": row} for index, row in enumerate(rows, 1)],
     }
@@ -35,12 +55,17 @@ def _repeated_epochs(report):
         return []
 
     counts = [row.get("train_presentations") for row in rows]
-    return [_fit(
-        1, "initial_fit", _epoch_rows(holdout_epoch_rows(rows), _metrics), "epoch",
-        train_samples=counts[0] if all(count == counts[0] for count in counts) else None,
-        presentations=sum(counts) if all(isinstance(count, int) for count in counts) else None,
-        summary={"epochs_trained": len(rows)},
-    )]
+    return [
+        _fit(
+            1,
+            "initial_fit",
+            _epoch_rows(holdout_epoch_rows(rows), _metrics),
+            "epoch",
+            train_samples=counts[0] if all(count == counts[0] for count in counts) else None,
+            presentations=sum(counts) if all(isinstance(count, int) for count in counts) else None,
+            summary={"epochs_trained": len(rows)},
+        )
+    ]
 
 
 def _iterative(report):
@@ -71,16 +96,26 @@ def _iterative(report):
         rows = _epoch_rows(by_update[number], metrics)
         if "epochs_run" in retained and retained["epochs_run"] != len(rows):
             raise ValueError("iterative update count differs from its retained epochs")
-        summary = _metrics({key: retained.get(key) for key in
-                            ("epochs_run", "best_epoch", "early_stopped", "patience_consumed", "seconds")})
+        summary = _metrics(
+            {
+                key: retained.get(key)
+                for key in ("epochs_run", "best_epoch", "early_stopped", "patience_consumed", "seconds")
+            }
+        )
         train_samples = retained.get("train")
-        fits.append(_fit(
-            number, "initial_fit" if number == 1 else "continue", rows, "epoch",
-            seq_range=retained.get("range"), train_samples=train_samples,
-            validation_samples=retained.get("validation"),
-            presentations=len(rows) * train_samples if isinstance(train_samples, int) else None,
-            summary=summary,
-        ))
+        fits.append(
+            _fit(
+                number,
+                "initial_fit" if number == 1 else "continue",
+                rows,
+                "epoch",
+                seq_range=retained.get("range"),
+                train_samples=train_samples,
+                validation_samples=retained.get("validation"),
+                presentations=len(rows) * train_samples if isinstance(train_samples, int) else None,
+                summary=summary,
+            )
+        )
     if any(number not in by_update and row.get("epochs_run") for number, row in updates.items()):
         raise ValueError("iterative update has no retained epoch history")
     return fits
@@ -99,12 +134,21 @@ def _native_training(report):
             "file": metadata.get("native_path", metadata.get("payload")),
             "sha256": metadata["state_sha256"],
         }
-    return [_fit(
-        1, "initial_fit", _epoch_rows(rows, _metrics), "epoch", seq_range=splits.get("train"),
-        train_samples=result.get("train_rows"), validation_samples=result.get("validation_rows"),
-        presentations=result.get("training_presentations"), checkpoint=checkpoint,
-        deployed_version=0 if checkpoint else None, summary=_metrics(result),
-    )]
+    return [
+        _fit(
+            1,
+            "initial_fit",
+            _epoch_rows(rows, _metrics),
+            "epoch",
+            seq_range=splits.get("train"),
+            train_samples=result.get("train_rows"),
+            validation_samples=result.get("validation_rows"),
+            presentations=result.get("training_presentations"),
+            checkpoint=checkpoint,
+            deployed_version=0 if checkpoint else None,
+            summary=_metrics(result),
+        )
+    ]
 
 
 def _legacy_zia(report):
@@ -117,14 +161,28 @@ def _legacy_zia(report):
         checkpoint = None
         if version.get("sha256"):
             checkpoint = {
-                "file": version.get("file"), "sha256": version["sha256"], "bytes": version.get("bytes"),
+                "file": version.get("file"),
+                "sha256": version["sha256"],
+                "bytes": version.get("bytes"),
             }
-        values = _metrics({"reported_fit_rows": version.get("train_samples"),
-                           "train_seconds": version.get("train_seconds"), "bytes": version.get("bytes")})
-        fits.append(_fit(
-            number, version["action"], [{"end_seq": end, **values}], "update",
-            seq_range=(start, end), checkpoint=checkpoint, deployed_version=number - 1,
-        ))
+        values = _metrics(
+            {
+                "reported_fit_rows": version.get("train_samples"),
+                "train_seconds": version.get("train_seconds"),
+                "bytes": version.get("bytes"),
+            }
+        )
+        fits.append(
+            _fit(
+                number,
+                version["action"],
+                [{"end_seq": end, **values}],
+                "update",
+                seq_range=(start, end),
+                checkpoint=checkpoint,
+                deployed_version=number - 1,
+            )
+        )
     return fits
 
 
@@ -145,14 +203,17 @@ def recover_training_history(report, directory=None):
     elif isinstance(report.get("training"), dict) and isinstance(report["training"].get("history"), list):
         fits, scheme = _native_training(report), "native_epochs"
         limitations = []
-    elif (report.get("protocol") == "batch_prequential_with_final_temporal_holdout"
-          and isinstance(report.get("model_versions"), list)):
+    elif report.get("protocol") == "batch_prequential_with_final_temporal_holdout" and isinstance(
+        report.get("model_versions"), list
+    ):
         fits, scheme = _legacy_zia(report), "zia_model_versions"
         limitations = [
             "checkpoint metadata retains update totals; epoch and minibatch histories are unavailable",
         ]
-    elif (report.get("schema_version") in {1, "task_evaluation-typed-v1"}
-          or report.get("protocol") == "temporal_holdout"):
+    elif (
+        report.get("schema_version") in {1, "task_evaluation-typed-v1"}
+        or report.get("protocol") == "temporal_holdout"
+    ):
         from .stream_training_history import stream_training_history
 
         fits, scheme = stream_training_history(report, directory), "stream_updates"

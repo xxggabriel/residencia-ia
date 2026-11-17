@@ -35,8 +35,10 @@ class SimResult:
     def strategy_cost(self, matrix: PerformanceMatrix) -> float:
         """CARA's strategy cost: summed relative staleness of the deployed models plus retrain costs."""
         # Same-batch accounting: a retrain at ``j`` replaces the staleness of ``j`` (model ``j`` serves it).
-        stale = sum(0.0 if m == j else matrix.staleness(j, m) for j, m in zip(
-            range(matrix.offline, matrix.batches), self.deployed, strict=True))
+        stale = sum(
+            0.0 if m == j else matrix.staleness(j, m)
+            for j, m in zip(range(matrix.offline, matrix.batches), self.deployed, strict=True)
+        )
         return float(stale + self.alpha * len(self.retrains))
 
 
@@ -98,6 +100,15 @@ def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float, same_batch: bo
             models.add(j)
             deployed = j
         timings.append(time.perf_counter() - began)
-    return SimResult(rule.name, float(alpha), retrains, served, errors, rule.parameters(),
-                     list(getattr(rule, "forecasts", [])), offline_seconds, timings,
-                     same_batch or matrix.paper_timing)
+    return SimResult(
+        rule.name,
+        float(alpha),
+        retrains,
+        served,
+        errors,
+        rule.parameters(),
+        list(getattr(rule, "forecasts", [])),
+        offline_seconds,
+        timings,
+        same_batch or matrix.paper_timing,
+    )

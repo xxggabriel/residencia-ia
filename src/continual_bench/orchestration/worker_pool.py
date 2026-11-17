@@ -19,8 +19,7 @@ class WorkerPool:
         self.guard = threading.Lock()
 
     def call(self, url, path, body=None):
-        request = urllib.request.Request(url + path, data=body,
-                                         headers={"Content-Type": "application/json"})
+        request = urllib.request.Request(url + path, data=body, headers={"Content-Type": "application/json"})
         try:
             with self.opener(request, timeout=10 if body is not None else 4) as response:
                 return response.status, json.load(response)
@@ -46,7 +45,9 @@ class WorkerPool:
             code, tracking = self.call(self.urls[0], "/ready")
             ready = code == 200 and tracking.get("ready") is True
             return (200 if ready else 503), {
-                "ready": ready, "workers": health["workers"], "tracking": tracking,
+                "ready": ready,
+                "workers": health["workers"],
+                "tracking": tracking,
             }
         if path in {"/ready", "/datasets-ready"}:
             snapshots = self.snapshots(path)
@@ -55,21 +56,37 @@ class WorkerPool:
             if path == "/datasets-ready" and ready:
                 admissions = [status for _code, status in snapshots.values()]
                 first = admissions[0]
-                ready = (isinstance(first.get("code_sha256"), str) and bool(first["code_sha256"])
-                         and type(first.get("datasets")) is int and first["datasets"] > 0
-                         and all(status.get("code_sha256") == first["code_sha256"]
-                                 and status.get("datasets") == first["datasets"] for status in admissions))
+                ready = (
+                    isinstance(first.get("code_sha256"), str)
+                    and bool(first["code_sha256"])
+                    and type(first.get("datasets")) is int
+                    and first["datasets"] > 0
+                    and all(
+                        status.get("code_sha256") == first["code_sha256"]
+                        and status.get("datasets") == first["datasets"]
+                        for status in admissions
+                    )
+                )
                 if ready:
                     metadata = {key: first[key] for key in ("code_sha256", "datasets")}
-            return (200 if ready else 503), {"ready": ready, **metadata, "workers": {
-                url: {"status_code": code, **status} for url, (code, status) in snapshots.items()}}
+            return (200 if ready else 503), {
+                "ready": ready,
+                **metadata,
+                "workers": {
+                    url: {"status_code": code, **status} for url, (code, status) in snapshots.items()
+                },
+            }
         if path == "/health":
             snapshots = self.snapshots(path)
-            healthy = {url: status for url, (code, status) in snapshots.items()
-                       if code == 200 and status.get("concurrency") == 1}
+            healthy = {
+                url: status
+                for url, (code, status) in snapshots.items()
+                if code == 200 and status.get("concurrency") == 1
+            }
             ready = len(healthy) == len(self.urls)
             return (200 if ready else 503), {
-                "status": "ok" if ready else "degraded", "concurrency": len(healthy),
+                "status": "ok" if ready else "degraded",
+                "concurrency": len(healthy),
                 "configured_workers": len(self.urls),
                 "active": sum(status["active"] for status in healthy.values()),
                 "queue": sum(status["queue"] for status in healthy.values()),
@@ -77,8 +94,11 @@ class WorkerPool:
             }
         # Job status lives on the volume shared by all execution containers.
         prefix, _, identity = path.rpartition("/")
-        if prefix not in {"/runs", "/epoch-runs", "/zia-runs"} or len(identity) != 24 or any(
-                c not in "0123456789abcdef" for c in identity):
+        if (
+            prefix not in {"/runs", "/epoch-runs", "/zia-runs"}
+            or len(identity) != 24
+            or any(c not in "0123456789abcdef" for c in identity)
+        ):
             return 404, {"error": "not_found"}
         for url in self.urls:
             code, status = self.call(url, path)
@@ -92,8 +112,11 @@ class WorkerPool:
         # Serialize placement, not execution. Admission reserves the backend slot before replying.
         with self.guard:
             snapshots = self.snapshots("/health")
-            candidates = [(url, status) for url, (code, status) in snapshots.items()
-                          if code == 200 and status.get("concurrency") == 1]
+            candidates = [
+                (url, status)
+                for url, (code, status) in snapshots.items()
+                if code == 200 and status.get("concurrency") == 1
+            ]
             candidates.sort(key=lambda item: item[1]["queue"])
             for url, _status in candidates:
                 code, result = self.call(url, path, body)

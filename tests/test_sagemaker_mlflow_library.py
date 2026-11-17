@@ -130,9 +130,15 @@ def test_library_exposes_new_parent_to_rest_fallback_if_initial_tags_fail(tracke
         raise OSError("metadata unavailable")
 
     monkeypatch.setattr(mlflow, "set_tags", fail_tags)
-    assert tracker._publish_with_library(
-        report(), output_dir=None, outputs_uri=None, model_package_arn=None,
-    ) is None
+    assert (
+        tracker._publish_with_library(
+            report(),
+            output_dir=None,
+            outputs_uri=None,
+            model_package_arn=None,
+        )
+        is None
+    )
     assert tracker.mlflow_run_id
     client = MlflowClient()
     runs = client.search_runs([tracker.experiment_id], f"tags.zia_run_key = '{tracker.run_key}'")
@@ -161,10 +167,18 @@ def test_mlflow_pyfunc_registry_loads_the_final_native_checkpoint(tracker, outpu
     relative = "models/final.npy"
     (output_dir / "models").mkdir()
     (output_dir / relative).write_bytes(payload)
-    (output_dir / "model-metadata.json").write_text(json.dumps({
-        "model": learner.name, "dataset": "social", "classes": ["a", "b"],
-        "features": ["feature"], "payload": "final.npy", "state_sha256": sha256(payload).hexdigest(),
-    }))
+    (output_dir / "model-metadata.json").write_text(
+        json.dumps(
+            {
+                "model": learner.name,
+                "dataset": "social",
+                "classes": ["a", "b"],
+                "features": ["feature"],
+                "payload": "final.npy",
+                "state_sha256": sha256(payload).hexdigest(),
+            }
+        )
+    )
     evidence = report()
     evidence["model_versions"][-1]["file"] = relative
     evidence["model_versions"][-1]["sha256"] = sha256(payload).hexdigest()

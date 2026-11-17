@@ -97,7 +97,9 @@ class TemporalHoldout(BinaryProtocol):
             },
             "compute_seconds": state.evaluation_duration_seconds,
         }
-        run.versions.record(model, {"action": "initial_fit", "seq_range": [0, state.trained],
-                                    "label_cutoff": state.test_start})
+        run.versions.record(
+            model,
+            {"action": "initial_fit", "seq_range": [0, state.trained], "label_cutoff": state.test_start},
+        )
         observer.sample_memory()
         return Outcome(report, state, model, run.versions, observer)

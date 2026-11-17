@@ -15,8 +15,10 @@ def recover_loaded(request, model, loader, implementation):
         if Path(module.__file__).resolve().parents[2].name != "code":
             raise ValueError("Registry inference must use bundled code")
     expected = {"logistic": "RiverModel", "hoeffding_tree": "HoeffdingTreeModel", "knn": "KNNModel"}
-    if (request["model"] not in expected
-            or type(model._model_impl.model).__name__ != expected[request["model"]]):
+    if (
+        request["model"] not in expected
+        or type(model._model_impl.model).__name__ != expected[request["model"]]
+    ):
         raise ValueError("Registry model implementation differs from the requested model")
     rows = request["rows"]
     schema = model.metadata.get_input_schema().inputs

@@ -108,8 +108,11 @@ class UncertaintyPerformanceForecaster(BatchPolicy):
     permitted = frozenset({"alpha", "delta", "samples", "seed"})
 
     def make_rule(self):
-        return UPF(delta=self.params.get("delta", 0.95), samples=int(self.params.get("samples", 100)),
-                   seed=int(self.params.get("seed", 0)))
+        return UPF(
+            delta=self.params.get("delta", 0.95),
+            samples=int(self.params.get("samples", 100)),
+            seed=int(self.params.get("seed", 0)),
+        )
 
 
 class RetrospectiveOracle(BatchPolicy):
@@ -120,6 +123,12 @@ class RetrospectiveOracle(BatchPolicy):
 
 
 BATCH_POLICIES: dict[str, type[BatchPolicy]] = {
-    cls.kind: cls for cls in (CaraThreshold, CaraCumulative, CaraPeriodic,
-                              UncertaintyPerformanceForecaster, RetrospectiveOracle)
+    cls.kind: cls
+    for cls in (
+        CaraThreshold,
+        CaraCumulative,
+        CaraPeriodic,
+        UncertaintyPerformanceForecaster,
+        RetrospectiveOracle,
+    )
 }

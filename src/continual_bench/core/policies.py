@@ -16,8 +16,20 @@ PERMITTED_PARAMS = SCENARIO_PARAMS | {"monitor_window"}
 # Cost-aware model-update policies (CARA, UPF) and the retrospective Oracle decide per *batch* from a
 # performance matrix; the per-sample Engine cannot host them. They live in `continual_bench.retraining`.
 BATCH_POLICY_KINDS = ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle")
-ZiaPolicy = Literal["frozen", "online", "drift", "drift_adwin", "drift_ddm",
-                    "incremental", "periodic", "cara", "cara_cumulative", "cara_periodic", "upf", "oracle"]
+ZiaPolicy = Literal[
+    "frozen",
+    "online",
+    "drift",
+    "drift_adwin",
+    "drift_ddm",
+    "incremental",
+    "periodic",
+    "cara",
+    "cara_cumulative",
+    "cara_periodic",
+    "upf",
+    "oracle",
+]
 ZIA_POLICIES = get_args(ZiaPolicy)
 
 
@@ -26,8 +38,16 @@ class RetrainingPolicy:
     accepts_scenario_params: ClassVar[bool] = False
     requires_batches: ClassVar[bool] = False
 
-    def __init__(self, every: int = 100, cooldown: int = 100, min_samples: int = 100, min_window: int = 50,
-                 action: str = "reset_retrain", last_update: int = 0, params: dict | None = None):
+    def __init__(
+        self,
+        every: int = 100,
+        cooldown: int = 100,
+        min_samples: int = 100,
+        min_window: int = 50,
+        action: str = "reset_retrain",
+        last_update: int = 0,
+        params: dict | None = None,
+    ):
         self.every, self.cooldown = every, cooldown
         self.min_samples, self.min_window = min_samples, min_window
         self.action, self.last_update = action, last_update
@@ -47,8 +67,9 @@ class RetrainingPolicy:
             if value < 0:
                 raise ValueError(f"policy {key} must be nonnegative")
         if "monitor_window" in self.params and (
-                self.params["monitor_window"] < 1
-                or int(self.params["monitor_window"]) != self.params["monitor_window"]):
+            self.params["monitor_window"] < 1
+            or int(self.params["monitor_window"]) != self.params["monitor_window"]
+        ):
             raise ValueError("policy monitor_window must be a positive integer")
         if self.params.get("error_threshold", 0) > 1:
             raise ValueError("policy error_threshold must be in [0,1]")
@@ -64,9 +85,11 @@ class RetrainingPolicy:
         self.last_update = labeled
 
     def __repr__(self):
-        return (f"{type(self).__name__}(kind={self.kind!r}, every={self.every}, cooldown={self.cooldown}, "
-                f"min_samples={self.min_samples}, min_window={self.min_window}, action={self.action!r}, "
-                f"last_update={self.last_update}, params={self.params!r})")
+        return (
+            f"{type(self).__name__}(kind={self.kind!r}, every={self.every}, cooldown={self.cooldown}, "
+            f"min_samples={self.min_samples}, min_window={self.min_window}, action={self.action!r}, "
+            f"last_update={self.last_update}, params={self.params!r})"
+        )
 
 
 class NoRetraining(RetrainingPolicy):
@@ -145,8 +168,14 @@ class PerformanceTriggeredRetraining(MonitoredPolicy):
 
 
 POLICIES: dict[str, type[RetrainingPolicy]] = {
-    cls.kind: cls for cls in (NoRetraining, OnlineUpdate, PeriodicRetraining, DriftTriggeredRetraining,
-                              PerformanceTriggeredRetraining)
+    cls.kind: cls
+    for cls in (
+        NoRetraining,
+        OnlineUpdate,
+        PeriodicRetraining,
+        DriftTriggeredRetraining,
+        PerformanceTriggeredRetraining,
+    )
 }
 
 

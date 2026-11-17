@@ -52,28 +52,95 @@ CATALOG: Registry[DatasetSpec] = Registry("source")
 _SYNTHETIC = "continual_bench.datasets.synthetic"
 _LOCAL = "continual_bench.datasets.local_manifest:LocalManifestSource"
 for _name in ("sea", "agrawal", "stagger"):
-    CATALOG.add(DatasetSpec(_name, BINARY, "river_abrupt", f"{_SYNTHETIC}:SyntheticSource", {"name": _name},
-                            metadata={"changepoints": "synthetic", "probes": True}))
+    CATALOG.add(
+        DatasetSpec(
+            _name,
+            BINARY,
+            "river_abrupt",
+            f"{_SYNTHETIC}:SyntheticSource",
+            {"name": _name},
+            metadata={"changepoints": "synthetic", "probes": True},
+        )
+    )
 for _name in ("hyperplane", "rbf_drift"):
-    CATALOG.add(DatasetSpec(_name, BINARY, "river_moving", f"{_SYNTHETIC}:MovingSyntheticSource",
-                            {"name": _name}, metadata={"changepoints": None}))
-CATALOG.add(DatasetSpec("friedman_drift", REGRESSION, "river_regression", f"{_SYNTHETIC}:FriedmanDriftSource",
-                        metadata={"changepoints": "synthetic"}))
+    CATALOG.add(
+        DatasetSpec(
+            _name,
+            BINARY,
+            "river_moving",
+            f"{_SYNTHETIC}:MovingSyntheticSource",
+            {"name": _name},
+            metadata={"changepoints": None},
+        )
+    )
+CATALOG.add(
+    DatasetSpec(
+        "friedman_drift",
+        REGRESSION,
+        "river_regression",
+        f"{_SYNTHETIC}:FriedmanDriftSource",
+        metadata={"changepoints": "synthetic"},
+    )
+)
 for _name in ("electricity", "airlines"):
-    CATALOG.add(DatasetSpec(_name, BINARY, "openml", "continual_bench.datasets.openml:RealSource",
-                            {"name": _name}, metadata={"changepoints": None}))
+    CATALOG.add(
+        DatasetSpec(
+            _name,
+            BINARY,
+            "openml",
+            "continual_bench.datasets.openml:RealSource",
+            {"name": _name},
+            metadata={"changepoints": None},
+        )
+    )
 for _name in ("insects", "gas"):
-    CATALOG.add(DatasetSpec(_name, MULTICLASS, "real_stream", _LOCAL, {"name": _name},
-                            "continual_bench.datasets.real_streams:prepare_real_stream", "cache"))
+    CATALOG.add(
+        DatasetSpec(
+            _name,
+            MULTICLASS,
+            "real_stream",
+            _LOCAL,
+            {"name": _name},
+            "continual_bench.datasets.real_streams:prepare_real_stream",
+            "cache",
+        )
+    )
 for _name in ("split_mnist", "permuted_mnist"):
-    CATALOG.add(DatasetSpec(_name, MULTICLASS, "image", _LOCAL, {"name": _name},
-                            "continual_bench.datasets.images:prepare_image_dataset", "cache"))
+    CATALOG.add(
+        DatasetSpec(
+            _name,
+            MULTICLASS,
+            "image",
+            _LOCAL,
+            {"name": _name},
+            "continual_bench.datasets.images:prepare_image_dataset",
+            "cache",
+        )
+    )
 for _name in ("split_cifar10", "split_cifar100"):
-    CATALOG.add(DatasetSpec(_name, MULTICLASS, "image", _LOCAL, {"name": _name},
-                            "continual_bench.datasets.cifar_parquet:prepare_cifar_parquet", "cache"))
+    CATALOG.add(
+        DatasetSpec(
+            _name,
+            MULTICLASS,
+            "image",
+            _LOCAL,
+            {"name": _name},
+            "continual_bench.datasets.cifar_parquet:prepare_cifar_parquet",
+            "cache",
+        )
+    )
 for _name in ("core50", "clear10", "clear100"):
-    CATALOG.add(DatasetSpec(_name, MULTICLASS, "temporal_vision", _LOCAL, {"name": _name},
-                            "continual_bench.datasets.temporal_vision:prepare_temporal_dataset", "cache"))
+    CATALOG.add(
+        DatasetSpec(
+            _name,
+            MULTICLASS,
+            "temporal_vision",
+            _LOCAL,
+            {"name": _name},
+            "continual_bench.datasets.temporal_vision:prepare_temporal_dataset",
+            "cache",
+        )
+    )
 # Local-manifest aliases without a bounded epoch loader; their manifest declares the task.
 for _name in ("split_cifar", "clear"):
     CATALOG.add(DatasetSpec(_name, None, "local_manifest", _LOCAL, {"name": _name}, prepare_kind="none"))
@@ -96,8 +163,9 @@ def load_dataset(name, cache, *, examples=100, seed=42, download=False, real_dir
         raise ValueError(f"unknown dataset {name}")
     if type(examples) is not int or not 10 <= examples <= 10_000:
         raise ValueError("examples must be an integer in [10,10000]")
-    return CATALOG.get(name).prepared(cache, examples=examples, seed=seed, download=download,
-                                      real_directory=real_directory)
+    return CATALOG.get(name).prepared(
+        cache, examples=examples, seed=seed, download=download, real_directory=real_directory
+    )
 
 
 def sample_dict(sample):

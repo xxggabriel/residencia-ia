@@ -70,8 +70,11 @@ def _typed_training(report, directory):
     train_seqs = _typed_bounds(report, directory) if need_bounds else ()
     if not initial and warmup:
         bounds = [train_seqs[0], train_seqs[warmup - 1] + 1] if len(train_seqs) >= warmup else [None, None]
-        initial = {"train_seq_range": bounds, "seq": bounds[1] - 1 if bounds[1] is not None else None,
-                   "train_samples": warmup}
+        initial = {
+            "train_seq_range": bounds,
+            "seq": bounds[1] - 1 if bounds[1] is not None else None,
+            "train_samples": warmup,
+        }
 
     def rows():
         for row in updates:
@@ -97,13 +100,21 @@ def _binary_training(report, versions):
         bounds = [0, warmup]
     if bounds is None:
         bounds = next(
-            (version["training"]["seq_range"] for version in versions
-             if version.get("training", {}).get("action") == "initial_fit"), None,
+            (
+                version["training"]["seq_range"]
+                for version in versions
+                if version.get("training", {}).get("action") == "initial_fit"
+            ),
+            None,
         )
     initial = None
     if bounds and bounds[1] > bounds[0]:
-        initial = {"train_seq_range": bounds, "seq": bounds[1] - 1, "train_samples": bounds[1] - bounds[0],
-                   "seconds": (report.get("tracking") or {}).get("metrics", {}).get("initial_train_seconds")}
+        initial = {
+            "train_seq_range": bounds,
+            "seq": bounds[1] - 1,
+            "train_samples": bounds[1] - bounds[0],
+            "seconds": (report.get("tracking") or {}).get("metrics", {}).get("initial_train_seconds"),
+        }
 
     def rows():
         for row in report.get("candidates", report.get("updates", ())):
@@ -141,8 +152,13 @@ def stream_training_history(report, directory=None, *, versions=None, captured=N
         nonlocal global_step
         grouped = action == "learn_one"
         fit = {
-            "fit_id": f"fit-{len(fits) + 1:06d}", "action": action, "status": "complete", "block_index": None,
-            "validation_samples": 0, "train_samples": 0, "steps": [],
+            "fit_id": f"fit-{len(fits) + 1:06d}",
+            "action": action,
+            "status": "complete",
+            "block_index": None,
+            "validation_samples": 0,
+            "train_samples": 0,
+            "steps": [],
         }
         last = None
         duration = 0.0
@@ -156,7 +172,9 @@ def stream_training_history(report, directory=None, *, versions=None, captured=N
             duration = _sum_known([duration, seconds])
             actions += len(chunk)
             metrics = {
-                "training_presentations": count, "learning_calls": count, "training_seconds": seconds,
+                "training_presentations": count,
+                "learning_calls": count,
+                "training_seconds": seconds,
                 "completed_training_actions": len(chunk),
             }
             if first["train_seq_range"][0] is not None:
@@ -165,9 +183,11 @@ def stream_training_history(report, directory=None, *, versions=None, captured=N
                 metrics["source_end_seq_exclusive"] = last["train_seq_range"][1]
             if not grouped and "candidate_accuracy" in last:
                 metrics["promotion/candidate/accuracy"] = last["candidate_accuracy"]
-                for key, name in (("incumbent_accuracy", "incumbent/accuracy"),
-                                  ("accuracy_gain", "accuracy_gain"),
-                                  ("validation_seconds", "validation_seconds")):
+                for key, name in (
+                    ("incumbent_accuracy", "incumbent/accuracy"),
+                    ("accuracy_gain", "accuracy_gain"),
+                    ("validation_seconds", "validation_seconds"),
+                ):
                     if key in last:
                         metrics[f"promotion/{name}"] = last[key]
                 metrics["promotion/accepted"] = int(last.get("promoted", True))
@@ -176,8 +196,14 @@ def stream_training_history(report, directory=None, *, versions=None, captured=N
             fit["end_seq"] = last["train_seq_range"][1]
             fit["train_samples"] += count
             fit["validation_samples"] += sum(row.get("validation_samples", 0) for row in chunk)
-            fit["steps"].append({"step": len(fit["steps"]) + 1, "global_step": global_step,
-                                 "kind": "update", "metrics": metrics})
+            fit["steps"].append(
+                {
+                    "step": len(fit["steps"]) + 1,
+                    "global_step": global_step,
+                    "kind": "update",
+                    "metrics": metrics,
+                }
+            )
             if captured is not None:
                 if action == "initial_fit":
                     actual.extend(captured["initial"])
@@ -192,22 +218,40 @@ def stream_training_history(report, directory=None, *, versions=None, captured=N
         if "validation_seq_range" in last:
             fit["validation_seq_range"] = last["validation_seq_range"]
         fit.update(
-            training_presentations=fit["train_samples"], train_seconds=duration, checkpoint=None,
+            training_presentations=fit["train_samples"],
+            train_seconds=duration,
+            checkpoint=None,
             deployed_version=None,
-            summary={"promoted": promoted, "training_seconds": duration,
-                     "learning_calls": fit["train_samples"], "completed_training_actions": actions,
-                     "source_coordinates": "half_open_training_span",
-                     "aggregation": "online_update_chunks" if grouped else "recorded_fit"},
+            summary={
+                "promoted": promoted,
+                "training_seconds": duration,
+                "learning_calls": fit["train_samples"],
+                "completed_training_actions": actions,
+                "source_coordinates": "half_open_training_span",
+                "aggregation": "online_update_chunks" if grouped else "recorded_fit",
+            },
         )
         if actual:
             _add_fit_observations(fit, action, actual, last, seen_training_seqs, quality)
         elif saved := retained.get(fit["fit_id"]):
-            fit.update({key: value for key, value in saved.items()
-                        if key.startswith("observation_") or key in (
-                            "observed_step_kind", "promotion_status", "source_model_version",
-                            "prediction_model_versions", "source_model_reason", "fit_sequence",
-                            "epoch_availability", "native_loss_availability",
-                        )})
+            fit.update(
+                {
+                    key: value
+                    for key, value in saved.items()
+                    if key.startswith("observation_")
+                    or key
+                    in (
+                        "observed_step_kind",
+                        "promotion_status",
+                        "source_model_version",
+                        "prediction_model_versions",
+                        "source_model_reason",
+                        "fit_sequence",
+                        "epoch_availability",
+                        "native_loss_availability",
+                    )
+                }
+            )
             if not promoted:
                 fit["checkpoint"] = saved.get("checkpoint")
         fits.append(fit)
@@ -250,37 +294,60 @@ def _add_fit_observations(fit, action, actual, last, trained, quality):
             repeated += sum(seq in trained for seq in source)
             trained.update(source)
         presentations += size
-        metrics = {"training/batch_size": size, "training/examples_processed": size,
-                   "training/presentations_cumulative": presentations,
-                   "training/replay_presentations_cumulative": repeated,
-                   "training/duration_seconds": row["seconds"], "training/native_loss": None}
+        metrics = {
+            "training/batch_size": size,
+            "training/examples_processed": size,
+            "training/presentations_cumulative": presentations,
+            "training/replay_presentations_cumulative": repeated,
+            "training/duration_seconds": row["seconds"],
+            "training/native_loss": None,
+        }
         prediction_version = None
         if prediction := row.get("prediction"):
             predictions.append(prediction)
             prediction_version = prediction.get("model_version")
             prediction_versions.add(prediction_version)
             metrics.update(single_prediction_metrics(prediction, quality))
-        steps.append({"step": index, "source_seq": row["seq"], "metrics": metrics,
-                      "prediction_model_version": prediction_version})
+        steps.append(
+            {
+                "step": index,
+                "source_seq": row["seq"],
+                "metrics": metrics,
+                "prediction_model_version": prediction_version,
+            }
+        )
     scopes = {}
     if predictions:
         scopes["prequential_before_learning"] = quality_scope(
-            quality.task, quality.collect(predictions),
+            quality.task,
+            quality.collect(predictions),
         )
     if validation := actual[-1].get("validation"):
-        scopes.update({scope: quality_scope("binary", binary_summary_quality(values))
-                       for scope, values in validation.items()})
+        scopes.update(
+            {
+                scope: quality_scope("binary", binary_summary_quality(values))
+                for scope, values in validation.items()
+            }
+        )
     step_kind = "one_reset_and_replay_pass" if action == "reset_retrain" else "one_learner_call"
-    fit.update(observation_steps=steps, observation_epochs=None, observed_step_kind=step_kind,
-               epoch_availability={"status": "unavailable", "reason": "single_pass_learning_has_no_epochs"},
-               native_loss_availability={"status": "unavailable", "reason": "learner_does_not_expose_loss"},
-               promotion_status="promoted" if last.get("promoted", True) else "rejected",
-               observation_effort={"steps": len(steps), "epochs": None,
-                                   "unique_training_examples": presentations,
-                                   "training_presentations": presentations, "replay_presentations": repeated},
-               observation_resources={"training_seconds": fit["train_seconds"]},
-               observation_scopes=scopes,
-               prediction_model_versions=sorted(prediction_versions - {None}, key=str))
+    fit.update(
+        observation_steps=steps,
+        observation_epochs=None,
+        observed_step_kind=step_kind,
+        epoch_availability={"status": "unavailable", "reason": "single_pass_learning_has_no_epochs"},
+        native_loss_availability={"status": "unavailable", "reason": "learner_does_not_expose_loss"},
+        promotion_status="promoted" if last.get("promoted", True) else "rejected",
+        observation_effort={
+            "steps": len(steps),
+            "epochs": None,
+            "unique_training_examples": presentations,
+            "training_presentations": presentations,
+            "replay_presentations": repeated,
+        },
+        observation_resources={"training_seconds": fit["train_seconds"]},
+        observation_scopes=scopes,
+        prediction_model_versions=sorted(prediction_versions - {None}, key=str),
+    )
     if last.get("validation_seconds") is not None:
         fit["observation_resources"]["validation_seconds"] = last["validation_seconds"]
     if checkpoint := actual[-1].get("checkpoint"):

@@ -47,14 +47,25 @@ class KNNModel(RiverModel):
 
 def knn_multiclass(n_neighbors: int = 11, window_size: int = 256, weighted: bool = True) -> EncodedEstimator:
     _validate(n_neighbors, window_size)
-    return EncodedEstimator(neighbors.KNNClassifier(
-        n_neighbors=n_neighbors, engine=neighbors.LazySearch(window_size=window_size),
-        weighted=weighted, cleanup_every=0, softmax=False))
+    return EncodedEstimator(
+        neighbors.KNNClassifier(
+            n_neighbors=n_neighbors,
+            engine=neighbors.LazySearch(window_size=window_size),
+            weighted=weighted,
+            cleanup_every=0,
+            softmax=False,
+        )
+    )
 
 
-def knn_regressor(n_neighbors: int = 11, window_size: int = 256, aggregation_method: str = "weighted_mean"
-                  ) -> EncodedEstimator:
+def knn_regressor(
+    n_neighbors: int = 11, window_size: int = 256, aggregation_method: str = "weighted_mean"
+) -> EncodedEstimator:
     _validate(n_neighbors, window_size)
-    return EncodedEstimator(neighbors.KNNRegressor(
-        n_neighbors=n_neighbors, engine=neighbors.LazySearch(window_size=window_size),
-        aggregation_method=aggregation_method))
+    return EncodedEstimator(
+        neighbors.KNNRegressor(
+            n_neighbors=n_neighbors,
+            engine=neighbors.LazySearch(window_size=window_size),
+            aggregation_method=aggregation_method,
+        )
+    )

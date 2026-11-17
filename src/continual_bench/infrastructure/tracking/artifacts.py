@@ -31,8 +31,11 @@ def artifact_plan(output_dir, *, exclude: Iterable[str] = ()) -> list[tuple[Path
             continue
         if (relative.as_posix() + "/").startswith(excluded):
             continue
-        parts = relative.parts[1:] if relative.parts[0] == "artifacts" and len(relative.parts) > 1 \
+        parts = (
+            relative.parts[1:]
+            if relative.parts[0] == "artifacts" and len(relative.parts) > 1
             else relative.parts
+        )
         target = "/".join(parts)
         if target not in seen:
             seen.add(target)
@@ -40,8 +43,9 @@ def artifact_plan(output_dir, *, exclude: Iterable[str] = ()) -> list[tuple[Path
     return plan
 
 
-def upload_concurrently(put: Callable[[Path, str], object], plan: list[tuple[Path, str]],
-                        *, workers: int = DEFAULT_UPLOAD_WORKERS) -> list:
+def upload_concurrently(
+    put: Callable[[Path, str], object], plan: list[tuple[Path, str]], *, workers: int = DEFAULT_UPLOAD_WORKERS
+) -> list:
     """Upload independent files in parallel; the first failure is re-raised."""
     if not plan:
         return []

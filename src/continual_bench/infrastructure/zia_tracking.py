@@ -17,10 +17,21 @@ def begin(client, directory, dataset, scope, policy, campaign):
         matches = client.search_runs([experiment_id], f"tags.zia_run_key = '{key}'")
         if len(matches) > 1:
             raise ValueError("multiple MLflow runs for the same Zia job")
-        run = matches[0] if matches else client.create_run(experiment_id, tags={
-            "zia_run_key": key, "mlflow.runName": f"{dataset}-{policy}",
-            "dataset": dataset, "scope": scope, "policy": policy, "campaign": campaign,
-        })
+        run = (
+            matches[0]
+            if matches
+            else client.create_run(
+                experiment_id,
+                tags={
+                    "zia_run_key": key,
+                    "mlflow.runName": f"{dataset}-{policy}",
+                    "dataset": dataset,
+                    "scope": scope,
+                    "policy": policy,
+                    "campaign": campaign,
+                },
+            )
+        )
     return run.info.run_id, experiment_id
 
 
@@ -31,54 +42,95 @@ def publish_run_metrics(client, directory, run_id, report):
     source = contract["input"]["source"]
     env = contract["environment"]
     # Zia streams carry a pinned Hugging Face source; catalog streams name their catalog entry.
-    dataset_source = (f"ziadatalabs/{source['repo']}" if "repo" in source
-                      else f"catalog/{source.get('catalog', report['dataset'])}")
+    dataset_source = (
+        f"ziadatalabs/{source['repo']}"
+        if "repo" in source
+        else f"catalog/{source.get('catalog', report['dataset'])}"
+    )
     params = {
-        "model": report["model"], "policy": report["policy"], "protocol": report["protocol"],
-        "dataset_source": dataset_source, "dataset_revision": source.get("revision", "catalog"),
-        "dataset_sha256": contract["input"]["sha256"], "dataset_license": contract["input"]["license"],
-        "samples": contract["input"]["rows"], "holdout_start": contract["holdout_start"],
-        "block_rows": contract["block_rows"], "model_params": json.dumps(report["model_params"]),
-        "code_sha256": env["code_sha256"], "git_revision": env["git_revision"],
+        "model": report["model"],
+        "policy": report["policy"],
+        "protocol": report["protocol"],
+        "dataset_source": dataset_source,
+        "dataset_revision": source.get("revision", "catalog"),
+        "dataset_sha256": contract["input"]["sha256"],
+        "dataset_license": contract["input"]["license"],
+        "samples": contract["input"]["rows"],
+        "holdout_start": contract["holdout_start"],
+        "block_rows": contract["block_rows"],
+        "model_params": json.dumps(report["model_params"]),
+        "code_sha256": env["code_sha256"],
+        "git_revision": env["git_revision"],
     }
     if aws := report["costs"].get("aws"):
         params["aws_region"] = aws["settings"]["region"]
     client.log_batch(
-        run_id, params=[Param(name, str(value)) for name, value in params.items()], synchronous=True,
+        run_id,
+        params=[Param(name, str(value)) for name, value in params.items()],
+        synchronous=True,
     )
     inputs = client.get_run(run_id).inputs
     if not inputs or not inputs.dataset_inputs:
-        url = (f"https://huggingface.co/datasets/{dataset_source}/resolve/{source['revision']}/{source['file']}"
-               if "repo" in source else f"catalog://{source.get('catalog', report['dataset'])}")
-        dataset = Dataset(
-            name=params["dataset_source"], digest=params["dataset_sha256"][:32], source_type="http",
-            source=json.dumps({"url": url}),
-            profile=json.dumps({
-                "num_rows": params["samples"], "num_features": len(contract["input"]["features"]),
-            }),
+        url = (
+            f"https://huggingface.co/datasets/{dataset_source}/resolve/{source['revision']}/{source['file']}"
+            if "repo" in source
+            else f"catalog://{source.get('catalog', report['dataset'])}"
         )
-        client.log_inputs(run_id, datasets=[DatasetInput(
-            dataset, tags=[InputTag("mlflow.data.context", report["protocol"])],
-        )])
+        dataset = Dataset(
+            name=params["dataset_source"],
+            digest=params["dataset_sha256"][:32],
+            source_type="http",
+            source=json.dumps({"url": url}),
+            profile=json.dumps(
+                {
+                    "num_rows": params["samples"],
+                    "num_features": len(contract["input"]["features"]),
+                }
+            ),
+        )
+        client.log_inputs(
+            run_id,
+            datasets=[
+                DatasetInput(
+                    dataset,
+                    tags=[InputTag("mlflow.data.context", report["protocol"])],
+                )
+            ],
+        )
     points = [(f"summary_{k}", 0, v) for k, v in report["metrics"].items()]
     points.extend((f"tracking_v1/summary/{k}", 0, v) for k, v in report["metrics"].items())
     points.extend((f"holdout/{k}", 0, v) for k, v in report["holdout"].items())
     for window in report["windows"]:
-        points.extend((f"{window['scope']}/windows/{k}", window["end_seq"], v) for k, v in window.items()
-                      if k not in {"scope", "end_seq", "start_time_ms", "end_time_ms"})
+        points.extend(
+            (f"{window['scope']}/windows/{k}", window["end_seq"], v)
+            for k, v in window.items()
+            if k not in {"scope", "end_seq", "start_time_ms", "end_time_ms"}
+        )
     for group in ("class_metrics", "holdout_class_metrics"):
-        points.extend((f"{group}/{label}/{key}", 0, value) for label, row in report[group].items()
-                      for key, value in row.items())
+        points.extend(
+            (f"{group}/{label}/{key}", 0, value)
+            for label, row in report[group].items()
+            for key, value in row.items()
+        )
     for version in report["model_versions"]:
-        fields = ("train_samples", "validation_samples", "training_presentations", "train_seconds",
-                  "iterations", "bytes")
-        points.extend((f"training/{name}", version["end_seq"], version[name])
-                      for name in fields if name in version)
+        fields = (
+            "train_samples",
+            "validation_samples",
+            "training_presentations",
+            "train_seconds",
+            "iterations",
+            "bytes",
+        )
+        points.extend(
+            (f"training/{name}", version["end_seq"], version[name]) for name in fields if name in version
+        )
         unit = {"epoch": "epochs", "minibatch": "minibatches"}.get(version.get("iteration_unit"))
         if unit:
             points.append((f"training/{unit}", version["end_seq"], version["iterations"]))
-    points.extend(("tracking_v1/posthoc_cost_sensitivity", index, value)
-                  for index, (_, value) in enumerate(report["cost_sensitivity"]))
+    points.extend(
+        ("tracking_v1/posthoc_cost_sensitivity", index, value)
+        for index, (_, value) in enumerate(report["cost_sensitivity"])
+    )
     log_metric_points(client, run_id, points)
     client.log_artifact(run_id, str(directory / "report.json"))
     # Only recorded model versions count toward AWS storage and are published.

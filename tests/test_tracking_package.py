@@ -84,15 +84,24 @@ def test_async_writer_coalesces_off_thread_and_flush_drains_everything():
 
 
 def test_artifact_plan_publishes_each_file_once(tmp_path):
-    for relative in ("artifacts/plots/a.png", "artifacts/data/index.json", "report.json",
-                     "tracking-observations/fits/fit-1/epochs.png", "tracking-observations/overview.png",
-                     ".pending-x/skip", "run.lock"):
+    for relative in (
+        "artifacts/plots/a.png",
+        "artifacts/data/index.json",
+        "report.json",
+        "tracking-observations/fits/fit-1/epochs.png",
+        "tracking-observations/overview.png",
+        ".pending-x/skip",
+        "run.lock",
+    ):
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(relative)
     plan = artifact_plan(tmp_path, exclude=("tracking-observations/fits/fit-1",))
     assert [target for _, target in plan] == [
-        "data/index.json", "plots/a.png", "report.json", "tracking-observations/overview.png",
+        "data/index.json",
+        "plots/a.png",
+        "report.json",
+        "tracking-observations/overview.png",
     ]
     uploaded = []
     upload_concurrently(lambda path, target: uploaded.append(target), plan, workers=4)
@@ -100,12 +109,19 @@ def test_artifact_plan_publishes_each_file_once(tmp_path):
 
 
 def _report():
-    return {"training_history": [
-        {"fit_id": f"fit-{i}", "action": "initial" if i == 1 else "retrain",
-         "start_seq": 0, "end_seq": 10 * i,
-         "steps": [{"step": 1, "global_step": i, "kind": "epoch", "metrics": {"loss": 1 / i}}], "summary": {}}
-        for i in (1, 2, 3)
-    ]}
+    return {
+        "training_history": [
+            {
+                "fit_id": f"fit-{i}",
+                "action": "initial" if i == 1 else "retrain",
+                "start_seq": 0,
+                "end_seq": 10 * i,
+                "steps": [{"step": 1, "global_step": i, "kind": "epoch", "metrics": {"loss": 1 / i}}],
+                "summary": {},
+            }
+            for i in (1, 2, 3)
+        ]
+    }
 
 
 def test_one_child_run_algorithm_serves_rest_and_client_backends(tmp_path, monkeypatch):
@@ -129,17 +145,34 @@ def test_one_child_run_algorithm_serves_rest_and_client_backends(tmp_path, monke
         body = payload or params or {}
         if api == "runs/search":
             runs = client.search_runs([experiment], body["filter"])
-            return {"runs": [{"info": {"run_id": r.info.run_id, "status": r.info.status},
-                              "data": {"tags": [{"key": k, "value": v} for k, v in r.data.tags.items()],
-                                       "metrics": [{"key": k} for k in r.data.metrics]}} for r in runs]}
+            return {
+                "runs": [
+                    {
+                        "info": {"run_id": r.info.run_id, "status": r.info.status},
+                        "data": {
+                            "tags": [{"key": k, "value": v} for k, v in r.data.tags.items()],
+                            "metrics": [{"key": k} for k in r.data.metrics],
+                        },
+                    }
+                    for r in runs
+                ]
+            }
         if api == "runs/create":
             run = client.create_run(experiment, tags={t["key"]: t["value"] for t in body["tags"]})
-            return {"run": {"info": {"run_id": run.info.run_id, "status": "RUNNING"},
-                            "data": {"tags": body["tags"]}}}
+            return {
+                "run": {
+                    "info": {"run_id": run.info.run_id, "status": "RUNNING"},
+                    "data": {"tags": body["tags"]},
+                }
+            }
         if api == "runs/log-batch":
-            client.log_batch(body["run_id"], metrics=[Metric(**m) for m in body.get("metrics", [])],
-                             params=[Param(**p) for p in body.get("params", [])],
-                             tags=[RunTag(**t) for t in body.get("tags", [])], synchronous=True)
+            client.log_batch(
+                body["run_id"],
+                metrics=[Metric(**m) for m in body.get("metrics", [])],
+                params=[Param(**p) for p in body.get("params", [])],
+                tags=[RunTag(**t) for t in body.get("tags", [])],
+                synchronous=True,
+            )
             return {}
         if api == "runs/update":
             client.set_terminated(body["run_id"], body["status"])

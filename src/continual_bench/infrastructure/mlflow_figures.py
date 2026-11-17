@@ -219,13 +219,29 @@ def _confusion(plt, report):
         matrix = [[totals["tn"], totals["fp"]], [totals["fn"], totals["tp"]]]
     out = []
     if matrix is not None:
-        out.append(("plots/performance/confusion_matrix.png", _confusion_matrix(
-            plt, matrix, labels or ["negativo", "positivo"], "prequential",
-        )))
+        out.append(
+            (
+                "plots/performance/confusion_matrix.png",
+                _confusion_matrix(
+                    plt,
+                    matrix,
+                    labels or ["negativo", "positivo"],
+                    "prequential",
+                ),
+            )
+        )
     if report.get("holdout_confusion") is not None:
-        out.append(("plots/performance/holdout_confusion.png", _confusion_matrix(
-            plt, report["holdout_confusion"], labels or ["negativo", "positivo"], "holdout",
-        )))
+        out.append(
+            (
+                "plots/performance/holdout_confusion.png",
+                _confusion_matrix(
+                    plt,
+                    report["holdout_confusion"],
+                    labels or ["negativo", "positivo"],
+                    "holdout",
+                ),
+            )
+        )
     if not any(totals.values()):
         return out
     fig, ax = plt.subplots(figsize=(12, 4.5))
@@ -283,7 +299,11 @@ def _probabilistic(plt, report):
     _plot_series(axes[0][0], windows, ["brier"], markers=markers, title="Brier score (menor é melhor)")
     _plot_series(axes[0][1], windows, ["log_loss"], markers=markers, title="Log loss (menor é melhor)")
     _plot_series(
-        axes[1][0], windows, ["ece", "mce"], markers=markers, title="Erro de calibração (ECE e MCE)",
+        axes[1][0],
+        windows,
+        ["ece", "mce"],
+        markers=markers,
+        title="Erro de calibração (ECE e MCE)",
     )
     _plot_series(
         axes[1][1],
@@ -506,8 +526,13 @@ def _summary(plt, report):
     held = [(position, _num(holdout.get(name))) for position, name in enumerate(names)]
     held = [(position, value) for position, value in held if value is not None]
     if held:
-        ax.barh([p - height / 2 for p, _ in held], [value for _, value in held],
-                height=height, label="holdout", color="#ff7f0e")
+        ax.barh(
+            [p - height / 2 for p, _ in held],
+            [value for _, value in held],
+            height=height,
+            label="holdout",
+            color="#ff7f0e",
+        )
     ax.set_yticks(list(positions), names)
     ax.invert_yaxis()
     ax.set_xlim(min(0, *values.values(), *(value for _, value in held)), 1.05)

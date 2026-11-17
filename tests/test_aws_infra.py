@@ -102,13 +102,16 @@ def test_distributed_map_writes_to_the_encrypted_artifacts_bucket():
 
 def test_dataset_launcher_builds_the_execution_name(tmp_path, monkeypatch):
     aws = tmp_path / "aws"
-    aws.write_text('#!/usr/bin/env bash\ncase "$1" in\ncloudformation) echo arn:dataset;;\n'
-                   'stepfunctions) printf "%s\\n" "$@";;\nesac\n')
+    aws.write_text(
+        '#!/usr/bin/env bash\ncase "$1" in\ncloudformation) echo arn:dataset;;\n'
+        'stepfunctions) printf "%s\\n" "$@";;\nesac\n'
+    )
     aws.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', os.defpath)}")
     output = subprocess.check_output(
         ["bash", "scripts/aws/start_dataset.sh", "infra/examples/dataset-social-smoke.json", "retry1"],
-        cwd=ROOT, text=True,
+        cwd=ROOT,
+        text=True,
     )
     assert "social-smoke-download--retry1" in output.splitlines()
 
@@ -138,7 +141,7 @@ def test_gateway_serves_all_worker_subnets_independent_of_interface_endpoint_pla
     gateway = resources["S3GatewayEndpoint"]
     assert "Condition" not in gateway
     assert gateway["Properties"]["VpcEndpointType"] == "Gateway"
-    route_table, = gateway["Properties"]["RouteTableIds"]
+    (route_table,) = gateway["Properties"]["RouteTableIds"]
     for association in ("SubnetARoutes", "SubnetBRoutes"):
         assert resources[association]["Properties"]["RouteTableId"] == route_table
     assert network["Outputs"]["PrivateSubnets"]["Value"]["Fn::If"][0] == "TwoZones"
@@ -214,12 +217,11 @@ def test_control_can_read_back_write_once_analytics_rows():
 def test_model_registration_reads_only_the_project_inference_repository():
     execution = template("modules/execution.yaml")
     role = execution["Resources"]["BenchmarkJobRole"]
-    registry = next(
-        policy["Fn::If"] for policy in role["Properties"]["Policies"] if "Fn::If" in policy
-    )
+    registry = next(policy["Fn::If"] for policy in role["Properties"]["Policies"] if "Fn::If" in policy)
     assert registry[0] == "ModelRegistry"
     image = next(
-        statement for statement in registry[1]["PolicyDocument"]["Statement"]
+        statement
+        for statement in registry[1]["PolicyDocument"]["Statement"]
         if statement.get("Sid") == "ReadInferenceImageForRegistration"
     )
     assert set(image["Action"]) == {"ecr:BatchGetImage", "ecr:DescribeImages"}
@@ -483,6 +485,7 @@ def test_asl_validator_rejects_unsafe_definitions(tmp_path):
     path.write_text(json.dumps(definition).replace("reconcile_unit", "advance_spot_run"))
     assert any("never EC2" in e for e in ASL.validate_file(path))
 
+
 def test_runtime_parameters_pin_build_outputs():
     compose = script("runtime_parameters").compose
     build = {
@@ -520,12 +523,20 @@ def test_release_manifest_composition_refuses_mismatched_deploys():
 
     assert ReleaseManifest(**manifest).job_definitions["benchmark"].endswith(":4")
     spot = release.compose(
-        {**outputs, "BenchmarkComputeBackend": "batch-fargate-spot"}, build, "a" * 40, "stack", None,
+        {**outputs, "BenchmarkComputeBackend": "batch-fargate-spot"},
+        build,
+        "a" * 40,
+        "stack",
+        None,
     )
     assert ReleaseManifest(**spot).benchmark_compute == "batch-fargate-spot"
     # On-demand Fargate releases keep the legacy (non-resumable) manifest shape.
     on_demand = release.compose(
-        {**outputs, "BenchmarkComputeBackend": "batch-fargate"}, build, "a" * 40, "stack", None,
+        {**outputs, "BenchmarkComputeBackend": "batch-fargate"},
+        build,
+        "a" * 40,
+        "stack",
+        None,
     )
     assert ReleaseManifest(**on_demand).benchmark_compute is None
     with pytest.raises(SystemExit):
@@ -608,8 +619,16 @@ def test_aws_lock_excludes_service_stack():
     for package in ("mlflow", "zenml", "confluent-kafka", "apache-airflow", "s3fs"):
         assert f"\n{package}==" not in lock
     # MLflow's native async logging (skinny client + SageMaker auth plugin) ships in the image.
-    for package in ("boto3", "duckdb", "pyarrow", "xgboost-cpu", "pandas", "scipy", "mlflow-skinny",
-                    "sagemaker-mlflow"):
+    for package in (
+        "boto3",
+        "duckdb",
+        "pyarrow",
+        "xgboost-cpu",
+        "pandas",
+        "scipy",
+        "mlflow-skinny",
+        "sagemaker-mlflow",
+    ):
         assert f"\n{package}==" in lock
 
 
@@ -673,9 +692,7 @@ def test_sagemaker_mlflow_app_is_serverless_and_wired_into_vpc_and_batch():
             "Environment"
         ]
     }
-    assert env["MLFLOW_TRACKING_URI"] == {
-        "Fn::If": ["MlflowTracking", {"Fn::GetAtt": "MlflowApp.Arn"}, ""]
-    }
+    assert env["MLFLOW_TRACKING_URI"] == {"Fn::If": ["MlflowTracking", {"Fn::GetAtt": "MlflowApp.Arn"}, ""]}
     assert root["Outputs"]["MlflowAppArn"]["Value"] == {"Fn::GetAtt": "Execution.Outputs.MlflowAppArn"}
 
     mlflow_vpce = network["Resources"]["SageMakerMlflowEndpoint"]
@@ -754,6 +771,7 @@ def test_benchmarks_run_serverless_on_fargate_spot_and_resume_after_interruption
     assert outputs["BenchmarkComputeBackend"]["Value"] == {
         "Fn::If": ["Spot", "batch-fargate-spot", "batch-fargate"]
     }
+
 
 def test_launch_input_pins_campaign_and_optional_snapshot_preparation_to_same_release():
     prepare = script("campaign_request").prepare
@@ -933,5 +951,3 @@ sys.exit(0)
     calls = log_file.read_text()
     assert "delete-change-set" in calls
     assert "execute-change-set" not in calls
-
-

@@ -238,12 +238,10 @@ def test_sagemaker_mlflow_tracker_logs_epochs_report_and_uploads_artifacts(tmp_p
         assert "x-amz-content-sha256" in headers
 
         if "/experiments/get-by-name" in req.full_url:
-            err_bytes = json.dumps(
-                {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "not found"}
-            ).encode("utf-8")
-            raise urllib.error.HTTPError(
-                req.full_url, 404, "Not Found", {}, io.BytesIO(err_bytes)
+            err_bytes = json.dumps({"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "not found"}).encode(
+                "utf-8"
             )
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, io.BytesIO(err_bytes))
         if req.full_url.endswith("/experiments/create"):
             return FakeHttpResponse({"experiment_id": "7"})
         if req.full_url.endswith("/runs/create"):
@@ -259,17 +257,13 @@ def test_sagemaker_mlflow_tracker_logs_epochs_report_and_uploads_artifacts(tmp_p
                 }
             )
         if "/registered-models/get" in req.full_url:
-            err_bytes = json.dumps(
-                {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "not found"}
-            ).encode("utf-8")
-            raise urllib.error.HTTPError(
-                req.full_url, 404, "Not Found", {}, io.BytesIO(err_bytes)
+            err_bytes = json.dumps({"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "not found"}).encode(
+                "utf-8"
             )
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, io.BytesIO(err_bytes))
         if req.full_url.endswith("/model-versions/create"):
             created_count = sum(1 for c in requests_seen if c[1].endswith("/model-versions/create"))
-            return FakeHttpResponse(
-                {"model_version": {"name": body["name"], "version": str(created_count)}}
-            )
+            return FakeHttpResponse({"model_version": {"name": body["name"], "version": str(created_count)}})
         return FakeHttpResponse({})
 
     uploaded: list[tuple[str, Path]] = []
@@ -404,5 +398,3 @@ def test_sagemaker_mlflow_tracker_logs_epochs_report_and_uploads_artifacts(tmp_p
         presigned = presigned_mlflow_url(app_arn, sagemaker_client=sm_client)
         assert presigned["kind"] == "mlflow-app"
         assert presigned["authorized_url"].startswith("https://mlflow.sagemaker.us-east-1.app.aws/")
-
-

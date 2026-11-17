@@ -6,11 +6,19 @@ from continual_bench.infrastructure.object_store import LocalObjectStore
 
 def _spot_tracker(unit_id, attempt, **metadata):
     tracker = SageMakerMlflowTracker(
-        tracking_uri="http://mlflow.example", dataset="social", policy="frozen", model_name="logistic",
-        run_id=unit_id, campaign_id="spot-acceptance", git_sha="abcdef1234",
+        tracking_uri="http://mlflow.example",
+        dataset="social",
+        policy="frozen",
+        model_name="logistic",
+        run_id=unit_id,
+        campaign_id="spot-acceptance",
+        git_sha="abcdef1234",
     )
     tracker.bind_spot_attempt(
-        f"i-{attempt}-{attempt}", instance_id=f"i-{attempt}", attempt=attempt, **metadata,
+        f"i-{attempt}-{attempt}",
+        instance_id=f"i-{attempt}",
+        attempt=attempt,
+        **metadata,
     )
     return tracker
 
@@ -54,14 +62,22 @@ def test_spot_reuses_parent_fits_versions_and_artifacts_after_lost_responses(tmp
                 client.set_terminated(request["run_id"], request["status"])
             return {}
         if api == "metrics/get-history":
-            return {"metrics": [encode(m) for m in client.get_metric_history(
-                request["run_id"], request["metric_key"],
-            )]}
+            return {
+                "metrics": [
+                    encode(m)
+                    for m in client.get_metric_history(
+                        request["run_id"],
+                        request["metric_key"],
+                    )
+                ]
+            }
         if api == "runs/log-batch":
             client.log_batch(
-                request["run_id"], metrics=[Metric(**m) for m in request.get("metrics", [])],
+                request["run_id"],
+                metrics=[Metric(**m) for m in request.get("metrics", [])],
                 params=[Param(**p) for p in request.get("params", [])],
-                tags=[RunTag(**t) for t in request.get("tags", [])], synchronous=True,
+                tags=[RunTag(**t) for t in request.get("tags", [])],
+                synchronous=True,
             )
             if fault == "progress" and any(m["key"].startswith("progress/") for m in request["metrics"]):
                 fault = None
@@ -74,9 +90,15 @@ def test_spot_reuses_parent_fits_versions_and_artifacts_after_lost_responses(tmp
                 raise MlflowRestError(404, exc.error_code, str(exc)) from exc
         if api == "registered-models/create":
             tags = {tag["key"]: tag["value"] for tag in request["tags"]}
-            return {"registered_model": encode(client.create_registered_model(
-                request["name"], tags=tags, description=request["description"],
-            ))}
+            return {
+                "registered_model": encode(
+                    client.create_registered_model(
+                        request["name"],
+                        tags=tags,
+                        description=request["description"],
+                    )
+                )
+            }
         if api == "model-versions/search":
             return {"model_versions": [encode(m) for m in client.search_model_versions(request["filter"])]}
         if api == "model-versions/create":
@@ -104,8 +126,13 @@ def test_spot_reuses_parent_fits_versions_and_artifacts_after_lost_responses(tmp
     assert fault is None
 
     checkpoint = "s3://tracking/checkpoints/unit/manifest.json"
-    second = _spot_tracker("unit-id", 2, resumed_checkpoint=checkpoint,
-                           previous_attempt_key="i-1-1", recovery_reason="INSTANCE_LOST")
+    second = _spot_tracker(
+        "unit-id",
+        2,
+        resumed_checkpoint=checkpoint,
+        previous_attempt_key="i-1-1",
+        recovery_reason="INSTANCE_LOST",
+    )
     monkeypatch.setattr(second, "_request", remote)
     assert second.start_live() and second.mlflow_run_id == root_id
     second.progress(12, {"rows": 12, "elapsed": 3})
@@ -118,12 +145,17 @@ def test_spot_reuses_parent_fits_versions_and_artifacts_after_lost_responses(tmp
     (output / "report.json").write_text("{}")
     report = {
         "metrics": {"accuracy": 0.8},
-        "training_history": [{
-            "fit_id": "fit-000001", "action": "initial", "start_seq": 0, "end_seq": 12,
-            "steps": [{"step": 1, "global_step": 1, "kind": "epoch", "metrics": {"loss": 0.5}}],
-            "checkpoint": {"file": "model/model.tar.gz", "sha256": "a" * 64},
-            "summary": {},
-        }],
+        "training_history": [
+            {
+                "fit_id": "fit-000001",
+                "action": "initial",
+                "start_seq": 0,
+                "end_seq": 12,
+                "steps": [{"step": 1, "global_step": 1, "kind": "epoch", "metrics": {"loss": 0.5}}],
+                "checkpoint": {"file": "model/model.tar.gz", "sha256": "a" * 64},
+                "summary": {},
+            }
+        ],
     }
     fault = "family"
     failed = second.publish_run_report(report, output_dir=output, store=store)
@@ -146,7 +178,8 @@ def test_spot_reuses_parent_fits_versions_and_artifacts_after_lost_responses(tmp
     assert parent.data.tags["cb-spot-attempt-i-2-2-resumed-checkpoint"] == checkpoint
     assert len(client.search_runs([exp])) == 2
     assert [(p.step, p.value) for p in client.get_metric_history(root_id, "progress/rows")] == [
-        (12, 12), (20, 20),
+        (12, 12),
+        (20, 20),
     ]
     assert [p.value for p in client.get_metric_history(root_id, "progress/elapsed")] == [2]
     assert [p.value for p in client.get_metric_history(root_id, "summary/accuracy")] == [0.8]

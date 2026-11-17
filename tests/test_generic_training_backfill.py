@@ -12,11 +12,19 @@ RUN_ID = "a" * 32
 
 def _epoch_report():
     return {
-        "complete": True, "version": "semana09-epochs-v1", "run_key": "b" * 24,
+        "complete": True,
+        "version": "semana09-epochs-v1",
+        "run_key": "b" * 24,
         "epochs": [
-            {"epoch": epoch, "train_presentations": 5, "test_examples": 2,
-             "metrics": {"mae": mae}, "training_seconds": 0.01, "prediction_seconds": 0.02,
-             "costs": {"metrics": {"errors": 1}}}
+            {
+                "epoch": epoch,
+                "train_presentations": 5,
+                "test_examples": 2,
+                "metrics": {"mae": mae},
+                "training_seconds": 0.01,
+                "prediction_seconds": 0.02,
+                "costs": {"metrics": {"errors": 1}},
+            }
             for epoch, mae in ((1, 0.6), (2, 0.5))
         ],
     }
@@ -40,7 +48,8 @@ def test_local_historical_inspection_is_read_only_and_writes_disjoint_output_on_
     [fit] = history["fits"]
     assert fit["checkpoint"] is None and fit["training_presentations"] == 10
     assert [(row["step"], row["global_step"], row["metrics"]["holdout:mae"]) for row in fit["steps"]] == [
-        (1, 1, 0.6), (2, 2, 0.5),
+        (1, 1, 0.6),
+        (2, 2, 0.5),
     ]
     assert not any("validation:mae" in row["metrics"] for row in fit["steps"])
     assert (destination / "artifacts" / "data" / "index.json").is_file()
@@ -49,15 +58,34 @@ def test_local_historical_inspection_is_read_only_and_writes_disjoint_output_on_
 
 def test_legacy_zia_preserves_updates_but_does_not_turn_iterations_into_epochs(tmp_path):
     path = tmp_path / "report.json"
-    path.write_text(json.dumps({
-        "complete": True, "protocol": "batch_prequential_with_final_temporal_holdout",
-        "model_versions": [
-            {"action": "initial", "start_seq": 0, "end_seq": 5, "sha256": "a" * 64,
-             "file": "models/0000.ubj", "iterations": 9, "train_samples": 5},
-            {"action": "online", "start_seq": 5, "end_seq": 10, "sha256": "b" * 64,
-             "file": "models/0001.ubj", "iterations": 800, "train_samples": 5},
-        ],
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "complete": True,
+                "protocol": "batch_prequential_with_final_temporal_holdout",
+                "model_versions": [
+                    {
+                        "action": "initial",
+                        "start_seq": 0,
+                        "end_seq": 5,
+                        "sha256": "a" * 64,
+                        "file": "models/0000.ubj",
+                        "iterations": 9,
+                        "train_samples": 5,
+                    },
+                    {
+                        "action": "online",
+                        "start_seq": 5,
+                        "end_seq": 10,
+                        "sha256": "b" * 64,
+                        "file": "models/0001.ubj",
+                        "iterations": 800,
+                        "train_samples": 5,
+                    },
+                ],
+            }
+        )
+    )
     output = tmp_path.parent / (tmp_path.name + "-derived")
     [result] = main([str(path), "--apply", "--output-dir", str(output)])
     assert result["groups"] == 2 and result["steps"] == 2 and result["availability"] == "partial"
@@ -70,21 +98,30 @@ def test_legacy_zia_preserves_updates_but_does_not_turn_iterations_into_epochs(t
 
 def test_legacy_iterative_groups_recorded_epochs_and_recovers_regression_metric_names(tmp_path):
     path = tmp_path / "result.json"
-    path.write_text(json.dumps({
-        "complete": True, "config": {"eval_metric": "validation:mae"},
-        "updates": [{"update": 1, "range": [0, 4], "train": 3, "epochs_run": 2},
-                    {"update": 2, "range": [4, 8], "train": 3, "epochs_run": 1}],
-        "epoch_history": [
-            {"update": 1, "epoch": 1, "global_epoch": 1, "validation:log_loss": 0.7},
-            {"update": 1, "epoch": 2, "global_epoch": 2, "validation:log_loss": 0.6},
-            {"update": 2, "epoch": 1, "global_epoch": 3, "validation:log_loss": 0.5},
-        ],
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "complete": True,
+                "config": {"eval_metric": "validation:mae"},
+                "updates": [
+                    {"update": 1, "range": [0, 4], "train": 3, "epochs_run": 2},
+                    {"update": 2, "range": [4, 8], "train": 3, "epochs_run": 1},
+                ],
+                "epoch_history": [
+                    {"update": 1, "epoch": 1, "global_epoch": 1, "validation:log_loss": 0.7},
+                    {"update": 1, "epoch": 2, "global_epoch": 2, "validation:log_loss": 0.6},
+                    {"update": 2, "epoch": 1, "global_epoch": 3, "validation:log_loss": 0.5},
+                ],
+            }
+        )
+    )
     [row] = main([str(path), "--apply", "--output-dir", str(tmp_path.parent / (tmp_path.name + "-derived"))])
     fits = json.loads((Path(row["output"]) / "training-history.json").read_text())["fits"]
     assert [(fit["start_seq"], fit["end_seq"]) for fit in fits] == [(0, 4), (4, 8)]
-    assert [[(step["step"], step["global_step"], step["metrics"]["validation:mae"]) for step in fit["steps"]]
-            for fit in fits] == [[(1, 1, 0.7), (2, 2, 0.6)], [(1, 3, 0.5)]]
+    assert [
+        [(step["step"], step["global_step"], step["metrics"]["validation:mae"]) for step in fit["steps"]]
+        for fit in fits
+    ] == [[(1, 1, 0.7), (2, 2, 0.6)], [(1, 3, 0.5)]]
     assert all("validation:log_loss" not in step["metrics"] for fit in fits for step in fit["steps"])
 
 
@@ -96,9 +133,13 @@ def test_s3_final_resolves_only_the_winning_attempt_and_binds_its_parent():
     report_uri = f"{prefix}/epochs/{run_key}/epoch-report.json"
     report_raw = json.dumps(_epoch_report()).encode()
     final = {
-        "kind": "matrix_case", "version": "run-final-v1", "outputs_uri": prefix,
-        "links": {"mlflow_run_id": RUN_ID}, "run_key": run_key,
-        "matrix_coordinates": {"mode": "epochs"}, "report_sha256": hashlib.sha256(report_raw).hexdigest(),
+        "kind": "matrix_case",
+        "version": "run-final-v1",
+        "outputs_uri": prefix,
+        "links": {"mlflow_run_id": RUN_ID},
+        "run_key": run_key,
+        "matrix_coordinates": {"mode": "epochs"},
+        "report_sha256": hashlib.sha256(report_raw).hexdigest(),
     }
     calls = []
 
@@ -150,7 +191,8 @@ class _Mlflow:
 
 
 def test_publication_is_explicit_and_reuses_exact_parent_without_touching_existing_report(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from continual_bench.infrastructure import training_tracking
 

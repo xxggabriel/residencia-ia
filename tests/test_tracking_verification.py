@@ -35,12 +35,25 @@ def test_mae_recomputation_accepts_one_ulp_accumulation_difference_but_rejects_w
         metrics.add(False, 0.1)
         event = {"seq": seq, "event_id": str(seq), "y": False, "timestamp": seq, "available_at": seq}
         events.append(event)
-        rows.append({"seq": seq, "event_id": str(seq), "label": False, "probability": 0.1,
-                     "timestamp": seq, "available_at": seq, "released_at": seq})
+        rows.append(
+            {
+                "seq": seq,
+                "event_id": str(seq),
+                "label": False,
+                "probability": 0.1,
+                "timestamp": seq,
+                "available_at": seq,
+                "released_at": seq,
+            }
+        )
     raw = b"".join(json.dumps(row).encode() + b"\n" for row in rows)
     values = metrics.values()
-    report = {"config": {"warmup": 0}, "observed": 7, "metrics": values,
-              "windows": [{"end_seq": 6, **values}]}
+    report = {
+        "config": {"warmup": 0},
+        "observed": 7,
+        "metrics": values,
+        "windows": [{"end_seq": 6, **values}],
+    }
     tracking = {
         "metrics": {**values, "mae_probability": published},
         "series": {key: [{"step": 6, "value": value}] for key, value in values.items()},
@@ -55,8 +68,13 @@ def test_mae_recomputation_accepts_one_ulp_accumulation_difference_but_rejects_w
 def test_remote_history_still_requires_exact_mae_value_despite_recomputation_tolerance():
     module = auditor()
     key = "tracking_v1/summary/mae_probability"
-    tracking = {"version": "residency-metrics-v1", "metrics": {"mae_probability": 0.1},
-                "series": {}, "settings": {}, "availability": {}}
+    tracking = {
+        "version": "residency-metrics-v1",
+        "metrics": {"mae_probability": 0.1},
+        "series": {},
+        "settings": {},
+        "availability": {},
+    }
     remote = math.nextafter(0.1, 1)
     run = SimpleNamespace(info=SimpleNamespace(run_id="fixture"), data=SimpleNamespace(metrics={key: remote}))
 

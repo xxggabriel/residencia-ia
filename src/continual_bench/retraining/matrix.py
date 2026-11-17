@@ -73,7 +73,7 @@ class PerformanceMatrix:
         if not observed.any() or np.any(values[observed] < 0) or np.any(values[observed] > 1):
             raise ValueError("matrix errors must be rates in [0, 1]")
         if self.paper_timing:
-            diagonal = self.err.diagonal()[self.offline:]
+            diagonal = self.err.diagonal()[self.offline :]
             if not np.all((diagonal >= 0) & (diagonal <= 1)):
                 raise ValueError("paper timing requires held-out errors for every online candidate")
 
@@ -147,9 +147,13 @@ class PerformanceMatrix:
         def clean(array):
             return [[None if not math.isfinite(v) else float(v) for v in row] for row in array]
 
-        return {"offline": self.offline, "batches": self.batches, "err": clean(self.err),
-                "fit_seconds": [None if not math.isfinite(v) else float(v) for v in self.fit_seconds],
-                "rows": self.rows.tolist()}
+        return {
+            "offline": self.offline,
+            "batches": self.batches,
+            "err": clean(self.err),
+            "fit_seconds": [None if not math.isfinite(v) else float(v) for v in self.fit_seconds],
+            "rows": self.rows.tolist(),
+        }
 
 
 class MatrixView:
@@ -180,8 +184,11 @@ class MatrixView:
 
     def observations(self) -> list[tuple[int, int, float]]:
         """All ``(model, batch, error)`` triples visible now: the UPF regression dataset."""
-        return [(i, j, float(self._matrix.err[i, j]))
-                for i in sorted(self.models) for j in range(self._first_evaluation(i), self.upto + 1)]
+        return [
+            (i, j, float(self._matrix.err[i, j]))
+            for i in sorted(self.models)
+            for j in range(self._first_evaluation(i), self.upto + 1)
+        ]
 
 
 @dataclass
@@ -267,10 +274,14 @@ def build_matrix(
         points.append(_geometry_sample(x[point_index], feature_fill))
         means.append((sums + (len(x) - observed) * feature_fill) / len(x))
         rows.append(len(y))
+
         def score(state, x=x, y=y, query_x=query_x, query_y=query_y):
             loss = np.asarray(learner.losses(state, x, y), dtype=loss_dtype)
-            on_queries = loss if query_x is None else np.asarray(
-                learner.losses(state, query_x, query_y), dtype=loss_dtype)
+            on_queries = (
+                loss
+                if query_x is None
+                else np.asarray(learner.losses(state, query_x, query_y), dtype=loss_dtype)
+            )
             return loss[point_index], float(on_queries.mean())
 
         if workers > 1 and len(states) > 1:
@@ -288,7 +299,8 @@ def build_matrix(
             states.append(candidate)
             errs.append([])
             sub_loss[j, j] = np.asarray(
-                learner.losses(candidate, x[point_index], y[point_index]), dtype=loss_dtype)
+                learner.losses(candidate, x[point_index], y[point_index]), dtype=loss_dtype
+            )
         else:
             seconds.append(float("nan"))
         j += 1
@@ -302,12 +314,19 @@ def build_matrix(
     size = j
     err = np.full((size, size), np.nan)
     for i, row in enumerate(errs):
-        err[i, i + 1:i + 1 + len(row)] = row
+        err[i, i + 1 : i + 1 + len(row)] = row
     if offline is None:
         offline = max(2, size // 3)
     matrix = PerformanceMatrix(
-        err=err, offline=offline, points=points, queries=queries, sub_loss=sub_loss,
-        feature_means=np.asarray(means), fit_seconds=np.asarray(seconds), rows=np.asarray(rows))
+        err=err,
+        offline=offline,
+        points=points,
+        queries=queries,
+        sub_loss=sub_loss,
+        feature_means=np.asarray(means),
+        fit_seconds=np.asarray(seconds),
+        rows=np.asarray(rows),
+    )
     return matrix, states
 
 
@@ -356,7 +375,14 @@ def build_paper_matrix(
             if j > i or i >= offline:
                 err[i, j] = float(np.mean(learner.losses(state, batches[j][2], batches[j][3])))
     matrix = PerformanceMatrix(
-        err=err, offline=offline, points=points, queries=queries, sub_loss=sub_loss,
-        feature_means=np.asarray(means), fit_seconds=np.asarray(seconds),
-        rows=np.asarray([len(b[1]) + len(b[3]) for b in batches]), paper_timing=True)
+        err=err,
+        offline=offline,
+        points=points,
+        queries=queries,
+        sub_loss=sub_loss,
+        feature_means=np.asarray(means),
+        fit_seconds=np.asarray(seconds),
+        rows=np.asarray([len(b[1]) + len(b[3]) for b in batches]),
+        paper_timing=True,
+    )
     return matrix, states

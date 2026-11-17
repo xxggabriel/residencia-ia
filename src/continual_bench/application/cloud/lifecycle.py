@@ -227,8 +227,13 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
                     analytics = ensure_rows(store, final)
             except Exception as error:  # Keep consolidating; the campaign is reported incomplete.
                 analytics = "error"
-                analytics_errors.append({"run_id": unit["run_id"], "error_type": type(error).__name__,
-                                         "message": str(error)[:500]})
+                analytics_errors.append(
+                    {
+                        "run_id": unit["run_id"],
+                        "error_type": type(error).__name__,
+                        "message": str(error)[:500],
+                    }
+                )
             units.append(
                 {
                     "run_id": unit["run_id"],
@@ -328,9 +333,7 @@ def reconcile_campaign(store, jobs, campaign_id: str, reason: str, *, clock=time
     tasks = jobs.task_states(described) if described else {}
     active_jobs = [job["jobId"] for job in described if job["status"] in ACTIVE]
     running_tasks = [
-        arn
-        for arn, state in tasks.items()
-        if state != "STOPPED" and not state.startswith("MISSING")
+        arn for arn, state in tasks.items() if state != "STOPPED" and not state.startswith("MISSING")
     ]
     report = {
         "campaign_id": campaign_id,

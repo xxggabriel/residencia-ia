@@ -47,8 +47,10 @@ def scored_metrics(report, events, probabilities):
     def checked(accumulator, original):
         values = accumulator.values()
         for key in LEGACY_METRICS:
-            equal = values[key] == original[key] if key == "n" else math.isclose(
-                values[key], original[key], rel_tol=0, abs_tol=1e-12
+            equal = (
+                values[key] == original[key]
+                if key == "n"
+                else math.isclose(values[key], original[key], rel_tol=0, abs_tol=1e-12)
             )
             if not equal:
                 raise ValueError(f"recovered offline scores differ from original {key}")
@@ -69,10 +71,17 @@ def scored_metrics(report, events, probabilities):
         windows.append({"end_seq": window["end_seq"], **checked(accumulator, window)})
     if covered != [event["seq"] for event in selected]:
         raise ValueError("historical metric windows do not partition the exact test suffix")
-    predictions = [{"event_id": event["event_id"], "seq": event["seq"], "label": bool(event["y"]),
-                    "probability": probability, "timestamp": event["timestamp"],
-                    "available_at": event["available_at"]}
-                   for event, probability in zip(selected, probabilities)]
+    predictions = [
+        {
+            "event_id": event["event_id"],
+            "seq": event["seq"],
+            "label": bool(event["y"]),
+            "probability": probability,
+            "timestamp": event["timestamp"],
+            "available_at": event["available_at"],
+        }
+        for event, probability in zip(selected, probabilities)
+    ]
     return aggregate, windows, predictions
 
 
@@ -84,9 +93,13 @@ def recover_offline_scores(report, events, receipt, directory, source_report_sha
     helper = Path(__file__).with_name("recover_offline_scores.py")
     helper_sha = hashlib.sha256(helper.read_bytes()).hexdigest()
     selected = selected_events(report, events)
-    request = {"uri": receipt["model_uri"], "model": report["config"]["model"]["name"],
-               "rows": [{"seq": event["seq"], "event_id": event["event_id"], "features": event["x"]}
-                        for event in selected]}
+    request = {
+        "uri": receipt["model_uri"],
+        "model": report["config"]["model"]["name"],
+        "rows": [
+            {"seq": event["seq"], "event_id": event["event_id"], "features": event["x"]} for event in selected
+        ],
+    }
     provenance = {
         "version": "offline-frozen-score-recovery-v1",
         "source_report_sha256": source_report_sha256,
@@ -110,16 +123,28 @@ def recover_offline_scores(report, events, receipt, directory, source_report_sha
         if ledger_path.exists():
             raise ValueError("existing predictions have no authenticated offline recovery cache")
         completed = subprocess.run(
-            [sys.executable, str(helper)], input=json_bytes(request).decode(), text=True,
-            capture_output=True, timeout=300, check=True,
+            [sys.executable, str(helper)],
+            input=json_bytes(request).decode(),
+            text=True,
+            capture_output=True,
+            timeout=300,
+            check=True,
         )
         recovered = json.loads(completed.stdout)
-        cache_raw = json_bytes({**provenance, "result": recovered,
-                                "result_sha256": hashlib.sha256(json_bytes(recovered)).hexdigest()})
-    if (recovered.get("uri") != request["uri"] or recovered.get("model") != request["model"]
-            or recovered.get("fresh_process") is not True
-            or recovered.get("seqs") != [event["seq"] for event in selected]
-            or recovered.get("event_ids") != [event["event_id"] for event in selected]):
+        cache_raw = json_bytes(
+            {
+                **provenance,
+                "result": recovered,
+                "result_sha256": hashlib.sha256(json_bytes(recovered)).hexdigest(),
+            }
+        )
+    if (
+        recovered.get("uri") != request["uri"]
+        or recovered.get("model") != request["model"]
+        or recovered.get("fresh_process") is not True
+        or recovered.get("seqs") != [event["seq"] for event in selected]
+        or recovered.get("event_ids") != [event["event_id"] for event in selected]
+    ):
         raise ValueError("offline recovery response identity or selection differs")
     for field in ("bundled_loader", "bundled_model_code"):
         if Path(recovered[field]).parents[2].name != "code":
@@ -166,7 +191,7 @@ def enriched_report(
         "confusion": "integer counts reconstructed from exact accuracy/F1 and evaluation label supports",
         "retention": "sampled concept probes, not boundary task matrix",
         "unavailable": "shadows, reference models and individual timers were not captured; "
-                       "ranking scores unavailable unless explicitly recovered from frozen offline models",
+        "ranking scores unavailable unless explicitly recovered from frozen offline models",
         "original_report_preserved": True,
         "tool_script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }
@@ -174,7 +199,8 @@ def enriched_report(
         tracking["derivation"]["offline_score_recovery"] = recovery
         tracking["derivation"]["recover_helper_sha256"] = recovery["helper_sha256"]
         tracking["prediction_ledger"] = {
-            "sha256": recovery["prediction_ledger_sha256"], "rows": recovery["rows"],
+            "sha256": recovery["prediction_ledger_sha256"],
+            "rows": recovery["rows"],
             "origin": RECOVERY_ORIGIN,
         }
     for key, value in (artifact_sizes or {}).items():
@@ -208,8 +234,11 @@ def main():
     parser.add_argument("--workers", type=int, default=4, choices=range(1, 9))
     parser.add_argument("--limit", type=int)
     parser.add_argument("--publish", action="store_true")
-    parser.add_argument("--recover-offline-scores", action="store_true",
-                        help="Infer only the exact test suffix of frozen offline Registry models")
+    parser.add_argument(
+        "--recover-offline-scores",
+        action="store_true",
+        help="Infer only the exact test suffix of frozen offline Registry models",
+    )
     args = parser.parse_args()
     source = Path(args.inputs).read_bytes()
     inputs = json.loads(source)
@@ -265,8 +294,9 @@ def main():
                 probabilities, recovery = recover_offline_scores(
                     report, events, record["receipt"], directory, record["sha256"]
                 )
-            enriched = enriched_report(report, events, settings, record.get("artifact_sizes"), job,
-                                       probabilities, recovery)
+            enriched = enriched_report(
+                report, events, settings, record.get("artifact_sizes"), job, probabilities, recovery
+            )
             result = {
                 "run_key": key,
                 "mlflow_run_id": record["receipt"]["mlflow_run_id"],

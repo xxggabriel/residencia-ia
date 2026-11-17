@@ -22,17 +22,31 @@ BLOCKS_PER_PART = 16
 
 class PredictionArchive:
     def __init__(
-        self, directory, classes, dataset_sha256, origin, fading_factor=0.99, threshold=0.5,
-        *, staging=None, resume=None,
+        self,
+        directory,
+        classes,
+        dataset_sha256,
+        origin,
+        fading_factor=0.99,
+        threshold=0.5,
+        *,
+        staging=None,
+        resume=None,
     ):
         self.directory = Path(directory)
         self.classes = classes
         self.threshold = 0.5 if threshold is None else threshold
-        self.schema = pa.schema([
-            ("seq", pa.uint32()), ("event_time_ms", pa.int64()), ("label", pa.uint8()),
-            ("prediction", pa.uint8()), ("holdout", pa.bool_()), ("model_end_seq", pa.uint32()),
-            *((f"p_{i}", pa.float64()) for i in range(len(classes))),
-        ])
+        self.schema = pa.schema(
+            [
+                ("seq", pa.uint32()),
+                ("event_time_ms", pa.int64()),
+                ("label", pa.uint8()),
+                ("prediction", pa.uint8()),
+                ("holdout", pa.bool_()),
+                ("model_end_seq", pa.uint32()),
+                *((f"p_{i}", pa.float64()) for i in range(len(classes))),
+            ]
+        )
         self.writer = None
         self.parts = []
         self.blocks = self.rows = self.part_rows = 0
@@ -52,8 +66,13 @@ class PredictionArchive:
             self.fading_state = resume["fading_state"]
             self.fading_weight = resume["fading_weight"]
             self.fading = resume["fading"]
-        self.manifest = {"version": "zia-predictions-v1", "origin": origin, "classes": classes,
-                         "dataset_sha256": dataset_sha256, "fading_factor": fading_factor}
+        self.manifest = {
+            "version": "zia-predictions-v1",
+            "origin": origin,
+            "classes": classes,
+            "dataset_sha256": dataset_sha256,
+            "fading_factor": fading_factor,
+        }
         if len(classes) == 2:
             self.manifest["decision_threshold"] = self.threshold
 
@@ -64,8 +83,14 @@ class PredictionArchive:
         if self.writer is not None:
             self.writer.close()
             self.writer = None
-            self.parts.append({"file": self.path.name, "rows": self.part_rows,
-                               "bytes": self.path.stat().st_size, "sha256": sha256_file(self.path)})
+            self.parts.append(
+                {
+                    "file": self.path.name,
+                    "rows": self.part_rows,
+                    "bytes": self.path.stat().st_size,
+                    "sha256": sha256_file(self.path),
+                }
+            )
 
     def add(self, start, times, labels, probabilities, holdout, model_end):
         if self.blocks % BLOCKS_PER_PART == 0:
@@ -76,11 +101,20 @@ class PredictionArchive:
             self.part_rows = 0
         n = len(labels)
         predicted = decide(probabilities, self.threshold).astype(np.uint8)
-        self.writer.write_batch(pa.RecordBatch.from_arrays([
-            pa.array(np.arange(start, start + n, dtype=np.uint32)), pa.array(times), pa.array(labels),
-            pa.array(predicted), pa.array(np.full(n, holdout)), pa.array(np.full(n, model_end, np.uint32)),
-            *(pa.array(probabilities[:, i], type=pa.float64()) for i in range(len(self.classes))),
-        ], schema=self.schema))
+        self.writer.write_batch(
+            pa.RecordBatch.from_arrays(
+                [
+                    pa.array(np.arange(start, start + n, dtype=np.uint32)),
+                    pa.array(times),
+                    pa.array(labels),
+                    pa.array(predicted),
+                    pa.array(np.full(n, holdout)),
+                    pa.array(np.full(n, model_end, np.uint32)),
+                    *(pa.array(probabilities[:, i], type=pa.float64()) for i in range(len(self.classes))),
+                ],
+                schema=self.schema,
+            )
+        )
         self.blocks += 1
         self.rows += n
         self.part_rows += n
@@ -95,8 +129,12 @@ class PredictionArchive:
         """Seal the active part so checkpoint files are complete and immutable."""
         self._close_part()
         return {
-            "parts": self.parts, "blocks": self.blocks, "rows": self.rows,
-            "fading_state": self.fading_state, "fading_weight": self.fading_weight, "fading": self.fading,
+            "parts": self.parts,
+            "blocks": self.blocks,
+            "rows": self.rows,
+            "fading_state": self.fading_state,
+            "fading_weight": self.fading_weight,
+            "fading": self.fading,
         }
 
     def __exit__(self, exc_type, _error, _traceback):
@@ -112,9 +150,17 @@ class PredictionArchive:
                         os.link(self.staging / part["file"], target / part["file"])
                 else:
                     self.staging.replace(target)
-                atomic_write(self.directory / INDEX, encoded({
-                    **self.manifest, "rows": self.rows, "parts": self.parts, "fading_accuracy": self.fading,
-                }))
+                atomic_write(
+                    self.directory / INDEX,
+                    encoded(
+                        {
+                            **self.manifest,
+                            "rows": self.rows,
+                            "parts": self.parts,
+                            "fading_accuracy": self.fading,
+                        }
+                    ),
+                )
         finally:
             if self.temp is not None:
                 self.temp.cleanup()
@@ -126,7 +172,10 @@ def prediction_manifest(directory, report):
         return None
     value = json.loads(path.read_bytes())
     expected = report["metrics"]["n"] + report["holdout"]["n"]
-    if (value["dataset_sha256"] != report["contract"]["input"]["sha256"] or value["rows"] != expected
-            or sum(part["rows"] for part in value["parts"]) != expected):
+    if (
+        value["dataset_sha256"] != report["contract"]["input"]["sha256"]
+        or value["rows"] != expected
+        or sum(part["rows"] for part in value["parts"]) != expected
+    ):
         raise ValueError("prediction archive differs from the completed Zia report")
     return value

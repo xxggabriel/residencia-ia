@@ -86,14 +86,16 @@ class ContinualEvaluation:
         seconds = time.perf_counter() - started
         self.reference_train_seconds += seconds
         metadata.update(available=True, train_samples=required, seconds=seconds)
-        self.reference_models.append({
-            "name": name,
-            "task": task,
-            "model": reference,
-            "seq_range": [start, end],
-            "train_samples": required,
-            "seconds": seconds,
-        })
+        self.reference_models.append(
+            {
+                "name": name,
+                "task": task,
+                "model": reference,
+                "seq_range": [start, end],
+                "train_samples": required,
+                "seconds": seconds,
+            }
+        )
         return self._accuracy(reference, self.probes[task]), metadata
 
     def after_label(self, seq, x, y, model):
@@ -112,22 +114,23 @@ class ContinualEvaluation:
         if self.next_seq != self.task_ends[task]:
             return
         accuracies = {
-            str(episode): self._accuracy(model, self.probes[episode])
-            if self.probes.get(episode) else None
+            str(episode): self._accuracy(model, self.probes[episode]) if self.probes.get(episode) else None
             for episode in range(len(self.task_ends))
         }
         start = self.task_ends[task - 1] if task else 0
         single, single_info = self._reference("task_only", task, start, self.next_seq)
         joint, joint_info = self._reference("joint_prefix_one_pass", task, 0, self.next_seq)
-        self.matrix.append({
-            "task": task,
-            "end_seq": seq,
-            "accuracies": accuracies,
-            "joint_accuracy": joint,
-            "single_accuracy": single,
-            "reference_joint": joint_info,
-            "reference_single": single_info,
-        })
+        self.matrix.append(
+            {
+                "task": task,
+                "end_seq": seq,
+                "accuracies": accuracies,
+                "joint_accuracy": joint,
+                "single_accuracy": single,
+                "reference_joint": joint_info,
+                "reference_single": single_info,
+            }
+        )
         values, availability = self._metrics(task)
         self.matrix[-1]["metrics"] = values
         self.matrix[-1]["availability"] = availability
@@ -151,11 +154,13 @@ class ContinualEvaluation:
             forgetting, backward = [], []
             for previous in range(task):
                 current = row["accuracies"][str(previous)]
-                history = [self.matrix[old]["accuracies"][str(previous)]
-                           for old in range(task)]
+                history = [self.matrix[old]["accuracies"][str(previous)] for old in range(task)]
                 first = self.matrix[previous]["accuracies"][str(previous)]
-                forgetting.append(max(history) - current
-                                  if current is not None and all(v is not None for v in history) else None)
+                forgetting.append(
+                    max(history) - current
+                    if current is not None and all(v is not None for v in history)
+                    else None
+                )
                 backward.append(current - first if current is not None and first is not None else None)
             assign("cl_forgetting", forgetting)
             assign("cl_backward_transfer", backward)
@@ -164,9 +169,14 @@ class ContinualEvaluation:
                 learned = self.matrix[previous]["accuracies"][str(previous)]
                 single = self.matrix[previous]["single_accuracy"]
                 forward.append(learned - single if learned is not None and single is not None else None)
-            missing_reference = next((self.matrix[j]["reference_single"]["reason"]
-                                      for j in range(1, task + 1)
-                                      if self.matrix[j]["single_accuracy"] is None), "missing_probe")
+            missing_reference = next(
+                (
+                    self.matrix[j]["reference_single"]["reason"]
+                    for j in range(1, task + 1)
+                    if self.matrix[j]["single_accuracy"] is None
+                ),
+                "missing_probe",
+            )
             assign("cl_forward_transfer", forward, missing_reference)
         else:
             for name in ("cl_forgetting", "cl_backward_transfer", "cl_forward_transfer"):
@@ -177,48 +187,61 @@ class ContinualEvaluation:
             reasons["cl_intransigence"] = None
         else:
             reasons["cl_intransigence"] = row["reference_joint"]["reason"] or "missing_probe"
-        return values, {name: {"available": values[name] is not None, "reason": reasons[name]}
-                        for name in METRICS}
+        return values, {
+            name: {"available": values[name] is not None, "reason": reasons[name]} for name in METRICS
+        }
 
     def report(self):
         """Return JSON-compatible evidence; trained reference objects remain on the instance."""
         values = self.matrix[-1]["metrics"] if self.matrix else dict.fromkeys(METRICS)
-        availability = self.matrix[-1]["availability"] if self.matrix else {
-            name: {"available": False, "reason": "no_completed_tasks"} for name in METRICS
-        }
-        return copy.deepcopy({
-            "schema_version": 1,
-            "matrix": self.matrix,
-            "series": {name: [{"step": row["task"], "value": row["metrics"][name]}
-                              for row in self.matrix] for name in METRICS},
-            "metrics": values,
-            "availability": availability,
-            "released_labels": self.next_seq,
-            "completed_tasks": len(self.matrix),
-            "probe_seconds": self.probe_seconds,
-            "reference_train_seconds": self.reference_train_seconds,
-            "overhead_seconds": self.probe_seconds + self.reference_train_seconds,
-            "reference_train_samples": sum(item["train_samples"] for item in self.reference_models),
-            "contract": {
-                "task_ends": self.task_ends,
-                "task_intervals": "half-open; episode indices distinguish recurring concepts",
-                "matrix_scope": (
-                    "all_declared_synthetic_episode_probes; future scores diagnostic only no adaptation"
-                ),
-                "average_accuracy_scope": "learned episodes only, j <= current task",
-                "reference_budget_per_model": self.reference_budget,
-                "references_enabled": self.references_enabled,
-                "reference_kind": "same-learner task-only and joint-prefix one-pass operational baselines",
-                "reference_budget_scope": "separate from main policy budget; no cumulative reference cap",
-                "forward_transfer": "mean learned-task diagonal minus task-only accuracy, excluding task 0",
-                "forgetting": "past sampled maximum excluding current row minus current accuracy; unclipped",
-                "forgetting_max_scope": (
-                    "all prior rows, including evaluations before the episode was learned"
-                ),
-                "formula_interpretation": (
-                    "Wang 2302.00487v3 Eq.3 literal all-prior-row maximum; "
-                    "extends the earlier triangular accuracy definition with diagnostic future probes"
-                ),
-                "overhead_scope": "probe deepcopy/inference plus reference construction/training",
-            },
-        })
+        availability = (
+            self.matrix[-1]["availability"]
+            if self.matrix
+            else {name: {"available": False, "reason": "no_completed_tasks"} for name in METRICS}
+        )
+        return copy.deepcopy(
+            {
+                "schema_version": 1,
+                "matrix": self.matrix,
+                "series": {
+                    name: [{"step": row["task"], "value": row["metrics"][name]} for row in self.matrix]
+                    for name in METRICS
+                },
+                "metrics": values,
+                "availability": availability,
+                "released_labels": self.next_seq,
+                "completed_tasks": len(self.matrix),
+                "probe_seconds": self.probe_seconds,
+                "reference_train_seconds": self.reference_train_seconds,
+                "overhead_seconds": self.probe_seconds + self.reference_train_seconds,
+                "reference_train_samples": sum(item["train_samples"] for item in self.reference_models),
+                "contract": {
+                    "task_ends": self.task_ends,
+                    "task_intervals": "half-open; episode indices distinguish recurring concepts",
+                    "matrix_scope": (
+                        "all_declared_synthetic_episode_probes; future scores diagnostic only no adaptation"
+                    ),
+                    "average_accuracy_scope": "learned episodes only, j <= current task",
+                    "reference_budget_per_model": self.reference_budget,
+                    "references_enabled": self.references_enabled,
+                    "reference_kind": (
+                        "same-learner task-only and joint-prefix one-pass operational baselines"
+                    ),
+                    "reference_budget_scope": "separate from main policy budget; no cumulative reference cap",
+                    "forward_transfer": (
+                        "mean learned-task diagonal minus task-only accuracy, excluding task 0"
+                    ),
+                    "forgetting": (
+                        "past sampled maximum excluding current row minus current accuracy; unclipped"
+                    ),
+                    "forgetting_max_scope": (
+                        "all prior rows, including evaluations before the episode was learned"
+                    ),
+                    "formula_interpretation": (
+                        "Wang 2302.00487v3 Eq.3 literal all-prior-row maximum; "
+                        "extends the earlier triangular accuracy definition with diagnostic future probes"
+                    ),
+                    "overhead_scope": "probe deepcopy/inference plus reference construction/training",
+                },
+            }
+        )

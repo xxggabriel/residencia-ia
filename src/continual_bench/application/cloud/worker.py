@@ -207,7 +207,14 @@ def zia_snapshot(store, unit):
 
 
 def execute_zia(
-    unit: RunUnit, store, workdir: Path, log, *, stop_requested=None, progress=None, checkpoint=None,
+    unit: RunUnit,
+    store,
+    workdir: Path,
+    log,
+    *,
+    stop_requested=None,
+    progress=None,
+    checkpoint=None,
     snapshot_manifest=None,
 ) -> dict:
     import yaml
@@ -311,14 +318,17 @@ def stop_zia_tracking(tracker, log):
 def complete_zia_tracking(tracker, store, final, output, report, adapted):
     if hasattr(tracker, "bind_attempt") and not final["attempt"].get("worker_id"):
         tracker.bind_attempt(final["attempt"]["attempt_key"])
-    result = tracker.publish_run_report(
-        report,
-        adapted=adapted,
-        output_dir=output,
-        store=store,
-        outputs_uri=final["outputs_uri"],
-        model_package_arn=final["model"]["model_package_arn"],
-    ) or {}
+    result = (
+        tracker.publish_run_report(
+            report,
+            adapted=adapted,
+            output_dir=output,
+            store=store,
+            outputs_uri=final["outputs_uri"],
+            model_package_arn=final["model"]["model_package_arn"],
+        )
+        or {}
+    )
     run_id = result.get("mlflow_run_id")
     artifacts = result.get("artifacts_uploaded") or {}
     children = result.get("child_runs") or []
@@ -339,10 +349,18 @@ def complete_zia_tracking(tracker, store, final, output, report, adapted):
         mlflow_experiment_id=result.get("mlflow_experiment_id"),
         mlflow_artifact_uri=result.get("artifact_uri"),
     )
-    links.update({key: result[key] for key in (
-        "registered_model", "registered_model_version",
-        "registered_family_model", "registered_family_version",
-    ) if result.get(key)})
+    links.update(
+        {
+            key: result[key]
+            for key in (
+                "registered_model",
+                "registered_model_version",
+                "registered_family_model",
+                "registered_family_version",
+            )
+            if result.get(key)
+        }
+    )
     final["tracking"] = {
         "required": True,
         "complete": True,
@@ -368,7 +386,12 @@ def execute_matrix_case(store, unit: RunUnit, workdir: Path, *, progress=None, c
             store, unit.labels["dataset"], unit.params["source_sha256"], workdir / "source", config, evaluator
         )
     report = _execute_case(
-        config, output, str(workdir / "cache"), None, source=source, progress=progress,
+        config,
+        output,
+        str(workdir / "cache"),
+        None,
+        source=source,
+        progress=progress,
         **({"checkpoint": checkpoint} if checkpoint is not None else {}),
     )
     directory = output / evaluator / report["run_key"]
@@ -452,16 +475,26 @@ def reuse_final(store, final_key, status_key, status, log, clock):
     except Exception as error:  # Repair failed: report it, keep the final manifest untouched.
         log.error("analytics repair failed", exc_info=True)
         put_json(
-            store, status_key,
-            {**status, "state": "REUSED_ANALYTICS_FAILED", "finished_at": clock(),
-             "diagnostic": {"error_type": type(error).__name__, "message": str(error)[:2000]}},
+            store,
+            status_key,
+            {
+                **status,
+                "state": "REUSED_ANALYTICS_FAILED",
+                "finished_at": clock(),
+                "diagnostic": {"error_type": type(error).__name__, "message": str(error)[:2000]},
+            },
         )
         return EXIT_FAILED
     put_json(
         store,
         status_key,
-        {**status, "state": "REUSED", "finished_at": clock(), "final_uri": store.uri(final_key),
-         "analytics": analytics},
+        {
+            **status,
+            "state": "REUSED",
+            "finished_at": clock(),
+            "final_uri": store.uri(final_key),
+            "analytics": analytics,
+        },
     )
     log.info("run already final; reusing published evidence", extra={"fields": {"analytics": analytics}})
     return EXIT_OK
@@ -568,7 +601,9 @@ def run_unit(
     def bind_spot_tracking(active):
         if active is not None and spot:
             active.bind_spot_attempt(
-                attempt_key, instance_id=worker_id, attempt=spot.attempt,
+                attempt_key,
+                instance_id=worker_id,
+                attempt=spot.attempt,
                 resumed_checkpoint=status.get("resumed_checkpoint"),
                 previous_attempt_key=status.get("previous_attempt_key"),
                 recovery_reason=status.get("recovery_reason"),
@@ -577,7 +612,9 @@ def run_unit(
     def record_spot_tracking(state, reason=None):
         if active_tracker is not None and spot:
             return active_tracker.record_spot_attempt(
-                state, reason=reason, checkpoint=checkpoint.receipt if checkpoint else None,
+                state,
+                reason=reason,
+                checkpoint=checkpoint.receipt if checkpoint else None,
             )
         return True
 
@@ -588,7 +625,11 @@ def run_unit(
             snapshot_manifest = None
             if resumable:
                 spot = SpotAttempt(
-                    store, unit, worker_id, attempt_key, stop_requested=lambda: sigterm_handler.received,
+                    store,
+                    unit,
+                    worker_id,
+                    attempt_key,
+                    stop_requested=lambda: sigterm_handler.received,
                 )
                 try:
                     grant = spot.acquire()
@@ -608,7 +649,12 @@ def run_unit(
                     check_stop()
                     return reuse_final(store, final_key, status_key, status, log, clock)
                 checkpoint = SpotCheckpoint(
-                    store, unit, workdir / "run", spot.attempt, requested=stop_requested, logger=log,
+                    store,
+                    unit,
+                    workdir / "run",
+                    spot.attempt,
+                    requested=stop_requested,
+                    logger=log,
                     interval=float(env.get("BENCH_CHECKPOINT_INTERVAL_SECONDS", "30")),
                 )
                 if store.head(pending_key) is not None:
@@ -644,7 +690,11 @@ def run_unit(
                         {"checkpoint": checkpoint, "snapshot_manifest": snapshot_manifest} if spot else {}
                     )
                     outcome = execute_zia(
-                        unit, store, workdir, log, stop_requested=stop_requested,
+                        unit,
+                        store,
+                        workdir,
+                        log,
+                        stop_requested=stop_requested,
                         progress=live_progress if callable(callback) else None,
                         **options,
                     )
@@ -663,7 +713,11 @@ def run_unit(
                         matrix_tracker.start()
                     active_tracker = matrix_tracker
                     outcome = execute_matrix_case(
-                        store, unit, workdir, progress=matrix_tracker.metrics, **options,
+                        store,
+                        unit,
+                        workdir,
+                        progress=matrix_tracker.metrics,
+                        **options,
                     )
                 elif not resuming:
                     outcome = execute_matrix_case(store, unit, workdir, **options)
@@ -687,10 +741,18 @@ def run_unit(
             "evaluation_seconds": evaluation_seconds,
         }
         if spot:
-            final["attempt"].update({name: status.get(name) for name in (
-                "worker_id", "spot_attempt", "previous_attempt_key", "recovery_reason",
-                "resumed_checkpoint",
-            )})
+            final["attempt"].update(
+                {
+                    name: status.get(name)
+                    for name in (
+                        "worker_id",
+                        "spot_attempt",
+                        "previous_attempt_key",
+                        "recovery_reason",
+                        "resumed_checkpoint",
+                    )
+                }
+            )
             final["attempt"]["checkpoint"] = checkpoint.receipt
         if unit.kind == "zia" and not resuming:
             report, output = outcome["report"], outcome["output"]
@@ -797,9 +859,15 @@ def run_unit(
                     "tracking": {"required": tracking_required, "complete": False},
                 }
             )
-            final.update(stage_publication(
-                store, outcome["output"], prefix, checkpoint, check_stop=check_stop if spot else None,
-            ))
+            final.update(
+                stage_publication(
+                    store,
+                    outcome["output"],
+                    prefix,
+                    checkpoint,
+                    check_stop=check_stop if spot else None,
+                )
+            )
             if "training_history" in report:
                 final["training_history_uri"] = f"{outputs_uri}/{relative_evidence}/training-history.json"
         if publication_required and not resuming:
@@ -823,19 +891,26 @@ def run_unit(
                 publication_root = workdir / "publication"
                 publication_root.mkdir(parents=True, exist_ok=True)
                 checkpoint.restore_files(
-                    final["publication_files"], publication_root, check_stop=check_stop,
+                    final["publication_files"],
+                    publication_root,
+                    check_stop=check_stop,
                 )
             else:
                 publication_root = outcome["output"]
             final.pop("publication_files")
             published = final["published"]
             archived_prefix = layout.attempt_prefix(
-                unit.campaign_id, unit.run_id, final["attempt"]["attempt_key"],
+                unit.campaign_id,
+                unit.run_id,
+                final["attempt"]["attempt_key"],
             )
             if published["prefix"] != archived_prefix or final["outputs_uri"] != store.uri(archived_prefix):
                 raise ContractError("Archived evidence is outside its campaign attempt")
             replicated = publish_directory(
-                store, publication_root, archived_prefix, check_stop=check_stop,
+                store,
+                publication_root,
+                archived_prefix,
+                check_stop=check_stop,
             )
             if replicated != published:
                 raise TrackingPublicationError("Restored files differ from the publication receipt")
@@ -870,7 +945,10 @@ def run_unit(
                 if spot:
                     spot.check_publication(strict=True)
                 model_package = registry(
-                    unit, report, metadata, final["model"]["archive_uri"],
+                    unit,
+                    report,
+                    metadata,
+                    final["model"]["archive_uri"],
                     {"snapshot_id": final["snapshot"]["id"]},
                 )
                 if not model_package or not model_package.get("model_package_arn"):
@@ -907,14 +985,21 @@ def run_unit(
                     matrix_tracker.start_live()
                 else:
                     matrix_tracker = MatrixMlflowRun(
-                        unit, archived["attempt_key"], archived["job_id"], tracking_uri, log,
+                        unit,
+                        archived["attempt_key"],
+                        archived["job_id"],
+                        tracking_uri,
+                        log,
                     )
                 active_tracker = matrix_tracker
             try:
                 if spot:
                     spot.check_publication(strict=True)
                 receipt = matrix_tracker.publish_training_evidence(
-                    report, directory, store=store, headline=final["metrics"],
+                    report,
+                    directory,
+                    store=store,
+                    headline=final["metrics"],
                     outputs_uri=final["outputs_uri"],
                 )
                 matrix_tracker.finish_publication()
@@ -937,7 +1022,9 @@ def run_unit(
             if not record_spot_tracking("SUCCEEDED"):
                 raise TrackingPublicationError("Could not record the completed Spot attempt in MLflow")
             final["publication_attempt"] = {
-                "attempt_key": attempt_key, "worker_id": worker_id, "attempt": spot.attempt,
+                "attempt_key": attempt_key,
+                "worker_id": worker_id,
+                "attempt": spot.attempt,
             }
             spot.check_publication(strict=True)
         try:
@@ -1042,8 +1129,10 @@ def run_unit(
         }
         log.error("run failed", exc_info=True, extra={"fields": {"exit_code": code}})
         if (
-            active_tracker is not None and hasattr(active_tracker, "mark_failed")
-            and not spot and not sigterm_handler.received
+            active_tracker is not None
+            and hasattr(active_tracker, "mark_failed")
+            and not spot
+            and not sigterm_handler.received
         ):
             try:
                 active_tracker.mark_failed(str(error)[:1000])
@@ -1069,8 +1158,11 @@ def run_unit(
                 "finished_at": clock(),
                 "wall_seconds": time.monotonic() - started,
                 "diagnostic": diagnostic,
-                **({"interruption_reason": reason, "checkpoint": checkpoint.receipt if checkpoint else None}
-                   if spot else {}),
+                **(
+                    {"interruption_reason": reason, "checkpoint": checkpoint.receipt if checkpoint else None}
+                    if spot
+                    else {}
+                ),
             },
         )
         if spot and not isinstance(error, SpotGrantError):

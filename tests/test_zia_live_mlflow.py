@@ -4,8 +4,12 @@ from continual_bench.infrastructure.aws.mlflow_tracking import SageMakerMlflowTr
 
 def test_live_progress_and_final_evidence_share_the_parent(monkeypatch):
     tracker = SageMakerMlflowTracker(
-        tracking_uri="http://mlflow.example", dataset="ecommerce", policy="online",
-        model_name="return-booster", run_id="benchmark", attempt_key="batch-1",
+        tracking_uri="http://mlflow.example",
+        dataset="ecommerce",
+        policy="online",
+        model_name="return-booster",
+        run_id="benchmark",
+        attempt_key="batch-1",
     )
     requests = []
 
@@ -39,8 +43,9 @@ def test_live_progress_and_final_evidence_share_the_parent(monkeypatch):
     assert result["published"] and result["mlflow_run_id"] == "parent"
     assert sum(path.endswith("/runs/create") for path, _ in requests) == 1
     assert all(data["run_id"] == "parent" for _, data in requests if data and "run_id" in data)
-    points = [(p["key"], p["step"], p["value"]) for _, data in requests
-              for p in (data or {}).get("metrics", [])]
+    points = [
+        (p["key"], p["step"], p["value"]) for _, data in requests for p in (data or {}).get("metrics", [])
+    ]
     assert [point for point in points if point[0].startswith("progress/")] == [
         ("progress/rows_processed", 10, 10.0),
         ("progress/rows_processed", 13, 13.0),
@@ -54,8 +59,12 @@ def test_live_progress_and_final_evidence_share_the_parent(monkeypatch):
 
 def test_progress_transport_failure_uses_the_next_snapshot(monkeypatch):
     tracker = SageMakerMlflowTracker(
-        tracking_uri="http://mlflow.example", dataset="ecommerce", policy="online",
-        model_name="return-booster", run_id="benchmark", attempt_key="batch-1",
+        tracking_uri="http://mlflow.example",
+        dataset="ecommerce",
+        policy="online",
+        model_name="return-booster",
+        run_id="benchmark",
+        attempt_key="batch-1",
     )
     tracker.mlflow_run_id = "parent"
     steps = []

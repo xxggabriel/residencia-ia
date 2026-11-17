@@ -61,7 +61,7 @@ def _cara_labels(name, points, seed):
     radii = (0.15, 0.2, 0.25, 0.3)
 
     def inside(x, concept):
-        return ((x[:, 0] - centres[concept]) ** 2 + (x[:, 1] - 0.5) ** 2 <= radii[concept] ** 2)
+        return (x[:, 0] - centres[concept]) ** 2 + (x[:, 1] - 0.5) ** 2 <= radii[concept] ** 2
 
     labels = []
     for t, x in enumerate(points):
@@ -130,7 +130,7 @@ def electricity_batches(path: str | Path, size: int = 2000):
         labels.append(1 if fields[8].strip().upper() == "UP" else 0)
     x, y = np.asarray(rows), np.asarray(labels, dtype=np.int64)
     count = len(y) // size
-    return [(x[i * size:(i + 1) * size], y[i * size:(i + 1) * size]) for i in range(count)]
+    return [(x[i * size : (i + 1) * size], y[i * size : (i + 1) * size]) for i in range(count)]
 
 
 def _cached(cache: Path, build):
@@ -145,7 +145,7 @@ def _cached(cache: Path, build):
 
 def _chunks(x, y, n_batches):
     size = len(y) // n_batches
-    return [(x[i * size:(i + 1) * size], y[i * size:(i + 1) * size]) for i in range(n_batches)]
+    return [(x[i * size : (i + 1) * size], y[i * size : (i + 1) * size]) for i in range(n_batches)]
 
 
 def covertype_arrays(path: str | Path):
@@ -197,8 +197,11 @@ def airlines_arrays(path: str | Path, *, use_disk_cache: bool = True):
             values = []
             for column in columns:
                 value = row[column]
-                values.append(float(codes[column].setdefault(value, len(codes[column])))
-                              if column in codes else float(value))
+                values.append(
+                    float(codes[column].setdefault(value, len(codes[column])))
+                    if column in codes
+                    else float(value)
+                )
             rows.append(values)
         return np.asarray(rows, dtype=np.float32), np.asarray(labels, dtype=np.int64)
 
@@ -212,8 +215,10 @@ def airlines_batches(path: str | Path, n_batches: int = 100):
 
 def windowed_batches(x, y, size: int, count: int, start: int):
     """``count`` consecutive batches of ``size`` rows beginning at batch ``start`` (UPF trial windows)."""
-    return [(x[(start + i) * size:(start + i + 1) * size], y[(start + i) * size:(start + i + 1) * size])
-            for i in range(count)]
+    return [
+        (x[(start + i) * size : (start + i + 1) * size], y[(start + i) * size : (start + i + 1) * size])
+        for i in range(count)
+    ]
 
 
 def cara_real_batches(name: str, path: str | Path, n_batches: int = 100):
@@ -228,12 +233,14 @@ def cara_real_batches(name: str, path: str | Path, n_batches: int = 100):
     if name == "covertype":
         # load_svmlight_file opens .bz2 transparently when given a filename.
         x, y = load_svmlight_file(str(path))
-        return list(zip(np.array_split(x.toarray(), n_batches), np.array_split(y - 1, n_batches),
-                        strict=True))
+        return list(
+            zip(np.array_split(x.toarray(), n_batches), np.array_split(y - 1, n_batches), strict=True)
+        )
     with path.open(newline="") as source:
         reader = csv.reader(source)
         header = next(reader)
         rows = list(reader)
+
     def column(index):
         values = [row[index] for row in rows]
         try:
@@ -259,4 +266,4 @@ def cara_real_batches(name: str, path: str | Path, n_batches: int = 100):
     x = hstack([OneHotEncoder().fit_transform(categories), numerical]).tocsr()
     x = MaxAbsScaler().fit_transform(x)
     size = len(y) // n_batches + 1
-    return [(x[i * size:(i + 1) * size], y[i * size:(i + 1) * size]) for i in range(n_batches)]
+    return [(x[i * size : (i + 1) * size], y[i * size : (i + 1) * size]) for i in range(n_batches)]

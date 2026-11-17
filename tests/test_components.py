@@ -95,8 +95,9 @@ def test_policy_factory_returns_one_strategy_per_kind():
 @pytest.mark.parametrize("family", ["linear_regression", "hoeffding_tree", "knn"])
 def test_typed_regression_runs_with_any_regression_family(tmp_path, family):
     source = make_source(default_registry(), DatasetConfig(name="friedman_drift", samples=200, label_delay=2))
-    report = run_typed(source, tmp_path, policy="periodic", every=40, max_samples=200,
-                       model={"name": family, "params": {}})
+    report = run_typed(
+        source, tmp_path, policy="periodic", every=40, max_samples=200, model={"name": family, "params": {}}
+    )
     assert report["complete"] and report["config"]["model"]["family"] == family
     assert report["metrics"]["train"]["n"] == 180 and report["metrics"]["train"]["mae"] >= 0
 
@@ -136,6 +137,7 @@ def test_checkpoint_from_an_older_package_layout_is_a_contract_mismatch(tmp_path
 def test_example_plugin_regression_model_runs_in_the_typed_evaluator(tmp_path):
     registry = default_registry(("examples.custom_plugin:register",))
     source = make_source(registry, DatasetConfig(name="friedman_drift", samples=120))
-    report = run_typed(source, tmp_path, max_samples=120, model={"name": "running_mean"},
-                       models=registry.models)
+    report = run_typed(
+        source, tmp_path, max_samples=120, model={"name": "running_mean"}, models=registry.models
+    )
     assert report["config"]["model"]["family"] == "running_mean" and report["metrics"]["train"]["mae"] > 0

@@ -64,8 +64,13 @@ def acquire_asset(cache, asset, *, download=False, opener=None, timeout=60, max_
     """
     url = urllib.parse.urlsplit(asset["url"])
     filename = asset["filename"]
-    if (url.scheme != "https" or url.username or url.password
-            or Path(filename).name != filename or filename in {"", ".", ".."}):
+    if (
+        url.scheme != "https"
+        or url.username
+        or url.password
+        or Path(filename).name != filename
+        or filename in {"", ".", ".."}
+    ):
         raise ValueError("image asset requires HTTPS without credentials and a plain filename")
     if not 0 < asset["bytes"] <= 180_000_000 or len(asset["sha256"]) != 64:
         raise ValueError("image asset exceeds the pinned admission budget")
@@ -84,9 +89,7 @@ def acquire_asset(cache, asset, *, download=False, opener=None, timeout=60, max_
         try:
             digest, count = hashlib.sha256(), 0
             open_url = opener or urllib.request.build_opener(_HTTPSRedirect()).open
-            with os.fdopen(descriptor, "wb") as output, open_url(
-                request, timeout=timeout
-            ) as response:
+            with os.fdopen(descriptor, "wb") as output, open_url(request, timeout=timeout) as response:
                 final_url = urllib.parse.urlsplit(response.geturl())
                 if final_url.scheme != "https" or final_url.username or final_url.password:
                     raise ValueError("image download redirected to an unsafe URL")
@@ -125,8 +128,13 @@ def read_mnist(images, labels, count):
             raise ValueError("truncated MNIST IDX header")
         magic, image_count, rows, columns = struct.unpack(">IIII", image_header)
         label_magic, label_count = struct.unpack(">II", label_header)
-        if (magic != 2051 or label_magic != 2049 or image_count != label_count
-                or (rows, columns) != (28, 28) or not 0 < count <= image_count):
+        if (
+            magic != 2051
+            or label_magic != 2049
+            or image_count != label_count
+            or (rows, columns) != (28, 28)
+            or not 0 < count <= image_count
+        ):
             raise ValueError("MNIST IDX schema/count mismatch")
         for index in range(count):
             pixels, label = image_stream.read(784), label_stream.read(1)
@@ -138,8 +146,11 @@ def read_mnist(images, labels, count):
 def read_cifar(archive_path, dataset, split, count):
     """Read binary members without extraction or deserializing Python objects."""
     if dataset == "cifar10":
-        members = ([f"cifar-10-batches-bin/data_batch_{i}.bin" for i in range(1, 6)]
-                   if split == "train" else ["cifar-10-batches-bin/test_batch.bin"])
+        members = (
+            [f"cifar-10-batches-bin/data_batch_{i}.bin" for i in range(1, 6)]
+            if split == "train"
+            else ["cifar-10-batches-bin/test_batch.bin"]
+        )
         record_size, label_offset, classes = 3073, 0, 10
     elif dataset == "cifar100":
         members = [f"cifar-100-binary/{split}.bin"]
@@ -208,8 +219,9 @@ def prepare_image_dataset(name, cache, limit=100, seed=42, *, download=False):
     for split, count in split_counts.items():
         if dataset == "mnist":
             prefix = "train" if split == "train" else "t10k"
-            iterator = read_mnist(paths[f"{prefix}-images-idx3-ubyte.gz"],
-                                  paths[f"{prefix}-labels-idx1-ubyte.gz"], count)
+            iterator = read_mnist(
+                paths[f"{prefix}-images-idx3-ubyte.gz"], paths[f"{prefix}-labels-idx1-ubyte.gz"], count
+            )
         else:
             iterator = read_cifar(next(iter(paths.values())), dataset, split, count)
         for index, pixels, label in iterator:
@@ -221,32 +233,57 @@ def prepare_image_dataset(name, cache, limit=100, seed=42, *, download=False):
                 order = range(dimension)
             raw_identity = [dataset, [a["sha256"] for a in assets], split, index]
             identity = hashlib.sha256(_json(raw_identity)).hexdigest()
-            rows.append((task, split, index, identity,
-                         {f"pixel_{i:04d}": pixels[j] / 255.0 for i, j in enumerate(order)}, str(label)))
+            rows.append(
+                (
+                    task,
+                    split,
+                    index,
+                    identity,
+                    {f"pixel_{i:04d}": pixels[j] / 255.0 for i, j in enumerate(order)},
+                    str(label),
+                )
+            )
     rows.sort(key=lambda r: (r[0], r[1] != "train", r[2]))
-    samples = [TaskSample(identity, seq, seq, seq, x, label, task_id=task,
-                          split=split, group=f"{dataset}:{split}:{index}")
-               for seq, (task, split, index, identity, x, label) in enumerate(rows)]
+    samples = [
+        TaskSample(
+            identity, seq, seq, seq, x, label, task_id=task, split=split, group=f"{dataset}:{split}:{index}"
+        )
+        for seq, (task, split, index, identity, x, label) in enumerate(rows)
+    ]
     if len(samples) != limit or len({s.sample_id for s in samples}) != limit:
         raise ValueError("prepared image budget or original-image uniqueness violated")
     descriptor = {
-        "adapter": "raw-image-protocol-v1", "name": name, "dataset": dataset,
-        "task": "multiclass", "samples": limit, "seed": seed,
-        "source": specification["source"], "license": specification["license"],
-        "license_reference": specification["license_reference"], "raw_assets": assets,
+        "adapter": "raw-image-protocol-v1",
+        "name": name,
+        "dataset": dataset,
+        "task": "multiclass",
+        "samples": limit,
+        "seed": seed,
+        "source": specification["source"],
+        "license": specification["license"],
+        "license_reference": specification["license_reference"],
+        "raw_assets": assets,
         "source_version": "original fixed IDX/binary release, pinned SHA-256 archives",
         "class_order": list(range(100 if dataset == "cifar100" else 10)),
-        "split_counts": split_counts, "selection": "unshuffled prefix within each official split",
+        "split_counts": split_counts,
+        "selection": "unshuffled prefix within each official split",
         "order": "artificial task, official split, original row index",
         "timestamp_kind": "artificial ordinal task replay; not collection time",
-        "natural_chronology": False, "changepoints": None,
+        "natural_chronology": False,
+        "changepoints": None,
         "schema": {"features": dimension, "pixel_range": [0, 1], "target": "class string"},
         "preprocessing": "raw uint8 pixels /255; no fit, resize, augmentation or pretrained features",
-        "protocol": ({"kind": "disjoint_budgeted_permuted_mnist", "tasks": 2,
-                      "task0": "identity", "task1_permutation": permutation,
-                      "deviation": "100 distinct originals partitioned across tasks; no full-base repetition"}
-                     if name == "permuted_mnist" else
-                     {"kind": "class_incremental", "classes_per_task": 10 if dataset == "cifar100" else 2}),
+        "protocol": (
+            {
+                "kind": "disjoint_budgeted_permuted_mnist",
+                "tasks": 2,
+                "task0": "identity",
+                "task1_permutation": permutation,
+                "deviation": "100 distinct originals partitioned across tasks; no full-base repetition",
+            }
+            if name == "permuted_mnist"
+            else {"kind": "class_incremental", "classes_per_task": 10 if dataset == "cifar100" else 2}
+        ),
         "coverage_note": "small prefixes need not cover every class/task; no full CL reproduction claimed",
     }
     descriptor["version"] = hashlib.sha256(_json(descriptor)).hexdigest()

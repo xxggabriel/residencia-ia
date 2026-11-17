@@ -61,15 +61,19 @@ def cluster(tmp_path, monkeypatch):
             if request.data is not None:
                 payload = json.loads(request.data)
                 code, result = backend.submit_job(
-                    root, payload["identity"], payload,
+                    root,
+                    payload["identity"],
+                    payload,
                     lambda value: perform(index, root, value),
-                    key_field="request_key" if url.path == "/epoch-runs" else "run_key")
+                    key_field="request_key" if url.path == "/epoch-runs" else "run_key",
+                )
             else:
                 path = root / url.path.rsplit("/", 1)[-1] / "job.json"
                 code, result = (200, json.loads(path.read_text())) if path.exists() else (404, {})
         if code >= 400:
-            raise urllib.error.HTTPError(request.full_url, code, "fixture", {},
-                                         io.BytesIO(json.dumps(result).encode()))
+            raise urllib.error.HTTPError(
+                request.full_url, code, "fixture", {}, io.BytesIO(json.dumps(result).encode())
+            )
         response = Response(json.dumps(result).encode())
         response.status = code
         return response
@@ -84,8 +88,14 @@ def cluster(tmp_path, monkeypatch):
 def test_eight_parallel_jobs_use_eight_executors_and_reject_a_ninth(cluster):
     pool, backends, started, release, peak, root = cluster
     with ThreadPoolExecutor(max_workers=8) as client:
-        requests = [client.submit(pool.submit, "/epoch-runs" if i % 2 else "/runs",
-                                  json.dumps({"identity": f"{i:024x}"}).encode()) for i in range(8)]
+        requests = [
+            client.submit(
+                pool.submit,
+                "/epoch-runs" if i % 2 else "/runs",
+                json.dumps({"identity": f"{i:024x}"}).encode(),
+            )
+            for i in range(8)
+        ]
         assert all(result.result()[0] == 202 for result in requests)
     assert all(event.wait(2) for event in started)
     code, health = pool.get("/health")
@@ -133,6 +143,7 @@ def test_failed_job_releases_its_slot_and_reports_failure(cluster):
     backend.SLOTS.release()
     # The job claim is no longer held after failure.
     from continual_bench.infrastructure.storage import run_lock
+
     with run_lock(root / ".job-claims", identity):
         pass
 
@@ -147,7 +158,7 @@ def test_timeout_after_submission_is_not_resent_to_another_worker():
         return Response(b'{"queue":0,"active":0,"concurrency":1}')
 
     pool = WorkerPool([f"http://slot-{i}" for i in range(8)], opener)
-    assert pool.submit("/runs", b'{}')[0] == 503
+    assert pool.submit("/runs", b"{}")[0] == 503
     assert len(posts) == 1
 
 
@@ -168,7 +179,7 @@ def test_readiness_requires_all_eight_workers_and_status_can_fail_over(cluster):
     assert pool.get("/ready")[0] == 503
     assert pool.get("/health")[1]["concurrency"] == 7
     assert pool.get("/runs/" + "c" * 24)[0] == 200
-    assert pool.get("/unexpected")[0] == pool.submit("/unexpected", b'{}')[0] == 404
+    assert pool.get("/unexpected")[0] == pool.submit("/unexpected", b"{}")[0] == 404
 
 
 @pytest.mark.parametrize("count", [1, 7, 9])

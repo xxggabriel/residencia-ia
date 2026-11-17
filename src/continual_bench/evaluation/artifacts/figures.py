@@ -504,13 +504,19 @@ def epoch_figures(report) -> list[Figure]:
 SYSTEM_FIGURES = {
     "cpu": ("CPU (%)", ("cpu_utilization_percentage", "process_cpu_utilization_percentage"), "%"),
     "container_cpu_percentage": (
-        "CPU do container (% da cota)", ("container_cpu_utilization_percentage",), "%",
+        "CPU do container (% da cota)",
+        ("container_cpu_utilization_percentage",),
+        "%",
     ),
     "container_cpu_vcpus": (
-        "CPU do container (vCPU)", ("container_cpu_usage_vcpus", "container_cpu_limit_vcpus"), "vCPU",
+        "CPU do container (vCPU)",
+        ("container_cpu_usage_vcpus", "container_cpu_limit_vcpus"),
+        "vCPU",
     ),
     "container_memory_percentage": (
-        "RAM do container (% do limite)", ("container_memory_usage_percentage",), "%",
+        "RAM do container (% do limite)",
+        ("container_memory_usage_percentage",),
+        "%",
     ),
     "container_memory_megabytes": (
         "RAM do container (MiB)",
@@ -568,31 +574,79 @@ def retraining_figures(analysis) -> list[Figure]:
     rules, alphas, setup = analysis["rules"], analysis["alphas"], analysis["setup"]
 
     def curve(key):
-        return [{"name": rule["label"], "points": [[c["alpha"], c[key]] for c in rule["curve"]]}
-                for rule in rules.values()]
+        return [
+            {"name": rule["label"], "points": [[c["alpha"], c[key]] for c in rule["curve"]]}
+            for rule in rules.values()
+        ]
 
     figures = [
-        _line("retraining", "cost_vs_alpha", "Custo Ĉα(θ) × α", curve("cost"),
-              x_label="α (custo de retreino relativo)", y_label="Ĉα(θ)"),
-        _line("retraining", "retrains_vs_alpha", "Número de retreinos × α", curve("retrains"),
-              x_label="α", y_label="retreinos"),
-        _line("retraining", "accuracy_vs_alpha", "Acurácia média online × α", curve("average_accuracy"),
-              x_label="α", y_label="acurácia média"),
-        _line("retraining", "scpe_vs_alpha", "SCPE (% sobre o Oracle) × α", curve("scpe"),
-              x_label="α", y_label="SCPE %"),
-        _line("retraining", "strategy_cost_vs_alpha", "Custo da estratégia (CARA) × κ=α",
-              curve("strategy_cost"), x_label="κ = α", y_label="custo da estratégia"),
-        _line("retraining", "retrain_bound", "Cotas de retreino (Proposição 3.1)",
-              [s for s in curve("cost") if s["name"] in {"UPF", "oracle"}],
-              x_label="α", y_label="Ĉα(θ)",
-              markers=[{"x": a, "kind": "bound", "label": label}
-                       for label, a in setup["bound_alphas"].items()
-                       if a is not None and a <= max(alphas) * 1.5]),
-        _line("retraining", "cumulative_strategy_cost", "Custo acumulado da estratégia online",
-              [{"name": rules[name]["label"],
-                "points": [[setup["offline_batches"] + k, v] for k, v in enumerate(series)]}
-               for name, series in analysis["cumulative_strategy_cost"].items()],
-              x_label="lote online", y_label="custo acumulado"),
+        _line(
+            "retraining",
+            "cost_vs_alpha",
+            "Custo Ĉα(θ) × α",
+            curve("cost"),
+            x_label="α (custo de retreino relativo)",
+            y_label="Ĉα(θ)",
+        ),
+        _line(
+            "retraining",
+            "retrains_vs_alpha",
+            "Número de retreinos × α",
+            curve("retrains"),
+            x_label="α",
+            y_label="retreinos",
+        ),
+        _line(
+            "retraining",
+            "accuracy_vs_alpha",
+            "Acurácia média online × α",
+            curve("average_accuracy"),
+            x_label="α",
+            y_label="acurácia média",
+        ),
+        _line(
+            "retraining",
+            "scpe_vs_alpha",
+            "SCPE (% sobre o Oracle) × α",
+            curve("scpe"),
+            x_label="α",
+            y_label="SCPE %",
+        ),
+        _line(
+            "retraining",
+            "strategy_cost_vs_alpha",
+            "Custo da estratégia (CARA) × κ=α",
+            curve("strategy_cost"),
+            x_label="κ = α",
+            y_label="custo da estratégia",
+        ),
+        _line(
+            "retraining",
+            "retrain_bound",
+            "Cotas de retreino (Proposição 3.1)",
+            [s for s in curve("cost") if s["name"] in {"UPF", "oracle"}],
+            x_label="α",
+            y_label="Ĉα(θ)",
+            markers=[
+                {"x": a, "kind": "bound", "label": label}
+                for label, a in setup["bound_alphas"].items()
+                if a is not None and a <= max(alphas) * 1.5
+            ],
+        ),
+        _line(
+            "retraining",
+            "cumulative_strategy_cost",
+            "Custo acumulado da estratégia online",
+            [
+                {
+                    "name": rules[name]["label"],
+                    "points": [[setup["offline_batches"] + k, v] for k, v in enumerate(series)],
+                }
+                for name, series in analysis["cumulative_strategy_cost"].items()
+            ],
+            x_label="lote online",
+            y_label="custo acumulado",
+        ),
     ]
     auc = {rule["label"]: rule["auc"] for rule in rules.values()}
     figures.append(_bar("retraining", "auc_by_policy", "AUC de Ĉα(θ) (Tabela 1)", auc))
@@ -601,24 +655,59 @@ def retraining_figures(analysis) -> list[Figure]:
     matrix = analysis["performance_matrix"]["err"]
     accuracy = [[None if v is None else 1 - v for v in row] for row in matrix]
     labels = [str(i) for i in range(len(matrix))]
-    figures.append(Figure("retraining", "accuracy_matrix", "Acurácia do modelo treinado no lote i no lote j",
-                          "heatmap", {"rows": labels, "columns": labels, "matrix": accuracy,
-                                      "x_label": "lote avaliado j", "y_label": "lote de treino i",
-                                      "value_range": (0, 1)}))
+    figures.append(
+        Figure(
+            "retraining",
+            "accuracy_matrix",
+            "Acurácia do modelo treinado no lote i no lote j",
+            "heatmap",
+            {
+                "rows": labels,
+                "columns": labels,
+                "matrix": accuracy,
+                "x_label": "lote avaliado j",
+                "y_label": "lote de treino i",
+                "value_range": (0, 1),
+            },
+        )
+    )
     stale = analysis["staleness_matrix"]
     values = [v for row in stale for v in row if v is not None]
     if values:
-        figures.append(Figure("retraining", "staleness_matrix", "Obsolescência Ψ̄ (CARA)", "heatmap", {
-            "rows": labels, "columns": labels,
-            "matrix": [list(column) for column in zip(*stale)],
-            "x_label": "lote avaliado t", "y_label": "lote de treino t'",
-            "value_range": (min(values), max(values))}))
+        figures.append(
+            Figure(
+                "retraining",
+                "staleness_matrix",
+                "Obsolescência Ψ̄ (CARA)",
+                "heatmap",
+                {
+                    "rows": labels,
+                    "columns": labels,
+                    "matrix": [list(column) for column in zip(*stale)],
+                    "x_label": "lote avaliado t",
+                    "y_label": "lote de treino t'",
+                    "value_range": (min(values), max(values)),
+                },
+            )
+        )
     for name, grid in analysis["wrong_alpha"].items():
-        figures.append(Figure("retraining", f"wrong_alpha_{name}", f"Aumento % de Ĉ com α errado ({name})",
-                              "heatmap", {"rows": [f"{a:.3g}" for a in grid["provided"]],
-                                          "columns": [f"{a:.3g}" for a in grid["real"]],
-                                          "matrix": grid["pct_increase"], "x_label": "α real",
-                                          "y_label": "α informado",
-                                          "value_range": (0, max((v for r in grid["pct_increase"] for v in r
-                                                                  if v is not None), default=1) or 1)}))
+        figures.append(
+            Figure(
+                "retraining",
+                f"wrong_alpha_{name}",
+                f"Aumento % de Ĉ com α errado ({name})",
+                "heatmap",
+                {
+                    "rows": [f"{a:.3g}" for a in grid["provided"]],
+                    "columns": [f"{a:.3g}" for a in grid["real"]],
+                    "matrix": grid["pct_increase"],
+                    "x_label": "α real",
+                    "y_label": "α informado",
+                    "value_range": (
+                        0,
+                        max((v for r in grid["pct_increase"] for v in r if v is not None), default=1) or 1,
+                    ),
+                },
+            )
+        )
     return figures

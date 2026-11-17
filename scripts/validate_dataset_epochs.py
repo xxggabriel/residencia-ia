@@ -22,16 +22,32 @@ def main():
     atomic_write(root / "dataset-smoke-complete.json", json.dumps(receipt).encode())
     for dataset in DATASETS:
         try:
-            report = run_epochs(EpochConfig(dataset=dataset), root, args.cache,
-                                download=args.download, real_directory=args.real_directory)
-            row = {"dataset": dataset, "complete": True, "status": "passed",
-                   "run_key": report["run_key"], "unique_examples": report["unique_examples"],
-                   "epochs": len(report["epochs"]), "metrics": [e["metrics"] for e in report["epochs"]],
-                   "code_sha256": report["contract"]["environment"]["code_sha256"],
-                   "runtime_fingerprint": report["contract"]["runtime_fingerprint"]}
+            report = run_epochs(
+                EpochConfig(dataset=dataset),
+                root,
+                args.cache,
+                download=args.download,
+                real_directory=args.real_directory,
+            )
+            row = {
+                "dataset": dataset,
+                "complete": True,
+                "status": "passed",
+                "run_key": report["run_key"],
+                "unique_examples": report["unique_examples"],
+                "epochs": len(report["epochs"]),
+                "metrics": [e["metrics"] for e in report["epochs"]],
+                "code_sha256": report["contract"]["environment"]["code_sha256"],
+                "runtime_fingerprint": report["contract"]["runtime_fingerprint"],
+            }
         except Exception as error:
-            row = {"dataset": dataset, "complete": False, "status": "blocked_or_failed",
-                   "error_type": type(error).__name__, "error": str(error)}
+            row = {
+                "dataset": dataset,
+                "complete": False,
+                "status": "blocked_or_failed",
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
         results.append(row)
         atomic_write(root / "dataset-smoke-progress.json", json.dumps(receipt, indent=2).encode())
         print(json.dumps(row), flush=True)

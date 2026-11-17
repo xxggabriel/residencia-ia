@@ -11,8 +11,20 @@ from continual_bench.infrastructure.training_tracking import HISTORY_FILE, train
 
 AXES = {"epoch": "época", "minibatch": "minibatch", "update": "atualização", "example": "exemplo"}
 QUALITY = {
-    "accuracy", "balanced_accuracy", "f1", "f1_macro", "macro_f1", "precision", "recall",
-    "macro_precision", "macro_recall", "pr_auc", "macro_pr_auc", "roc_auc", "macro_roc_auc", "r2",
+    "accuracy",
+    "balanced_accuracy",
+    "f1",
+    "f1_macro",
+    "macro_f1",
+    "precision",
+    "recall",
+    "macro_precision",
+    "macro_recall",
+    "pr_auc",
+    "macro_pr_auc",
+    "roc_auc",
+    "macro_roc_auc",
+    "r2",
 }
 LOSSES = {"loss", "log_loss", "mae", "mse", "rmse", "brier", "error_rate"}
 
@@ -48,7 +60,8 @@ def training_figures(fits):
             continue
         kind = steps[0]["kind"]
         context = {
-            key: value for key, value in fit.items()
+            key: value
+            for key, value in fit.items()
             if key not in ("summary", "steps") and not key.startswith("observation_")
         }
         keys = sorted({key for row in steps for key, value in row["metrics"].items() if _finite(value)})
@@ -66,10 +79,22 @@ def training_figures(fits):
                 title = f"{fit['fit_id']} · {fit['action']} · {label}"
                 if kind == "minibatch" and group in {"loss", "quality"}:
                     title += " antes da atualização"
-                figures.append(Figure(f"training/{fit['fit_id']}", group, title, "line", {
-                    "series": series, "x_label": AXES[kind], "y_label": unit, "step_kind": kind,
-                    "fit": context, "global_steps": [[row["step"], row["global_step"]] for row in steps],
-                }))
+                figures.append(
+                    Figure(
+                        f"training/{fit['fit_id']}",
+                        group,
+                        title,
+                        "line",
+                        {
+                            "series": series,
+                            "x_label": AXES[kind],
+                            "y_label": unit,
+                            "step_kind": kind,
+                            "fit": context,
+                            "global_steps": [[row["step"], row["global_step"]] for row in steps],
+                        },
+                    )
+                )
     return figures
 
 
@@ -83,5 +108,8 @@ def write_training_artifacts(directory, report):
     atomic_write(Path(directory) / HISTORY_FILE, encoded(document))
     write_observation_evidence(directory, report)
     return write_artifacts(
-        directory, training_figures(fits), {"training/history": document}, preserve_existing=True,
+        directory,
+        training_figures(fits),
+        {"training/history": document},
+        preserve_existing=True,
     )

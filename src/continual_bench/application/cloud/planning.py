@@ -49,7 +49,12 @@ def file_sha256(project_root, relative) -> str:
 
 
 def admit_capacity(
-    concurrency: int, vcpus_per_job: float, *, quota_vcpus: float, queue: dict, queue_excess: bool = False,
+    concurrency: int,
+    vcpus_per_job: float,
+    *,
+    quota_vcpus: float,
+    queue: dict,
+    queue_excess: bool = False,
 ) -> dict:
     """Check the regional quota and the queue against the parallel tasks.
 
@@ -169,7 +174,8 @@ def _matrix_units(request, release, project_root):
         plan = load_model(ExperimentMatrix, str(Path(project_root) / request.matrix.path)).plan()
         configs, matrix_id = plan["cases"], plan["matrix"]
     missing = {
-        describe(config)["dataset"] for config in configs
+        describe(config)["dataset"]
+        for config in configs
         if CATALOG.get(describe(config)["dataset"]).family not in OFFLINE_MATRIX_FAMILIES
     } - request.source_digests.keys()
     if missing:
@@ -180,9 +186,7 @@ def _matrix_units(request, release, project_root):
         if family == "openml" and not isinstance(config, EpochConfig) and config.dataset.params:
             raise ValueError("OpenML matrix inputs are resolved exclusively by their published digest")
         if family not in (*OFFLINE_MATRIX_FAMILIES, "openml") and not isinstance(config, EpochConfig):
-            raise ValueError(
-                f"prepared source {coordinates['dataset']} requires the epochs evaluator"
-            )
+            raise ValueError(f"prepared source {coordinates['dataset']} requires the epochs evaluator")
         evaluator = {Config: "binary", TypedConfig: "typed", EpochConfig: "epochs"}[type(config)]
         params = {
             "evaluator": evaluator,

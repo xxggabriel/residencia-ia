@@ -38,7 +38,8 @@ class Snapshot:
         self.durable["state"] = pickle.dumps(state, protocol=5)
         self.durable["files"] = {
             path.relative_to(self.output): path.read_bytes()
-            for path in self.output.rglob("*") if path.is_file()
+            for path in self.output.rglob("*")
+            if path.is_file()
         }
         if self.stop_after is not None and self.stop_after(state):
             raise PowerLoss("instance disappeared after a durable checkpoint")
@@ -67,14 +68,31 @@ def stream_fixture(tmp_path):
         label = ((classes + ids // 3300) % size).astype(np.uint8)
         path = tmp_path / dataset / "smoke.parquet"
         path.parent.mkdir()
-        pq.write_table(pa.table({
-            "event_time": timestamps, "label": label, "feature": classes.astype(np.float32),
-        }), path, row_group_size=701)
-        path.with_suffix(".json").write_text(json.dumps({
-            "dataset": dataset, "scope": "smoke", "source": DATASETS[dataset], "format": FORMAT,
-            "rows": len(ids), "bytes": path.stat().st_size, "features": ["feature"],
-            "sha256": sha256_file(path),
-        }))
+        pq.write_table(
+            pa.table(
+                {
+                    "event_time": timestamps,
+                    "label": label,
+                    "feature": classes.astype(np.float32),
+                }
+            ),
+            path,
+            row_group_size=701,
+        )
+        path.with_suffix(".json").write_text(
+            json.dumps(
+                {
+                    "dataset": dataset,
+                    "scope": "smoke",
+                    "source": DATASETS[dataset],
+                    "format": FORMAT,
+                    "rows": len(ids),
+                    "bytes": path.stat().st_size,
+                    "features": ["feature"],
+                    "sha256": sha256_file(path),
+                }
+            )
+        )
     settings = TrackingConfig.model_validate(
         yaml.safe_load(Path("configs/base/tracking.yaml").read_text())
     ).model_dump()
@@ -87,8 +105,16 @@ def deterministic_window(window):
 
 def fit_lineage(fit):
     keys = (
-        "fit_id", "start_seq", "end_seq", "action", "checkpoint", "source_model_version",
-        "promotion_status", "deployed_version", "replaces_model_version", "training_presentations",
+        "fit_id",
+        "start_seq",
+        "end_seq",
+        "action",
+        "checkpoint",
+        "source_model_version",
+        "promotion_status",
+        "deployed_version",
+        "replaces_model_version",
+        "training_presentations",
     )
     return ({k: fit[k] for k in keys if k in fit}, [step["global_step"] for step in fit["steps"]])
 
@@ -121,12 +147,19 @@ def test_seek_keeps_timestamp_ties_and_the_same_holdout_split(stream_fixture):
         start += len(block[0])
 
 
-@pytest.mark.parametrize(("dataset", "policy", "mode"), [
-    ("social", "periodic", "notice"), ("social", "online", "loss"),
-    ("social", "drift_adwin", "loss"), ("social", "drift_ddm", "loss"),
-    ("social", "upf", "matrix_loss"), ("social", "upf", "matrix_loss_then_evaluation_loss"),
-    ("social", "frozen", "final_loss"), ("fraud", "incremental", "loss"),
-])
+@pytest.mark.parametrize(
+    ("dataset", "policy", "mode"),
+    [
+        ("social", "periodic", "notice"),
+        ("social", "online", "loss"),
+        ("social", "drift_adwin", "loss"),
+        ("social", "drift_ddm", "loss"),
+        ("social", "upf", "matrix_loss"),
+        ("social", "upf", "matrix_loss_then_evaluation_loss"),
+        ("social", "frozen", "final_loss"),
+        ("fraud", "incremental", "loss"),
+    ],
+)
 def test_resumes_with_identical_predictions_metrics_and_lineage(stream_fixture, dataset, policy, mode):
     from continual_bench.evaluation.zia import run
 
@@ -157,8 +190,14 @@ def test_resumes_with_identical_predictions_metrics_and_lineage(stream_fixture, 
 
     expected_error = InterruptedError if mode == "notice" else PowerLoss
     with pytest.raises(expected_error):
-        run(*parameters, interrupted_path, settings, iterative_config=iterative,
-            progress=progress, checkpoint=checkpoint)
+        run(
+            *parameters,
+            interrupted_path,
+            settings,
+            iterative_config=iterative,
+            progress=progress,
+            checkpoint=checkpoint,
+        )
     last = pickle.loads(durable["state"])
     if matrix_loss:
         assert last["phase"] == "matrix"
@@ -174,16 +213,28 @@ def test_resumes_with_identical_predictions_metrics_and_lineage(stream_fixture, 
     if mode == "matrix_loss_then_evaluation_loss":
         next_attempt = root / "retry"
         with pytest.raises(PowerLoss):
-            run(*parameters, next_attempt, settings, iterative_config=iterative, checkpoint=Snapshot(
-                next_attempt, durable, stop_after=lambda saved: saved["phase"] == "evaluation",
-            ))
+            run(
+                *parameters,
+                next_attempt,
+                settings,
+                iterative_config=iterative,
+                checkpoint=Snapshot(
+                    next_attempt,
+                    durable,
+                    stop_after=lambda saved: saved["phase"] == "evaluation",
+                ),
+            )
         assert pickle.loads(durable["state"])["state"]["stream"].next_step > 0
 
     output = root / "resumed"
     resumed_progress = []
     resumed = run(
-        *parameters, output, settings, iterative_config=iterative,
-        checkpoint=Snapshot(output, durable), progress=lambda step, _: resumed_progress.append(step),
+        *parameters,
+        output,
+        settings,
+        iterative_config=iterative,
+        checkpoint=Snapshot(output, durable),
+        progress=lambda step, _: resumed_progress.append(step),
     )
     if mode == "final_loss":
         assert resumed_progress == []

@@ -89,10 +89,16 @@ def load_manifest(root, dataset, scope):
     expected_rows = SMOKE_ROWS if scope == "smoke" else spec["rows"]
     with ParquetFile(path) as source:
         names = source.schema_arrow.names
-        if (manifest["format"] != FORMAT or manifest["dataset"] != dataset or manifest["scope"] != scope
-                or manifest["source"] != spec or manifest["rows"] != expected_rows
-                or source.metadata.num_rows != expected_rows or manifest["bytes"] != path.stat().st_size
-                or names != ["event_time", "label", *manifest["features"]]):
+        if (
+            manifest["format"] != FORMAT
+            or manifest["dataset"] != dataset
+            or manifest["scope"] != scope
+            or manifest["source"] != spec
+            or manifest["rows"] != expected_rows
+            or source.metadata.num_rows != expected_rows
+            or manifest["bytes"] != path.stat().st_size
+            or names != ["event_time", "label", *manifest["features"]]
+        ):
             raise ValueError(f"prepared input contract mismatch: {path}")
     return path, manifest
 
@@ -119,10 +125,18 @@ def social_features(source, nodes_path, destination):
     outgoing = np.zeros_like(incoming)
     pending_src, pending_dst = [], []
     current_day = None
-    features = ["same_region", "source_age", "target_age",
-                "source_in", "source_out", "target_in", "target_out"]
-    schema = pa.schema([("event_time", pa.int64()), ("label", pa.uint8()),
-                        *((name, pa.float32()) for name in features)])
+    features = [
+        "same_region",
+        "source_age",
+        "target_age",
+        "source_in",
+        "source_out",
+        "target_in",
+        "target_out",
+    ]
+    schema = pa.schema(
+        [("event_time", pa.int64()), ("label", pa.uint8()), *((name, pa.float32()) for name in features)]
+    )
     with pq.ParquetFile(source) as edges, pq.ParquetWriter(destination, schema, compression="zstd") as writer:
         for batch in edges.iter_batches(batch_size=65_536, use_threads=False):
             times, labels, src, dst = (column.to_numpy() for column in batch.columns)
@@ -139,8 +153,14 @@ def social_features(source, nodes_path, destination):
                     pending_src, pending_dst = [], []
                     current_day = day
                 a, b = src[start:end], dst[start:end]
-                if (np.any(a < 0) or np.any(b < 0) or np.any(node_ids[a] < 0) or np.any(node_ids[b] < 0)
-                        or np.any(joined[a] > day) or np.any(joined[b] > day)):
+                if (
+                    np.any(a < 0)
+                    or np.any(b < 0)
+                    or np.any(node_ids[a] < 0)
+                    or np.any(node_ids[b] < 0)
+                    or np.any(joined[a] > day)
+                    or np.any(joined[b] > day)
+                ):
                     raise ValueError("edge endpoint absent or created after the edge")
                 values[start:end, 0] = node_ids[a] == node_ids[b]
                 values[start:end, 1] = (day - joined[a]) / 3650
@@ -149,10 +169,16 @@ def social_features(source, nodes_path, destination):
                     values[start:end, column] = np.log1p(count) / 10
                 pending_src.append(a.copy())
                 pending_dst.append(b.copy())
-            writer.write_batch(pa.RecordBatch.from_arrays(
-                [pa.array(times), pa.array(labels), *(pa.array(values[:, i]) for i in range(len(features)))],
-                schema=schema,
-            ))
+            writer.write_batch(
+                pa.RecordBatch.from_arrays(
+                    [
+                        pa.array(times),
+                        pa.array(labels),
+                        *(pa.array(values[:, i]) for i in range(len(features))),
+                    ],
+                    schema=schema,
+                )
+            )
 
 
 def prepare(root, dataset, scope):
@@ -179,15 +205,19 @@ def prepare(root, dataset, scope):
         sorted_path = temp / "edges.parquet" if nodes else output
         projection = {"fraud": FRAUD, "social": SOCIAL, "ecommerce": ECOMMERCE}[dataset]
         limit = f"LIMIT {SMOKE_ROWS}" if scope == "smoke" else ""
-        with duckdb.connect(config={"threads": 1, "memory_limit": "768MB",
-                                     "temp_directory": str(temp / "spill")}) as con:
+        with duckdb.connect(
+            config={"threads": 1, "memory_limit": "768MB", "temp_directory": str(temp / "spill")}
+        ) as con:
             con.from_parquet(str(raw)).create_view("source_rows")
-            con.execute(f"""
+            con.execute(
+                f"""
                 COPY (SELECT * EXCLUDE (event_id) FROM
                       (SELECT {projection} FROM (SELECT * FROM source_rows {limit}))
                       ORDER BY event_time, event_id)
                 TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 65536)
-            """, [str(sorted_path)])
+            """,
+                [str(sorted_path)],
+            )
         if nodes:
             social_features(sorted_path, nodes, output)
         with ParquetFile(output) as parquet:
@@ -195,9 +225,15 @@ def prepare(root, dataset, scope):
                 raise ValueError("prepared dataset row count differs from the input")
             features = parquet.schema_arrow.names[2:]
         manifest = {
-            "format": FORMAT, "dataset": dataset, "scope": scope, "source": spec,
-            "license": "CC-BY-NC-4.0", "rows": expected_rows, "features": features,
-            "sha256": sha256_file(output), "bytes": output.stat().st_size,
+            "format": FORMAT,
+            "dataset": dataset,
+            "scope": scope,
+            "source": spec,
+            "license": "CC-BY-NC-4.0",
+            "rows": expected_rows,
+            "features": features,
+            "sha256": sha256_file(output),
+            "bytes": output.stat().st_size,
         }
         output.replace(path)
         atomic_write(manifest_path, json.dumps(manifest, indent=2).encode())

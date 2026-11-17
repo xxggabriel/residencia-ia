@@ -24,11 +24,16 @@ def test_moving_streams_replay_with_binary_targets_and_no_fake_changepoints(name
     assert events != list(MovingSyntheticSource(name, 50, 43, 3, 1000).events())
 
 
-@pytest.mark.parametrize("name,params", [
-    ("hyperplane", {"mag_change": 0}), ("hyperplane", {"n_drift_features": 0}),
-    ("rbf_drift", {"change_speed": 0}), ("rbf_drift", {"n_drift_centroids": 0}),
-    ("rbf_drift", {"n_centroids": 5, "n_drift_centroids": 10}),
-])
+@pytest.mark.parametrize(
+    "name,params",
+    [
+        ("hyperplane", {"mag_change": 0}),
+        ("hyperplane", {"n_drift_features": 0}),
+        ("rbf_drift", {"change_speed": 0}),
+        ("rbf_drift", {"n_drift_centroids": 0}),
+        ("rbf_drift", {"n_centroids": 5, "n_drift_centroids": 10}),
+    ],
+)
 def test_moving_sources_reject_static_or_invalid_drift(name, params):
     with pytest.raises(ValueError):
         MovingSyntheticSource(name, 50, 42, 0, 0, **params)
@@ -58,13 +63,26 @@ def test_friedman_rejects_absent_or_overlapping_drift():
 def local_manifest(tmp_path):
     raw = tmp_path / "insects.csv"
     raw.write_text("wing,class,time\n1.1,a,10\n2.2,b,11\n3.3,c,12\n")
-    spec = dict(schema_version=1, name="insects", variant="fixture-three-class", version="fixture-v1",
-                source="https://example.org/source", license="fixture-only", access_approved=True,
-                license_reference="https://example.org/license", format="csv", task="multiclass",
-                files=[dict(path=raw.name, sha256=hashlib.sha256(raw.read_bytes()).hexdigest(), rows=3)],
-                features={"wing": "numeric"}, target="class", labels=["a", "b", "c"],
-                order="timestamp", order_description="fixture timestamps", timestamp_column="time",
-                preparation="No transformation; synthetic fixture, not INSECTS data")
+    spec = dict(
+        schema_version=1,
+        name="insects",
+        variant="fixture-three-class",
+        version="fixture-v1",
+        source="https://example.org/source",
+        license="fixture-only",
+        access_approved=True,
+        license_reference="https://example.org/license",
+        format="csv",
+        task="multiclass",
+        files=[dict(path=raw.name, sha256=hashlib.sha256(raw.read_bytes()).hexdigest(), rows=3)],
+        features={"wing": "numeric"},
+        target="class",
+        labels=["a", "b", "c"],
+        order="timestamp",
+        order_description="fixture timestamps",
+        timestamp_column="time",
+        preparation="No transformation; synthetic fixture, not INSECTS data",
+    )
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(spec))
     return path, raw, spec
@@ -102,11 +120,13 @@ def test_local_admission_rejects_corruption_missing_access_and_target_leakage(lo
 
 def test_local_admission_rejects_schema_timestamp_and_count_failure(local_manifest):
     path, raw, spec = local_manifest
-    for text, match in [("wing,class,time\n1,a,10\n2,b,9\n3,c,12\n", "decreased"),
-                        ("wing,class,time\nnan,a,10\n2,b,11\n3,c,12\n", "non-finite"),
-                        ("wing,class,time\n1,a,10.5\n2,b,11\n3,c,12\n", "integer"),
-                        ("other,class,time\n1,a,10\n2,b,11\n3,c,12\n", "schema"),
-                        ("wing,class,time\n1,a,10\n2,b,11\n", "row count")]:
+    for text, match in [
+        ("wing,class,time\n1,a,10\n2,b,9\n3,c,12\n", "decreased"),
+        ("wing,class,time\nnan,a,10\n2,b,11\n3,c,12\n", "non-finite"),
+        ("wing,class,time\n1,a,10.5\n2,b,11\n3,c,12\n", "integer"),
+        ("other,class,time\n1,a,10\n2,b,11\n3,c,12\n", "schema"),
+        ("wing,class,time\n1,a,10\n2,b,11\n", "row count"),
+    ]:
         raw.write_text(text)
         spec["files"][0]["sha256"] = hashlib.sha256(raw.read_bytes()).hexdigest()
         path.write_text(json.dumps(spec))
@@ -159,14 +179,29 @@ def test_gas_libsvm_keeps_batch_order_and_all_six_class_labels(tmp_path):
     for batch in range(1, 3):
         path = tmp_path / f"batch{batch}.dat"
         path.write_text("".join(f"{label} 1:{label}.0 2:{batch}.0\n" for label in range(1, 7)))
-        files.append(dict(path=path.name, sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-                          rows=6, batch=str(batch)))
-    spec = dict(name="gas", variant="fixture-2-batches", version="fixture-v1",
-                source="https://archive.ics.uci.edu/dataset/224/gas+sensor+array+drift+dataset",
-                license="fixture-only", license_reference="https://example.org/license", access_approved=True,
-                format="libsvm", task="multiclass", files=files, features={"1": "numeric", "2": "numeric"},
-                target="label", labels=[str(i) for i in range(1, 7)], order="batch",
-                order_description="provided batch order", preparation="Synthetic fixture only")
+        files.append(
+            dict(
+                path=path.name, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), rows=6, batch=str(batch)
+            )
+        )
+    spec = dict(
+        name="gas",
+        variant="fixture-2-batches",
+        version="fixture-v1",
+        source="https://archive.ics.uci.edu/dataset/224/gas+sensor+array+drift+dataset",
+        license="fixture-only",
+        license_reference="https://example.org/license",
+        access_approved=True,
+        format="libsvm",
+        task="multiclass",
+        files=files,
+        features={"1": "numeric", "2": "numeric"},
+        target="label",
+        labels=[str(i) for i in range(1, 7)],
+        order="batch",
+        order_description="provided batch order",
+        preparation="Synthetic fixture only",
+    )
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps(spec))
     source = LocalManifestSource("gas", 12, 42, 0, 0, manifest_path=manifest)
@@ -177,8 +212,19 @@ def test_gas_libsvm_keeps_batch_order_and_all_six_class_labels(tmp_path):
 
 
 def task_samples():
-    return [TaskSample(str(i), i, i, i, {"p0": i, "p1": i + 1, "p2": i + 2}, str(i % 4),
-                       split="test" if i >= 4 else "train", group=str(i // 4)) for i in range(8)]
+    return [
+        TaskSample(
+            str(i),
+            i,
+            i,
+            i,
+            {"p0": i, "p1": i + 1, "p2": i + 2},
+            str(i % 4),
+            split="test" if i >= 4 else "train",
+            group=str(i // 4),
+        )
+        for i in range(8)
+    ]
 
 
 def test_split_protocol_preserves_labels_split_and_task_membership():

@@ -24,8 +24,11 @@ def main():
     parser.add_argument("--airlines", help="original airlines.csv")
     parser.add_argument("--covertype", help="original scaled LibSVM Covertype file")
     parser.add_argument("--workers", type=int, default=1, help="parallel matrix columns")
-    parser.add_argument("--drift-backend", choices=("skmultiflow", "river"),
-                        help="optionally include ADWIN and DDM; River is an alternative backend")
+    parser.add_argument(
+        "--drift-backend",
+        choices=("skmultiflow", "river"),
+        help="optionally include ADWIN and DDM; River is an alternative backend",
+    )
     parser.add_argument("--output")
     parser.add_argument("--log", help="JSON-lines file with every progress event")
     args = parser.parse_args()

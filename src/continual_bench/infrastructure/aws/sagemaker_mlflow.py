@@ -323,10 +323,14 @@ def publish_with_library(
             tracker.experiment_id = str(experiment.experiment_id)
             tracker.mlflow_run_id = run_id
             tracker.artifact_uri = run.info.artifact_uri
-            mlflow.set_tags({
-                "mlflow.note.content": note, "tracking_library": "sagemaker-mlflow",
-                "benchmark_complete": "false", "zia_artifacts_status": "publishing",
-            })
+            mlflow.set_tags(
+                {
+                    "mlflow.note.content": note,
+                    "tracking_library": "sagemaker-mlflow",
+                    "benchmark_complete": "false",
+                    "zia_artifacts_status": "publishing",
+                }
+            )
             params = report_params(tracker, report)
             points = report_metric_items(report, 0, adapted, include_observations=output_dir is None)
             desired = {(p["key"], p["step"], p["value"]): p for p in points}
@@ -335,15 +339,26 @@ def publish_with_library(
             backend.log_batch(run_id, metrics=[desired[key] for key in missing], params=params)
             dataset_logged = _log_dataset(mlflow, tracker, report, outputs_uri)
             child_runs = publish_training_rounds(
-                backend, experiment.experiment_id, run_id, report, now_ms=int(time.time() * 1000),
+                backend,
+                experiment.experiment_id,
+                run_id,
+                report,
+                now_ms=int(time.time() * 1000),
             )
             observed = output_dir is not None and publish_sdk_observations(
-                client, run_id, output_dir, report, child_runs,
+                client,
+                run_id,
+                output_dir,
+                report,
+                child_runs,
             )
             # prepare_artifacts already rendered the dashboards: upload them instead of re-plotting.
             figures = _saved_figures(output_dir) or log_report_figures(report)
             uploaded = _log_artifacts(
-                client, run_id, output_dir, exclude=(ARTIFACT_ROOT,) if observed else (),
+                client,
+                run_id,
+                output_dir,
+                exclude=(ARTIFACT_ROOT,) if observed else (),
             )
             if output_dir is not None and not uploaded:
                 raise ValueError("MLflow run has no uploaded artifacts")

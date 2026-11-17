@@ -9,22 +9,32 @@ from pathlib import Path
 def collect(root):
     result = {
         "scope": "functional smoke only; no ranking or comparative campaign",
-        "binary": [], "typed": [], "services": [],
+        "binary": [],
+        "typed": [],
+        "services": [],
     }
     for path in sorted((root / "smoke").rglob("report.json")):
         report = json.loads(path.read_text())
-        result["binary"].append({
-            "run_key": report["run_key"], "dataset": report["config"]["dataset"]["name"],
-            "samples": report["observed"], "policy": report["config"]["policy"]["name"],
-            "detector": report["config"]["detector"]["name"], "metrics": report["metrics"],
-            "code_sha256": report["environment"]["code_sha256"],
-            "dataset_sha256": report["dataset"]["sha256"], "environment": report["environment"],
-            "near_future": {k: v for k, v in report["task_evaluation"]["near_future"].items()
-                            if k != "windows"},
-            "promotion": report["promotion"], "training": report["training"],
-            "compute_seconds": report["compute_seconds"],
-            "peak_rss_bytes_process": report["peak_rss_bytes_process"],
-        })
+        result["binary"].append(
+            {
+                "run_key": report["run_key"],
+                "dataset": report["config"]["dataset"]["name"],
+                "samples": report["observed"],
+                "policy": report["config"]["policy"]["name"],
+                "detector": report["config"]["detector"]["name"],
+                "metrics": report["metrics"],
+                "code_sha256": report["environment"]["code_sha256"],
+                "dataset_sha256": report["dataset"]["sha256"],
+                "environment": report["environment"],
+                "near_future": {
+                    k: v for k, v in report["task_evaluation"]["near_future"].items() if k != "windows"
+                },
+                "promotion": report["promotion"],
+                "training": report["training"],
+                "compute_seconds": report["compute_seconds"],
+                "peak_rss_bytes_process": report["peak_rss_bytes_process"],
+            }
+        )
     for path in sorted((root / "typed").rglob("report.json")):
         result["typed"].append(json.loads(path.read_text()))
     for path in sorted((root / "service-tests").rglob("service-evidence.json")):

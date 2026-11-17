@@ -146,8 +146,9 @@ class OnlineObservability:
                 self.continual_versions.append(self.current_model_version)
         self.instrumentation_seconds += time.perf_counter() - started
 
-    def record_learning(self, seq, seconds, size, *, initial=False, prediction=None, validation=None,
-                        checkpoint=None):
+    def record_learning(
+        self, seq, seconds, size, *, initial=False, prediction=None, validation=None, checkpoint=None
+    ):
         if self.learning_steps is None:
             return
         started = time.perf_counter()

@@ -6,5 +6,8 @@ from continual_bench.core.tasks import REGRESSION
 
 
 def metric_set(task: str) -> dict:
-    return ({"mae": metrics.MAE(), "rmse": metrics.RMSE()} if task == REGRESSION else
-            {"accuracy": metrics.Accuracy(), "macro_f1": metrics.MacroF1()})
+    return (
+        {"mae": metrics.MAE(), "rmse": metrics.RMSE()}
+        if task == REGRESSION
+        else {"accuracy": metrics.Accuracy(), "macro_f1": metrics.MacroF1()}
+    )

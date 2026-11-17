@@ -8,14 +8,15 @@ from unittest.mock import Mock
 
 from botocore.exceptions import ClientError
 
-CALLBACK = runpy.run_path(
-    str(Path(__file__).parents[1] / "infra" / "sagemaker" / "callback" / "index.py")
-)
+CALLBACK = runpy.run_path(str(Path(__file__).parents[1] / "infra" / "sagemaker" / "callback" / "index.py"))
 MESSAGE = {
     "token": "Abcdef1234",
     "pipelineExecutionArn": "arn:studio-execution",
-    "arguments": {"stage": "campaign", "request_uri": "s3://data/studio/requests/request.json",
-                  "request_version": "version-1"},
+    "arguments": {
+        "stage": "campaign",
+        "request_uri": "s3://data/studio/requests/request.json",
+        "request_version": "version-1",
+    },
 }
 
 
@@ -84,6 +85,7 @@ def test_verify_requires_the_tracking_receipt_and_reads_the_campaign_artifact_in
         "tracking": {"required": True, "complete": False},
         "artifacts_index_uri": "s3://data/campaigns/zia-test/artifacts/data/index.json",
     }
+
     def fetch(**args):
         doc = summary if args["Key"].endswith("/summary.json") else {"figures": [{"plot": "test.svg"}]}
         return {"Body": BytesIO(json.dumps(doc).encode())}

@@ -31,33 +31,45 @@ def test_extends_chains_lists_and_nested_mappings_relative_to_each_file(tmp_path
     write(tmp_path / "base/mid.yaml", "extends: root.yaml\nwarmup: 20\npolicy: {name: none}\n")
     write(tmp_path / "base/extra.json", '{"metric_window": 50, "policy": {"cooldown": 5}}')
     write(tmp_path / "base/tracking.yaml", "probe_samples: 4\n")
-    path = write(tmp_path / "runs/run.yaml",
-                 "extends: [../base/mid.yaml, ../base/extra.json]\n"
-                 "dataset: {samples: 300}\n"
-                 "tracking: {extends: ../base/tracking.yaml, continual_references: false}\n")
+    path = write(
+        tmp_path / "runs/run.yaml",
+        "extends: [../base/mid.yaml, ../base/extra.json]\n"
+        "dataset: {samples: 300}\n"
+        "tracking: {extends: ../base/tracking.yaml, continual_references: false}\n",
+    )
     assert load_document(path) == {
-        "dataset": {"name": "sea", "samples": 300}, "warmup": 20, "metric_window": 50,
+        "dataset": {"name": "sea", "samples": 300},
+        "warmup": 20,
+        "metric_window": 50,
         "policy": {"name": "none", "cooldown": 5},
-        "tracking": {"probe_samples": 4, "continual_references": False}}
+        "tracking": {"probe_samples": 4, "continual_references": False},
+    }
     assert load_model(Config, path).tracking.probe_samples == 4
 
 
 def test_list_items_may_extend_a_base(tmp_path):
     write(tmp_path / "case.yaml", "warmup: 30\ndataset: {samples: 180}\n")
-    path = write(tmp_path / "campaign.yaml",
-                 "name: c\ncases:\n  - {extends: case.yaml, dataset: {name: sea}}\n"
-                 "  - {extends: case.yaml, dataset: {name: agrawal}}\n")
+    path = write(
+        tmp_path / "campaign.yaml",
+        "name: c\ncases:\n  - {extends: case.yaml, dataset: {name: sea}}\n"
+        "  - {extends: case.yaml, dataset: {name: agrawal}}\n",
+    )
     cases = load_model(Campaign, path).cases
-    assert [(c.dataset.name, c.dataset.samples, c.warmup) for c in cases] == [("sea", 180, 30),
-                                                                             ("agrawal", 180, 30)]
+    assert [(c.dataset.name, c.dataset.samples, c.warmup) for c in cases] == [
+        ("sea", 180, 30),
+        ("agrawal", 180, 30),
+    ]
 
 
-@pytest.mark.parametrize("files,error,match", [
-    ({"a.yaml": "extends: b.yaml\n", "b.yaml": "extends: a.yaml\n"}, ValueError, "cycle"),
-    ({"a.yaml": "extends: missing.yaml\n"}, FileNotFoundError, "not found"),
-    ({"a.yaml": "extends: [1]\n"}, ValueError, "path or a list"),
-    ({"a.yaml": "extends: b.yaml\n", "b.yaml": "- not a mapping\n"}, ValueError, "mapping"),
-])
+@pytest.mark.parametrize(
+    "files,error,match",
+    [
+        ({"a.yaml": "extends: b.yaml\n", "b.yaml": "extends: a.yaml\n"}, ValueError, "cycle"),
+        ({"a.yaml": "extends: missing.yaml\n"}, FileNotFoundError, "not found"),
+        ({"a.yaml": "extends: [1]\n"}, ValueError, "path or a list"),
+        ({"a.yaml": "extends: b.yaml\n", "b.yaml": "- not a mapping\n"}, ValueError, "mapping"),
+    ],
+)
 def test_invalid_inheritance_fails_closed(tmp_path, files, error, match):
     for name, text in files.items():
         write(tmp_path / name, text)
@@ -89,7 +101,8 @@ def test_versioned_campaign_typed_and_matrix_configs_validate():
     assert campaign.identity() == "45622477fbedbbd6148d9f00"
     assert load_model(TypedConfig, CONFIGS / "typed/friedman-smoke.yaml").dataset.name == "friedman_drift"
     assert load_model(ExperimentMatrix, CONFIGS / "matrices/binary-comparison.yaml").identity() == (
-        "380356c50d6234d3b4e3c41f")
+        "380356c50d6234d3b4e3c41f"
+    )
     any_model = load_model(ExperimentMatrix, CONFIGS / "matrices/any-model.yaml")
     assert any_model.identity() == "14ad8b68c464cbd8a5c39bb1"
 

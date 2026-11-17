@@ -119,7 +119,9 @@ class SpotAttempt:
             }
             try:
                 self.store.put_bytes(
-                    self.claim_key(attempt), json.dumps(claim, sort_keys=True).encode(), if_absent=True,
+                    self.claim_key(attempt),
+                    json.dumps(claim, sort_keys=True).encode(),
+                    if_absent=True,
                 )
             except ObjectExists:
                 previous = get_json(self.store, self.claim_key(attempt))
@@ -137,7 +139,8 @@ class SpotAttempt:
     def _previous_state(self, attempt_key):
         try:
             status = get_json(
-                self.store, layout.attempt_status_key(self.unit.campaign_id, self.unit.run_id, attempt_key),
+                self.store,
+                layout.attempt_status_key(self.unit.campaign_id, self.unit.run_id, attempt_key),
             )
         except FileNotFoundError:
             return "LOST"  # Stopped before its status reached S3 (e.g. SIGKILL after the Spot notice).
