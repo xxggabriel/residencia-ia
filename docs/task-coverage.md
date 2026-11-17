@@ -4,7 +4,7 @@ O catálogo vigente admite 17 fontes. Stream51 foi retirado do catálogo, adapta
 
 O escopo verificável partiu do pedido e das Pages da Semana 09, lidas em 3 de novembro de 2026. A planilha `Semana_09_Datasets_Benchmarks.xlsx` não foi materializada: o leitor autorizado retornou `page_reference_unsupported_format` para a referência fornecida. A matriz abaixo não substituiu os 47 registros, 39 associações e 64 referências da pesquisa. Não foram inventados registros nem seleções ausentes.
 
-**Implementado** descreveu código executável. **Validado inicialmente** descreveu testes pequenos no homelab. **Campanha pendente** descreveu comparações que aquela rodada não executou. A ampliação de 4 de novembro, incluindo os testes de 100 exemplos/2 épocas e o bloqueio de Stream51, ficou no [relatório de datasets](task-dataset-execution.md).
+**Implementado** descreveu código executável. **Validado inicialmente** descreveu testes pequenos. **Campanha pendente** descreveu comparações que aquela rodada não executou. A ampliação de 4 de novembro, incluindo os testes de 100 exemplos/2 épocas e o bloqueio de Stream51, ficou no [relatório de datasets](task-dataset-execution.md).
 
 | Componente | Fonte e versão | Implementação | Testes e estado |
 | --- | --- | --- | --- |

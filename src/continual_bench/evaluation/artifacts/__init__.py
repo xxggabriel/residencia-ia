@@ -24,10 +24,21 @@ def _dump(value) -> bytes:
     return json.dumps(value, indent=2, sort_keys=True, allow_nan=False, default=str).encode()
 
 
-def write_artifacts(directory, figures: list[Figure], dumps: dict[str, object]) -> dict:
+def write_artifacts(
+    directory, figures: list[Figure], dumps: dict[str, object], *, preserve_existing=False,
+) -> dict:
     """Render every figure, save its data and the raw dumps; return the index."""
     root = Path(directory) / ROOT
     index = {"version": "run-artifacts-v1", "figures": [], "data": []}
+    previous = root / "data/index.json"
+    if preserve_existing and previous.exists():
+        index = json.loads(previous.read_bytes())
+        if index["version"] != "run-artifacts-v1":
+            raise ValueError("unsupported artifact index")
+    replaced = {(figure.group, figure.name) for figure in figures}
+    index["figures"] = [
+        item for item in index["figures"] if (item["group"], item["name"]) not in replaced
+    ]
     seen = set()
     for figure in figures:
         key = (figure.group, figure.name)
@@ -57,8 +68,9 @@ def write_artifacts(directory, figures: list[Figure], dumps: dict[str, object]) 
             continue
         path = f"data/{name}.json"
         atomic_write(root / path, _dump(value))
-        index["data"].append(path)
-    index["groups"] = sorted({figure.group for figure in figures})
+        if path not in index["data"]:
+            index["data"].append(path)
+    index["groups"] = sorted({item["group"] for item in index["figures"]})
     atomic_write(root / "data/index.json", _dump(index))
     return {
         "root": ROOT,

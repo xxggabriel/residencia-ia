@@ -6,22 +6,35 @@ with any model family that supports the dataset's target type.
 
 import hashlib
 import json
+import math
+import pickle
 import time
 from collections import deque
 from dataclasses import asdict
 from itertools import islice
 from pathlib import Path
 
-from continual_bench.core.tasks import MULTICLASS, REGRESSION, task_kind
+from river.base import Classifier
+
+from continual_bench.core.tasks import BINARY, MULTICLASS, REGRESSION, task_kind
 from continual_bench.datasets.base import as_sample_source
 from continual_bench.infrastructure.storage import atomic_write, run_lock
 from continual_bench.models import MODELS, default_model
+from continual_bench.models.encoding import EncodedEstimator, NativeEstimator
 
 from .artifacts import system_figures, typed_figures, write_artifacts
 from .costs import account, profile
 from .environment import environment, peak_rss_bytes
 from .scoring import metric_set
+from .stream_observations import (
+    StreamQuality,
+    adapted_binary_positive_class,
+    declared_class_labels,
+    typed_observations,
+)
+from .stream_training_history import stream_training_history
 from .system_metrics import SystemMetricsSampler
+from .training_evidence import write_training_artifacts
 
 TYPED_TASKS = (REGRESSION, MULTICLASS)
 TYPED_POLICIES = ("none", "online", "periodic")
@@ -82,6 +95,34 @@ def _admit(source, task, max_samples, max_seconds, started):
     return records
 
 
+def _record_model(directory, versions, model, action, seq):
+    try:
+        payload = pickle.dumps(model, protocol=5)
+    except (pickle.PicklingError, AttributeError, TypeError):
+        # A runtime-provided estimator may have no serializable state.
+        return
+    ordinal = len(versions)
+    file = f"models/{ordinal:04d}.pkl"
+    atomic_write(directory / file, payload)
+    versions.append({
+        "ordinal": ordinal, "action": action, "seq": seq, "file": file,
+        "sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload),
+    })
+
+
+def _predict(model, x, positive_class):
+    """Observe scores using the same one inference call as River's default argmax."""
+    if (positive_class is not None and isinstance(model, (EncodedEstimator, NativeEstimator))
+            and type(model.estimator).predict_one is Classifier.predict_one):
+        probabilities = model.predict_proba_one(x)
+        if probabilities:
+            prediction = max(probabilities, key=probabilities.get)
+            probability = float(probabilities.get(positive_class, 0.0))
+            return prediction, probability if math.isfinite(probability) and 0 <= probability <= 1 else None
+        return None, None
+    return model.predict_one(x), None
+
+
 def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, window=128,
               max_samples=1000, max_seconds=60, training_budget=None, costs=None, model=None,
               model_factory=None, models=MODELS, progress=None):
@@ -115,10 +156,13 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
     else:
         descriptor = {"family": "injected", "task": task}
     kind = task_kind(task)
+    positive_class = adapted_binary_positive_class(manifest) if task == MULTICLASS else None
     started = time.monotonic()
     records = _admit(source, task, max_samples, max_seconds, started)
-    if sum(s.split == "train" for s in records) <= warmup:
+    train_count = sum(s.split == "train" for s in records)
+    if train_count <= warmup:
         raise ValueError("typed warmup must leave at least one training-stream evaluation sample")
+    online_last = train_count if training_budget is None else min(train_count, warmup + training_budget)
     payload = b"".join(_json(asdict(sample)) + b"\n" for sample in records)
     config = {"schema_version": "task_evaluation-typed-v1", "task": task, "policy": policy, "warmup": warmup,
               "every": every, "window": window, "max_samples": max_samples, "max_seconds": max_seconds,
@@ -140,11 +184,18 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
             schedule = PeriodicSchedule(policy, warmup, every)
             metric_sets = {split: metric_set(task) for split in ("train", "validation", "test")}
             counts = {split: 0 for split in metric_sets}
-            per_task, predictions, updates = {}, [], []
+            per_task, predictions, updates, versions = {}, [], [], []
             replay, pending = deque(maxlen=window), deque()
             train_arrived = released_train = training_used = budget_blocked = 0
-            prediction_seconds = training_seconds = 0.0
+            prediction_seconds = training_seconds = initial_seconds = 0.0
             prediction_errors = 0.0
+            initial_first = None
+            initial_fit = None
+            trained_seqs = set()
+            model_version = None
+            captured = {"initial": [], "updates": {}}
+            labeled = {split: [] for split in ("prequential", "validation", "test")}
+            tracking_seconds = 0.0
 
             def score(sample, prediction):
                 nonlocal prediction_errors
@@ -161,12 +212,18 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
 
             def release(now):
                 nonlocal model, released_train, training_used, training_seconds, budget_blocked
+                nonlocal initial_first, initial_seconds, initial_fit
+                nonlocal model_version, tracking_seconds
                 while pending and pending[0][0].available_at <= now:
                     if time.monotonic() - started > max_seconds:
                         raise TimeoutError("typed evaluation deadline exceeded")
-                    sample, prediction, train_index = pending.popleft()
+                    sample, prediction, train_index, observed = pending.popleft()
                     if sample.split != "train" or train_index >= warmup:
                         score(sample, prediction)
+                        tick = time.perf_counter()
+                        split = "prequential" if sample.split == "train" else sample.split
+                        labeled[split].append(observed)
+                        tracking_seconds += time.perf_counter() - tick
                     if sample.split != "train":
                         continue
                     released_train += 1
@@ -186,18 +243,45 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
                         model.learn_one(dict(row.x), row.y)
                     seconds = time.perf_counter() - before
                     training_seconds += seconds
-                    if not initial:
+                    tick = time.perf_counter()
+                    repeated = sum(row.seq in trained_seqs for row in selected)
+                    trained_seqs.update(row.seq for row in selected)
+                    model_version = f"trained-through-{sample.seq}"
+                    step = {"seq": sample.seq, "seconds": seconds, "size": len(selected),
+                            "repeated_presentations": repeated}
+                    if not reset:
+                        step["prediction"] = observed
+                    if initial:
+                        captured["initial"].append(step)
+                    else:
+                        captured["updates"][str(sample.seq)] = step
+                    tracking_seconds += time.perf_counter() - tick
+                    if initial:
+                        if initial_first is None:
+                            initial_first = sample.seq
+                        initial_seconds += seconds
+                        if train_index == warmup - 1:
+                            initial_fit = {
+                                "seq": sample.seq, "train_seq_range": [initial_first, sample.seq + 1],
+                                "train_samples": warmup, "seconds": initial_seconds,
+                            }
+                            _record_model(directory, versions, model, "initial_fit", sample.seq)
+                    else:
                         training_used += len(selected)
+                        action = "reset_retrain" if reset else "learn_one"
                         updates.append({"seq": sample.seq, "released_at": now,
                                         "train_samples": len(selected),
-                                        "action": "reset_retrain" if reset else "learn_one",
+                                        "action": action,
+                                        "train_seq_range": [selected[0].seq, selected[-1].seq + 1],
                                         "seconds": seconds})
+                        if reset or (policy == "online" and released_train == online_last):
+                            _record_model(directory, versions, model, action, sample.seq)
 
             for step, sample in enumerate(records, 1):
                 if time.monotonic() - started > max_seconds:
                     raise TimeoutError("typed evaluation deadline exceeded")
                 before = time.perf_counter()
-                prediction = model.predict_one(dict(sample.x))
+                prediction, probability = _predict(model, dict(sample.x), positive_class)
                 prediction_seconds += time.perf_counter() - before
                 prediction = kind.normalize_prediction(prediction)
                 index = train_arrived if sample.split == "train" else None
@@ -206,7 +290,11 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
                 predictions.append({"sample_id": sample.sample_id, "seq": sample.seq,
                                     "prediction": prediction, "split": sample.split,
                                     "training_labels_available": released_train})
-                pending.append((sample, prediction, index))
+                tick = time.perf_counter()
+                observation = {"seq": sample.seq, "prediction": prediction, "label": sample.y,
+                               "probability": probability, "model_version": model_version}
+                pending.append((sample, prediction, index, observation))
+                tracking_seconds += time.perf_counter() - tick
                 release(sample.timestamp)
                 if progress is not None and (step == 1 or step % window == 0):
                     observed = {f"{split}/{name}": metric.get()
@@ -226,7 +314,7 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
                       "prediction_digest": hashlib.sha256(_json(predictions)).hexdigest(),
                       "updates": updates, "training": {"warmup_samples": warmup,
                           "postwarmup_samples": training_used, "budget": training_budget,
-                          "blocked_decisions": budget_blocked},
+                          "blocked_decisions": budget_blocked, "initial_fit": initial_fit},
                       "compute": {"elapsed_seconds": time.monotonic() - started,
                                   "training_seconds": training_seconds,
                                   "prediction_seconds": prediction_seconds,
@@ -240,11 +328,38 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
                                                    "forgetting"),
                                    "resume": ("complete-run idempotency; interrupted runs restart "
                                               "from scratch")}}
+            model_index = _json({"format_version": 1, "versions": versions})
+            if versions:
+                atomic_write(directory / "model-versions.json", model_index)
+            model_storage = sum(entry["bytes"] for entry in versions) + (len(model_index) if versions else 0)
+            report["model_versions"] = {
+                "count": len(versions), "storage_bytes": model_storage,
+                "index_sha256": hashlib.sha256(model_index).hexdigest() if versions else None,
+            }
             report["costs"] = account(costs, errors=prediction_errors,
                                       presentations=warmup + training_used, updates=len(updates),
                                       train_seconds=training_seconds, predict_seconds=prediction_seconds,
-                                      model_storage_bytes=0)
+                                      model_storage_bytes=model_storage)
         report["system_metrics"] = sampler.report()
+        tick = time.perf_counter()
+        if task == REGRESSION:
+            quality = StreamQuality(task, target_unit=manifest.get("target_unit") or "target_unit")
+        else:
+            declared = declared_class_labels(manifest)
+            admitted = sorted({sample.y for sample in records} - set(declared))
+            classes = (*declared, *admitted)
+            prediction_classes = {row["prediction"] for row in predictions} - set(classes)
+            quality = StreamQuality(
+                BINARY if positive_class else MULTICLASS, classes, positive_class,
+                confusion_classes=tuple(sorted(prediction_classes, key=str)),
+            )
+        report["training_history"] = stream_training_history(
+            report, directory, versions=versions, captured=captured, quality=quality,
+        )
+        report["tracking_observations"] = typed_observations(
+            report, quality, labeled, unique_training=len(trained_seqs),
+            tracking_seconds=tracking_seconds + time.perf_counter() - tick,
+        )
         timeline = [(r.seq, r.split, r.y, p["prediction"]) for r, p in zip(records, predictions)]
         report["artifacts"] = write_artifacts(
             directory, typed_figures(report, timeline) + system_figures(report["system_metrics"]),
@@ -253,7 +368,9 @@ def run_typed(source, root, *, task=None, policy="online", warmup=20, every=50, 
              "costs/scenario": report["costs"], "events/updates": report["updates"],
              "series/predictions": [{"seq": seq, "split": split, "target": y, "prediction": p}
                                     for seq, split, y, p in timeline],
+             "series/tracking-observations": labeled,
              "system/samples": report["system_metrics"]})
+        report["artifacts"] = write_training_artifacts(directory, report)
         atomic_write(directory / "samples.jsonl", payload)
         atomic_write(directory / "predictions.json", _json(predictions))
         atomic_write(report_path, _json(report))

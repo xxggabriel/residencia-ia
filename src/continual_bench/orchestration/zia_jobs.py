@@ -11,13 +11,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from continual_bench.core.policies import ZiaPolicy
 from continual_bench.datasets.zia import load_manifest, sha256_file
 from continual_bench.evaluation.environment import encoded, environment
 from continual_bench.infrastructure.storage import atomic_write
 
 DATA_ROOT = Path(os.environ.get("BENCH_ZIA_DATA", "/zia-data"))
 JOB_ROOT = Path(os.environ.get("BENCH_STATE", "/state/runs")).parent / "zia-runs"
-TIMEOUT = 14400
+TIMEOUTS = {"smoke": 3600, "full": 172800}
 
 
 class Job(BaseModel):
@@ -25,7 +26,7 @@ class Job(BaseModel):
 
     dataset: Literal["fraud", "social", "ecommerce"]
     scope: Literal["smoke", "full"]
-    policy: Literal["frozen", "periodic", "drift", "incremental"]
+    policy: ZiaPolicy
     campaign: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -46,13 +47,25 @@ def perform(job):
     atomic_write(directory / "job.json", encoded(status))
     try:
         with (directory / "worker.log").open("a") as log:
-            result = subprocess.run([
+            with subprocess.Popen([
                 sys.executable, "-m", "continual_bench.evaluation.zia",
                 str(DATA_ROOT), job.dataset, job.scope, job.policy, str(directory),
                 "--campaign", job.campaign,
-            ], stdout=log, stderr=subprocess.STDOUT, timeout=TIMEOUT, check=False)
-        if result.returncode:
-            raise RuntimeError(f"benchmark exited {result.returncode}; inspect {key}/worker.log")
+            ], stdout=log, stderr=subprocess.STDOUT) as process:
+                timeout = TIMEOUTS[job.scope]
+                try:
+                    exit_code = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired as error:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    raise RuntimeError(
+                        f"benchmark timed out after {timeout}s; inspect {key}/worker.log"
+                    ) from error
+        if exit_code:
+            raise RuntimeError(f"benchmark exited {exit_code}; inspect {key}/worker.log")
         report = json.loads((directory / "report.json").read_text())
         receipt_path = directory / "receipt.json"
         receipt = json.loads(receipt_path.read_text())

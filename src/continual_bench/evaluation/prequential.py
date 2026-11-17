@@ -46,6 +46,7 @@ class Prequential(BinaryProtocol):
     def execute(self, run: BinaryRun) -> Outcome | Progress:
         config = run.config
         engine = run.snapshot["state"] if run.snapshot else self.build_engine(run)
+        previous_duration = getattr(engine, "evaluation_duration_seconds", 0.0)
         events = iter(self.stream(run))
         next_checkpoint = engine.next_seq + config.checkpoint_every
         probes = run.source.probes() if hasattr(run.source, "probes") else {}
@@ -61,10 +62,12 @@ class Prequential(BinaryProtocol):
                         run.progress(window["end_seq"], window)
             if engine.next_seq >= next_checkpoint:
                 engine.versions.flush()
+                engine.evaluation_duration_seconds = previous_duration + time.monotonic() - run.started
                 run.checkpoint(engine)
                 next_checkpoint = engine.next_seq + config.checkpoint_every
             if run.stop_after is not None and engine.next_seq >= run.stop_after:
                 engine.versions.flush()
+                engine.evaluation_duration_seconds = previous_duration + time.monotonic() - run.started
                 run.checkpoint(engine)
                 return Progress(engine.next_seq)
         if engine.next_seq != config.dataset.samples:
@@ -72,4 +75,5 @@ class Prequential(BinaryProtocol):
         engine.finish()
         engine.observer.sample_memory()
         engine.probe(probes)
+        engine.evaluation_duration_seconds = previous_duration + time.monotonic() - run.started
         return Outcome(engine.report(), engine, engine.model, engine.versions, engine.observer)

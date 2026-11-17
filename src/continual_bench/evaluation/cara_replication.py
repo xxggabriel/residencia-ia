@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,9 @@ from continual_bench.retraining.cara_reference import (
     threshold_schedule,
 )
 from continual_bench.retraining.schedule import alpha_max_same_batch
+
+from .epoch_history import pickle_state
+from .retraining_observations import candidate_report, sample_identity
 
 BATCHES, OFFLINE, GRID = 100, 25, 100
 REFERENCE = "ac2a600a3bbc5729087318087c9def96104c9023"
@@ -50,6 +54,10 @@ PAPER = {
 
 
 class ForestLearner:
+    observation_model = "random_forest"
+    observation_threshold = None  # Preserve the estimator's argmax and tie rule.
+    observation_step_kind = "sklearn_fit_call"
+
     def __init__(self, seed: int):
         self.seed = seed
 
@@ -72,13 +80,42 @@ class ForestLearner:
 
         if issparse(x):
             return forest.predict(x)
+        scores = ForestLearner._predict_scores(forest, x)
+        return forest.classes_[scores.argmax(axis=1)]
+
+    @staticmethod
+    def _predict_scores(forest, x):
         rows = np.asarray(x, dtype=np.float32, order="C")
         total = np.zeros((len(rows), len(forest.classes_)))
         for tree in forest.estimators_:
             counts = tree.tree_.predict(rows)
             counts = counts[:, 0, :] if counts.ndim == 3 else counts
             total += counts / counts.sum(axis=1, keepdims=True)
-        return forest.classes_[total.argmax(axis=1)]
+        return total
+
+    @staticmethod
+    def observation_predict(forest, x, positive):
+        from scipy.sparse import issparse
+
+        if issparse(x):
+            totals, denominator = forest.predict_proba(x), 1
+        else:
+            totals, denominator = ForestLearner._predict_scores(forest, x), len(forest.estimators_)
+        prediction = forest.classes_[totals.argmax(axis=1)]
+        positions = forest.classes_.tolist()
+        if positive is None:
+            return prediction, None
+        scores = (totals[:, positions.index(positive)] / denominator if positive in positions
+                  else np.zeros(x.shape[0]))
+        return prediction, scores
+
+    @staticmethod
+    def observation_durations(_index, elapsed):
+        return [elapsed]
+
+    @staticmethod
+    def observation_checkpoint(state):
+        return pickle_state(state), "pkl"
 
 
 def batches_for(name, *, directory="~/.cache/continual-bench/datasets", electricity_path=None,
@@ -100,16 +137,24 @@ class Phase:
     stale: np.ndarray
     accuracy: np.ndarray
     train_errors: list[list[np.ndarray]]  # indexed by batch, then model
+    tracking: dict | None = None
+    drift_updates: dict | None = None
 
 
-def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_baselines=False):
+def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_baselines=False,
+                tracking_dataset=None, phase_name=None, initial=None, drift_backend=None):
     """Train and score each candidate inside a single phase, using the reference's 90/10 split."""
     from sklearn.metrics.pairwise import rbf_kernel
     from sklearn.model_selection import train_test_split
 
+    started = time.perf_counter()
     splits = [train_test_split(x, y, test_size=0.1, random_state=0) for x, y in batches]
     query_stream = [(q, labels) for _, q, _, labels in splits] if queries is None else queries
-    models = [learner.fit(i, x, y) for i, (x, _, y, _) in enumerate(splits)]
+    models, fit_seconds = [], []
+    for i, (x, _, y, _) in enumerate(splits):
+        before = time.perf_counter()
+        models.append(learner.fit(i, x, y))
+        fit_seconds.append(time.perf_counter() - before)
     own_errors = [learner.losses(model, x, y).astype(bool)
                   for model, (x, _, y, _) in zip(models, splits, strict=True)]
 
@@ -123,7 +168,7 @@ def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_basel
         for m, model in enumerate(models[:t + 1]):
             accuracy.append(1.0 - learner.losses(model, query, labels).mean())
             loss = own_errors[m] if m == t else learner.losses(model, x, y).astype(bool)
-            if drift_baselines:
+            if drift_baselines or drift_backend is not None:
                 errors.append(loss)
             if m == t:
                 stale.append(0.0)
@@ -142,7 +187,25 @@ def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_basel
             stale[:t + 1, t] = costs
             accuracy[:t + 1, t] = scores
             errors.append(losses)
-    return Phase(stale, accuracy, errors)
+    phase = Phase(stale, accuracy, errors)
+    drift = None
+    if drift_backend is not None:
+        drift = {"detector_backend": drift_backend, "alarms": [], "coordinate": "batch_number"}
+        phase.drift_updates = drift_schedules(phase, drift_backend, alarms=drift["alarms"])
+        for detector in phase.drift_updates:
+            drift[f"{detector}_alarm_count"] = sum(event["detector"] == detector for event in drift["alarms"])
+    if tracking_dataset is not None:
+        phase.tracking = candidate_report(
+            tracking_dataset, learner.seed, [(x, y, test, labels) for x, test, y, labels in splits],
+            models, learner, fit_seconds, protocol=f"CARA-paper-{phase_name}-candidates", initial=initial,
+            duration_before_tracking=time.perf_counter() - started, drift=drift,
+            evaluation={
+                "rbf_gamma": gamma,
+                "policy_query_scope": "static_queries" if queries is not None else "batch_holdout",
+                "static_queries_sha256": sample_identity(queries) if queries is not None else None,
+            },
+        )
+    return phase
 
 
 def prequential_accuracy(accuracy, retrains):
@@ -164,7 +227,7 @@ def drift_detectors(backend):
     return (("adwin", ADWIN()), ("ddm", DDM()))
 
 
-def drift_schedules(phase, backend):
+def drift_schedules(phase, backend, *, alarms=None):
     schedules = {}
     for name, detector in drift_detectors(backend):
         model, retrains = 0, []
@@ -173,13 +236,16 @@ def drift_schedules(phase, backend):
             if detected:
                 model = t - 1
             detected = False
-            for loss in losses[model]:
+            for index, loss in enumerate(losses[model], 1):
                 if backend == "skmultiflow":
                     detector.add_element(int(loss))
-                    detected |= detector.detected_change()
+                    alarm = detector.detected_change()
                 else:
                     detector.update(int(loss))
-                    detected |= detector.drift_detected
+                    alarm = detector.drift_detected
+                detected |= alarm
+                if alarm and alarms is not None:
+                    alarms.append({"seq": t + 1, "offset_in_batch": index, "detector": name})
             if detected:
                 retrains.append(t)
         schedules[name] = retrains
@@ -241,9 +307,12 @@ def replicate(name, seeds=5, *, kappa_points=GRID, kappa_max=None, progress=None
     matrices = []
     for seed in range(seeds):
         learner = ForestLearner(seed)
-        offline = build_phase(batches[:OFFLINE], learner, gamma, offline_queries, workers=workers)
-        online = build_phase(batches[OFFLINE:], learner, gamma, online_queries, workers=workers,
-                             drift_baselines=drift_backend is not None)
+        offline = build_phase(batches[:OFFLINE], learner, gamma, offline_queries, workers=workers,
+                              tracking_dataset=name, phase_name="offline")
+        online = build_phase(
+            batches[OFFLINE:], learner, gamma, online_queries, workers=workers,
+            drift_backend=drift_backend, tracking_dataset=name, phase_name="online", initial=0,
+        )
         matrices.append((offline, online))
         emit({"event": "matrix", "dataset": name, "seed": seed})
 
@@ -257,7 +326,7 @@ def replicate(name, seeds=5, *, kappa_points=GRID, kappa_max=None, progress=None
     emit({"event": "grid", "dataset": name, "kappa_max": top, "points": kappa_points})
     runs = []
     for seed, (offline, online) in enumerate(matrices):
-        baselines = drift_schedules(online, drift_backend) if drift_backend else {}
+        baselines = online.drift_updates or {}
         runs.append([evaluate_kappa(offline, online, kappa, seed, baselines) for kappa in kappas])
         emit({"event": "analysis", "dataset": name, "seed": seed})
 
@@ -276,7 +345,8 @@ def replicate(name, seeds=5, *, kappa_points=GRID, kappa_max=None, progress=None
             "summary": summary, "kappa": kappas, "curves": curves, "drift_backend": drift_backend,
             "kappa_range": "offline-oracle" if kappa_max is None else "fixed",
             "kernel_gamma": gamma if gamma is not None else "1/n_features",
-            "oracle_retrains": summary["oracle_staleness"]["retrains"]}
+            "oracle_retrains": summary["oracle_staleness"]["retrains"],
+            "candidate_tracking": [{"offline": a.tracking, "online": b.tracking} for a, b in matrices]}
 
 
 def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fraction=0.25, **options):
@@ -286,10 +356,12 @@ def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fracti
     stream, queries, gamma = batches_for(name, **options)
     if batches > len(stream):
         raise ValueError("showcase horizon exceeds the available batches")
-    accuracy, deployed, changes, kappas = [], [], [], []
+    accuracy, deployed, changes, kappas, tracking = [], [], [], [], []
     for seed in range(seeds):
         phase = build_phase(stream[:batches], ForestLearner(seed), gamma,
-                            None if queries is None else queries[:batches])
+                            None if queries is None else queries[:batches],
+                            tracking_dataset=name, phase_name="showcase", initial=offline)
+        tracking.append(phase.tracking)
         history, online = phase.stale[:offline, :offline], phase.stale[offline:, offline:]
         kappa = fraction * alpha_max_same_batch(history.T, 0, 1, offline - 1)
         tau = fit_threshold(history, kappa, cumulative=False, seed=seed)
@@ -306,4 +378,5 @@ def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fracti
     return {"dataset": name, "rule": "cara", "seeds": seeds, "batches": batches, "offline": offline,
             "alpha": float(np.mean(kappas)), "accuracy_mean": stack.mean(axis=0).tolist(),
             "accuracy_std": stack.std(axis=0).tolist(), "schedule_mean": scores.mean(axis=0).tolist(),
-            "schedule_std": scores.std(axis=0).tolist(), "retrain_batches": marked}
+            "schedule_std": scores.std(axis=0).tolist(), "retrain_batches": marked,
+            "candidate_tracking": tracking}

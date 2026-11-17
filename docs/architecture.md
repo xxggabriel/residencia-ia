@@ -105,7 +105,7 @@ MLflow. Consulte a campanha `infra/examples/campaign-binary-matrix.json` e o
   de código, dependências, fonte e transporte antes de retomar.
 - Modelos registrados pelo publicador local carregam o código empacotado. Os scripts de
   recuperação leem o `loader_module` registrado no `MLmodel`.
-- Registro da refatoração de 08/11/2026. A comparação no homelab conferiu igualdade de digests
+- Registro da refatoração de 08/11/2026. A comparação conferiu igualdade de digests
   de predição e métricas em 100 casos, sendo 91 binários, 3 typed e 6 de épocas. Esse recorte
   descreve a equivalência entre as duas revisões verificadas naquela data.
 

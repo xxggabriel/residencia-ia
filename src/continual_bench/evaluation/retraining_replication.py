@@ -7,6 +7,7 @@ UPF Table 4; UPF with delta = 0.95. ADWIN/KSWIN/FHDDM baselines are not reproduc
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -15,6 +16,8 @@ import numpy as np
 from continual_bench.datasets import retraining_benchmarks as data
 from continual_bench.retraining import build_paper_matrix
 from continual_bench.retraining.analysis import DEFAULT_RULES, analyze, trapezoid
+
+from .retraining_observations import candidate_report
 
 OFFLINE, ONLINE, ALPHAS = 7, 8, 10
 # Extra resolution at low costs, where the per-query staleness objective changes schedules.
@@ -43,18 +46,48 @@ class XGBoostLearner:
     Use the native API to preserve the learner settings of the original benchmark.
     """
 
+    observation_model = "xgboost"
+    observation_threshold = 0.5
+    observation_step_kind = "xgboost_boosting_round"
+
     def __init__(self, seed: int):
         self.params = {"objective": "binary:logistic", "seed": seed, "nthread": 2, "verbosity": 0}
+        self._round_durations = {}
 
     def fit(self, index, x, y):
         import xgboost
 
-        return xgboost.train(self.params, xgboost.DMatrix(x, label=y), num_boost_round=100)
+        durations = self._round_durations[index] = []
+
+        class ObserveRounds(xgboost.callback.TrainingCallback):
+            def before_iteration(self, model, epoch, evals_log):
+                self.started = time.perf_counter()
+                return False
+
+            def after_iteration(self, model, epoch, evals_log):
+                durations.append(time.perf_counter() - self.started)
+                return False
+
+        return xgboost.train(
+            self.params, xgboost.DMatrix(x, label=y), num_boost_round=100, callbacks=[ObserveRounds()],
+        )
 
     def losses(self, state, x, y):
+        prediction, _ = self.observation_predict(state, x, 1)
+        return (prediction != y).astype(np.float64)
+
+    def observation_predict(self, state, x, positive):
         import xgboost
 
-        return ((state.predict(xgboost.DMatrix(x)) >= 0.5).astype(np.int64) != y).astype(np.float64)
+        scores = state.predict(xgboost.DMatrix(x))
+        return (scores >= self.observation_threshold).astype(np.int64), scores if positive == 1 else None
+
+    def observation_durations(self, index, _elapsed):
+        return self._round_durations[index]
+
+    @staticmethod
+    def observation_checkpoint(state):
+        return bytes(state.save_raw(raw_format="ubj")), "ubj"
 
 
 def trial_batches(name: str, trial: int, electricity_path=None, size=None, directory=DEFAULT_CACHE, *,
@@ -84,6 +117,7 @@ def trial_batches(name: str, trial: int, electricity_path=None, size=None, direc
 
 def run_trial(name, trial, *, electricity_path=None, airlines_path=None, size=None, samples=100, rules=None,
               compare_oracles=False, decision_timing="same-batch"):
+    started = time.perf_counter()
     if compare_oracles and name != "electricity":
         raise ValueError("the shared CARA/UPF benchmark uses Electricity")
     if decision_timing not in ("same-batch", "next-batch"):
@@ -91,8 +125,14 @@ def run_trial(name, trial, *, electricity_path=None, airlines_path=None, size=No
     if decision_timing == "next-batch" and not compare_oracles:
         raise ValueError("next-batch timing requires the shared benchmark")
     batches = trial_batches(name, trial, electricity_path, size, airlines_path=airlines_path)
-    matrix, _ = build_paper_matrix(batches, XGBoostLearner(trial), OFFLINE, seed=trial,
-                                   separate_query_split=compare_oracles)
+    learner = XGBoostLearner(trial)
+    matrix, states = build_paper_matrix(batches, learner, OFFLINE, seed=trial,
+                                        separate_query_split=compare_oracles)
+    tracking = candidate_report(
+        name, trial, batches, states, learner, matrix.fit_seconds.tolist(), protocol="UPF-paper-candidates",
+        initial=matrix.initial, duration_before_tracking=time.perf_counter() - started,
+        evaluation={"separate_query_split": compare_oracles, "decision_timing": decision_timing},
+    )
     selected_rules = tuple(rules) if rules else DEFAULT_RULES
     if compare_oracles:
         selected_rules = (*selected_rules, "oracle_staleness")
@@ -100,8 +140,10 @@ def run_trial(name, trial, *, electricity_path=None, airlines_path=None, size=No
             errors = matrix.err.copy()
             np.fill_diagonal(errors, np.nan)
             matrix = replace(matrix, err=errors, paper_timing=False)
-    return analyze(matrix, n_alphas=ALPHAS, alpha_top=ALPHA_MAX[name], samples=samples, seed=trial,
-                   rules=selected_rules, alpha_grid=COMPARISON_GRID if compare_oracles else None)
+    result = analyze(matrix, n_alphas=ALPHAS, alpha_top=ALPHA_MAX[name], samples=samples, seed=trial,
+                     rules=selected_rules, alpha_grid=COMPARISON_GRID if compare_oracles else None)
+    result["candidate_tracking"] = tracking
+    return result
 
 
 def replicate(name, trials=10, *, compare_oracles=False, **options):
@@ -137,7 +179,8 @@ def replicate(name, trials=10, *, compare_oracles=False, **options):
             table[level][rule] = {"alpha": row["alpha"], **stats}
     result = {"dataset": name, "trials": trials, "alpha_max": ALPHA_MAX[name], "summary": summary,
             "alphas": runs[0]["alphas"], "curves": curves, "table": table,
-            "oracle_alpha_max_per_trial": [run["setup"]["oracle_alpha_max"] for run in runs]}
+            "oracle_alpha_max_per_trial": [run["setup"]["oracle_alpha_max"] for run in runs],
+            "candidate_tracking": [run["candidate_tracking"] for run in runs]}
     if compare_oracles:
         result["comparison"] = {
             "same_batch": options.get("decision_timing", "same-batch") == "same-batch",

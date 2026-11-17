@@ -14,8 +14,11 @@ from continual_bench.core.contracts import event_json
 from continual_bench.evaluation.artifacts import binary_figures, system_figures, write_artifacts
 from continual_bench.evaluation.binary import BinaryRun, Progress, protocol_for, read_events
 from continual_bench.evaluation.environment import environment, peak_rss_bytes
+from continual_bench.evaluation.stream_observations import BINARY_QUALITY, binary_observations
+from continual_bench.evaluation.stream_training_history import stream_training_history
 from continual_bench.evaluation.system_metrics import SystemMetricsSampler
 from continual_bench.evaluation.tracking import metric_catalog, save_tracking_files
+from continual_bench.evaluation.training_evidence import write_training_artifacts
 from continual_bench.infrastructure.storage import LocalCheckpoints, atomic_write, run_lock
 from continual_bench.infrastructure.versioning import ModelVersions
 
@@ -120,6 +123,7 @@ def evaluate(
             report = finalize(outcome, run, protocol, contract, env, started)
         report["system_metrics"] = system.report()
         report["artifacts"] = write_binary_artifacts(directory, report)
+        report["artifacts"] = write_training_artifacts(directory, report)
         # Report first, then complete checkpoint: either crash point is safe to recompute/reuse.
         atomic_write(report_path, json.dumps(report, indent=2).encode())
         checkpoints.save(identity, {"contract": contract, "state": outcome.state, "complete": True})
@@ -145,7 +149,18 @@ def finalize(outcome, run, protocol, contract, env, started) -> dict:
             "peak_rss_bytes_process": peak_rss_bytes(),
         }
     )
-    save_tracking_files(directory, report, settings, outcome.observer)
+    tick = time.perf_counter()
+    events = run.events() if config.detector.name != "none" and run.manifest.get("changepoints") else None
+    save_tracking_files(directory, report, settings, outcome.observer, events=events)
+    report["training_history"] = stream_training_history(
+        report, directory, versions=outcome.versions.entries, captured=outcome.observer.learning_steps,
+        quality=BINARY_QUALITY,
+    )
+    report["tracking_observations"] = binary_observations(
+        report, outcome.observer,
+        duration_seconds=getattr(outcome.state, "evaluation_duration_seconds", report["compute_seconds"]),
+        tracking_seconds=time.perf_counter() - tick,
+    )
     if settings.get("task_evaluation") is not None:
         from continual_bench.evaluation.reporting import supplemental_report
 

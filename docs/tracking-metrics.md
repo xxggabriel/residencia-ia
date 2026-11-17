@@ -257,3 +257,9 @@ recebe métricas das campanhas Zia, das matrizes e dos jobs nativos com a granul
 própria de cada avaliador. O catálogo no SageMaker Unified Studio associa o snapshot
 ao run Zia cujo manifesto final comprova o vínculo. Veja
 [rastreamento no MLflow](mlflow-tracking.md) e [publicação do catálogo](aws/operations.md#publicação-automática-no-catálogo).
+
+## Observações por ajuste
+
+O [contrato de observações por run e ajuste](benchmark-observations.md) detalha
+o inventário legado, os novos escopos e o namespace adicional no MLflow. A
+revisão do catálogo identifica a extensão sem renomear as séries existentes.

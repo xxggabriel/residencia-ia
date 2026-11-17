@@ -7,12 +7,15 @@ costs, `system/*`, plots/data artifacts, parameters, tags and dataset lineage. T
 failures never abort training; they are counted and reported.
 """
 
+import json
 import math
 import re
 import time
+from pathlib import Path
 
 from .metric_tracking import log_metric_points
 from .run_artifacts import publish_run_artifacts
+from .storage import atomic_write, publication_lock
 
 EXPERIMENT = "continual-bench/semana09/iterative-catalog-v1"
 
@@ -43,6 +46,34 @@ class IterativeMlflowTracker:
             self.errors.append(f"{action}: {type(error).__name__}: {str(error)[:300]}")
             return None
 
+    @property
+    def run_key(self):
+        return f"{self.campaign}-{self.dataset}"
+
+    def resume_publication(self, directory):
+        """Reuse the original run and its live series for a completed retained report."""
+        directory = Path(directory)
+        result = directory / "result.json"
+        with publication_lock(directory, "iterative-tracking"):
+            if not result.is_file():
+                return None
+            report = json.loads(result.read_bytes())
+            if report.get("complete") is not True or (report.get("mlflow") or {}).get("mlflow_run_id"):
+                return report.get("mlflow")
+            experiment = self.client.get_experiment_by_name(EXPERIMENT)
+            if experiment is None:
+                raise RuntimeError("Missing iterative experiment for retained report")
+            self.experiment_id = experiment.experiment_id
+            found = self.client.search_runs(
+                [self.experiment_id], f"tags.`cb-run-id` = '{self.run_key}'", max_results=2,
+            )
+            if len(found) != 1:
+                raise ValueError("Expected one original MLflow run for iterative republication")
+            self.run_id = found[0].info.run_id
+            report["mlflow"] = self._publish(report, directory)
+            atomic_write(result, json.dumps(report, default=str).encode())
+            return report["mlflow"]
+
     def start(self, params, samples):
         from mlflow.entities import Dataset, DatasetInput, InputTag, Param, RunTag
 
@@ -50,7 +81,7 @@ class IterativeMlflowTracker:
         experiment = client.get_experiment_by_name(EXPERIMENT)
         self.experiment_id = experiment.experiment_id if experiment else client.create_experiment(EXPERIMENT)
         short = self.git_sha[:7]
-        key = f"{self.campaign}-{self.dataset}"
+        key = self.run_key
         tags = {"cb-dataset": self.dataset, "cb-policy": "iterative", "cb-scope": "full",
                 "cb-model": self.model, "cb-run-id": key, "cb-campaign-id": self.campaign,
                 "cb-git-sha": self.git_sha, "zia_run_key": key, "mlflow.source.type": "JOB",
@@ -92,6 +123,10 @@ class IterativeMlflowTracker:
 
     def publish(self, report, directory):
         """Final points, artifacts and run termination; returns a receipt dict."""
+        with publication_lock(directory, "iterative-tracking"):
+            return self._publish(report, directory)
+
+    def _publish(self, report, directory):
         from mlflow.entities import RunTag
 
         points = []

@@ -24,12 +24,23 @@ import numpy as np
 
 N_POINTS = 512  # labeled points kept per batch for the CARA similarity-weighted staleness
 N_QUERIES = 100  # query points per batch (CARA-D: sampled from the data stream itself)
+POLICY_MISSING_FEATURES = "warmup_column_mean_or_zero"
+
+
+def _finite_feature_stats(features):
+    observed = np.isfinite(features)
+    sums = features.sum(axis=0, dtype=np.float64, where=observed)
+    return sums, observed.sum(axis=0)
+
+
+def _geometry_sample(features, fill):
+    return np.where(np.isfinite(features), features, fill)
 
 
 class Learner(Protocol):
     """Trains one model per batch and scores any trained model on any batch."""
 
-    def fit(self, index: int, x: np.ndarray, y: np.ndarray) -> object:
+    def fit(self, index: int, x: np.ndarray, y: np.ndarray, *context: np.ndarray) -> object:
         """Train the model produced at the end of batch ``index``; the learner owns its window."""
 
     def losses(self, state: object, x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -174,7 +185,7 @@ class MatrixView:
 
 
 def build_matrix(
-    stream: Iterable[tuple[np.ndarray, np.ndarray]],
+    stream: Iterable[tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]],
     learner: Learner,
     *,
     offline: int | None = None,
@@ -189,7 +200,13 @@ def build_matrix(
     The model of the final batch is never trained (it could not serve any later batch). With
     ``query_stream`` (CARA's "-S" streams) the queries are the given labeled points instead of a
     sample of the batch, and ``err`` is measured on them. ``workers > 1`` scores the trained models of
-    one batch in threads (``learner.losses`` must be thread-safe).
+    one batch in threads (``learner.losses`` must be thread-safe). An optional third array in a
+    batch (such as timestamps) is forwarded to the learner's fit only.
+
+    The RBF samples and feature means used by the policies fill missing values with
+    the observed column mean in the warm-up batch, or zero when that column has no
+    observations. This reference is fixed before any later batch is processed.
+    The learner consumes the unchanged features, including missing values.
     """
     rng = np.random.default_rng(seed)
     states: list[object] = []
@@ -200,40 +217,44 @@ def build_matrix(
     query_iterator = None if query_stream is None else iter(query_stream)
     pending = next(iterator, None)
     j = 0
+    feature_fill = None
     while pending is not None:
-        x, y = pending
+        x, y, *fit_context = pending
         pending = next(iterator, None)
         x = np.asarray(x)
         if not len(y) or len(x) != len(y):
             raise ValueError("every batch needs rows and matching labels")
+        sums, observed = _finite_feature_stats(x)
+        if feature_fill is None:
+            feature_fill = np.divide(sums, observed, out=np.zeros_like(sums), where=observed > 0)
         point_index = rng.choice(len(y), size=min(n_points, len(y)), replace=False)
         if query_iterator is None:
             query_index = rng.choice(len(y), size=min(n_queries, len(y)), replace=False)
-            queries.append(x[query_index].astype(np.float64))
+            queries.append(_geometry_sample(x[query_index], feature_fill))
             query_x = query_y = None
         else:
             query_x, query_y = (np.asarray(v) for v in next(query_iterator))
-            queries.append(query_x.astype(np.float64))
-        points.append(x[point_index].astype(np.float64))
-        means.append(x.mean(axis=0, dtype=np.float64))
+            queries.append(_geometry_sample(query_x, feature_fill))
+        points.append(_geometry_sample(x[point_index], feature_fill))
+        means.append((sums + (len(x) - observed) * feature_fill) / len(x))
         rows.append(len(y))
         def score(state, x=x, y=y, query_x=query_x, query_y=query_y):
             loss = np.asarray(learner.losses(state, x, y), dtype=np.float64)
             on_queries = loss if query_x is None else np.asarray(
                 learner.losses(state, query_x, query_y), dtype=np.float64)
-            return loss, float(on_queries.mean())
+            return loss[point_index], float(on_queries.mean())
 
         if workers > 1 and len(states) > 1:
             with ThreadPoolExecutor(workers) as pool:
                 scored = list(pool.map(score, states))
         else:
             scored = [score(state) for state in states]
-        for i, (loss, error) in enumerate(scored):
+        for i, (sampled_loss, error) in enumerate(scored):
             errs[i].append(error)
-            sub_loss[i, j] = loss[point_index]
+            sub_loss[i, j] = sampled_loss
         if pending is not None:
             started = time.perf_counter()
-            state = learner.fit(j, x, y)
+            state = learner.fit(j, x, y, *fit_context)
             seconds.append(time.perf_counter() - started)
             states.append(state)
             errs.append([])

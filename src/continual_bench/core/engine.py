@@ -136,7 +136,7 @@ class Engine:
             if decision.action != "none":
                 train_samples = self._admitted_training(decision)
                 if train_samples is not None:
-                    self._update(event, decision, train_samples, now)
+                    self._update(event, decision, train_samples, now, prediction=(p, trace))
             if self.current.n == self.metric_window:
                 self.close_window(event.seq)
             if self.observer is not None:
@@ -145,14 +145,17 @@ class Engine:
     def _learn_warmup(self, event: Event, p: float, trace: dict, now: int) -> None:
         train_started = time.perf_counter()
         self.model.learn(dict(event.x), event.y)
+        seconds = time.perf_counter() - train_started
         if self.observer is not None:
-            self.observer.warmup_train_seconds += time.perf_counter() - train_started
+            self.observer.warmup_train_seconds += seconds
             self.observer.warmup_train_samples += 1
+        if observer := getattr(self.observer, "record_learning", None):
+            observer(event.seq, seconds, 1, initial=True,
+                     prediction=self._learning_prediction(event, p, trace))
         self.policy.updated(self.labeled)
         if self.versions is not None and event.seq == self.warmup - 1:
-            self.versions.record(self.model, {"action": "initial_fit", "seq_range": [0, self.warmup],
-                                              "label_available_at": event.available_at,
-                                              "released_at": now})
+            self._record_model({"action": "initial_fit", "seq_range": [0, self.warmup],
+                                "label_available_at": event.available_at, "released_at": now})
         if self.observer is not None:
             self.observer.after_label(event, p, trace, now, self.model, False)
 
@@ -210,14 +213,26 @@ class Engine:
                 return None
         return train_samples
 
-    def _update(self, event: Event, decision: Decision, train_samples: int, now: int) -> None:
+    def _record_model(self, training):
+        version = self.versions.record(self.model, training)
+        if observer := getattr(self.observer, "recorded_model_version", None):
+            observer(version)
+
+    @staticmethod
+    def _learning_prediction(event, probability, trace):
+        return {"probability": probability, "label": bool(event.y),
+                "model_version": trace.get("model_version")}
+
+    def _update(self, event: Event, decision: Decision, train_samples: int, now: int, *, prediction=None):
         validation_count = self._validation_count
         previous = self.observer.before_update(self.model) if self.observer is not None else None
         started = time.perf_counter()
         promoted = True
-        validation = {}
+        validation, evaluation, checkpoint = {}, None, None
         if decision.action == "reset_retrain":
-            promoted, validation, training_seconds = self._retrain(event, train_samples, started)
+            promoted, validation, training_seconds, evaluation, checkpoint = self._retrain(
+                event, train_samples, started,
+            )
         elif decision.action == "learn_one":
             self.model.learn(dict(event.x), event.y)
             training_seconds = time.perf_counter() - started
@@ -235,17 +250,20 @@ class Engine:
                           if decision.action == "reset_retrain" else event.seq)
         self.candidates.append({**record, "promoted": promoted,
                                 "train_seq_range": [training_start, training_end], **validation})
+        if observer := getattr(self.observer, "record_learning", None):
+            recorded = (self._learning_prediction(event, *prediction)
+                        if prediction is not None and decision.action == "learn_one" else None)
+            observer(event.seq, training_seconds, train_samples, prediction=recorded,
+                     validation=evaluation, checkpoint=checkpoint)
         if promoted:
             self.updates.append(record)
             if self.observer is not None:
                 self.observer.after_update(previous, record)
             if self.versions is not None:
-                self.versions.record(self.model, {"action": decision.action,
-                                                  "seq_range": [training_start, training_end],
-                                                  "label_available_at": event.available_at,
-                                                  "released_at": now})
+                self._record_model({"action": decision.action, "seq_range": [training_start, training_end],
+                                    "label_available_at": event.available_at, "released_at": now})
 
-    def _retrain(self, event: Event, train_samples: int, started: float) -> tuple[bool, dict, float]:
+    def _retrain(self, event: Event, train_samples: int, started: float):
         """Fit a fresh candidate on the bounded replay; optionally gate it on a past-label holdout."""
         validation_count = self._validation_count
         candidate = self.model_factory()
@@ -254,12 +272,15 @@ class Engine:
         for x, y in training:
             candidate.learn(dict(x), y)
         training_seconds = time.perf_counter() - started
-        promoted, validation = True, {}
+        promoted, validation, evaluation, checkpoint = True, {}, None, None
         if validation_count:
             holdout = replay[-validation_count:]
             incumbent = copy.deepcopy(self.model)
-            candidate_accuracy = self.holdout_accuracy(candidate, holdout)
-            incumbent_accuracy = self.holdout_accuracy(incumbent, holdout)
+            capture = getattr(self.observer, "record_learning", None) is not None
+            candidate_metrics = Metrics() if capture else None
+            incumbent_metrics = Metrics() if capture else None
+            candidate_accuracy = self.holdout_accuracy(candidate, holdout, scorer=candidate_metrics)
+            incumbent_accuracy = self.holdout_accuracy(incumbent, holdout, scorer=incumbent_metrics)
             gain = candidate_accuracy - incumbent_accuracy
             promoted = gain > self.promotion.get("min_improvement", 0)
             validation = {"validation_samples": validation_count,
@@ -268,20 +289,29 @@ class Engine:
                           "incumbent_accuracy": incumbent_accuracy,
                           "accuracy_gain": gain,
                           "validation_seconds": time.perf_counter() - started - training_seconds}
+            if capture:
+                began = time.perf_counter()
+                evaluation = {"promotion_validation/candidate": candidate_metrics.values(),
+                              "promotion_validation/incumbent": incumbent_metrics.values()}
+                if not promoted and self.versions is not None:
+                    checkpoint = self.versions.record_candidate(candidate, event.seq)
+                self.observer.instrumentation_seconds += time.perf_counter() - began
         if promoted:
             self.model = candidate
             if self.reset_detector:
                 self.detector = self.detector_factory()
-        return promoted, validation, training_seconds
+        return promoted, validation, training_seconds, evaluation, checkpoint
 
     @staticmethod
-    def holdout_accuracy(model, holdout):
+    def holdout_accuracy(model, holdout, *, scorer=None):
         correct = 0
         for x, y in holdout:
             probability = model.predict(dict(x))
             if not 0 <= probability <= 1:
                 raise ValueError("invalid prediction during promotion validation")
             correct += (probability >= 0.5) == y
+            if scorer is not None:
+                scorer.add(y, probability)
         return correct / len(holdout)
 
     def close_window(self, end_seq: int) -> None:

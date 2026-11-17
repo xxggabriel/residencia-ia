@@ -382,6 +382,7 @@ def test_cli_recovers_only_offline_when_opted_in_and_replay_preserves_originals(
 
 def test_fresh_helper_loads_a_local_pyfunc_bundled_implementation_without_training(tmp_path):
     mlflow = pytest.importorskip("mlflow")
+    import pandas as pd
     from mlflow.models import ModelSignature
     from mlflow.types import ColSpec, Schema
 
@@ -413,6 +414,7 @@ def test_fresh_helper_loads_a_local_pyfunc_bundled_implementation_without_traini
     mlflow.pyfunc.save_model(
         path=str(destination), loader_module="continual_bench.adapters.model_loader", data_path=str(data),
         code_paths=[str(package)], pip_requirements=["numpy", "pandas"],
+        input_example=pd.DataFrame({"value": [2.0]}),
         signature=ModelSignature(inputs=Schema([ColSpec("double", "value")]),
                                  outputs=Schema([ColSpec("double")])),
     )

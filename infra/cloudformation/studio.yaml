@@ -142,7 +142,9 @@ Resources:
                 Resource: !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/studio/requests/*"
               - Effect: Allow
                 Action: s3:GetObject
-                Resource: !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/campaigns/*/summary.json"
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/campaigns/*/summary.json"
+                  - !Sub "arn:${AWS::Partition}:s3:::${DataBucket}/campaigns/*/artifacts/data/index.json"
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: !Ref KeyArn

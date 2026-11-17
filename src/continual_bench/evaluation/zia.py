@@ -6,7 +6,10 @@ import json
 import os
 import time
 from collections import deque
+from contextlib import nullcontext
+from hashlib import sha256
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import get_args
 
 os.environ["OMP_NUM_THREADS"] = "2"
@@ -36,11 +39,13 @@ from continual_bench.evaluation.zia_metrics import (  # noqa: E402
     decision_threshold,
     ratio,
 )
+from continual_bench.evaluation.zia_observations import TemporalHoldoutProbes, run_observations  # noqa: E402
 from continual_bench.evaluation.zia_predictions import (  # noqa: E402
     PredictionArchive,
     prediction_manifest,
 )
-from continual_bench.infrastructure.storage import atomic_write  # noqa: E402
+from continual_bench.evaluation.zia_training_history import TrainingHistory, unique_train_rows  # noqa: E402
+from continual_bench.infrastructure.storage import atomic_write, run_lock  # noqa: E402
 from continual_bench.models.zia import make_zia_model  # noqa: E402
 
 POLICIES = get_args(ZiaPolicy)
@@ -89,15 +94,20 @@ def batches(path, size, split):
         offset += len(y)
 
 
-def drift_alarms(detector, policy, probabilities, labels, metrics, threshold=0.5):
+def drift_alarms(detector, policy, probabilities, labels, metrics, threshold=0.5, *, on_alarm=None):
     if policy == "drift":
         detector.update(1 - metrics["accuracy"])
+        if on_alarm is not None and detector.drift_detected:
+            on_alarm(len(labels) - 1)
         return int(detector.drift_detected)
     decisions = decide(probabilities, threshold)
     alarms = 0
-    for error in (decisions != labels).tolist():
+    for index, error in enumerate((decisions != labels).tolist()):
         detector.update(int(error))
-        alarms += int(detector.drift_detected)
+        if detector.drift_detected:
+            alarms += 1
+            if on_alarm is not None:
+                on_alarm(index)
     return alarms
 
 
@@ -111,6 +121,7 @@ def run(
     *,
     tracker=None,
     iterative_config=None,
+    stop_requested=None,
 ):
     if policy not in POLICIES:
         raise ValueError(f"unknown Zia policy: {policy}")
@@ -123,14 +134,16 @@ def run(
     spec = DATASETS[dataset]
     classes = len(spec["classes"])
     iter_config = IterativeTrainingConfig.from_params(iterative_config)
-    model = make_zia_model(spec["model"], classes, config=iter_config, dataset=dataset)
+    costs = profile(tracking_settings["costs"])
+    threshold = decision_threshold(costs) if classes == 2 else None
+    model = make_zia_model(spec["model"], spec["classes"], config=iter_config, dataset=dataset,
+                           decision_threshold=threshold)
+    history = TrainingHistory(output, stop_requested)
     monitoring = SystemMetricsSampler(output, interval=0.5 if scope == "smoke" else 5)
     replay = deque(maxlen=REPLAY_BLOCKS)
     detector = None
     policy_settings = {}
     block_rows = BLOCK_ROWS[scope]
-    costs = profile(tracking_settings["costs"])
-    threshold = decision_threshold(costs) if classes == 2 else None
     batch_policy = None
     retraining_options = zia_retraining.settings(tracking_settings) if policy in BATCH_POLICY_KINDS else None
     if policy == "online":
@@ -154,31 +167,40 @@ def run(
                            "offline_blocks": retraining_options["offline_blocks"],
                            "timing": "retrain after block t serves t+1 onward"}
     matrix = states = None
+
     def scores():
         return ClassificationMetrics(classes, threshold)
 
     online, holdout = scores(), scores()
-    windows, versions = [], []
+    windows, versions, alarm_events = [], [], []
+    observed_windows = []
+    probes = TemporalHoldoutProbes()
+    tracking_seconds = 0.0
     class_counts = np.zeros(classes, dtype=np.int64)
     train_seconds = predict_seconds = 0.0
-    presentations = unique = resets = alarms = rows = stream_blocks = 0
-    last_training_end = last_timestamp = None
+    resets = rows = stream_blocks = 0
+    last_timestamp = None
     warmup = 0
     split = manifest["rows"] - int(manifest["rows"] * HOLDOUT_FRACTION)
-    with monitoring, PredictionArchive(
+    candidate_dir = TemporaryDirectory(prefix="zia-candidates-") if batch_policy else nullcontext()
+    with monitoring, candidate_dir as scratch, PredictionArchive(
         output, spec["classes"], manifest["sha256"], "native", tracking_settings["fading_factor"],
         threshold=threshold,
     ) as predictions:
         if batch_policy is not None:
             matrix, states = zia_retraining.stream_matrix(
-                ((x, y) for _, x, y, held_out in batches(path, block_rows, split) if not held_out),
-                make_zia_model(spec["model"], classes, config=iter_config, dataset=dataset), threshold,
-                iter_config, REPLAY_BLOCKS, retraining_options)
+                ((x, y, ts) for ts, x, y, held_out in batches(path, block_rows, split) if not held_out),
+                make_zia_model(spec["model"], spec["classes"], config=iter_config, dataset=dataset,
+                               decision_threshold=threshold),
+                threshold, iter_config, REPLAY_BLOCKS, retraining_options,
+                history=history, scratch=Path(scratch), tracker=tracker,
+            )
             batch_policy.prepare(matrix)
             policy_settings["offline_blocks"] = matrix.offline
         for step, (timestamps, x, y, is_holdout) in enumerate(batches(path, block_rows, split)):
+            history.check_interrupted()
             if ((last_timestamp is not None and timestamps[0] < last_timestamp)
-                    or np.any(timestamps[1:] < timestamps[:-1]) or np.any(y >= classes)):
+                    or np.any(timestamps[1:] < timestamps[:-1]) or np.any((y < 0) | (y >= classes))):
                 raise ValueError("unordered timestamps or invalid labels")
             last_timestamp = int(timestamps[-1])
             start, rows = rows, rows + len(y)
@@ -186,6 +208,8 @@ def run(
             action = "initial" if step == 0 else None
             chosen, phase = (states[0] if step == 0 and states is not None else None), None
             if not step:
+                if is_holdout:
+                    raise ValueError("no warm-up rows strictly before the temporal holdout")
                 warmup = len(y)
             if step:
                 timer = time.monotonic()
@@ -203,15 +227,34 @@ def run(
                     "prediction_seconds": elapsed, "prediction_throughput_per_second": len(y) / elapsed,
                     **metrics,
                 })
+                mark = time.monotonic()
+                serving = versions[-1]
+                observed_windows.append({
+                    "step": rows, "start_seq": start, "scope": windows[-1]["scope"],
+                    "quality": window.quality(spec["classes"]), "model_version": len(versions) - 1,
+                    "fit_id": serving["fit_id"], "checkpoint": serving["sha256"],
+                    "inference_seconds": elapsed, "start_time_ms": int(timestamps[0]),
+                    "end_time_ms": last_timestamp,
+                })
+                if is_holdout:
+                    probes.add(start, timestamps, x, y)
+                tracking_seconds += time.monotonic() - mark
                 if not is_holdout:
                     stream_blocks += 1
                     if policy == "periodic" or detector is not None:
-                        replay.append((start, x, y))
-                    block_alarms = (
-                        drift_alarms(detector, policy, probabilities, y, metrics, threshold)
-                        if detector is not None else 0
-                    )
-                    alarms += block_alarms
+                        replay.append((start, x, y, timestamps))
+                    block_alarms = 0
+                    if detector is not None:
+                        alarm_offsets = []
+                        block_alarms = drift_alarms(
+                            detector, policy, probabilities, y, metrics, threshold,
+                            on_alarm=alarm_offsets.append,
+                        )
+                        alarm_events.extend({
+                            "seq": start + offset + 1, "block_index": step, "block_end_seq": rows,
+                            "timestamp_ms": int(timestamps[offset]), "detector": policy_settings["detector"],
+                            "signal": policy_settings["signal"],
+                        } for offset in alarm_offsets)
                     if policy == "online":
                         action = "online"
                     elif policy == "incremental":
@@ -230,49 +273,67 @@ def run(
                 timer = time.monotonic()
                 if chosen is not None:
                     # Pre-trained for the matrix with this exact window; no second fit.
-                    model.load(chosen["payload"])
-                    train_start, fit_rows, iterations = chosen["start"], chosen["rows"], chosen["iterations"]
-                    fit_x = fit_y = None
-                    resets += action == "reset_retrain"
-                elif action == "reset_retrain":
-                    train_start = replay[0][0]
-                    fit_x = np.concatenate([item[1] for item in replay])
-                    fit_y = np.concatenate([item[2] for item in replay])
-                    fit_rows = len(fit_y)
-                    resets += 1
+                    fit = chosen["fit"]
+                    payload = chosen["path"].read_bytes()
+                    extension = chosen["path"].suffix[1:]
+                    model.load(payload)
                 else:
-                    train_start, fit_x, fit_y = start, x, y
-                    fit_rows = len(fit_y)
-                if chosen is not None:
-                    pass
-                elif action == "online":
-                    iterations = model.fit_online(fit_x, fit_y)
-                else:
-                    iterations = model.fit(
-                        fit_x, fit_y, action == "continue", config=iter_config, tracker=tracker,
+                    if action == "reset_retrain":
+                        train_start = replay[0][0]
+                        fit_x = np.concatenate([item[1] for item in replay])
+                        fit_y = np.concatenate([item[2] for item in replay])
+                        fit_timestamps = np.concatenate([item[3] for item in replay])
+                    else:
+                        train_start, fit_x, fit_y, fit_timestamps = start, x, y, timestamps
+                    if action == "online":
+                        model.fit_online(fit_x, fit_y, tracker=tracker, stop_requested=stop_requested)
+                    else:
+                        model.fit(
+                            fit_x, fit_y, action == "continue", config=iter_config, tracker=tracker,
+                            timestamps=fit_timestamps, capture_sigterm=stop_requested is None,
+                            stop_requested=stop_requested,
+                        )
+                    fit = history.capture(
+                        model.training_summary, action=action, block_index=step, start=train_start,
+                        timestamps=fit_timestamps, seconds=time.monotonic() - timer,
+                        current_block_start=start, source_model_version=(
+                            len(versions) - 1 if action in ("continue", "online") else None
+                        ),
                     )
-                elapsed = chosen["seconds"] if chosen is not None else time.monotonic() - timer
-                train_seconds += elapsed
-                presentations += fit_rows
-                unique += rows - max(train_start, last_training_end or 0)
-                last_training_end = rows
-                payload, extension = model.payload()
+                    payload, extension = model.payload()
+                    del fit_x, fit_y, fit_timestamps
+                if fit["end_seq"] != rows:
+                    raise ValueError("checkpoint fit window differs from its deployment block")
+                resets += action == "reset_retrain"
+                train_seconds += fit["train_seconds"]
                 filename = f"models/{len(versions):04d}.{extension}"
                 atomic_write(output / filename, payload)
+                fit["deployed_version"] = len(versions)
+                fit["deployment_action"] = action
+                fit["promotion_status"] = "promoted"
+                fit["replaces_model_version"] = len(versions) - 1 if versions else None
+                fit["checkpoint"] = {
+                    "file": filename, "sha256": sha256(payload).hexdigest(), "bytes": len(payload),
+                }
+                history.save_partial(fit)
                 versions.append({
-                    "end_seq": rows, "file": filename, "action": action, "start_seq": train_start,
-                    "sha256": sha256_file(output / filename), "bytes": len(payload),
-                    "train_samples": fit_rows, "train_seconds": elapsed, "iterations": iterations,
+                    "end_seq": rows, "action": action, "start_seq": fit["start_seq"], "fit_id": fit["fit_id"],
+                    **fit["checkpoint"],
+                    "train_samples": fit["train_samples"], "validation_samples": fit["validation_samples"],
+                    "training_presentations": fit["training_presentations"],
+                    "train_seconds": fit["train_seconds"],
+                    "iterations": fit["summary"]["iterations"],
+                    "iteration_unit": fit["steps"][0]["kind"],
                     **({"phase": phase} if phase else {}),
                 })
-                if action == "reset_retrain" and fit_x is not None:
-                    del fit_x, fit_y
+                if action == "reset_retrain" and chosen is None:
                     gc.collect()
             if step % 10 == 0:
                 atomic_write(output / "progress.json", encoded({
                     "rows": rows, "total_rows": manifest["rows"], "model_versions_count": len(versions),
                     "elapsed_seconds": time.monotonic() - started,
                 }))
+    history.check_interrupted()
     if rows != manifest["rows"] or not online.confusion.sum() or not holdout.confusion.sum():
         raise ValueError("dataset coverage or temporal split is incomplete")
     retraining, retraining_metrics = None, {}
@@ -280,10 +341,23 @@ def run(
         zia_retraining.verify_realised(matrix, windows, batch_policy)
         retraining, retraining_metrics = zia_retraining.finalize(
             batch_policy, matrix, states, retraining_options)
+        for fit in history.fits:
+            if fit["deployed_version"] is None:
+                fit["promotion_status"] = "rejected"
+                fit["checkpoint_unavailable_reason"] = "matrix_candidate_checkpoint_is_transient"
     summary, by_class = online.metrics()
     final, final_by_class = holdout.metrics()
     errors = int(online.confusion.sum() - online.confusion.trace())
     updates = len(versions) - 1
+    alarms = len(alarm_events)
+    deployed_fits = [fit for fit in history.fits if fit["deployed_version"] is not None]
+    presentations = sum(fit["training_presentations"] for fit in deployed_fits)
+    after_warmup = sum(fit["training_presentations"] for fit in deployed_fits[1:])
+    unique = unique_train_rows(deployed_fits)
+    if batch_policy is not None:
+        retraining_metrics["retraining_matrix_training_presentations"] = sum(
+            fit["training_presentations"] for fit in history.fits
+        )
     model_bytes = sum(v["bytes"] for v in versions)
     error_units = (summary["fp"] * costs["false_positive"] + summary["fn"] * costs["false_negative"]
                    if classes == 2 else errors * costs["classification_error"])
@@ -296,17 +370,21 @@ def run(
                    for sample in system["samples"] if "process_memory_rss_megabytes" in sample["values"]]
     rss_integral = sum((end - start) * (before + after) / 2
                        for (start, before), (end, after) in zip(rss_samples, rss_samples[1:]))
-    wall_cost = aws_account(costs["aws"], train_seconds=compute_seconds, predict_seconds=0,
-                            model_storage_bytes=model_bytes)
+    wall_cost = (
+        aws_account(
+            costs["aws"], train_seconds=compute_seconds, predict_seconds=0, model_storage_bytes=model_bytes,
+        )
+        if costs["aws"] is not None else None
+    )
     summary.update(
         dataset_rows=rows, initial_train_rows=warmup, holdout_rows=final["n"],
-        training_presentations=presentations, training_used_post_warmup=presentations - warmup,
+        training_presentations=presentations, training_used_post_warmup=after_warmup,
         training_unique_examples=unique, training_repeated_presentations=presentations - unique,
         update_count=updates, retrain_count=resets, alarm_count=alarms,
         updates_per_1000_evaluated=1000 * updates / summary["n"],
         train_seconds=train_seconds, initial_train_seconds=versions[0]["train_seconds"],
         update_train_seconds=train_seconds - versions[0]["train_seconds"],
-        postwarmup_train_samples_per_second=ratio(presentations - warmup,
+        postwarmup_train_samples_per_second=ratio(after_warmup,
                                                   train_seconds - versions[0]["train_seconds"]),
         prediction_seconds=predict_seconds,
         prediction_latency_mean_seconds=ratio(predict_seconds, rows - warmup),
@@ -324,8 +402,9 @@ def run(
         ),
         scenario_total_cost=cost_report["metrics"]["cost_total"],
         **retraining_metrics,
-        **cost_report["metrics"], **{"aws_" + k: v for k, v in cost_report["aws"]["metrics"].items()},
-        **{"aws_evaluation_" + k: v for k, v in wall_cost["metrics"].items()},
+        **cost_report["metrics"],
+        **{"aws_" + k: v for k, v in cost_report.get("aws", {}).get("metrics", {}).items()},
+        **{"aws_evaluation_" + k: v for k, v in (wall_cost or {}).get("metrics", {}).items()},
     )
     error_sum = sum(w["error_rate"] for w in windows if w["scope"] == "prequential")
     alpha = tracking_settings["upf_alpha"]
@@ -354,6 +433,7 @@ def run(
         "contract": {"input": manifest, "environment": env, "block_rows": block_rows,
                      "holdout_start": rows - final["n"], "replay_blocks": REPLAY_BLOCKS,
                      "adwin_delta": ADWIN_DELTA, "score_bins": SCORE_BINS, "policy_settings": policy_settings,
+                     "iterative_training": iter_config.model_dump(),
                      "decision_threshold": threshold, "decision_rule": decision_rule},
         "class_counts": class_counts.tolist(),
         "metrics": summary, "holdout": final, "windows": windows,
@@ -361,10 +441,23 @@ def run(
         "class_metrics": dict(zip(spec["classes"], by_class, strict=True)),
         "holdout_class_metrics": dict(zip(spec["classes"], final_by_class, strict=True)),
         "model_versions": versions, "model_explanation": model.explanation(manifest["features"]),
+        "training_history": history.fits, "alarms": alarm_events,
         "costs": cost_report, "evaluation_aws_cost": wall_cost, "cost_sensitivity": sensitivity,
         "availability": availability, "system_metrics": system,
         **({"retraining": retraining} if retraining is not None else {}),
     }
+    mark = time.monotonic()
+    prequential_observation = online.quality(spec["classes"], curves=True)
+    holdout_observation = holdout.quality(spec["classes"], curves=True)
+    retention = probes.evaluate(model, output, versions, threshold)
+    tracking_seconds += time.monotonic() - mark
+    report["tracking_observations"] = run_observations(
+        report=report, history=history, windows=observed_windows,
+        prequential=prequential_observation, holdout=holdout_observation, retention=retention,
+        has_detector=detector is not None, overhead=tracking_seconds, started=started,
+    )
+    history.check_interrupted()
+    history.save()
     atomic_write(output / "report.json", encoded(report))
     atomic_write(output / "progress.json", encoded({"rows": rows, "total_rows": rows, "complete": True}))
     return report
@@ -381,6 +474,12 @@ def main():
     parser.add_argument("--campaign", help="Publish the run to the configured MLflow server")
     args = parser.parse_args()
     settings = TrackingConfig.model_validate(yaml.safe_load(args.tracking.read_text())).model_dump()
+    with run_lock(args.output.parent, args.output.name):
+        report = _run_cli(args, settings)
+    print(json.dumps(report["metrics"], indent=2))
+
+
+def _run_cli(args, settings):
     if args.campaign:
         from mlflow.tracking import MlflowClient
 
@@ -395,6 +494,9 @@ def main():
             report_path = args.output / "report.json"
             if report_path.is_file():
                 report = json.loads(report_path.read_text())
+                _, manifest = load_manifest(args.root, args.dataset, args.scope)
+                if report["contract"]["input"] != manifest or report["policy"] != args.policy:
+                    raise ValueError("existing report does not match the requested Zia run")
             else:
                 report = run(
                     args.root, args.dataset, args.scope, args.policy, args.output, settings,
@@ -409,7 +511,7 @@ def main():
         report = run(args.root, args.dataset, args.scope, args.policy, args.output, settings)
         evidence = prediction_manifest(args.output, report)
         write_zia_artifacts(args.output, report, tracking_report(report, evidence))
-    print(json.dumps(report["metrics"], indent=2))
+    return report
 
 
 if __name__ == "__main__":

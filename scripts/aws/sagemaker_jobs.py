@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -184,6 +185,8 @@ def main():
     parser.add_argument("--bucket")
     parser.add_argument("--role")
     parser.add_argument("--kms-key-arn", help="SSE-KMS key for job outputs (default: the data bucket key)")
+    parser.add_argument("--mlflow-arn", default=os.environ.get("MLFLOW_TRACKING_URI"),
+                        help="SageMaker MLflow App ARN for Training and Tuning")
     parser.add_argument("--model-data")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--delete-after", action="store_true")
@@ -226,6 +229,16 @@ def main():
         name, request = inference_requests(
             spec, role=args.role, image=images["ml"], model_data=args.model_data, git_sha=git_sha
         )
+    if args.mlflow_arn and args.kind in {"training", "tuning"}:
+        definition = request["TrainingJobDefinition"] if args.kind == "tuning" else request
+        name_key = "TrainingJobName" if args.kind == "training" else "HyperParameterTuningJobName"
+        definition["Environment"].update({
+            "MLFLOW_TRACKING_URI": args.mlflow_arn,
+            "BENCH_NATIVE_EXECUTION_ID": request[name_key],
+            "BENCH_NATIVE_STAGE": args.kind,
+        })
+        if args.kms_key_arn:
+            definition["Environment"]["BENCH_KMS_KEY_ID"] = args.kms_key_arn
     if args.dry_run:
         print(json.dumps(request, indent=2))
         return

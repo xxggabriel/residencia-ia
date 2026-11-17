@@ -132,8 +132,8 @@ Para cargas que exigem disponibilidade entre AZs, mantenha `all`. Veja a
 [documentação de resiliência do PrivateLink](https://docs.aws.amazon.com/vpc/latest/privatelink/privatelink-access-aws-services.html)
 e os [preços do PrivateLink](https://aws.amazon.com/privatelink/pricing/).
 
-Em ambientes que dispensam registro de modelos e tracking, `EnableModelRegistry=false` remove
-os endpoints do SageMaker API e MLflow e desativa a integração correspondente. Mantenha
+Em ambientes que dispensam registro de modelos e tracking, combine `EnableModelRegistry=false`
+e `EnableMlflowTracking=false` para remover os endpoints do SageMaker API e MLflow. Mantenha
 Streaming e Feature Store desabilitados quando estiverem fora do escopo do ambiente.
 Use as saídas `InterfaceEndpoints` (soma dos endpoints) e `InterfaceEndpointAvailabilityZoneCount`
 para estimar a parcela fixa; `S3GatewayEndpointId` identifica o gateway no inventário da stack.

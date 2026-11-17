@@ -87,11 +87,15 @@ SUMMARY_FAMILIES = {
         "f1_weighted",
         "precision",
         "recall",
+        "macro_precision",
+        "macro_recall",
         "specificity",
         "mcc",
         "cohen_kappa",
         "roc_auc",
         "average_precision",
+        "macro_roc_auc",
+        "macro_pr_auc",
         "fading_accuracy",
         "mean_window_accuracy",
         "brier",
@@ -152,10 +156,19 @@ def _summary_family(metrics, rule):
 def binary_figures(report) -> list[Figure]:
     windows = report.get("windows", [])
     tracking = report.get("tracking") or {}
+    multiclass = len(report.get("classes", ())) > 2
     figures = []
     accuracy_markers = _events(report)
     for group, entries in WINDOW_FIGURES.items():
         for name, (title, keys) in entries.items():
+            if multiclass:
+                title, keys = {
+                    "precision_recall": ("Precisão e recall macro", ["macro_precision", "macro_recall"]),
+                    "ranking": ("Ranqueamento macro (ROC AUC e AP)", ["macro_roc_auc", "macro_pr_auc"]),
+                }.get(name, (title, keys))
+                keys = [key for key in keys if any(_finite(w.get(key)) for w in windows)]
+                if not keys:
+                    continue
             series = [{"name": key, "points": [[w["end_seq"], w.get(key)] for w in windows]} for key in keys]
             markers = accuracy_markers if name == "accuracy" else []
             figures.append(
@@ -221,14 +234,14 @@ def binary_figures(report) -> list[Figure]:
     candidates = report.get("candidates", report.get("updates", []))
     cumulative, promoted_total = [], 0
     for candidate in candidates:
-        promoted_total += candidate["train_samples"]
+        promoted_total += candidate.get("training_presentations", candidate["train_samples"])
         cumulative.append([candidate["seq"], promoted_total])
     figures.append(
         _line(
             "adaptation",
             "training_presentations",
             "Apresentações de treino acumuladas pós-warmup",
-            [{"name": "train_samples", "points": cumulative}],
+            [{"name": "training_presentations", "points": cumulative}],
             x_label="seq",
             y_label="apresentações",
             markers=accuracy_markers,

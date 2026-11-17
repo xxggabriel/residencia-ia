@@ -32,8 +32,10 @@ class TemporalHoldout(BinaryProtocol):
                 if event.available_at < test_start:
                     train_started = time.perf_counter()
                     model.learn(dict(event.x), event.y)
-                    observer.warmup_train_seconds += time.perf_counter() - train_started
+                    elapsed = time.perf_counter() - train_started
+                    observer.warmup_train_seconds += elapsed
                     observer.warmup_train_samples += 1
+                    observer.record_learning(event.seq, elapsed, 1, initial=True)
                     trained += 1
             else:
                 prediction_started = time.perf_counter()

@@ -149,6 +149,61 @@ def test_training_loop_runs_full_100_epochs_when_loss_continually_improves():
     assert model.weight_epoch == 100
 
 
+def test_early_stopping_maximizes_accuracy_and_rejects_unknown_metrics():
+    model = SyntheticScheduledModel([0.50, 0.30, 0.40, 0.60])
+    result = train_iterative(
+        model, "train", "val", {"max_epochs": 4, "patience": 2, "eval_metric": "validation:accuracy"},
+    )
+    assert result.best_epoch == model.weight_epoch == 2
+    assert result.best_score == pytest.approx(0.85)
+    assert result.best_validation_loss == pytest.approx(0.30)
+    with pytest.raises(ValueError, match="unknown early stopping metric"):
+        IterativeTrainingConfig(eval_metric="validation:acuracy")
+
+
+def test_training_loop_keeps_timestamps_together_and_counts_presentations():
+    timestamps = np.array([10, 10, 11, 11, 12, 12, 12, 12])
+    x = np.arange(len(timestamps))[:, None]
+    y = np.arange(len(timestamps)) % 2
+    (tx, _), (vx, _) = chronological_train_val_split(x, y, 0.25, timestamps=timestamps)
+    assert (tx[-1, 0], vx[0, 0]) == (3, 4)
+
+    model = SyntheticScheduledModel([0.60, 0.55, 0.50])
+    result = train_iterative(
+        model, (x, y), config={"max_epochs": 3, "validation_fraction": 0.25},
+        timestamps=timestamps,
+    )
+    assert result.train_rows == result.validation_rows == 4
+    assert [row["train_samples"] for row in result.history] == [4, 4, 4]
+    assert result.training_presentations == 12
+
+    result = train_iterative(
+        model, (x[:1], y[:1]), config={"max_epochs": 2}, timestamps=timestamps[:1],
+    )
+    assert result.train_rows == 1 and result.validation_rows == 0
+    assert result.selection_scope == "train"
+    assert result.training_presentations == 2
+    assert result.best_validation_loss is None
+    assert all("validation:log_loss" not in row for row in result.history)
+
+
+def test_training_loop_polls_external_stop_without_replacing_signal_handler():
+    tracker = SpyTracker()
+    original = signal.getsignal(signal.SIGTERM)
+    result = train_iterative(
+        SyntheticScheduledModel([0.6, 0.5, 0.4]),
+        "train",
+        "val",
+        {"max_epochs": 3},
+        tracker=tracker,
+        capture_sigterm=False,
+        stop_requested=lambda: bool(tracker.epochs),
+    )
+    assert result.stopped_by_signal and result.epochs_run == 1
+    assert tracker.final_summary["stopped_by_signal"] is True
+    assert signal.getsignal(signal.SIGTERM) is original
+
+
 def test_chronological_split_uses_zero_copy_views_and_never_touches_holdout():
     rng = np.random.default_rng(42)
     full_x = rng.normal(size=(200, 4)).astype(np.float64)

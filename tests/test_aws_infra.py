@@ -60,8 +60,8 @@ def test_job_definitions_match_the_reference_campaign():
     resources = template("modules/execution.yaml")["Resources"]
     root = template("root.yaml")["Parameters"]
     params = template("modules/execution.yaml")["Parameters"]
-    assert (params["BenchmarkVcpus"]["Default"], params["BenchmarkMemoryMiB"]["Default"]) == ("2", 2048)
-    assert (root["BenchmarkVcpus"]["Default"], root["BenchmarkMemoryMiB"]["Default"]) == ("2", 2048)
+    assert (params["BenchmarkVcpus"]["Default"], params["BenchmarkMemoryMiB"]["Default"]) == ("1", 2048)
+    assert (root["BenchmarkVcpus"]["Default"], root["BenchmarkMemoryMiB"]["Default"]) == ("1", 2048)
     benchmark = resources["BenchmarkJobDefinition"]["Properties"]["ContainerProperties"]
     assert benchmark["Command"][:4] == ["continual-bench", "aws", "run-unit", "--unit-uri"]
     assert benchmark["User"] == "1000" and benchmark["NetworkConfiguration"]["AssignPublicIp"] == "DISABLED"
@@ -639,12 +639,12 @@ def test_sagemaker_mlflow_app_is_serverless_and_wired_into_vpc_and_batch():
 
     app = execution["Resources"]["MlflowApp"]
     assert app["Type"] == "AWS::SageMaker::MlflowApp"
-    assert app["Condition"] == "ModelRegistry"
+    assert app["Condition"] == "MlflowTracking"
     assert app["Properties"]["ArtifactStoreUri"] == {"Fn::Sub": "s3://${DataBucketName}/mlflow"}
     assert app["Properties"]["ModelRegistrationMode"] == "AutoModelRegistrationDisabled"
 
     role = execution["Resources"]["MlflowAppRole"]
-    assert role["Condition"] == "ModelRegistry"
+    assert role["Condition"] == "MlflowTracking"
     assert role["Properties"]["RoleName"] == {"Fn::Sub": "${Project}-mlflow"}
 
     env = {
@@ -654,12 +654,13 @@ def test_sagemaker_mlflow_app_is_serverless_and_wired_into_vpc_and_batch():
         ]
     }
     assert env["MLFLOW_TRACKING_URI"] == {
-        "Fn::If": ["ModelRegistry", {"Fn::GetAtt": "MlflowApp.Arn"}, ""]
+        "Fn::If": ["MlflowTracking", {"Fn::GetAtt": "MlflowApp.Arn"}, ""]
     }
     assert root["Outputs"]["MlflowAppArn"]["Value"] == {"Fn::GetAtt": "Execution.Outputs.MlflowAppArn"}
 
     mlflow_vpce = network["Resources"]["SageMakerMlflowEndpoint"]
-    assert mlflow_vpce["Condition"] == "ModelRegistry"
+    assert mlflow_vpce["Condition"] == "MlflowTracking"
+    assert network["Resources"]["SageMakerApiEndpoint"]["Condition"] == "SageMakerApi"
     assert mlflow_vpce["Properties"]["ServiceName"] == {"Fn::Sub": "aws.sagemaker.${AWS::Region}.mlflow"}
     assert mlflow_vpce["Properties"]["PrivateDnsEnabled"] is True
 
@@ -685,6 +686,29 @@ def test_timeouts_are_standardized_to_14400_seconds():
 
     dataset_asl = json.loads((ROOT / "infra" / "statemachines" / "dataset.asl.json").read_text())
     assert dataset_asl["States"]["Prepare"]["TimeoutSeconds"] == 14400
+
+
+def test_benchmark_maps_apply_campaign_execution_timeout_to_the_batch_container():
+    states = json.loads((ROOT / "infra" / "statemachines" / "benchmark.asl.json").read_text())["States"]
+    for map_name, submit_name in (("InlineRuns", "Submit"), ("DistributedRuns", "DistributedSubmit")):
+        submit = states[map_name]["ItemProcessor"]["States"][submit_name]
+        assert submit["Parameters"]["Timeout"]["AttemptDurationSeconds.$"] == "$.item.run_timeout_seconds"
+        assert submit["TimeoutSecondsPath"] == "$.item.task_timeout_seconds"
+
+
+def test_launch_input_pins_campaign_and_optional_snapshot_preparation_to_same_release():
+    prepare = script("campaign_request").prepare
+    root = ROOT / "infra" / "examples"
+    campaign = json.loads((root / "campaign-fraud-smoke.json").read_text())
+    dataset = json.loads((root / "dataset-fraud-smoke.json").read_text())
+    with pytest.raises(ValueError, match="published Git SHA"):
+        prepare(campaign)
+    release = "a" * 40
+    assert prepare(campaign, release=release, dataset=dataset, campaign_id="new-smoke") == "new-smoke"
+    assert campaign["request"]["release"] == dataset["release"] == release
+    dataset["request"]["scope"] = "full"
+    with pytest.raises(ValueError, match="does not match"):
+        prepare(campaign, dataset=dataset)
 
 
 def test_deploy_change_set_skips_when_empty_changeset(tmp_path):

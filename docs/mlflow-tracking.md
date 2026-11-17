@@ -1,9 +1,45 @@
 # Rastreamento no MLflow: métricas, métricas de sistema, gráficos e dados
 
 Os avaliadores geram métricas, gráficos e dados conforme o protocolo e as entradas disponíveis.
-No homelab, os publicadores registram no MLflow as métricas e os artefatos produzidos.
+No perfil Docker Compose, os publicadores registram no MLflow as métricas e os artefatos produzidos.
 No perfil AWS, o MLflow gerenciado recebe as campanhas Zia, as matrizes e os jobs
 nativos do SageMaker.
+
+## Histórico por ajuste em todos os benchmarks
+
+O arquivo `training-history.json` reúne os ajustes do run. O índice em
+`artifacts/data/index.json` aponta para as séries e gráficos de cada ajuste em
+`data/training/<fit_id>/` e `plots/training/<fit_id>/`. Onde houver checkpoint,
+o histórico inclui seu caminho e SHA-256. Nos modelos binários com um diário
+de checkpoints compartilhado, inclui também o deslocamento e o tamanho.
+
+Cada ajuste tem um step local que começa em 1. O `global_step` acompanha a
+ordem no run pai. O step representa uma época quando o algoritmo percorre
+o conjunto de treino por épocas, um minibatch no treino online da Zia, ou
+uma atualização nos demais fluxos contínuos. Atualizações contínuas podem ser
+agregadas em janelas com a contagem de apresentações. A avaliação no
+holdout permanece identificada como holdout.
+
+O MLflow registra um run pai por execução ou tentativa e um run filho por
+ajuste, com `cb-fit-id`, `cb-fit-action` e `cb-step-kind`. A publicação é
+opt-in na CLI local. Use `--services` em `run`, `typed`, `epoch-job` ou
+`matrix`. O worker iterativo publica quando `MLFLOW_TRACKING_URI` está
+configurado. Na AWS, o worker do Batch e os jobs nativos do SageMaker Studio
+publicam no MLflow configurado e retêm as evidências nos respectivos
+artefatos. Runs de preparação de dados registram progresso de processamento.
+
+Para runs antigas, inspecione o relatório retido antes de aplicar o backfill:
+
+```bash
+python scripts/backfill_training_history.py /caminho/dos/resultados
+python scripts/backfill_training_history.py --run-id ID_DO_RUN_PAI
+python scripts/backfill_training_history.py s3://BUCKET/campaigns/CAMPANHA/runs/RUN/final.json
+```
+
+Use `--apply --output-dir /caminho/novo` para exportar a evidência derivada
+separadamente. Uma origem vinculada ao run pai permite publicar o backfill
+no MLflow com `--apply`. O comando preserva os relatórios originais e
+informa quais épocas, métricas ou checkpoints ficaram indisponíveis.
 
 ## Métricas coletadas por padrão
 
@@ -86,7 +122,8 @@ A publicação é idempotente: pontos `system/*` já existentes são conferidos 
 artefatos de mesmo caminho são sobrescritos com o mesmo conteúdo. A marca
 `tracking_v1_status=complete` continua sendo a última escrita antes de encerrar o run.
 
-A CLI local de avaliação typed e de matriz grava os resultados em diretórios de estado.
+A CLI local de avaliação typed e de matriz grava os resultados em diretórios de estado
+e pode publicar esses resultados no MLflow com `--services`.
 O tracking AWS de matrizes é configurado no worker do Batch e aceita casos binários, typed e
 de épocas.
 
@@ -162,3 +199,25 @@ Os dashboards em PNG dependem de matplotlib no ambiente publicador.
 O caminho REST/SigV4 foi usado na validação das integrações com o app AWS.
 O caminho opcional do SDK foi exercitado com o file store local. Consulte o escopo
 em [validação na AWS](aws/validation.md).
+
+## Páginas de retreinamento em Artifacts
+
+| Caminho na run principal | Conteúdo |
+| --- | --- |
+| `tracking-observations/overview/overview.html` | Dataset, política, protocolo, gráficos e tabela pesquisável com unidade, split e posição. |
+| `tracking-observations/retraining-timeline.html` | Ordem do histórico, treino inicial identificado, decisões de promoção, alarmes, filtro de status e zoom por eixo. |
+| `tracking-observations/retraining-explorer.html` | Seleção por slider ou posição numérica, evolução por step e época, métricas por split e checkpoint do ajuste. |
+
+Cada HTML incorpora os dados necessários à visualização, o CSS e o JavaScript.
+O MLflow 3.17.2 abre a prévia HTML em um iframe com `allow-scripts`. Os arquivos
+baixados também funcionam sem acesso à rede. O suporte à prévia depende do
+servidor que hospeda a UI. Se a prévia estiver indisponível, baixe o HTML pela
+aba Artifacts. [Implementação da prévia no MLflow 3.17.2](https://github.com/mlflow/mlflow/blob/v3.17.2/mlflow/server/js/src/experiment-tracking/components/artifact-view-components/ShowArtifactHtmlView.tsx)
+
+O `plots-manifest.json` identifica as fontes das páginas. Os pontos originais
+continuam em `observations.json`, `training-history.json` e nos dados por ajuste.
+A timeline usa a sequência registrada da promoção ou do fim dos dados do
+ajuste. Para protocolos com coordenadas compatíveis, alinha os marcadores
+às métricas. Quando a posição estiver ausente, o ajuste continua na tabela.
+O intervalo opera no eixo selecionado. O explorador começa no primeiro
+ajuste e indica séries indisponíveis separadamente.

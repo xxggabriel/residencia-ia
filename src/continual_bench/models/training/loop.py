@@ -8,11 +8,13 @@ import platform
 import resource
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 import numpy as np
 
-from continual_bench.config.iterative import IterativeTrainingConfig
+from continual_bench.config.iterative import METRIC_DIRECTIONS, IterativeTrainingConfig
+from continual_bench.models.observations import quality_scope, training_step
 
 from .callbacks import (
     EarlyStoppingStrategy,
@@ -69,24 +71,36 @@ def chronological_train_val_split(
     validation_fraction: float = 0.1,
     *,
     holdout_start: int | None = None,
+    timestamps: np.ndarray | None = None,
 ) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
-    """Slice chronological train and validation views strictly before the frozen temporal holdout."""
+    """Slice train and validation before holdout, keeping each timestamp in one partition."""
     if len(x) != len(y):
         raise ValueError("x and y must have the same number of rows")
+    if timestamps is not None and len(timestamps) != len(y):
+        raise ValueError("timestamps and labels must have the same number of rows")
     if holdout_start is not None:
         if holdout_start <= 0 or holdout_start > len(y):
             raise ValueError("invalid holdout_start boundary")
         x = x[:holdout_start]
         y = y[:holdout_start]
+        if timestamps is not None:
+            timestamps = timestamps[:holdout_start]
     total = len(y)
-    if total < 2:
+    if not total or (timestamps is None and total < 2):
         raise ValueError("at least 2 samples are required for chronological train/validation split")
     if not (0.0 < validation_fraction < 0.5):
         raise ValueError("validation_fraction must be between 0 and 0.5")
     val_rows = max(1, int(total * validation_fraction))
-    split_idx = max(1, total - val_rows)
-    if not (0 < split_idx < total):
-        raise ValueError("dataset too small for chronological train/validation split")
+    split_idx = total - val_rows
+    if timestamps is not None:
+        if np.any(timestamps[1:] < timestamps[:-1]):
+            raise ValueError("timestamps must be sorted")
+        timestamp = timestamps[split_idx]
+        before = int(np.searchsorted(timestamps, timestamp, side="left"))
+        after = int(np.searchsorted(timestamps, timestamp, side="right"))
+        boundaries = [boundary for boundary in (before, after) if 0 < boundary < total]
+        # A homogeneous window can train the model but cannot provide temporal validation.
+        split_idx = min(boundaries, key=lambda boundary: abs(split_idx - boundary), default=total)
     # Zero-copy NumPy slice views: never clone arrays in memory
     train_x, train_y = x[:split_idx], y[:split_idx]
     val_x, val_y = x[split_idx:], y[split_idx:]
@@ -101,11 +115,13 @@ def emit_cloudwatch_metrics(metrics: dict[str, float | int]) -> None:
         "validation:balanced_accuracy",
         "validation:f1_macro",
         "validation:pr_auc",
+        "validation:macro_pr_auc",
         "train:log_loss",
         "train:accuracy",
         "train:balanced_accuracy",
         "train:f1_macro",
         "train:pr_auc",
+        "train:macro_pr_auc",
         "best_validation_loss",
         "epoch",
         "best_epoch",
@@ -127,22 +143,19 @@ class TrainingResult(dict):
             raise AttributeError(name) from exc
 
 
-def _resolve_eval_metric(
-    eval_metric: str,
-    train_metrics: dict[str, float],
-    val_metrics: dict[str, float],
-) -> float:
-    if eval_metric.startswith("validation:"):
-        key = eval_metric.split(":", 1)[1]
-        if key in val_metrics:
-            return float(val_metrics[key])
-    if eval_metric.startswith("train:"):
-        key = eval_metric.split(":", 1)[1]
-        if key in train_metrics:
-            return float(train_metrics[key])
-    if eval_metric in val_metrics:
-        return float(val_metrics[eval_metric])
-    return float(val_metrics["log_loss"])
+def _row_count(data: Any) -> int | None:
+    try:
+        _, y = unpack_split(data)
+    except ValueError:
+        return None
+    return len(y)
+
+
+def _selection_coordinates(eval_metric: str, val_rows: int | None) -> tuple[str, str]:
+    scope, separator, name = eval_metric.partition(":")
+    if not separator:
+        scope, name = "validation", scope
+    return ("train" if val_rows == 0 else scope), name
 
 
 class IterativeTrainingLoop:
@@ -156,17 +169,21 @@ class IterativeTrainingLoop:
         tracker: EpochMetricsTracker | Any | None = None,
         emit_stdout: bool = False,
         on_sigterm_checkpoint: Callable[[bytes, dict[str, Any]], Any] | None = None,
+        capture_sigterm: bool = True,
+        stop_requested: Callable[[], bool] | None = None,
     ):
         self.config = IterativeTrainingConfig.from_params(config)
         self.strategy = strategy or EarlyStoppingStrategy(
             patience=self.config.patience,
             min_delta=self.config.min_delta,
-            mode="min",
+            mode=METRIC_DIRECTIONS[self.config.eval_metric.split(":")[-1]],
             restore_best_weights=self.config.restore_best_weights,
         )
         self.tracker = tracker
         self.emit_stdout = emit_stdout
         self.on_sigterm_checkpoint = on_sigterm_checkpoint
+        self.capture_sigterm = capture_sigterm
+        self.stop_requested = stop_requested
 
     def run(
         self,
@@ -175,6 +192,7 @@ class IterativeTrainingLoop:
         val_data: Any | None = None,
         *,
         holdout_start: int | None = None,
+        timestamps: np.ndarray | None = None,
     ) -> TrainingResult:
         enforce_single_thread_env()
         self.strategy.reset()
@@ -186,6 +204,7 @@ class IterativeTrainingLoop:
                 y,
                 self.config.validation_fraction,
                 holdout_start=holdout_start,
+                timestamps=timestamps,
             )
         else:
             if holdout_start is not None:
@@ -197,15 +216,29 @@ class IterativeTrainingLoop:
             else:
                 train_split, val_split = train_data, val_data
 
-        history: list[dict[str, float | int]] = []
+        train_rows, val_rows = _row_count(train_split), _row_count(val_split)
+        selection_scope, selection_metric = _selection_coordinates(self.config.eval_metric, val_rows)
+        history: list[dict[str, float | int | None]] = []
+        observation_steps = []
+        observation_epochs = []
+        inference_seconds = []
+        evaluation_counts = []
+        tracking_overhead_seconds = 0.0
+        started = time.perf_counter()
         total_train_seconds = 0.0
         total_val_seconds = 0.0
-        best_train_metrics: dict[str, float] = {}
-        best_val_metrics: dict[str, float] = {}
+        best_train_metrics: dict[str, float | None] = {}
+        best_val_metrics: dict[str, float | None] = {}
+        best_score_counts, last_score_counts = {}, {}
 
-        with GracefulTerminationHandler() as sigterm:
+        sigterm = GracefulTerminationHandler()
+
+        def interrupted() -> bool:
+            return sigterm.received or (self.stop_requested is not None and self.stop_requested())
+
+        with sigterm if self.capture_sigterm else nullcontext():
             for epoch in range(1, self.config.max_epochs + 1):
-                if sigterm.received:
+                if interrupted():
                     break
 
                 t0 = time.perf_counter()
@@ -214,46 +247,104 @@ class IterativeTrainingLoop:
                 total_train_seconds += train_duration
 
                 v0 = time.perf_counter()
-                val_metrics = model.evaluate_split(val_split)
-                val_duration = time.perf_counter() - v0
+                val_metrics = model.evaluate_split(val_split) if val_rows != 0 else {}
+                val_duration = time.perf_counter() - v0 if val_rows != 0 else 0.0
                 total_val_seconds += val_duration
 
-                target_loss = _resolve_eval_metric(self.config.eval_metric, train_metrics, val_metrics)
+                selection_metrics = train_metrics if selection_scope == "train" else val_metrics
+                selection_key = selection_metric
+                if selection_key not in selection_metrics:
+                    selection_key = {"macro_f1": "f1_macro", "f1_macro": "macro_f1"}.get(
+                        selection_metric, selection_metric,
+                    )
+                if selection_key not in selection_metrics:
+                    name = f"{selection_scope}:{selection_metric}"
+                    raise ValueError(f"early stopping metric {name} is unsupported")
+                target = selection_metrics[selection_key]
                 prev_best_epoch = self.strategy.best_epoch
-                should_stop = self.strategy.step(epoch, target_loss, state=model.get_state)
+                should_stop = target is not None and self.strategy.step(
+                    epoch, float(target), state=model.get_state,
+                )
+                # A scorer belongs to this epoch's observed predictions. Only retain
+                # the most recent and best-checkpoint score histograms for curves.
+                last_score_counts = {
+                    scope: scores
+                    for scope in (("train", "validation") if val_rows != 0 else ("train",))
+                    if (scores := getattr(model, f"last_{scope}_scores", None)) is not None
+                }
                 if self.strategy.best_epoch != prev_best_epoch:
                     best_train_metrics = dict(train_metrics)
                     best_val_metrics = dict(val_metrics)
+                    best_score_counts = last_score_counts
 
                 rss_mb = current_peak_rss_mb()
-                epoch_metrics: dict[str, float | int] = {
+                epoch_metrics: dict[str, float | int | None] = {
                     "epoch": int(epoch),
-                    "train:log_loss": float(train_metrics["log_loss"]),
-                    "train:accuracy": float(train_metrics["accuracy"]),
-                    "validation:log_loss": float(val_metrics["log_loss"]),
-                    "validation:accuracy": float(val_metrics["accuracy"]),
-                    "validation:f1_macro": float(
-                        val_metrics.get("f1_macro", val_metrics.get("macro_f1", 0.0))
-                    ),
                     "early_stopped": 1 if should_stop else 0,
                     "best_epoch": int(self.strategy.best_epoch),
                     "patience_consumed": int(self.strategy.patience_counter),
                     "training_duration_seconds": float(train_duration),
                     "validation_duration_seconds": float(val_duration),
                     "peak_rss_mb": float(rss_mb),
-                    "best_validation_loss": float(self.strategy.best_loss),
+                    "best_validation_loss": best_val_metrics.get("log_loss"),
+                    "best_score": self.strategy.best_score if self.strategy.best_epoch else None,
+                    "train_samples": train_rows,
+                    "validation_samples": val_rows,
                 }
-                if "balanced_accuracy" in train_metrics:
-                    epoch_metrics["train:balanced_accuracy"] = float(train_metrics["balanced_accuracy"])
-                if "pr_auc" in train_metrics:
-                    epoch_metrics["train:pr_auc"] = float(train_metrics["pr_auc"])
-                if "f1_macro" in train_metrics:
-                    epoch_metrics["train:f1_macro"] = float(train_metrics["f1_macro"])
-                if "balanced_accuracy" in val_metrics:
-                    epoch_metrics["validation:balanced_accuracy"] = float(val_metrics["balanced_accuracy"])
-                if "pr_auc" in val_metrics:
-                    epoch_metrics["validation:pr_auc"] = float(val_metrics["pr_auc"])
+                for scope, metrics in (("train", train_metrics), ("validation", val_metrics)):
+                    epoch_metrics.update({f"{scope}:{key}": value for key, value in metrics.items()})
+                    if "macro_f1" in metrics and "f1_macro" not in metrics:
+                        epoch_metrics[f"{scope}:f1_macro"] = metrics["macro_f1"]
                 history.append(epoch_metrics)
+                tracking_started = time.perf_counter()
+                train_overhead = getattr(model, "last_train_quality_seconds", 0.0)
+                validation_overhead = (
+                    getattr(model, "last_validation_quality_seconds", 0.0) if val_rows != 0 else 0.0
+                )
+                train_prediction = getattr(model, "last_train_prediction_seconds", None)
+                val_prediction = (
+                    getattr(model, "last_validation_prediction_seconds", None) if val_rows != 0 else None
+                )
+                scopes = {}
+                if train_quality := getattr(model, "last_train_quality", None):
+                    scopes["train"] = train_quality
+                if val_rows != 0 and (val_quality := getattr(model, "last_validation_quality", None)):
+                    scopes["validation"] = val_quality
+                inference_seconds.extend(
+                    value for value in (train_prediction, val_prediction) if value is not None
+                )
+                evaluation_counts.extend(scope["evaluated_examples"] for scope in scopes.values())
+                learner_seconds = max(0.0, train_duration - train_overhead - (train_prediction or 0.0))
+                train_values = {f"train/{key}": value for key, value in train_metrics.items()}
+                observation_steps.append(training_step(
+                    epoch, examples=train_rows,
+                    cumulative=epoch * train_rows if train_rows is not None else None,
+                    duration_seconds=learner_seconds,
+                    native_loss=train_metrics.get("native_loss"), metrics=train_values,
+                ))
+                if "train" in scopes:
+                    observation_steps[-1]["scopes"] = {"train": scopes["train"]}
+                observation_epochs.append({
+                    "epoch": epoch,
+                    "first_step": epoch,
+                    "last_step": epoch,
+                    "metrics": {
+                        **train_values,
+                        **{f"validation/{key}": value for key, value in val_metrics.items()},
+                        "training/examples_processed": train_rows,
+                        "training/duration_seconds": learner_seconds,
+                        "validation/duration_seconds": max(0.0, val_duration - validation_overhead),
+                        "epoch/duration_seconds": max(0.0, train_duration + val_duration
+                                                       - train_overhead - validation_overhead),
+                        "train/inference_seconds": train_prediction,
+                        "validation/inference_seconds": val_prediction,
+                        "resources/peak_rss_bytes": int(rss_mb * 2**20),
+                    },
+                    "scopes": scopes,
+                })
+                tracking_overhead_seconds += (
+                    time.perf_counter() - tracking_started + train_overhead + validation_overhead
+                )
 
                 if self.emit_stdout:
                     emit_cloudwatch_metrics(epoch_metrics)
@@ -269,7 +360,7 @@ class IterativeTrainingLoop:
                         if not self.emit_stdout:
                             emit_cloudwatch_metrics(epoch_metrics)
 
-                if should_stop or sigterm.received:
+                if should_stop or interrupted():
                     break
 
             restored = False
@@ -289,7 +380,7 @@ class IterativeTrainingLoop:
                         "signal": sigterm.signum,
                         "epochs_completed": len(history),
                         "best_epoch": self.strategy.best_epoch,
-                        "best_validation_loss": self.strategy.best_loss,
+                        "best_validation_loss": best_val_metrics.get("log_loss"),
                     },
                 )
 
@@ -298,17 +389,33 @@ class IterativeTrainingLoop:
         gc.collect()
 
         epochs_run = len(history)
+        checkpoint_epoch = self.strategy.best_epoch if restored else epochs_run
+        summary_scopes = dict(observation_epochs[checkpoint_epoch - 1]["scopes"]) if checkpoint_epoch else {}
+        curve_started = time.perf_counter()
+        score_counts = best_score_counts if restored else last_score_counts
+        for scope, scores in score_counts.items():
+            label_order = summary_scopes[scope]["classes"]
+            summary_scopes[scope] = quality_scope("binary", scores.quality(label_order, curves=True))
+        tracking_overhead_seconds += time.perf_counter() - curve_started
+        measured_inference = sum(inference_seconds) if inference_seconds else None
+        evaluated_examples = sum(evaluation_counts) if evaluation_counts else None
         result = TrainingResult(
             epochs_run=epochs_run,
             epochs_trained=epochs_run,
             iterations=epochs_run,
             best_epoch=self.strategy.best_epoch,
-            best_loss=self.strategy.best_loss,
-            best_validation_loss=self.strategy.best_loss,
+            best_loss=self.strategy.best_score if self.strategy.best_epoch else None,
+            best_score=self.strategy.best_score if self.strategy.best_epoch else None,
+            best_validation_loss=best_val_metrics.get("log_loss"),
             early_stopped=self.strategy.early_stopped,
             patience_consumed=self.strategy.patience_counter,
             restored_best=restored,
-            stopped_by_signal=sigterm.received,
+            stopped_by_signal=interrupted(),
+            selection_scope=selection_scope,
+            selection_metric=selection_metric,
+            train_rows=train_rows,
+            validation_rows=val_rows,
+            training_presentations=epochs_run * train_rows if train_rows is not None else None,
             training_duration_seconds=total_train_seconds,
             validation_duration_seconds=total_val_seconds,
             peak_rss_mb=current_peak_rss_mb(),
@@ -316,6 +423,32 @@ class IterativeTrainingLoop:
             validation_metrics=best_val_metrics,
             validation=best_val_metrics,
             history=history,
+            observation_steps=observation_steps,
+            observation_epochs=observation_epochs,
+            observed_step_kind=getattr(model, "training_step_kind", "train_epoch_call"),
+            observation_effort={
+                "unique_training_examples": train_rows,
+                "evaluated_examples": evaluated_examples,
+                "training_presentations": epochs_run * train_rows if train_rows is not None else None,
+                "steps": epochs_run,
+                "epochs": epochs_run,
+            },
+            observation_resources={
+                "duration_seconds": time.perf_counter() - started,
+                "training_seconds": sum(s["metrics"]["training/duration_seconds"] for s in observation_steps),
+                "inference_seconds": measured_inference,
+                "inference_scope": "training_and_validation_split_predictions",
+                "predictions_per_second": (
+                    evaluated_examples / measured_inference if evaluated_examples is not None
+                    and measured_inference and len(inference_seconds) == len(evaluation_counts) else None
+                ),
+                "peak_rss_bytes": int(current_peak_rss_mb() * 2**20),
+                "rss_scope": "process_lifetime_high_water_mark",
+                "tracking_overhead_seconds": tracking_overhead_seconds,
+            },
+            observation_scopes=summary_scopes,
+            checkpoint_epoch=checkpoint_epoch,
+            last_epoch=epochs_run,
         )
         if self.tracker is not None and hasattr(self.tracker, "finalize"):
             try:
@@ -324,7 +457,12 @@ class IterativeTrainingLoop:
                         "epochs_trained": epochs_run,
                         "best_epoch": self.strategy.best_epoch,
                         "early_stopped": self.strategy.early_stopped,
-                        "best_validation_loss": self.strategy.best_loss,
+                        "best_validation_loss": result.best_validation_loss,
+                        "best_score": result.best_score,
+                        "stopped_by_signal": result.stopped_by_signal,
+                        "train_rows": train_rows,
+                        "validation_rows": val_rows,
+                        "training_presentations": result.training_presentations,
                     }
                 )
             except Exception:
@@ -345,6 +483,9 @@ def train_iterative(
     emit_stdout: bool = False,
     holdout_start: int | None = None,
     on_sigterm_checkpoint: Callable[[bytes, dict[str, Any]], Any] | None = None,
+    timestamps: np.ndarray | None = None,
+    capture_sigterm: bool = True,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> TrainingResult:
     """Convenience entry point to run the iterative training loop with early stopping."""
     loop = IterativeTrainingLoop(
@@ -353,8 +494,10 @@ def train_iterative(
         tracker=tracker,
         emit_stdout=emit_stdout,
         on_sigterm_checkpoint=on_sigterm_checkpoint,
+        capture_sigterm=capture_sigterm,
+        stop_requested=stop_requested,
     )
-    return loop.run(model, train_data, val_data, holdout_start=holdout_start)
+    return loop.run(model, train_data, val_data, holdout_start=holdout_start, timestamps=timestamps)
 
 
 run_training_loop = train_iterative

@@ -51,7 +51,7 @@ Parameters:
     AllowedValues: [FARGATE, FARGATE_SPOT]
   BenchmarkVcpus:
     Type: String
-    Default: "2"
+    Default: "1"
     AllowedValues: ["0.25", "0.5", "1", "2", "4", "8", "16"]
   BenchmarkMemoryMiB:
     Type: Number
@@ -112,9 +112,14 @@ Parameters:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
+  EnableMlflowTracking:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
 
 Conditions:
   ModelRegistry: !Equals [!Ref EnableModelRegistry, "true"]
+  MlflowTracking: !Equals [!Ref EnableMlflowTracking, "true"]
   Spot: !Equals [!Ref FargateCapacity, FARGATE_SPOT]
   CreateRuntimeLogGroups: !Equals [!Ref ReuseRuntimeLogGroups, "false"]
 
@@ -598,7 +603,7 @@ Resources:
           - {Name: BENCH_PROJECT_ROOT, Value: /app}
           - {Name: BENCH_MODEL_REGISTRY, Value: !Ref EnableModelRegistry}
           - {Name: BENCH_INFERENCE_IMAGE, Value: !Ref MlImage}
-          - {Name: MLFLOW_TRACKING_URI, Value: !If [ModelRegistry, !GetAtt MlflowApp.Arn, ""]}
+          - {Name: MLFLOW_TRACKING_URI, Value: !If [MlflowTracking, !GetAtt MlflowApp.Arn, ""]}
           - {Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region}
           - {Name: BENCH_BENCHMARK_VCPUS, Value: !Ref BenchmarkVcpus}
           - {Name: OMP_NUM_THREADS, Value: "2"}
@@ -608,7 +613,7 @@ Resources:
   # ---------------------------------------------------------------- SageMaker MLflow App (serverless, $0/hr fixed cost)
   MlflowAppRole:
     Type: AWS::IAM::Role
-    Condition: ModelRegistry
+    Condition: MlflowTracking
     Properties:
       RoleName: !Sub "${Project}-mlflow"
       Path: !Sub "/${Project}/"
@@ -636,7 +641,7 @@ Resources:
 
   MlflowApp:
     Type: AWS::SageMaker::MlflowApp
-    Condition: ModelRegistry
+    Condition: MlflowTracking
     Properties:
       Name: !Sub "${Project}-mlflow"
       ArtifactStoreUri: !Sub "s3://${DataBucketName}/mlflow"
@@ -842,4 +847,4 @@ Outputs:
   ComputeEnvironmentArn:
     Value: !Ref ComputeEnvironment
   MlflowAppArn:
-    Value: !If [ModelRegistry, !GetAtt MlflowApp.Arn, ""]
+    Value: !If [MlflowTracking, !GetAtt MlflowApp.Arn, ""]

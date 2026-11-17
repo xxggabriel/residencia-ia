@@ -8,6 +8,8 @@ manifests, attempt records) and in Batch (jobs found by their deterministic name
 import json
 import re
 import time
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from continual_bench.infrastructure.object_store import get_json, put_json
 
@@ -169,6 +171,24 @@ def reported_outcomes(results) -> dict:
     return {r["run_id"]: r for r in results if isinstance(r, dict) and "run_id" in r}
 
 
+def _publish_zia_comparisons(store, campaign_id, units):
+    from continual_bench.evaluation.zia_artifacts import write_zia_campaign_artifacts
+
+    prefix = f"{layout.campaign_prefix(campaign_id)}/artifacts"
+    with TemporaryDirectory(prefix="zia-campaign-") as temp:
+        write_zia_campaign_artifacts(temp, units)
+        root = Path(temp) / "artifacts"
+        index = root / "data/index.json"
+        for artifact in sorted(root.rglob("*")):
+            if artifact.is_file() and artifact != index:
+                relative = artifact.relative_to(root).as_posix()
+                content_type = "image/svg+xml" if artifact.suffix == ".svg" else "application/json"
+                store.put_bytes(f"{prefix}/{relative}", artifact.read_bytes(), content_type=content_type)
+        index_key = f"{prefix}/data/index.json"
+        store.put_bytes(index_key, index.read_bytes(), content_type="application/json")
+    return store.uri(index_key)
+
+
 def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> dict:
     plan = get_json(store, layout.plan_key(campaign_id))
     reported_by_run = reported_outcomes(results)
@@ -193,8 +213,10 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
                     "holdout": final.get("holdout"),
                     "decision_threshold": final.get("decision_threshold"),
                     "attempt": final["attempt"],
+                    "artifacts_index_uri": final.get("artifacts_index_uri"),
                     "model_package_arn": (final.get("model") or {}).get("model_package_arn"),
                     "analytics": analytics,
+                    **({"tracking": final["tracking"]} if "tracking" in final else {}),
                 }
             )
         else:
@@ -221,18 +243,29 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
         "consolidated_at": clock(),
         "final_manifests": [u["final_uri"] for u in units if u["final_uri"]],
     }
+    receipts = [unit.get("tracking") for unit in units]
+    if any(receipt is not None for receipt in receipts):
+        required = any(receipt and receipt.get("required") for receipt in receipts)
+        complete = not required or all(receipt and receipt.get("complete") for receipt in receipts)
+        summary["tracking"] = {"required": required, "complete": complete}
+        summary["complete"] = summary["complete"] and complete
+    if plan["snapshot"] is not None:
+        summary["artifacts_index_uri"] = _publish_zia_comparisons(store, campaign_id, units)
     put_json(store, layout.summary_key(campaign_id), summary)
     row = {k: summary[k] for k in ("campaign_id", "release", "succeeded", "total", "complete")}
     row["snapshot_id"] = (plan["snapshot"] or {}).get("id")
     row["final_manifests"] = summary["final_manifests"]
     store.put_bytes(layout.analytics_key("campaigns", campaign_id), (json.dumps(row) + "\n").encode())
-    return {
+    result = {
         "campaign_id": campaign_id,
         "complete": summary["complete"],
         "succeeded": succeeded,
         "total": len(units),
         "summary_uri": store.uri(layout.summary_key(campaign_id)),
     }
+    if "artifacts_index_uri" in summary:
+        result["artifacts_index_uri"] = summary["artifacts_index_uri"]
+    return result
 
 
 def campaign_job_name(campaign_id: str):

@@ -8,7 +8,7 @@ Para preparar a execução no Airflow, rode `scripts/validate_dataset_epochs.py`
 
 ## Validação inicial de 4 de novembro
 
-Foram implementados loaders executáveis para as 18 fontes/variantes explicitadas no projeto, na branch local `Semana-09`. Foram realizados testes iniciais exclusivamente no homelab, acessado por `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes gabriel@192.168.100.27`. **A DAG completa não foi iniciada: a aquisição do Stream51 permaneceu bloqueada pela resolução DNS da origem oficial.** O seu adaptador passou pelos testes de contrato com fixtures; isso não homologou seus dados reais.
+Foram implementados loaders executáveis para as 18 fontes/variantes explicitadas no projeto, na branch local `Semana-09`. Foram realizados testes iniciais com containers isolados. **A DAG completa não foi iniciada: a aquisição do Stream51 permaneceu bloqueada pela resolução DNS da origem oficial.** O seu adaptador passou pelos testes de contrato com fixtures; isso não homologou seus dados reais.
 
 A planilha `Semana_09_Datasets_Benchmarks.xlsx` continuou indisponível neste executor: a referência Library retornou `page_reference_unsupported_format`. As 18 entradas abaixo não substituíram os 47 registros do catálogo bibliográfico, nem representaram 18 datasets independentes. Outros candidatos do catálogo não foram presumidos selecionados.
 
@@ -34,7 +34,7 @@ Esse protocolo verificou carga, schema, alvos, treinamento, avaliação, artefat
 | Stream51 | ZIP/JSON/bounding boxes oficiais; suporte a arquivo local e HTTP Range | BLOCKED nos dados reais; contratos com fixture aprovados |
 | CLEAR10, CLEAR100 | Release julho/2022, espelho indicado pelos autores, revisão imutável | PASS nas duas variantes |
 
-Detalhes de origem, licença, schema, ordem, checksums e limitações: [MNIST/CIFAR nativos](image-datasets.md), [INSECTS/Gas](real-streams.md), [CORe50/Stream51/CLEAR](temporal-vision.md). O loader CIFAR usado pelo factory foi `datasets/cifar_parquet.py`: a aquisição dos arquivos completos de Toronto excedeu o timeout no homelab, e foi escolhida explicitamente a variante Parquet versionada; não houve troca automática de origem após uma negação. Os hashes LFS integrais foram registrados como referência, sem alegar sua verificação por leitura parcial. Foram verificados os bytes selecionados e os respectivos manifestos. A representação de CORe50/CLEAR/Stream51 foi RGB 16×16 normalizado; não houve pré-treino de um extrator visual.
+Detalhes de origem, licença, schema, ordem, checksums e limitações: [MNIST/CIFAR nativos](image-datasets.md), [INSECTS/Gas](real-streams.md), [CORe50/Stream51/CLEAR](temporal-vision.md). O loader CIFAR usado pelo factory foi `datasets/cifar_parquet.py`: a aquisição dos arquivos completos de Toronto excedeu o timeout de aquisição, e foi escolhida explicitamente a variante Parquet versionada; não houve troca automática de origem após uma negação. Os hashes LFS integrais foram registrados como referência, sem alegar sua verificação por leitura parcial. Foram verificados os bytes selecionados e os respectivos manifestos. A representação de CORe50/CLEAR/Stream51 foi RGB 16×16 normalizado; não houve pré-treino de um extrator visual.
 
 ## Arquitetura entregue
 
@@ -47,7 +47,7 @@ Detalhes de origem, licença, schema, ordem, checksums e limitações: [MNIST/CI
 
 ## Ambiente e evidências
 
-O diretório isolado foi `/home/gabriel/semana09-datasets-20261103-2341`, com snapshot final em `review-final/code`, caches e resultados em `state` e logs em `evidence`. O ambiente possuía 28 CPUs lógicas Xeon E5-2680 v4, aproximadamente 30 GiB de RAM e mais de 500 GiB livres no início. A stack original permaneceu em serviço. Os testes usaram containers transitórios, sem publicar portas ou parar serviços.
+A validação usou um snapshot do código, com caches e resultados em `state` e logs em `evidence`. O ambiente possuía 28 CPUs lógicas Xeon E5-2680 v4, aproximadamente 30 GiB de RAM e mais de 500 GiB livres no início. A stack original permaneceu em serviço. Os testes usaram containers transitórios, sem publicar portas ou parar serviços.
 
 Foi construída somente a imagem auxiliar `continual-bench-datasets:semana09-v2`, derivada da imagem existente, acrescentando Pillow 13.0.0 e PyArrow 26.0.1 com hashes fixados. As dependências opcionais ficaram em `.[datasets]`, `uv.lock` e `requirements.lock`. Os testes unitários usaram 2 CPUs/3 GiB, os smokes 2 CPUs/4 GiB e os clientes de serviços 2 CPUs/6 GiB, com limites externos de tempo. Não foram executados testes iniciais no Mac.
 
@@ -66,18 +66,18 @@ O aviso preexistente de input example do MLflow permaneceu na suíte; os avisos 
 
 A revisão final corrigiu também a revogação de um recibo antigo antes de repetir a admissão via CLI: uma falha posterior deixou `complete=false`, com teste de regressão. Os smokes e serviços foram repetidos após essa mudança. O código Python revisado teve SHA-256 `c12041fa90c65452d7abe64e66d6f0c3bdfd2a6aafd9c79254224d63f7912d30`; o fingerprint incluiu também os contratos e as versões do runtime. A imagem usada nos testes precedeu os commits locais e registrou `git_revision=uncommitted`; a correspondência foi estabelecida pelo hash dos fontes, sem inventar uma revisão executada.
 
-Os loaders foram registrados no commit `4c7a6ae` e o protocolo de épocas e o gate da DAG no commit `90706ad`. A consolidação do homelab confirmou os 17 resultados com o mesmo fingerprint e as quatro evidências de serviços. O pico RSS foi medido no processo executor compartilhado. Os arquivos de `reports/semana09-datasets/` estão no histórico Git. Para ler a consolidação, use `git show f835ee8:reports/semana09-datasets/consolidation.json`. [Complemento do relatório no Space](https://chatgpt.com/space/page_ea19e36695b88191aeefc5cc7af299ad).
+Os loaders foram registrados no commit `4c7a6ae` e o protocolo de épocas e o gate da DAG no commit `90706ad`. A consolidação da validação confirmou os 17 resultados com o mesmo fingerprint e as quatro evidências de serviços. O pico RSS foi medido no processo executor compartilhado. Os arquivos de `reports/semana09-datasets/` estão no histórico Git. Para ler a consolidação, use `git show f835ee8:reports/semana09-datasets/consolidation.json`. [Complemento do relatório no Space](https://chatgpt.com/space/page_ea19e36695b88191aeefc5cc7af299ad).
 
 ## Bloqueio registrado na primeira rodada
 
-O endereço oficial `http://klab.cis.rit.edu/files/Stream-51.zip` não resolveu DNS no homelab (`Name or service not known`). O MD5 publicado `5f34d542b71af7e5ecb2226d1bc7297c` ficou como referência para o arquivo integral. A falta dessa fonte impediu a aprovação do gate da época. O gate vigente usa o catálogo de 17 fontes descrito acima.
+O endereço oficial `http://klab.cis.rit.edu/files/Stream-51.zip` não resolveu DNS durante a validação (`Name or service not known`). O MD5 publicado `5f34d542b71af7e5ecb2226d1bc7297c` ficou como referência para o arquivo integral. A falta dessa fonte impediu a aprovação do gate da época. O gate vigente usa o catálogo de 17 fontes descrito acima.
 
-Comandos de validação, executados **no homelab** com o snapshot final e o estado isolado:
+Comandos de validação, executados com o snapshot final e o estado isolado:
 
 ```bash
-export TASK_BENCH_CODE=/home/gabriel/semana09-datasets-20261103-2341/review-final/code
-export TASK_BENCH_STATE=/home/gabriel/semana09-datasets-20261103-2341/state
-export TASK_BENCH_SERVICE_ENV=/home/gabriel/.config/continual-bench/benchmark.env
+export TASK_BENCH_CODE=/caminho/absoluto/do/snapshot
+export TASK_BENCH_STATE=/caminho/absoluto/do/estado/isolado
+export TASK_BENCH_SERVICE_ENV=/caminho/privado/benchmark.env
 
 timeout 900 docker run --rm --network none --cpus 2 --memory 4g \
   --pids-limit 192 --read-only --tmpfs /tmp:rw,size=256m \

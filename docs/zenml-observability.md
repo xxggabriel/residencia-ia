@@ -1,6 +1,6 @@
 # Registros e visualizações ZenML
 
-## Configuração atual do homelab
+## Configuração com Docker Compose
 
 O Docker Compose configura o projeto `default` e a stack `benchmark-minio-v2`.
 A stack usa um orquestrador local e guarda os artefatos no bucket privado

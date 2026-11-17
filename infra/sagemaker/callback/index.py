@@ -70,6 +70,27 @@ def tick(message, sfn, sm, s3):
         summary = read_json(s3, uri, "campaigns/")
         if summary.get("complete") is not True:
             return respond(sm, message, failure=f"Incomplete campaign summary at {uri}")
+        tracking = summary.get("tracking") or {}
+        if tracking.get("required") is True:
+            if tracking.get("complete") is not True:
+                return respond(sm, message, failure=f"Incomplete MLflow publication at {uri}")
+            index_uri = summary.get("artifacts_index_uri")
+            prefix = uri.rsplit("/", 1)[0] + "/"
+            if index_uri or summary.get("snapshot") is not None:
+                if not index_uri or not index_uri.startswith(prefix):
+                    return respond(sm, message, failure=f"Campaign artifact index is missing from {uri}")
+                if not read_json(s3, index_uri, "campaigns/").get("figures"):
+                    return respond(
+                        sm, message, failure=f"Campaign artifact index has no figures at {index_uri}"
+                    )
+            else:
+                units = summary.get("units") or []
+                if not units or any(
+                    not (unit.get("artifacts_index_uri") or "").startswith(prefix + "runs/")
+                    or not (unit.get("tracking") or {}).get("mlflow_run_id")
+                    for unit in units
+                ):
+                    return respond(sm, message, failure=f"Matrix unit evidence is missing from {uri}")
         return respond(sm, message, outputs={"SummaryUri": uri})
 
     uri = args["request_uri"]

@@ -35,9 +35,7 @@ Implementações primárias consultadas para o formato:
 - [CORe50 no Avalanche](https://github.com/ContinualAI/avalanche/blob/master/avalanche/benchmarks/datasets/core50/core50_data.py).
 - [CLEAR metadata no Avalanche](https://github.com/ContinualAI/avalanche/blob/master/avalanche/benchmarks/datasets/clear/clear.py).
 
-## Verificação inicial no homelab em novembro de 2026
-
-Todas as execuções iniciais ocorreram em `gabriel@192.168.100.27`, via SSH com autenticação já disponível e `StrictHostKeyChecking=yes`. Não foram executados testes no Mac.
+## Verificação inicial em novembro de 2026
 
 Os probes HTTP/ZIP reais confirmaram suporte a ranges em CORe50 e CLEAR. A listagem CORe50 incluiu 165428 membros e transferiu 18202869 bytes de diretório/metadados; CLEAR10 teve 33245 membros de treino com 4205433 bytes; CLEAR100 teve 112155 membros de treino com 14222299 bytes. As estruturas reais foram inspecionadas: CLEAR treino usou prefixo `train_image_only/`, enquanto teste usou `test/`.
 

@@ -51,6 +51,7 @@ def pipeline_definition(*, bucket, role, runtime_image, ml_image, git_sha, key_a
     def environment(stage):
         return {
             "MLFLOW_TRACKING_URI": mlflow_arn,
+            "BENCH_KMS_KEY_ID": key_arn,
             "BENCH_NATIVE_EXECUTION_ID": execution,
             "BENCH_NATIVE_STAGE": stage,
             "BENCH_NATIVE_SCOPE": param("Scope"),

@@ -37,8 +37,9 @@ def publish_run_metrics(client, directory, run_id, report):
         "samples": contract["input"]["rows"], "holdout_start": contract["holdout_start"],
         "block_rows": contract["block_rows"], "model_params": json.dumps(report["model_params"]),
         "code_sha256": env["code_sha256"], "git_revision": env["git_revision"],
-        "aws_region": report["costs"]["aws"]["settings"]["region"],
     }
+    if aws := report["costs"].get("aws"):
+        params["aws_region"] = aws["settings"]["region"]
     client.log_batch(
         run_id, params=[Param(name, str(value)) for name, value in params.items()], synchronous=True,
     )
@@ -65,8 +66,13 @@ def publish_run_metrics(client, directory, run_id, report):
         points.extend((f"{group}/{label}/{key}", 0, value) for label, row in report[group].items()
                       for key, value in row.items())
     for version in report["model_versions"]:
-        points.extend((f"training/{k}", version["end_seq"], version[k])
-                      for k in ("train_samples", "train_seconds", "iterations", "bytes"))
+        fields = ("train_samples", "validation_samples", "training_presentations", "train_seconds",
+                  "iterations", "bytes")
+        points.extend((f"training/{name}", version["end_seq"], version[name])
+                      for name in fields if name in version)
+        unit = {"epoch": "epochs", "minibatch": "minibatches"}.get(version.get("iteration_unit"))
+        if unit:
+            points.append((f"training/{unit}", version["end_seq"], version["iterations"]))
     points.extend(("tracking_v1/posthoc_cost_sensitivity", index, value)
                   for index, (_, value) in enumerate(report["cost_sensitivity"]))
     log_metric_points(client, run_id, points)

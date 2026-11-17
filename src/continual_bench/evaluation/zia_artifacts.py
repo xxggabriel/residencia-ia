@@ -1,6 +1,7 @@
 """Adapt retained Zia evidence to the shared tracking and artifact contracts."""
 
 import hashlib
+import math
 from itertools import accumulate
 
 from continual_bench.evaluation.artifacts import (
@@ -11,7 +12,13 @@ from continual_bench.evaluation.artifacts import (
     write_artifacts,
 )
 from continual_bench.evaluation.tracking import VERSION, metric_catalog
+from continual_bench.evaluation.training_evidence import training_figures
+from continual_bench.infrastructure.observation_tracking import write_observation_evidence
 from continual_bench.infrastructure.storage import atomic_write
+
+
+def _finite(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def tracking_report(report, predictions=None):
@@ -95,11 +102,14 @@ def write_zia_artifacts(directory, report, adapted):
     tracking = adapted["tracking"]
     atomic_write(directory / "metric-definitions.json", metric_catalog()[1])
     plot_tracking = {**tracking, "metrics": {k: v for k, v in tracking["metrics"].items() if v is not None}}
-    figures = binary_figures({**adapted, "tracking": plot_tracking})
+    classes = report["contract"]["input"]["source"]["classes"]
+    figures = binary_figures({**adapted, "tracking": plot_tracking, "classes": classes})
     figures.extend(system_figures(report["system_metrics"]))
+    history = report.get("training_history")
+    if history:
+        figures.extend(training_figures(history))
     if report.get("retraining"):
         figures.extend(retraining_figures(report["retraining"]))
-    classes = report["contract"]["input"]["source"]["classes"]
     for scope, field in (("prequential", "prequential_confusion"), ("holdout", "holdout_confusion")):
         matrix = report[field]
         title = f"Matriz de confusão ({scope})"
@@ -108,11 +118,21 @@ def write_zia_artifacts(directory, report, adapted):
             "x_label": "Predição", "y_label": "Classe real", "value_range": (0, max(map(max, matrix))),
         }))
     windows = [w for w in report["windows"] if w["scope"] == "holdout"]
-    figures.append(Figure("performance", "holdout_accuracy", "Acurácia no holdout", "line", {
-        "series": [{"name": name, "points": [[w["end_seq"], w[name]] for w in windows]}
-                   for name in ("accuracy", "balanced_accuracy")],
-        "x_label": "seq (fim da janela)", "y_label": "valor",
-    }))
+    ranking = ("roc_auc", "average_precision") if len(classes) == 2 else ("macro_roc_auc", "macro_pr_auc")
+    for group, name, title, keys in (
+        ("performance", "holdout_accuracy", "Acurácia no holdout",
+         ("accuracy", "balanced_accuracy", "f1_macro")),
+        ("probabilistic", "holdout_ranking", "Ranqueamento no holdout", ranking),
+        ("probabilistic", "holdout_losses", "Brier e log loss no holdout", ("brier", "log_loss")),
+    ):
+        series = [
+            {"name": key, "points": [[window["end_seq"], window.get(key)] for window in windows]}
+            for key in keys if any(_finite(window.get(key)) for window in windows)
+        ]
+        if series:
+            figures.append(Figure(group, name, title, "line", {
+                "series": series, "x_label": "seq (fim da janela)", "y_label": "valor",
+            }))
     versions = report["model_versions"]
     figures.append(Figure("adaptation", "model_storage", "Armazenamento acumulado dos modelos", "line", {
         "series": [{"name": "bytes", "points": list(zip(
@@ -120,6 +140,7 @@ def write_zia_artifacts(directory, report, adapted):
         ))}],
         "x_label": "seq", "y_label": "bytes",
     }))
+    write_observation_evidence(directory, report)
     return write_artifacts(directory, figures, {
         "summary/metrics": {"metrics": tracking["metrics"], "availability": tracking["availability"],
                             "report_metrics": report["metrics"], "holdout": report["holdout"]},
@@ -133,4 +154,38 @@ def write_zia_artifacts(directory, report, adapted):
         "costs/accounting": {"learner": report["costs"], "evaluation": report["evaluation_aws_cost"]},
         "model/explanation": report["model_explanation"],
         "retraining/analysis": report.get("retraining"),
+        "training/history": None if history is None else {"version": 1, "fits": history},
+    })
+
+
+def write_zia_campaign_artifacts(directory, units):
+    """Compare policy outcomes on matching partitions of one campaign snapshot."""
+    succeeded = [unit for unit in units if unit["status"] == "SUCCEEDED"]
+    metrics = {
+        "prequential": (
+            "accuracy", "balanced_accuracy", "f1_macro", "macro_roc_auc", "macro_pr_auc",
+            "log_loss", "train_seconds", "retrain_count", "scenario_total_cost", "aws_cost_total_usd",
+        ),
+        "holdout": ("accuracy", "balanced_accuracy", "f1_macro", "macro_roc_auc", "macro_pr_auc", "log_loss"),
+    }
+    figures = []
+    for scope, names in metrics.items():
+        field = "metrics" if scope == "prequential" else "holdout"
+        for name in names:
+            values = [(unit.get(field) or {}).get(name) for unit in succeeded]
+            if any(_finite(value) for value in values):
+                title = f"{scope} · {name} por política"
+                figures.append(Figure(f"comparison/{scope}", name, title, "bar", {
+                    "labels": [unit["labels"]["policy"] for unit in succeeded],
+                    "values": [value if _finite(value) else None for value in values],
+                    "x_label": name,
+                }))
+    return write_artifacts(directory, figures, {
+        "comparison/policies": [
+            {
+                key: unit[key] for key in ("run_id", "labels", "status", "final_uri", "metrics", "holdout")
+                if key in unit
+            }
+            for unit in units
+        ],
     })

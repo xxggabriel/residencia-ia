@@ -17,6 +17,18 @@ from contextlib import contextmanager
 
 from .retraining_figures import RETRAINING_BUILDERS
 
+PALETTE = (
+    "#0072B2",
+    "#D55E00",
+    "#009E73",
+    "#CC79A7",
+    "#E69F00",
+    "#56B4E9",
+    "#F0E442",
+    "#000000",
+    "#999999",
+    "#882255",
+)
 MARKER_STYLE = {
     "alarm": ("#d62728", "--", "Alarme do detector"),
     "changepoint": ("#7f7f7f", ":", "Mudança de conceito"),
@@ -64,12 +76,23 @@ def _rolling_mean(values, size=ROLLING_WINDOW):
     return out
 
 
+def _prequential_windows(report):
+    return [window for window in (report.get("windows") or ()) if window.get("scope") != "holdout"]
+
+
+def _adaptations(report):
+    events = report.get("candidates", report.get("updates"))
+    if events is not None:
+        return events
+    return [{"seq": version["end_seq"], **version} for version in (report.get("model_versions") or ())[1:]]
+
+
 def _events(report) -> list[dict]:
     markers = [{"x": a["seq"], "kind": "alarm"} for a in report.get("alarms", [])]
     dataset = report.get("dataset")  # a dict in binary reports, a plain name in ZIA reports
     for point in (dataset.get("changepoints") if isinstance(dataset, dict) else None) or []:
         markers.append({"x": point, "kind": "changepoint"})
-    for candidate in report.get("candidates", report.get("updates", [])):
+    for candidate in _adaptations(report):
         markers.append(
             {"x": candidate["seq"], "kind": "update" if candidate.get("promoted", True) else "rejected"}
         )
@@ -117,7 +140,7 @@ def _plot_series(ax, windows, keys, *, markers=(), smooth=True, ylim=None, title
 
 
 def _performance_dashboard(plt, report):
-    windows = report.get("windows") or []
+    windows = _prequential_windows(report)
     if not windows:
         return []
     markers = _events(report)
@@ -134,7 +157,7 @@ def _performance_dashboard(plt, report):
     _plot_series(
         axes[1][0],
         windows,
-        ["precision", "recall", "specificity"],
+        ["precision", "recall", "specificity", "macro_precision", "macro_recall"],
         markers=markers,
         ylim=(0, 1.02),
         title="Precisão, recall e especificidade",
@@ -144,7 +167,7 @@ def _performance_dashboard(plt, report):
         windows,
         ["mcc", "cohen_kappa"],
         markers=markers,
-        ylim=(-0.05, 1.02),
+        ylim=(-1.0, 1.02),
         title="Concordância (MCC e kappa)",
     )
     fig.suptitle("Desempenho prequential ao longo do fluxo", fontsize=13, fontweight="bold")
@@ -152,14 +175,10 @@ def _performance_dashboard(plt, report):
     return [("plots/performance/dashboard.png", fig)]
 
 
-def _confusion(plt, report):
-    windows = report.get("windows") or []
-    totals = {k: sum(w.get(k) or 0 for w in windows) for k in ("tp", "fp", "tn", "fn")}
-    if not any(totals.values()):
-        return []
+def _confusion_matrix(plt, matrix, labels, scope):
     import numpy as np
 
-    counts = np.array([[totals["tn"], totals["fp"]], [totals["fn"], totals["tp"]]], dtype=float)
+    counts = np.array(matrix, dtype=float)
     rows = counts.sum(axis=1, keepdims=True)
     normalized = np.divide(counts, rows, out=np.zeros_like(counts), where=rows > 0)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.6))
@@ -169,8 +188,8 @@ def _confusion(plt, report):
     ):
         image = ax.imshow(data, cmap="Blues")
         fig.colorbar(image, ax=ax, fraction=0.046)
-        ax.set_xticks([0, 1], ["negativo", "positivo"])
-        ax.set_yticks([0, 1], ["negativo", "positivo"])
+        ax.set_xticks(range(len(labels)), labels)
+        ax.set_yticks(range(len(labels)), labels)
         ax.set_xlabel("predito")
         ax.set_ylabel("real")
         ax.set_title(title, fontsize=10, fontweight="bold")
@@ -184,8 +203,31 @@ def _confusion(plt, report):
                 color="white" if value > data.max() / 2 else "black",
                 fontsize=11,
             )
+    fig.suptitle(f"Matriz de confusão · {scope}")
     fig.tight_layout()
-    out = [("plots/performance/confusion_matrix.png", fig)]
+    return fig
+
+
+def _confusion(plt, report):
+    import numpy as np
+
+    windows = _prequential_windows(report)
+    totals = {k: sum(w.get(k) or 0 for w in windows) for k in ("tp", "fp", "tn", "fn")}
+    labels = ((report.get("contract") or {}).get("input") or {}).get("source", {}).get("classes")
+    matrix = report.get("prequential_confusion")
+    if matrix is None and any(totals.values()):
+        matrix = [[totals["tn"], totals["fp"]], [totals["fn"], totals["tp"]]]
+    out = []
+    if matrix is not None:
+        out.append(("plots/performance/confusion_matrix.png", _confusion_matrix(
+            plt, matrix, labels or ["negativo", "positivo"], "prequential",
+        )))
+    if report.get("holdout_confusion") is not None:
+        out.append(("plots/performance/holdout_confusion.png", _confusion_matrix(
+            plt, report["holdout_confusion"], labels or ["negativo", "positivo"], "holdout",
+        )))
+    if not any(totals.values()):
+        return out
     fig, ax = plt.subplots(figsize=(12, 4.5))
     xs = [w["end_seq"] for w in windows]
     bottom = np.zeros(len(windows))
@@ -204,7 +246,7 @@ def _confusion(plt, report):
 
 
 def _error_tradeoff(plt, report):
-    windows = report.get("windows") or []
+    windows = _prequential_windows(report)
     points = [
         (w["end_seq"], _num(w.get("false_positive_rate")), _num(w.get("false_negative_rate")))
         for w in windows
@@ -233,18 +275,20 @@ def _error_tradeoff(plt, report):
 
 
 def _probabilistic(plt, report):
-    windows = report.get("windows") or []
+    windows = _prequential_windows(report)
     if not any(_num(w.get("brier")) is not None for w in windows):
         return []
     markers = _events(report)
     fig, axes = plt.subplots(2, 2, figsize=(14, 8), sharex=True)
     _plot_series(axes[0][0], windows, ["brier"], markers=markers, title="Brier score (menor é melhor)")
     _plot_series(axes[0][1], windows, ["log_loss"], markers=markers, title="Log loss (menor é melhor)")
-    _plot_series(axes[1][0], windows, ["ece", "mce"], markers=markers, title="Erro de calibração (ECE e MCE)")
+    _plot_series(
+        axes[1][0], windows, ["ece", "mce"], markers=markers, title="Erro de calibração (ECE e MCE)",
+    )
     _plot_series(
         axes[1][1],
         windows,
-        ["roc_auc", "average_precision"],
+        ["roc_auc", "average_precision", "macro_roc_auc", "macro_pr_auc"],
         markers=markers,
         ylim=(0, 1.02),
         title="Ranqueamento (ROC AUC e AP)",
@@ -255,7 +299,7 @@ def _probabilistic(plt, report):
 
 
 def _drift(plt, report):
-    windows = report.get("windows") or []
+    windows = _prequential_windows(report)
     markers = _events(report)
     if not windows or not markers:
         return []
@@ -297,13 +341,13 @@ def _drift(plt, report):
 
 
 def _adaptation(plt, report):
-    candidates = report.get("candidates", report.get("updates", []))
+    candidates = _adaptations(report)
     if not candidates:
         return []
     fig, axes = plt.subplots(1, 2, figsize=(14, 4.8))
     total, xs, cumulative = 0, [], []
     for c in candidates:
-        total += c.get("train_samples", 0)
+        total += c.get("training_presentations", c.get("train_samples", 0))
         xs.append(c["seq"])
         cumulative.append(total)
     axes[0].step(xs, cumulative, where="post", color="#1f77b4", linewidth=2)
@@ -433,11 +477,15 @@ def _summary(plt, report):
         "f1_macro",
         "precision",
         "recall",
+        "macro_precision",
+        "macro_recall",
         "specificity",
         "mcc",
         "cohen_kappa",
         "roc_auc",
         "average_precision",
+        "macro_roc_auc",
+        "macro_pr_auc",
     ]
     values = {k: _num(metrics.get(k)) for k in quality}
     values = {k: v for k, v in values.items() if v is not None}
@@ -455,12 +503,14 @@ def _summary(plt, report):
         label="prequential",
         color="#1f77b4",
     )
-    if holdout:
-        held = [_num(holdout.get(n)) or 0 for n in names]
-        ax.barh([p - height / 2 for p in positions], held, height=height, label="holdout", color="#ff7f0e")
+    held = [(position, _num(holdout.get(name))) for position, name in enumerate(names)]
+    held = [(position, value) for position, value in held if value is not None]
+    if held:
+        ax.barh([p - height / 2 for p, _ in held], [value for _, value in held],
+                height=height, label="holdout", color="#ff7f0e")
     ax.set_yticks(list(positions), names)
     ax.invert_yaxis()
-    ax.set_xlim(0, 1.05)
+    ax.set_xlim(min(0, *values.values(), *(value for _, value in held)), 1.05)
     ax.set_title("Métricas finais de qualidade", fontsize=10, fontweight="bold")
     for p, n in zip(positions, names):
         ax.text(

@@ -190,8 +190,23 @@ def _headline(report) -> dict:
     return summary | {"updates": len(report.get("updates", [])), "alarms": len(report.get("alarms", []))}
 
 
+def _publish_local_case(directory, name, config, report=None, *, run_key=None):
+    from continual_bench.infrastructure.benchmark_tracking import publish_local_benchmark
+
+    evaluator = "epochs"
+    if isinstance(config, Config):
+        evaluator = "binary"
+    elif isinstance(config, TypedConfig):
+        evaluator = "typed"
+    run_dir = directory / evaluator / (run_key if report is None else report["run_key"])
+    if report is None:
+        report_path = run_dir / ("epoch-report.json" if evaluator == "epochs" else "report.json")
+        report = json.loads(report_path.read_bytes())
+    return publish_local_benchmark(run_dir, report, experiment_name=f"continual-bench/local-matrix/{name}")
+
+
 def execute_matrix(matrix: ExperimentMatrix, root, *, cache="state/datasets", real_directory=None,
-                   max_seconds=86_400):
+                   max_seconds=86_400, services=False):
     """Run every planned case once; a rerun resumes, reusing completed reports."""
     plan = matrix.plan()
     directory = Path(root) / matrix.identity()
@@ -203,7 +218,13 @@ def execute_matrix(matrix: ExperimentMatrix, root, *, cache="state/datasets", re
         started = time.monotonic()
         for config in plan["cases"]:
             key = case_key(config)
-            if journal["cases"].get(key, {}).get("status") == "passed":
+            prior = journal["cases"].get(key, {})
+            if prior.get("status") == "passed":
+                if services and not prior.get("tracking"):
+                    prior["tracking"] = _publish_local_case(
+                        directory, plan["matrix"], config, run_key=prior["run_key"],
+                    )
+                    atomic_write(journal_path, json.dumps(journal, indent=2).encode())
                 continue
             if time.monotonic() - started >= max_seconds:
                 raise TimeoutError("matrix deadline reached before next case")
@@ -211,6 +232,9 @@ def execute_matrix(matrix: ExperimentMatrix, root, *, cache="state/datasets", re
             atomic_write(journal_path, json.dumps(journal, indent=2).encode())
             try:
                 report = _execute_case(config, directory, cache, real_directory)
+                tracking = None
+                if services:
+                    tracking = _publish_local_case(directory, plan["matrix"], config, report)
             except Exception as error:
                 # Store type only: third-party error strings can contain credential URLs.
                 journal["cases"][key] = {"status": "failed", "error_type": type(error).__name__,
@@ -219,6 +243,8 @@ def execute_matrix(matrix: ExperimentMatrix, root, *, cache="state/datasets", re
                 raise
             journal["cases"][key] = {"status": "passed", **describe(config), "run_key": report["run_key"],
                                      "metrics": _headline(report)}
+            if tracking:
+                journal["cases"][key]["tracking"] = tracking
             atomic_write(journal_path, json.dumps(journal, indent=2).encode())
         journal["complete"] = True
         atomic_write(journal_path, json.dumps(journal, indent=2).encode())

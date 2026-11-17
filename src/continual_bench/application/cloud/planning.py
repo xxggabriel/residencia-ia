@@ -215,6 +215,7 @@ def map_items(plan: dict, store) -> list[dict]:
             "unit_uri": store.uri(u["unit_key"]),
             "job_definition": plan["release"]["job_definitions"]["benchmark"],
             "max_attempts": plan["max_attempts"],
+            "run_timeout_seconds": plan["timeouts"]["run_seconds"],
             "task_timeout_seconds": plan["timeouts"]["task_seconds"],
             "labels": u["labels"],
         }
