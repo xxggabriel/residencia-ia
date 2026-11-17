@@ -154,9 +154,7 @@ class EndpointLifecycle:
         if self.flink_application:
             try:
                 ka = client("kinesisanalyticsv2", max_attempts=2, read_timeout=5)
-                detail = ka.describe_application(ApplicationName=self.flink_application)[
-                    "ApplicationDetail"
-                ]
+                detail = ka.describe_application(ApplicationName=self.flink_application)["ApplicationDetail"]
                 if detail.get("ApplicationStatus") == "RUNNING":
                     ka.stop_application(ApplicationName=self.flink_application, Force=False)
                     stopped["flink"].append(self.flink_application)
@@ -169,14 +167,8 @@ class EndpointLifecycle:
                 for page in sm.get_paginator("list_endpoints").paginate(StatusEquals="InService"):
                     for ep in page.get("Endpoints", []):
                         arn = ep["EndpointArn"]
-                        tags = {
-                            t["Key"]: t["Value"]
-                            for t in sm.list_tags(ResourceArn=arn).get("Tags", [])
-                        }
-                        if (
-                            tags.get("cb-stack") == self.project
-                            and tags.get("cb-ephemeral") == "true"
-                        ):
+                        tags = {t["Key"]: t["Value"] for t in sm.list_tags(ResourceArn=arn).get("Tags", [])}
+                        if tags.get("cb-stack") == self.project and tags.get("cb-ephemeral") == "true":
                             sm.delete_endpoint(EndpointName=ep["EndpointName"])
                             stopped["sagemaker_endpoints"].append(ep["EndpointName"])
             except Exception as error:

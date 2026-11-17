@@ -74,9 +74,11 @@ class SystemMetricsSampler:
             limit = int((self._cgroup / "memory.max").read_text())
             used = int((self._cgroup / "memory.current").read_text())
             if limit > 0 and used >= 0:
-                values.update(container_memory_usage_megabytes=used / MEGABYTE,
-                              container_memory_limit_megabytes=limit / MEGABYTE,
-                              container_memory_usage_percentage=100 * used / limit)
+                values.update(
+                    container_memory_usage_megabytes=used / MEGABYTE,
+                    container_memory_limit_megabytes=limit / MEGABYTE,
+                    container_memory_usage_percentage=100 * used / limit,
+                )
         except (OSError, ValueError):
             pass
         try:
@@ -206,8 +208,10 @@ class SystemMetricsSampler:
         return {
             "version": "system-metrics-v1",
             "naming": "MLflow system metrics; published as system/<name>",
-            "scope": ("container and process sampled during evaluation and metric derivation; "
-                      "excludes plots and publication"),
+            "scope": (
+                "container and process sampled during evaluation and metric derivation; "
+                "excludes plots and publication"
+            ),
             "interval_seconds": self.interval,
             "collector": "psutil" if self._psutil is not None else "procfs_and_disk_usage",
             "unavailable_reason": None if self._psutil is not None else "psutil is not installed",

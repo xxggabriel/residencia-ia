@@ -64,14 +64,25 @@ EFFORT = {
     "updates": "Atualizações",
 }
 RESOURCE_PANELS = (
-    ("Tempo", "s", {
-        "training_seconds": "Treino", "inference_seconds": "Inferência",
-        "served_inference_seconds": "Inferência servida",
-        "duration_seconds": "Duração total", "tracking_overhead_seconds": "Overhead do tracking",
-    }),
-    ("Vazão de inferência", "predições/s", {
-        "predictions_per_second": "Inferência", "served_predictions_per_second": "Inferência servida",
-    }),
+    (
+        "Tempo",
+        "s",
+        {
+            "training_seconds": "Treino",
+            "inference_seconds": "Inferência",
+            "served_inference_seconds": "Inferência servida",
+            "duration_seconds": "Duração total",
+            "tracking_overhead_seconds": "Overhead do tracking",
+        },
+    ),
+    (
+        "Vazão de inferência",
+        "predições/s",
+        {
+            "predictions_per_second": "Inferência",
+            "served_predictions_per_second": "Inferência servida",
+        },
+    ),
     ("Pico de RSS", "bytes", {"peak_rss_bytes": "Pico de RSS"}),
     ("Custo total", None, {"cost_total": "Custo total"}),
     ("Custo por 1.000 exemplos avaliados", None, {"cost_per_1000_evaluated": "Custo normalizado"}),
@@ -138,8 +149,7 @@ def _sample(points, count, *, limit=MAX_POINTS, keep_x_extrema=False):
                     if x_high is None or entry["x"] > x_high[1]["x"]:
                         x_high = (index, entry)
             if index and (
-                (value is None) != (previous["y"] is None)
-                or entry.get("version") != previous.get("version")
+                (value is None) != (previous["y"] is None) or entry.get("version") != previous.get("version")
             ):
                 retained[index - 1] = previous
                 retained[index] = entry
@@ -186,8 +196,11 @@ def _fit_detail(fit):
     if fit.get("action") in ("initial", "initial_fit") and promotion == "promoted":
         promotion = "initial"
     return {
-        "fit": fit["fit_id"], "action": fit.get("action"), "status": promotion,
-        "version": fit.get("deployed_version"), "source_version": fit.get("source_model_version"),
+        "fit": fit["fit_id"],
+        "action": fit.get("action"),
+        "status": promotion,
+        "version": fit.get("deployed_version"),
+        "source_version": fit.get("source_model_version"),
         "checkpoint": checkpoint.get("sha256") or checkpoint.get("file"),
     }
 
@@ -224,22 +237,32 @@ def _window_panels(observations, fits, *, primary_only=False, markers=None):
             transitions = [
                 {"x": row["step"], "kind": "update", "label": "Primeira janela da nova versão"}
                 for previous, row in pairwise(rows)
-                if previous.get("model_version") is not None and row.get("model_version") is not None
+                if previous.get("model_version") is not None
+                and row.get("model_version") is not None
                 and previous["model_version"] != row["model_version"]
             ]
         else:
             transitions = markers
         title, x_label = WINDOW_LABELS.get(coordinate, ("Qualidade por janela", "Evento (fim da janela)"))
         panel = Panel(
-            f"{title} · {scope}", x_label, label,
+            f"{title} · {scope}",
+            x_label,
+            label,
             y_lim=None if task == "regression" else (0, 1.045),
-            markers=transitions if coordinate not in WINDOW_LABELS else [], integer_x=True,
+            markers=transitions if coordinate not in WINDOW_LABELS else [],
+            integer_x=True,
         )
         for key in keys[:1] if primary_only else keys:
-            _add(panel, QUALITY_LABELS[key], (
-                _window_point(row, scope, quality, key, details.get(row.get("fit_id"), {}))
-                for row in rows for quality in [row.get("quality") or {}]
-            ), len(rows))
+            _add(
+                panel,
+                QUALITY_LABELS[key],
+                (
+                    _window_point(row, scope, quality, key, details.get(row.get("fit_id"), {}))
+                    for row in rows
+                    for quality in [row.get("quality") or {}]
+                ),
+                len(rows),
+            )
         if panel.series:
             panels.append(panel)
     return panels
@@ -247,11 +270,14 @@ def _window_panels(observations, fits, *, primary_only=False, markers=None):
 
 def _window_point(row, scope, quality, key, detail):
     context = {
-        **detail, "fit": row.get("fit_id"), "version": row.get("model_version"),
+        **detail,
+        "fit": row.get("fit_id"),
+        "version": row.get("model_version"),
         "checkpoint": row.get("checkpoint_sha256") or row.get("checkpoint") or detail.get("checkpoint"),
     }
-    return _point(row["step"], quality.get(key), scope=scope, support=quality.get("evaluated_examples"),
-                  **context)
+    return _point(
+        row["step"], quality.get(key), scope=scope, support=quality.get("evaluated_examples"), **context
+    )
 
 
 def _fit_quality_panels(observations, fits):
@@ -265,17 +291,30 @@ def _fit_quality_panels(observations, fits):
         rows = [_quality_entry((fit.get("observation_scopes") or {}).get(scope) or {}) for fit in fits]
         unit = next((row["target_unit"] for row in rows if row.get("target_unit")), None)
         panel = Panel(
-            f"Qualidade por ajuste · {scope}", "Ajuste na sequência",
+            f"Qualidade por ajuste · {scope}",
+            "Ajuste na sequência",
             f"Erro ({_target_unit(unit)})" if task == "regression" else "Proporção",
             y_lim=None if task == "regression" else (0, 1.18),
-            fit_axis=True, primary_annotation=True,
+            fit_axis=True,
+            primary_annotation=True,
         )
         for key in keys[:2]:
-            _add(panel, QUALITY_LABELS[key], (
-                _point(index, row.get(key), scope=scope, support=row.get("evaluated_examples"),
-                       **_fit_detail(fit))
-                for index, (row, fit) in enumerate(zip(rows, fits, strict=True), 1)
-            ), len(rows), "comparison")
+            _add(
+                panel,
+                QUALITY_LABELS[key],
+                (
+                    _point(
+                        index,
+                        row.get(key),
+                        scope=scope,
+                        support=row.get("evaluated_examples"),
+                        **_fit_detail(fit),
+                    )
+                    for index, (row, fit) in enumerate(zip(rows, fits, strict=True), 1)
+                ),
+                len(rows),
+                "comparison",
+            )
         if panel.series:
             panels.append(panel)
     return panels
@@ -289,15 +328,20 @@ def _official_overview(observations):
         quality = _quality_entry(scoped)
         unit = _target_unit(quality.get("target_unit"))
         panel = Panel(
-            f"Resumo oficial · {scope}", "Resumo do split",
+            f"Resumo oficial · {scope}",
+            "Resumo do split",
             f"Erro ({unit})" if task == "regression" else "Proporção",
             y_lim=None if task == "regression" else (0, 1.18),
             annotate=True,
         )
         for index, key in enumerate(keys, 1):
-            _add(panel, QUALITY_LABELS[key], (
-                _point(index, quality.get(key), scope=scope, support=quality.get("evaluated_examples")),
-            ), 1, "scatter")
+            _add(
+                panel,
+                QUALITY_LABELS[key],
+                (_point(index, quality.get(key), scope=scope, support=quality.get("evaluated_examples")),),
+                1,
+                "scatter",
+            )
         if panel.series:
             panels.append(panel)
     return panels
@@ -313,10 +357,7 @@ def _fit_series(fit, dimension):
     rows = fit.get(f"observation_{dimension}s") or []
     if not rows:
         return []
-    keys = sorted({
-        key for row in rows for key, value in _row_metrics(row)
-        if _number(value) is not None
-    })
+    keys = sorted({key for row in rows for key, value in _row_metrics(row) if _number(value) is not None})
     dimension_name = "Época local" if dimension == "epoch" else "Step local"
     title = f"{dimension_name} · {fit['fit_id']}"
     if dimension == "step" and isinstance(kind, str):
@@ -335,18 +376,40 @@ def _fit_series(fit, dimension):
             markers.append({"x": best, "kind": "update", "label": "Melhor época"})
         if _number(last) and last > 0:
             stopped = summary.get("early_stopped") or fit.get("early_stopped")
-            markers.append({"x": last, "kind": "alarm" if stopped else "bound",
-                            "label": "Última época · early stopping" if stopped else "Última época"})
+            markers.append(
+                {
+                    "x": last,
+                    "kind": "alarm" if stopped else "bound",
+                    "label": "Última época · early stopping" if stopped else "Última época",
+                }
+            )
         if _number(promoted) is not None:
             markers.append({"x": promoted, "kind": "changepoint", "label": "Checkpoint promovido"})
-    unit = next((quality.get("target_unit") for quality in (fit.get("observation_scopes") or {}).values()
-                 if quality.get("target_unit")), None)
+    unit = next(
+        (
+            quality.get("target_unit")
+            for quality in (fit.get("observation_scopes") or {}).values()
+            if quality.get("target_unit")
+        ),
+        None,
+    )
     panels = (
         Panel(f"Perda · {title}", dimension_name, "Perda", markers=markers, integer_x=True),
-        Panel(f"Qualidade · {title}", dimension_name, "Proporção", y_lim=(0, 1.045),
-              markers=markers, integer_x=True),
-        Panel(f"Erro de regressão · {title}", dimension_name, _target_unit(unit),
-              markers=markers, integer_x=True),
+        Panel(
+            f"Qualidade · {title}",
+            dimension_name,
+            "Proporção",
+            y_lim=(0, 1.045),
+            markers=markers,
+            integer_x=True,
+        ),
+        Panel(
+            f"Erro de regressão · {title}",
+            dimension_name,
+            _target_unit(unit),
+            markers=markers,
+            integer_x=True,
+        ),
         Panel(f"Tempo · {title}", dimension_name, "s", markers=markers, integer_x=True),
         Panel(f"Volume por chamada · {title}", dimension_name, "Contagem", markers=markers, integer_x=True),
         Panel(f"Volume acumulado · {title}", dimension_name, "Contagem", markers=markers, integer_x=True),
@@ -363,7 +426,8 @@ def _fit_series(fit, dimension):
         elif leaf.endswith("_seconds"):
             panel = panels[3]
         elif leaf.endswith(("_size", "_presentations", "_examples", "_samples")) or leaf in (
-            "presentations", "examples_processed",
+            "presentations",
+            "examples_processed",
         ):
             panel = panels[4]
         elif leaf.endswith("_cumulative"):
@@ -374,8 +438,12 @@ def _fit_series(fit, dimension):
             continue
         scope = key.rsplit("/", 1)[0] if "/" in key else None
         detail = _fit_detail(fit)
-        _add(panel, _key_label(key), (_fit_row_point(row, dimension, scope, key, detail)
-                                     for row in rows), len(rows))
+        _add(
+            panel,
+            _key_label(key),
+            (_fit_row_point(row, dimension, scope, key, detail) for row in rows),
+            len(rows),
+        )
     return panels
 
 
@@ -393,29 +461,45 @@ def _fit_row_point(row, dimension, scope, key, detail):
         version = row["prediction_model_version"]
         if version != detail.get("version"):
             detail = {**detail, "version": version, "checkpoint": row.get("prediction_checkpoint")}
-    return _point(row[dimension], quality.get(leaf, values.get(key)), scope=scope,
-                  support=quality.get("evaluated_examples", values.get(f"{scope}/evaluated_examples")),
-                  **detail)
+    return _point(
+        row[dimension],
+        quality.get(leaf, values.get(key)),
+        scope=scope,
+        support=quality.get("evaluated_examples", values.get(f"{scope}/evaluated_examples")),
+        **detail,
+    )
 
 
 def _comparison_panel(title, unit, fields, fits, summary, container, *, caption=None):
-    panel = Panel(title, "Ajuste na sequência" if fits else "Run principal", unit,
-                  annotate=True, fit_axis=bool(fits))
+    panel = Panel(
+        title, "Ajuste na sequência" if fits else "Run principal", unit, annotate=True, fit_axis=bool(fits)
+    )
     panel.title = f"{title} · {caption}" if caption else title
     for index, (key, label) in enumerate(fields.items(), 1):
         points = (
-            _point(position, (fit.get(container) or {}).get(key), **_fit_detail(fit))
-            for position, fit in enumerate(fits, 1)
-        ) if fits else (_point(index, summary.get(key)),)
+            (
+                _point(position, (fit.get(container) or {}).get(key), **_fit_detail(fit))
+                for position, fit in enumerate(fits, 1)
+            )
+            if fits
+            else (_point(index, summary.get(key)),)
+        )
         _add(panel, label, points, len(fits) if fits else 1, "comparison" if fits else "scatter")
     return panel
 
 
 def _effort_panels(fits, summary):
     return [
-        panel for title, fields in (
-            ("Exemplos", {**dict(list(EFFORT.items())[:3]), "examples_observed": "Observados",
-                          "evaluated_examples": "Predições avaliadas"}),
+        panel
+        for title, fields in (
+            (
+                "Exemplos",
+                {
+                    **dict(list(EFFORT.items())[:3]),
+                    "examples_observed": "Observados",
+                    "evaluated_examples": "Predições avaliadas",
+                },
+            ),
             ("Steps, épocas e atualizações", dict(list(EFFORT.items())[3:])),
         )
         if (panel := _comparison_panel(title, "Contagem", fields, fits, summary, "observation_effort")).series
@@ -435,12 +519,18 @@ def _resource_panels(fits, summary):
                     if currency is None or kind is None:
                         continue
                     selected = [
-                        fit if ((fit.get("observation_resources") or {}).get("cost_currency"),
-                                (fit.get("observation_resources") or {}).get("cost_kind")) == (currency, kind)
-                        else {**fit, "observation_resources": {}} for fit in fits
+                        fit
+                        if (
+                            (fit.get("observation_resources") or {}).get("cost_currency"),
+                            (fit.get("observation_resources") or {}).get("cost_kind"),
+                        )
+                        == (currency, kind)
+                        else {**fit, "observation_resources": {}}
+                        for fit in fits
                     ]
-                    panel = _comparison_panel(title, currency, fields, selected, summary,
-                                              "observation_resources", caption=kind)
+                    panel = _comparison_panel(
+                        title, currency, fields, selected, summary, "observation_resources", caption=kind
+                    )
                     if panel.series:
                         panels.append(panel)
                 continue
@@ -448,32 +538,40 @@ def _resource_panels(fits, summary):
             if unit is None or caption is None:
                 continue
         elif unit == "bytes":
-            scopes = {
-                (fit.get("observation_resources") or {}).get("rss_scope") for fit in fits
-            } if fits else {summary.get("rss_scope")}
+            scopes = (
+                {(fit.get("observation_resources") or {}).get("rss_scope") for fit in fits}
+                if fits
+                else {summary.get("rss_scope")}
+            )
             # Values from different RSS scopes cannot share a panel.
             for scope in sorted(scopes - {None}):
                 selected = [
-                    fit if (fit.get("observation_resources") or {}).get("rss_scope") == scope
-                    else {**fit, "observation_resources": {}} for fit in fits
+                    fit
+                    if (fit.get("observation_resources") or {}).get("rss_scope") == scope
+                    else {**fit, "observation_resources": {}}
+                    for fit in fits
                 ]
-                panel = _comparison_panel(title, unit, fields, selected, summary,
-                                          "observation_resources", caption=scope)
+                panel = _comparison_panel(
+                    title, unit, fields, selected, summary, "observation_resources", caption=scope
+                )
                 if panel.series:
                     panels.append(panel)
             continue
         else:
             caption = None
-        panel = _comparison_panel(title, unit, fields, fits, summary, "observation_resources",
-                                  caption=caption)
+        panel = _comparison_panel(
+            title, unit, fields, fits, summary, "observation_resources", caption=caption
+        )
         if panel.series:
             panels.append(panel)
     return panels
 
 
 def _ranking_panel(quality, task, kind, scope):
-    axes = ("recall", "precision", "Recall", "Precisão") if kind == "pr" else (
-        "fpr", "tpr", "Taxa de falsos positivos", "Recall"
+    axes = (
+        ("recall", "precision", "Recall", "Precisão")
+        if kind == "pr"
+        else ("fpr", "tpr", "Taxa de falsos positivos", "Recall")
     )
     curve = quality.get(f"{kind}_curve") or {}
     ranking = quality.get("ranking_method")
@@ -500,7 +598,9 @@ def _ranking_panel(quality, task, kind, scope):
     if kind == "pr" and _number(quality.get("average_precision")) is not None:
         method = f"AP={quality['average_precision']:.5g} · {method}"
     panel = Panel(
-        f"{'Precisão–recall' if kind == 'pr' else 'ROC'} · {scope}\n{method}", axes[2], axes[3],
+        f"{'Precisão–recall' if kind == 'pr' else 'ROC'} · {scope}\n{method}",
+        axes[2],
+        axes[3],
         y_lim=(0, 1.045),
     )
     x, y = curve.get(axes[0]) or [], curve.get(axes[1]) or []
@@ -509,19 +609,36 @@ def _ranking_panel(quality, task, kind, scope):
         if kind == "pr":
             # Histogram curves advance from recall 0; sklearn supplies the reverse order.
             style = "steps-pre" if x[0] < x[-1] else "steps-post"
-        _add(panel, "Escores da classe positiva", (
-            _point(a, b, scope=scope, support=support)
-            for a, b in zip(x, y, strict=True) if _number(a) is not None
-        ), len(x), style)
+        _add(
+            panel,
+            "Escores da classe positiva",
+            (
+                _point(a, b, scope=scope, support=support)
+                for a, b in zip(x, y, strict=True)
+                if _number(a) is not None
+            ),
+            len(x),
+            style,
+        )
         if kind == "roc" and _number(quality.get("recall_at_fpr_0_01")) is not None:
             target = quality["recall_at_fpr_0_01"]
-            operating = [a for a, b in zip(x, y, strict=True) if _number(a) is not None and a <= 0.01
-                         and _number(b) is not None and math.isclose(b, target, abs_tol=1e-12)]
+            operating = [
+                a
+                for a, b in zip(x, y, strict=True)
+                if _number(a) is not None
+                and a <= 0.01
+                and _number(b) is not None
+                and math.isclose(b, target, abs_tol=1e-12)
+            ]
             panel.markers.append({"x": 0.01, "kind": "alarm", "label": "Limite de FPR (1%)"})
             if operating:
-                _add(panel, f"Ponto operacional (recall={target:.4g})", (
-                    _point(max(operating), target, scope=scope, support=support),
-                ), 1, "scatter")
+                _add(
+                    panel,
+                    f"Ponto operacional (recall={target:.4g})",
+                    (_point(max(operating), target, scope=scope, support=support),),
+                    1,
+                    "scatter",
+                )
     return panel
 
 
@@ -531,21 +648,32 @@ def _residual_panel(quality, scope):
     residuals = quality.get("residuals") or {}
     x, y = residuals.get("prediction") or [], residuals.get("error") or []
     if x and len(x) == len(y):
-        _add(panel, "Resíduos", (_point(a, b, scope=scope) for a, b in zip(x, y, strict=True)
-                                if _number(a) is not None), len(x), "scatter")
+        _add(
+            panel,
+            "Resíduos",
+            (_point(a, b, scope=scope) for a, b in zip(x, y, strict=True) if _number(a) is not None),
+            len(x),
+            "scatter",
+        )
     return panel
 
 
 def _retention_panel(retention):
     rows = retention.get("series") or []
-    panel = Panel("Retenção e esquecimento · conjuntos históricos reservados", "Checkpoint", "Escore",
-                  zero=True)
+    panel = Panel(
+        "Retenção e esquecimento · conjuntos históricos reservados", "Checkpoint", "Escore", zero=True
+    )
     for key, name in (
-        ("absolute_retention", "Retenção absoluta"), ("gem_bwt", "BWT de GEM"),
+        ("absolute_retention", "Retenção absoluta"),
+        ("gem_bwt", "BWT de GEM"),
         ("post_learning_fm", "FM pós-aprendizado"),
     ):
-        _add(panel, name, (_point(row["step"], row.get(key), version=row.get("model_version"))
-                           for row in rows), len(rows))
+        _add(
+            panel,
+            name,
+            (_point(row["step"], row.get(key), version=row.get("model_version")) for row in rows),
+            len(rows),
+        )
     return panel
 
 
@@ -605,37 +733,63 @@ def _draw_panel(ax, panel):
         y = [point["y"] if point["y"] is not None else np.nan for point in series.points]
         if series.style == "comparison":
             # Join equal-scope points, excluding rejected/unselected checkpoints from the trajectory.
-            linked = [p["y"] if p.get("status") not in ("rejected", "candidate") else None
-                      for p in series.points]
+            linked = [
+                p["y"] if p.get("status") not in ("rejected", "candidate") else None for p in series.points
+            ]
             ax.plot(x, linked, color=color, linestyle=style, linewidth=1.25, label=series.name)
             for status, (marker, _, _) in FIT_STYLES.items():
                 selected = [p for p in series.points if p.get("status") == status and p["y"] is not None]
                 if selected:
-                    ax.scatter([p["x"] for p in selected], [p["y"] for p in selected],
-                               marker=marker, color=color, zorder=3)
+                    ax.scatter(
+                        [p["x"] for p in selected],
+                        [p["y"] for p in selected],
+                        marker=marker,
+                        color=color,
+                        zorder=3,
+                    )
         elif series.style == "scatter":
             ax.scatter(x, y, color=color, marker="o", label=series.name, alpha=0.75, zorder=3)
         else:
-            ax.plot(x, y, color=color, linestyle=style, linewidth=1.55, label=series.name,
-                    drawstyle=series.style if series.style.startswith("steps-") else "default",
-                    marker="o" if len(x) <= 35 else None, markersize=3)
+            ax.plot(
+                x,
+                y,
+                color=color,
+                linestyle=style,
+                linewidth=1.55,
+                label=series.name,
+                drawstyle=series.style if series.style.startswith("steps-") else "default",
+                marker="o" if len(x) <= 35 else None,
+                markersize=3,
+            )
         if panel.annotate:
             for point in _label_points(series.points, 24 // len(panel.series)):
                 support = f" · n={point['support']:,}" if point.get("support") is not None else ""
                 below = series.style == "comparison" and index % 2 == 1 and point["y"] > 0.05
                 rightmost = point["x"] == x[-1] and len(x) > 1
-                ax.annotate(f"{point['y']:.4g}{support}", (point["x"], point["y"]),
-                            xytext=(-4 if rightmost else 4, -6 if below else 6 + 9 * (index % 2)),
-                            textcoords="offset points", color="#212936", fontsize=8,
-                            va="top" if below else "bottom", ha="right" if rightmost else "left")
+                ax.annotate(
+                    f"{point['y']:.4g}{support}",
+                    (point["x"], point["y"]),
+                    xytext=(-4 if rightmost else 4, -6 if below else 6 + 9 * (index % 2)),
+                    textcoords="offset points",
+                    color="#212936",
+                    fontsize=8,
+                    va="top" if below else "bottom",
+                    ha="right" if rightmost else "left",
+                )
     if panel.primary_annotation:
         _annotate_primary(ax, panel.series)
     seen = set()
     for event in panel.markers:
         color, style, default = EVENT_STYLES[event["kind"]]
         label = event.get("label", default)
-        ax.axvline(event["x"], color=color, linestyle=style, linewidth=1, alpha=0.7,
-                   label=None if label in seen else label)
+        ax.axvline(
+            event["x"],
+            color=color,
+            linestyle=style,
+            linewidth=1,
+            alpha=0.7,
+            label=None if label in seen else label,
+        )
         seen.add(label)
     if panel.zero:
         ax.axhline(0, color="#556274", linewidth=0.9, linestyle=":")
@@ -647,8 +801,12 @@ def _draw_panel(ax, panel):
         fits = {point["x"]: point["fit"] for series in panel.series for point in series.points}
         if len(fits) <= 12:
             positions = sorted(fits)
-            ax.set_xticks(positions, [fits[position] for position in positions],
-                          fontsize=8, rotation=25 if len(fits) > 7 else 0)
+            ax.set_xticks(
+                positions,
+                [fits[position] for position in positions],
+                fontsize=8,
+                rotation=25 if len(fits) > 7 else 0,
+            )
     if panel.integer_x or (panel.fit_axis and len(fits) > 12):
         ax.xaxis.set_major_locator(MaxNLocator(integer=True, min_n_ticks=1))
         ax.ticklabel_format(axis="x", style="plain", useOffset=False)
@@ -659,16 +817,27 @@ def _draw_panel(ax, panel):
     ax.spines[["top", "right"]].set_visible(False)
     ax.legend(fontsize=8, ncol=min(3, max(1, (len(panel.series) + len(seen) + 2) // 3)))
     if any(series.reduced for series in panel.series):
-        ax.text(1, -0.27, "Série reduzida no desenho · dados completos no artefato",
-                transform=ax.transAxes, ha="right", fontsize=8, color="#475569")
+        ax.text(
+            1,
+            -0.27,
+            "Série reduzida no desenho · dados completos no artefato",
+            transform=ax.transAxes,
+            ha="right",
+            fontsize=8,
+            color="#475569",
+        )
 
 
 def _label_points(points, limit):
     present = [point for point in points if point["y"] is not None]
     if len(present) <= limit:
         return present
-    selected = [present[0], present[-1], min(present, key=lambda row: row["y"]),
-                max(present, key=lambda row: row["y"])]
+    selected = [
+        present[0],
+        present[-1],
+        min(present, key=lambda row: row["y"]),
+        max(present, key=lambda row: row["y"]),
+    ]
     return {point["x"]: point for point in selected}.values()
 
 
@@ -682,9 +851,16 @@ def _annotate_primary(ax, series):
     for point in _label_points(primary.points, 12):
         x = point["x"]
         support = f"\nn={point['support']:,}" if point.get("support") is not None else ""
-        ax.annotate(f"{point['y']:.4g}{support}", (x, top[x]), xytext=(0, 6),
-                    textcoords="offset points", ha="center", va="bottom", fontsize=8,
-                    color=_style(0)[0])
+        ax.annotate(
+            f"{point['y']:.4g}{support}",
+            (x, top[x]),
+            xytext=(0, 6),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color=_style(0)[0],
+        )
 
 
 def _panel_figure(plt, panels, title, subtitle=None):
@@ -700,11 +876,13 @@ def _panel_figure(plt, panels, title, subtitle=None):
         _draw_panel(fig.add_subplot(slot), panel)
     if any(panel.fit_axis for panel in panels):
         statuses = {
-            point.get("status")
-            for panel in panels for series in panel.series for point in series.points
+            point.get("status") for panel in panels for series in panel.series for point in series.points
         }
-        handles = [Line2D([], [], marker=marker, color=color, linestyle="None", label=label, markersize=6)
-                   for status, (marker, color, label) in FIT_STYLES.items() if status in statuses]
+        handles = [
+            Line2D([], [], marker=marker, color=color, linestyle="None", label=label, markersize=6)
+            for status, (marker, color, label) in FIT_STYLES.items()
+            if status in statuses
+        ]
         if handles:
             fig.legend(handles=handles, loc="outside lower center", ncol=min(len(handles), 5), fontsize=9)
     fig.suptitle(title + (f"\n{subtitle}" if subtitle else ""), fontsize=13, fontweight="bold")
@@ -718,8 +896,13 @@ def _heatmap(ax, matrix, x_labels, y_labels, *, x_label, y_label, title, fractio
     from matplotlib import colormaps
 
     color_map = colormaps["Blues"].with_extremes(bad="#c1c9d5")
-    view = ax.imshow(np.ma.masked_invalid(data), cmap=color_map, aspect="auto",
-                     vmin=0 if fraction else None, vmax=1 if fraction else None)
+    view = ax.imshow(
+        np.ma.masked_invalid(data),
+        cmap=color_map,
+        aspect="auto",
+        vmin=0 if fraction else None,
+        vmax=1 if fraction else None,
+    )
     ax.figure.colorbar(view, ax=ax, fraction=0.045)
     for setter, labels, rotate in ((ax.set_xticks, x_labels, 50), (ax.set_yticks, y_labels, 0)):
         positions = range(0, len(labels), max(1, math.ceil(len(labels) / 30)))
@@ -728,17 +911,28 @@ def _heatmap(ax, matrix, x_labels, y_labels, *, x_label, y_label, title, fractio
         finite = data[np.isfinite(data)]
         shade = 0.5 if fraction else (finite.max() / 2 if finite.size else 0)
         for (i, j), value in np.ndenumerate(data):
-            label = ("–" if not math.isfinite(value) else f"{value:.1%}") if fraction else (
-                f"{value:,.0f}" if math.isfinite(value) else "–"
+            label = (
+                ("–" if not math.isfinite(value) else f"{value:.1%}")
+                if fraction
+                else (f"{value:,.0f}" if math.isfinite(value) else "–")
             )
-            ax.text(j, i, label, ha="center", va="center", fontsize=8,
-                    color="white" if value > shade else "#182238")
+            ax.text(
+                j,
+                i,
+                label,
+                ha="center",
+                va="center",
+                fontsize=8,
+                color="white" if value > shade else "#182238",
+            )
     ax.set(xlabel=x_label, ylabel=y_label, title=title)
 
 
 def _matrix_available(classes, matrix):
     return (
-        bool(classes) and isinstance(matrix, (list, tuple)) and len(matrix) == len(classes)
+        bool(classes)
+        and isinstance(matrix, (list, tuple))
+        and len(matrix) == len(classes)
         and all(isinstance(row, (list, tuple)) and len(row) == len(classes) for row in matrix)
         and any(_number(value) and value > 0 for row in matrix for value in row)
     )
@@ -747,14 +941,24 @@ def _matrix_available(classes, matrix):
 def _confusion(plt, quality, scope):
     classes = [str(label) for label in quality["classes"]]
     matrix = quality["confusion_matrix"]
-    normalized = [[value / total for value in row] if (total := sum(row)) else [None] * len(row)
-                  for row in matrix]
+    normalized = [
+        [value / total for value in row] if (total := sum(row)) else [None] * len(row) for row in matrix
+    ]
     height = max(5, min(12, len(classes) * 0.28))
     fig, (left, right) = plt.subplots(1, 2, figsize=(14, height), layout="constrained")
-    _heatmap(left, matrix, classes, classes, x_label="Classe prevista", y_label="Classe real",
-             title="Contagens")
-    _heatmap(right, normalized, classes, classes, x_label="Classe prevista", y_label="Classe real",
-             title="Normalizada pela classe real · cinza sem suporte", fraction=True)
+    _heatmap(
+        left, matrix, classes, classes, x_label="Classe prevista", y_label="Classe real", title="Contagens"
+    )
+    _heatmap(
+        right,
+        normalized,
+        classes,
+        classes,
+        x_label="Classe prevista",
+        y_label="Classe real",
+        title="Normalizada pela classe real · cinza sem suporte",
+        fraction=True,
+    )
     threshold = quality.get("decision_threshold")
     context = ""
     if quality.get("positive_class") is not None:
@@ -770,10 +974,11 @@ def _class_recall(plt, quality, scope):
     rows = list(zip(classes, recalls, supports, strict=True))
     columns = math.ceil(len(rows) / 40)
     height = max(4.8, 2.3 + min(40, len(rows)) * 0.31)
-    fig, axes = plt.subplots(1, columns, figsize=(max(8, 5.2 * columns), height), squeeze=False,
-                             layout="constrained")
+    fig, axes = plt.subplots(
+        1, columns, figsize=(max(8, 5.2 * columns), height), squeeze=False, layout="constrained"
+    )
     for index, ax in enumerate(axes.flat):
-        subset = rows[40 * index:40 * (index + 1)]
+        subset = rows[40 * index : 40 * (index + 1)]
         positions = list(range(len(subset)))
         ax.barh(positions, [recall or 0 for _, recall, _ in subset], color="#0072B2")
         ax.set_yticks(positions, [str(label) for label, _, _ in subset], fontsize=8)
@@ -794,11 +999,17 @@ def _retention_matrix(plt, retention):
     rows, columns = retention["checkpoints"], retention["periods"]
     width = max(8, min(17, 5 + len(columns) * 0.5))
     height = max(4.8, min(15, 3.5 + len(rows) * 0.36))
-    fig, ax = plt.subplots(figsize=(width, height),
-                           layout="constrained")
-    _heatmap(ax, retention["matrix"], columns, rows, x_label="Tarefa ou período histórico",
-             y_label="Checkpoint", title="Cinza indica avaliação indisponível",
-             fraction=retention.get("metric") in ("accuracy", "macro_f1", "recall"))
+    fig, ax = plt.subplots(figsize=(width, height), layout="constrained")
+    _heatmap(
+        ax,
+        retention["matrix"],
+        columns,
+        rows,
+        x_label="Tarefa ou período histórico",
+        y_label="Checkpoint",
+        title="Cinza indica avaliação indisponível",
+        fraction=retention.get("metric") in ("accuracy", "macro_f1", "recall"),
+    )
     fig.suptitle(f"Retenção histórica · {retention.get('metric') or 'escore'}")
     return fig
 
@@ -806,8 +1017,11 @@ def _retention_matrix(plt, retention):
 def _detection_delays(plt, delays, unit, note):
     fig, ax = plt.subplots(figsize=(8, 4.8), layout="constrained")
     ax.hist(delays, bins=min(20, 1 + math.isqrt(len(delays))), color="#0072B2", edgecolor="white")
-    ax.set(title=f"Atraso das detecções completas{note}", xlabel=f"Atraso ({unit})",
-           ylabel="Detecções com correspondência")
+    ax.set(
+        title=f"Atraso das detecções completas{note}",
+        xlabel=f"Atraso ({unit})",
+        ylabel="Detecções com correspondência",
+    )
     return fig
 
 
@@ -941,16 +1155,38 @@ panels.forEach(panel => {
 
 def _chart_data(panels):
     dash = ("none", "7 4", "7 3 2 3", "2 3")
-    return [{
-        "title": panel.title, "xLabel": panel.x_label, "yLabel": panel.y_label,
-        "yLim": panel.y_lim, "zero": panel.zero, "fitAxis": panel.fit_axis, "integerX": panel.integer_x,
-        "markers": [{"x": m["x"], "color": EVENT_STYLES[m["kind"]][0],
-                     "label": m.get("label") or EVENT_STYLES[m["kind"]][2]} for m in panel.markers],
-        "series": [{"name": series.name, "points": series.points, "style": series.style,
-                    "color": _style(index)[0], "dash": dash[index % len(dash)],
-                    "count": series.input_count, "retained": len(series.points)}
-                   for index, series in enumerate(panel.series)],
-    } for panel in panels]
+    return [
+        {
+            "title": panel.title,
+            "xLabel": panel.x_label,
+            "yLabel": panel.y_label,
+            "yLim": panel.y_lim,
+            "zero": panel.zero,
+            "fitAxis": panel.fit_axis,
+            "integerX": panel.integer_x,
+            "markers": [
+                {
+                    "x": m["x"],
+                    "color": EVENT_STYLES[m["kind"]][0],
+                    "label": m.get("label") or EVENT_STYLES[m["kind"]][2],
+                }
+                for m in panel.markers
+            ],
+            "series": [
+                {
+                    "name": series.name,
+                    "points": series.points,
+                    "style": series.style,
+                    "color": _style(index)[0],
+                    "dash": dash[index % len(dash)],
+                    "count": series.input_count,
+                    "retained": len(series.points),
+                }
+                for index, series in enumerate(panel.series)
+            ],
+        }
+        for panel in panels
+    ]
 
 
 def _write_html(path, panels, title, *, page=None):
@@ -986,8 +1222,9 @@ output {{display:block;background:#f1f5fb;padding:.42rem .65rem;min-height:3rem;
 def _write_json(path, value):
     # The full fit can contain a long series. Stream JSON without another in-memory copy.
     path.parent.mkdir(parents=True, exist_ok=True)
-    with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, prefix=".pending-",
-                            delete=False) as stream:
+    with NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent, prefix=".pending-", delete=False
+    ) as stream:
         temporary = Path(stream.name)
         try:
             json.dump(value, stream, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
@@ -1020,8 +1257,21 @@ class _Publication:
         target = self.children.setdefault(fit["fit_id"], []) if fit else self.parent
         target.append(path)
 
-    def chart(self, path, builder, *, source, source_pointer, scope=None, fit=None, additional_sources=(),
-              panels=None, absent_panels=(), reason="dados necessários indisponíveis", html=False):
+    def chart(
+        self,
+        path,
+        builder,
+        *,
+        source,
+        source_pointer,
+        scope=None,
+        fit=None,
+        additional_sources=(),
+        panels=None,
+        absent_panels=(),
+        reason="dados necessários indisponíveis",
+        html=False,
+    ):
         path = path + (".html" if html else ".png")
         checkpoint = (fit.get("checkpoint") or {}) if fit else {}
         detail = _fit_detail(fit) if fit else {}
@@ -1047,8 +1297,10 @@ class _Publication:
             "checkpoint": checkpoint or None,
             "scope": scope,
             "metric_version": self.version,
-            "availability": {"status": "available" if availability is None else "unavailable",
-                             "reason": availability},
+            "availability": {
+                "status": "available" if availability is None else "unavailable",
+                "reason": availability,
+            },
             "source": {"artifact": source, "pointers": source_pointer},
         }
         if additional_sources:
@@ -1056,10 +1308,17 @@ class _Publication:
                 {"artifact": artifact, "pointers": pointers} for artifact, pointers in additional_sources
             ]
         if panels:
-            entry["series"] = [{"panel": panel.title, "name": series.name,
-                                "data_points": series.input_count, "rendered_points": len(series.points),
-                                "decimated": series.reduced}
-                               for panel in panels for series in panel.series]
+            entry["series"] = [
+                {
+                    "panel": panel.title,
+                    "name": series.name,
+                    "data_points": series.input_count,
+                    "rendered_points": len(series.points),
+                    "decimated": series.reduced,
+                }
+                for panel in panels
+                for series in panel.series
+            ]
         if absent_panels:
             entry["unavailable_panels"] = [
                 {"title": panel.title, "reason": "sem observações finitas para as métricas do painel"}
@@ -1087,11 +1346,18 @@ class _Publication:
 
     def line(self, stem, panels, title, *, subtitle=None, **metadata):
         panels_with_data = [panel for panel in panels if panel.series]
-        source = partial(_panel_figure, panels=panels_with_data, title=title, subtitle=subtitle) if (
-            panels_with_data
-        ) else None
-        self.chart(stem, source, panels=panels_with_data,
-                   absent_panels=[panel for panel in panels if not panel.series], **metadata)
+        source = (
+            partial(_panel_figure, panels=panels_with_data, title=title, subtitle=subtitle)
+            if (panels_with_data)
+            else None
+        )
+        self.chart(
+            stem,
+            source,
+            panels=panels_with_data,
+            absent_panels=[panel for panel in panels if not panel.series],
+            **metadata,
+        )
 
     def scoped(self, location, scopes, task, *, source, pointer, fit=None):
         for scope, scoped in scopes.items():
@@ -1100,32 +1366,57 @@ class _Publication:
             if name != scope:
                 name += "-" + hashlib.sha256(scope.encode()).hexdigest()[:8]
             quality = _quality_entry(scoped)
-            metadata = {"scope": scope, "fit": fit, "source": source,
-                        "source_pointer": [f"{pointer}/{_selector(scope)}"]}
+            metadata = {
+                "scope": scope,
+                "fit": fit,
+                "source": source,
+                "source_pointer": [f"{pointer}/{_selector(scope)}"],
+            }
             prefix = f"{location}/{name}"
             if task in ("binary", "multiclass"):
                 classes, matrix = quality.get("classes"), quality.get("confusion_matrix")
-                renderer = partial(_confusion, quality=quality, scope=scope) if (
-                    _matrix_available(classes, matrix)
-                ) else None
-                self.chart(f"{prefix}-confusion", renderer, **metadata,
-                           reason="matriz de confusão com suporte indisponível")
+                renderer = (
+                    partial(_confusion, quality=quality, scope=scope)
+                    if (_matrix_available(classes, matrix))
+                    else None
+                )
+                self.chart(
+                    f"{prefix}-confusion",
+                    renderer,
+                    **metadata,
+                    reason="matriz de confusão com suporte indisponível",
+                )
                 recalls, supports = quality.get("class_recall"), quality.get("class_support")
-                renderer = partial(_class_recall, quality=quality, scope=scope) if (
-                    classes and recalls and supports and len(classes) == len(recalls) == len(supports)
-                ) else None
-                self.chart(f"{prefix}-class-recall", renderer, **metadata,
-                           reason="recall ou suporte ordenado por classe indisponível")
+                renderer = (
+                    partial(_class_recall, quality=quality, scope=scope)
+                    if (classes and recalls and supports and len(classes) == len(recalls) == len(supports))
+                    else None
+                )
+                self.chart(
+                    f"{prefix}-class-recall",
+                    renderer,
+                    **metadata,
+                    reason="recall ou suporte ordenado por classe indisponível",
+                )
             if task == "binary":
                 for kind in ("pr", "roc"):
                     panel = _ranking_panel(quality, task, kind, scope)
-                    self.line(f"{prefix}-{kind}", [panel] if panel.series else [],
-                              "Ranqueamento binário", **metadata,
-                              reason="escores da classe positiva ou classes exigidas indisponíveis")
+                    self.line(
+                        f"{prefix}-{kind}",
+                        [panel] if panel.series else [],
+                        "Ranqueamento binário",
+                        **metadata,
+                        reason="escores da classe positiva ou classes exigidas indisponíveis",
+                    )
             if task == "regression":
                 panel = _residual_panel(quality, scope)
-                self.line(f"{prefix}-residuals", [panel] if panel.series else [], "Erros de predição",
-                          **metadata, reason="resíduos ou predições preservadas indisponíveis")
+                self.line(
+                    f"{prefix}-residuals",
+                    [panel] if panel.series else [],
+                    "Erros de predição",
+                    **metadata,
+                    reason="resíduos ou predições preservadas indisponíveis",
+                )
 
     def manifest(self, elapsed_seconds):
         value = {
@@ -1141,12 +1432,18 @@ class _Publication:
             prefix = f"fits/{fit_id}/"
             child_path = prefix + "plots-manifest.json"
             paths.append(child_path)
-            _write_json(self.root / child_path, {
-                "version": VERSION, "parent_run_id": self.parent_run_id,
-                "run_id": self.child_run_ids.get(fit_id), "fit_id": fit_id,
-                "metric_version": self.version, "artifacts": paths,
-                "figures": [entry for entry in self.figures if entry["fit_id"] == fit_id],
-            })
+            _write_json(
+                self.root / child_path,
+                {
+                    "version": VERSION,
+                    "parent_run_id": self.parent_run_id,
+                    "run_id": self.child_run_ids.get(fit_id),
+                    "fit_id": fit_id,
+                    "metric_version": self.version,
+                    "artifacts": paths,
+                    "figures": [entry for entry in self.figures if entry["fit_id"] == fit_id],
+                },
+            )
         self.parent.append("plots-manifest.json")
         _write_json(self.root / "plots-manifest.json", value)
         return value
@@ -1158,8 +1455,11 @@ def _parent_charts(publication, observations, fits, report):
     fit_quality = _fit_quality_panels(observations, fits)
     panels = windows + fit_quality + _official_overview(observations)
     title = "Visão geral do benchmark"
-    metadata = {"source": "observations.json", "source_pointer": ["/scopes", "/windows"],
-                "scope": "por painel"}
+    metadata = {
+        "source": "observations.json",
+        "source_pointer": ["/scopes", "/windows"],
+        "scope": "por painel",
+    }
     # The adjustment comparison uses the canonical fit history retained by the parent run.
     if fit_quality:
         metadata["additional_sources"] = [
@@ -1174,53 +1474,99 @@ def _parent_charts(publication, observations, fits, report):
     ):
         kind = stem.rsplit("/", 1)[-1]
         publication.chart(
-            stem, partial(_write_html, panels=page_panels, title=page_title, page=pages[kind]),
-            html=True, panels=page_panels, source="observations.json",
+            stem,
+            partial(_write_html, panels=page_panels, title=page_title, page=pages[kind]),
+            html=True,
+            panels=page_panels,
+            source="observations.json",
             source_pointer=["/lineage", "/scopes", "/windows", "/drift", "/effort", "/resources"],
-            additional_sources=[("../training-history.json", ["/fits"]),
-                                ("mlflow-lineage.json", ["/children"])],
+            additional_sources=[
+                ("../training-history.json", ["/fits"]),
+                ("mlflow-lineage.json", ["/children"]),
+            ],
             scope="run",
         )
-    publication.scoped("overview", observations.get("scopes") or {}, task, source="observations.json",
-                       pointer="/scopes")
+    publication.scoped(
+        "overview", observations.get("scopes") or {}, task, source="observations.json", pointer="/scopes"
+    )
 
     for family, title, collector in (
         ("effort", "Volume e esforço", _effort_panels),
         ("resources", "Tempo, memória, vazão e custo", _resource_panels),
     ):
         total = observations.get(family) or {}
-        publication.line(f"overview/{family}", collector([], total), f"{title} da run",
-                         source="observations.json", source_pointer=[f"/{family}"], scope="run")
-        publication.line(f"overview/{family}-by-fit", collector(fits, {}) if fits else [],
-                         f"{title} por ajuste", source="../training-history.json",
-                         source_pointer=[f"/fits/*/observation_{family}"], scope="ajustes")
+        publication.line(
+            f"overview/{family}",
+            collector([], total),
+            f"{title} da run",
+            source="observations.json",
+            source_pointer=[f"/{family}"],
+            scope="run",
+        )
+        publication.line(
+            f"overview/{family}-by-fit",
+            collector(fits, {}) if fits else [],
+            f"{title} por ajuste",
+            source="../training-history.json",
+            source_pointer=[f"/fits/*/observation_{family}"],
+            scope="ajustes",
+        )
     retention = observations.get("retention") or {}
     matrix, rows, columns = (retention.get(key) for key in ("matrix", "checkpoints", "periods"))
     renderer = None
-    if matrix and rows and columns and len(matrix) == len(rows) and all(len(row) == len(columns)
-                                                                      for row in matrix):
+    if (
+        matrix
+        and rows
+        and columns
+        and len(matrix) == len(rows)
+        and all(len(row) == len(columns) for row in matrix)
+    ):
         renderer = partial(_retention_matrix, retention=retention)
-    publication.chart("overview/retention-matrix", renderer, source="observations.json",
-                      source_pointer=["/retention/matrix", "/retention/checkpoints", "/retention/periods"],
-                      scope="holdout histórico", reason="avaliações históricas comparáveis indisponíveis")
+    publication.chart(
+        "overview/retention-matrix",
+        renderer,
+        source="observations.json",
+        source_pointer=["/retention/matrix", "/retention/checkpoints", "/retention/periods"],
+        scope="holdout histórico",
+        reason="avaliações históricas comparáveis indisponíveis",
+    )
     panel = _retention_panel(retention)
-    publication.line("overview/retention", [panel] if panel.series else [], "Retenção histórica",
-                     source="observations.json", source_pointer=["/retention/series"],
-                     scope="holdout histórico",
-                     reason="séries de retenção ou esquecimento indisponíveis")
+    publication.line(
+        "overview/retention",
+        [panel] if panel.series else [],
+        "Retenção histórica",
+        source="observations.json",
+        source_pointer=["/retention/series"],
+        scope="holdout histórico",
+        reason="séries de retenção ou esquecimento indisponíveis",
+    )
     timeline, panel, delays, unit, note = _drift_panels(observations, fits)
-    publication.line("overview/drift", timeline, "Qualidade e eventos de drift no fluxo",
-                     source="observations.json", source_pointer=["/windows", "/drift"], scope="fluxo",
-                     additional_sources=[("../training-history.json", ["/fits"])] if fits else (),
-                     reason="trajetória com eventos de drift indisponível")
-    publication.line("overview/detector-quality", [panel] if panel.series else [], "Qualidade do detector",
-                     source="observations.json", source_pointer=["/drift"], scope="detecção",
-                     reason="mudanças anotadas ou acompanhamento suficiente indisponíveis")
+    publication.line(
+        "overview/drift",
+        timeline,
+        "Qualidade e eventos de drift no fluxo",
+        source="observations.json",
+        source_pointer=["/windows", "/drift"],
+        scope="fluxo",
+        additional_sources=[("../training-history.json", ["/fits"])] if fits else (),
+        reason="trajetória com eventos de drift indisponível",
+    )
+    publication.line(
+        "overview/detector-quality",
+        [panel] if panel.series else [],
+        "Qualidade do detector",
+        source="observations.json",
+        source_pointer=["/drift"],
+        scope="detecção",
+        reason="mudanças anotadas ou acompanhamento suficiente indisponíveis",
+    )
     publication.chart(
         "overview/detection-delays",
         partial(_detection_delays, delays=delays, unit=unit, note=note) if delays else None,
-        source="observations.json", source_pointer=["/drift/delays", "/drift/delay_unit"],
-        scope="detecção", reason="atrasos de detecção com acompanhamento completo indisponíveis",
+        source="observations.json",
+        source_pointer=["/drift/delays", "/drift/delay_unit"],
+        scope="detecção",
+        reason="atrasos de detecção com acompanhamento completo indisponíveis",
     )
 
 
@@ -1236,18 +1582,39 @@ def _child_charts(publication, observations, fit):
     caption = f"{fit_id} · {fit.get('action')} · {status}"
     for dimension, heading in (("step", "Curvas de step"), ("epoch", "Curvas de época")):
         reason = "treinador sem épocas observáveis" if dimension == "epoch" else "steps indisponíveis"
-        publication.line(f"{location}/{dimension}s", _fit_series(fit, dimension), heading, subtitle=caption,
-                         source=source, source_pointer=[f"/observation_{dimension}s"], fit=fit,
-                         scope="por série", reason=reason)
+        publication.line(
+            f"{location}/{dimension}s",
+            _fit_series(fit, dimension),
+            heading,
+            subtitle=caption,
+            source=source,
+            source_pointer=[f"/observation_{dimension}s"],
+            fit=fit,
+            scope="por série",
+            reason=reason,
+        )
     for family, title, collector in (
         ("effort", "Volume e esforço", _effort_panels),
         ("resources", "Tempo, memória, vazão e custo", _resource_panels),
     ):
-        publication.line(f"{location}/{family}", collector([], fit.get(f"observation_{family}") or {}),
-                         title, subtitle=caption, source=source, source_pointer=[f"/observation_{family}"],
-                         fit=fit, scope="ajuste")
-    publication.scoped(location, fit.get("observation_scopes") or {}, observations.get("task"),
-                       source=source, pointer="/observation_scopes", fit=fit)
+        publication.line(
+            f"{location}/{family}",
+            collector([], fit.get(f"observation_{family}") or {}),
+            title,
+            subtitle=caption,
+            source=source,
+            source_pointer=[f"/observation_{family}"],
+            fit=fit,
+            scope="ajuste",
+        )
+    publication.scoped(
+        location,
+        fit.get("observation_scopes") or {},
+        observations.get("task"),
+        source=source,
+        pointer="/observation_scopes",
+        fit=fit,
+    )
 
 
 def write_observation_figures(directory, report, *, parent_run_id=None, child_run_ids=None, allow_html=True):

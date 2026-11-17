@@ -19,38 +19,60 @@ from continual_bench.models.linear import RiverModel
 
 
 def small_config(mode="streaming", tracking=None, policy="online"):
-    return Config.model_validate({
-        "name": "tracking-regression",
-        "mode": mode,
-        "dataset": {"name": "sea", "samples": 120, "label_delay": 3},
-        "warmup": 20,
-        "metric_window": 20,
-        "batch_size": 8,
-        "replay_window": 30,
-        "checkpoint_every": 20,
-        "training_budget": None if mode == "offline" else 100,
-        "detector": {"name": "none"},
-        "policy": {"name": "none" if mode == "offline" else policy,
-                   "action": "learn_one" if policy == "online" and mode != "offline" else "reset_retrain",
-                   "every": 20, "cooldown": 0, "min_samples": 20, "min_window": 10},
-        "tracking": tracking,
-    })
+    return Config.model_validate(
+        {
+            "name": "tracking-regression",
+            "mode": mode,
+            "dataset": {"name": "sea", "samples": 120, "label_delay": 3},
+            "warmup": 20,
+            "metric_window": 20,
+            "batch_size": 8,
+            "replay_window": 30,
+            "checkpoint_every": 20,
+            "training_budget": None if mode == "offline" else 100,
+            "detector": {"name": "none"},
+            "policy": {
+                "name": "none" if mode == "offline" else policy,
+                "action": "learn_one" if policy == "online" and mode != "offline" else "reset_retrain",
+                "every": 20,
+                "cooldown": 0,
+                "min_samples": 20,
+                "min_window": 10,
+            },
+            "tracking": tracking,
+        }
+    )
 
 
 def without_runtime(value):
     if isinstance(value, dict):
-        return {key: without_runtime(item) for key, item in value.items()
-                if "seconds" not in key and key not in {"instrumentation", "memory_samples"}}
+        return {
+            key: without_runtime(item)
+            for key, item in value.items()
+            if "seconds" not in key and key not in {"instrumentation", "memory_samples"}
+        }
     if isinstance(value, list):
         return [without_runtime(item) for item in value]
     return value
 
 
 def prediction_evidence(directory):
-    fields = ("event_id", "seq", "timestamp", "available_at", "released_at", "probability", "label",
-              "trained_labels_at_prediction", "comparison_id", "previous_probability")
-    return [{key: row[key] for key in fields}
-            for row in map(json.loads, (directory / "predictions.jsonl").read_text().splitlines())]
+    fields = (
+        "event_id",
+        "seq",
+        "timestamp",
+        "available_at",
+        "released_at",
+        "probability",
+        "label",
+        "trained_labels_at_prediction",
+        "comparison_id",
+        "previous_probability",
+    )
+    return [
+        {key: row[key] for key in fields}
+        for row in map(json.loads, (directory / "predictions.jsonl").read_text().splitlines())
+    ]
 
 
 def test_all_867_frozen_configuration_dumps_and_identities_remain_identical():
@@ -86,8 +108,9 @@ def test_tracking_local_run_has_exact_predictions_counts_and_reference_lineage(m
     expected = 48 if mode == "offline" else 100
     assert report["metrics"]["n"] == len(ledger) == expected
     assert tracking["prediction_ledger"]["rows"] == expected
-    assert hashlib.sha256((directory / "predictions.jsonl").read_bytes()).hexdigest() == (
-        tracking["prediction_ledger"]["sha256"]
+    assert (
+        hashlib.sha256((directory / "predictions.jsonl").read_bytes()).hexdigest()
+        == (tracking["prediction_ledger"]["sha256"])
     )
     assert all(row["released_at"] >= row["available_at"] for row in ledger)
     assert [row["seq"] for row in ledger] == list(range(72 if mode == "offline" else 20, 120))
@@ -106,7 +129,9 @@ def test_tracking_local_run_has_exact_predictions_counts_and_reference_lineage(m
         assert all(row["trained_labels_at_prediction"] <= row["seq"] - 3 for row in ledger)
         continual = tracking["continual"]
         assert [(row["task"], row["end_seq"]) for row in continual["matrix"]] == [
-            (0, 39), (1, 79), (2, 119),
+            (0, 39),
+            (1, 79),
+            (2, 119),
         ]
         assert continual["released_labels"] == 120
         assert len(tracking["reference_models"]) == 6
@@ -152,10 +177,12 @@ def test_interrupted_tracking_run_matches_core_metrics_predictions_and_cl_matrix
 
 @pytest.mark.parametrize("mode", ["streaming", "incremental"])
 def test_reference_and_shadow_toggles_do_not_change_main_predictions_or_budget(mode, tmp_path):
-    disabled = small_config(mode, {"probe_samples": 8, "continual_references": False,
-                                   "adaptation_shadows": False})
-    enabled = small_config(mode, {"probe_samples": 8, "continual_references": True,
-                                  "adaptation_shadows": True})
+    disabled = small_config(
+        mode, {"probe_samples": 8, "continual_references": False, "adaptation_shadows": False}
+    )
+    enabled = small_config(
+        mode, {"probe_samples": 8, "continual_references": True, "adaptation_shadows": True}
+    )
     before, after = run(disabled, tmp_path), run(enabled, tmp_path)
     assert before["dataset"]["sha256"] == after["dataset"]["sha256"]
     assert before["prediction_digest"] == after["prediction_digest"]
@@ -181,14 +208,21 @@ def test_engine_observer_itself_does_not_change_policy_or_learning(size):
     events = list(source.events())
 
     def engine(observer):
-        return Engine(RiverModel, NullDetector,
-                      PolicyStrategy("periodic", every=20, cooldown=0, min_samples=20, min_window=10),
-                      warmup=20, window=30, metric_window=20, training_budget=80, observer=observer)
+        return Engine(
+            RiverModel,
+            NullDetector,
+            PolicyStrategy("periodic", every=20, cooldown=0, min_samples=20, min_window=10),
+            warmup=20,
+            window=30,
+            metric_window=20,
+            training_budget=80,
+            observer=observer,
+        )
 
     baseline, observed = engine(None), engine(OnlineObservability(settings))
     for start in range(0, len(events), size):
-        baseline.observe_batch(events[start:start + size])
-        observed.observe_batch(events[start:start + size])
+        baseline.observe_batch(events[start : start + size])
+        observed.observe_batch(events[start : start + size])
     baseline.finish()
     observed.finish()
     for field in ("metrics", "windows", "training", "prediction_digest"):

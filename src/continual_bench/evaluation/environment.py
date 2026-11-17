@@ -15,9 +15,23 @@ DATASET_LOCKS = ("image-datasets.lock.json", "real-streams.lock.json", "temporal
 
 def environment():
     versions = {}
-    for package in ("continual-bench", "river", "pydantic", "zenml", "mlflow-skinny", "confluent-kafka",
-                    "pandas", "numpy", "scipy", "pillow", "pyarrow", "scikit-learn", "matplotlib", "xgboost",
-                    "psutil"):
+    for package in (
+        "continual-bench",
+        "river",
+        "pydantic",
+        "zenml",
+        "mlflow-skinny",
+        "confluent-kafka",
+        "pandas",
+        "numpy",
+        "scipy",
+        "pillow",
+        "pyarrow",
+        "scikit-learn",
+        "matplotlib",
+        "xgboost",
+        "psutil",
+    ):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -59,8 +73,16 @@ def dataset_fingerprint(env=None):
         if path is None:
             raise FileNotFoundError(f"dataset contract must accompany the runtime: {name}")
         locks[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return hashlib.sha256(encoded({"locks": locks, "code": env["code_sha256"],
-                                  "python": env.get("python"), "packages": env.get("packages")})).hexdigest()
+    return hashlib.sha256(
+        encoded(
+            {
+                "locks": locks,
+                "code": env["code_sha256"],
+                "python": env.get("python"),
+                "packages": env.get("packages"),
+            }
+        )
+    ).hexdigest()
 
 
 def current_rss_bytes():

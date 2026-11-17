@@ -42,10 +42,18 @@ def test_performance_requires_released_monitoring_window_and_threshold():
     assert subject.decide(DecisionContext(10, 5, False, 0.5, 4)).action == "reset_retrain"
 
 
-@pytest.mark.parametrize("params", [
-    {"error_threshold": 2}, {"monitor_window": 1.5}, {"monitor_window": 0},
-    {"error_threshold": float("nan")}, {"unknown": 1}, {"horizon": 10}, {"target_error": 0.1},
-])
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"error_threshold": 2},
+        {"monitor_window": 1.5},
+        {"monitor_window": 0},
+        {"error_threshold": float("nan")},
+        {"unknown": 1},
+        {"horizon": 10},
+        {"target_error": 0.1},
+    ],
+)
 def test_policy_rejects_invalid_configuration(params):
     with pytest.raises(ValueError):
         policy("performance", **params)
@@ -68,19 +76,32 @@ def test_batch_policies_are_not_per_sample_policies(kind):
         Config.model_validate({"policy": {"name": kind}})
 
 
-@pytest.mark.parametrize("kind,params", [
-    ("upf", {"delta": 1.0}), ("upf", {"samples": 1}), ("cara", {"alpha": -1}), ("cara", {"bogus": 1}),
-    ("cara_periodic", {"period": 0}), ("cara", {"alpha": float("nan")}), ("oracle", {"tau": 1}),
-])
+@pytest.mark.parametrize(
+    "kind,params",
+    [
+        ("upf", {"delta": 1.0}),
+        ("upf", {"samples": 1}),
+        ("cara", {"alpha": -1}),
+        ("cara", {"bogus": 1}),
+        ("cara_periodic", {"period": 0}),
+        ("cara", {"alpha": float("nan")}),
+        ("oracle", {"tau": 1}),
+    ],
+)
 def test_batch_policies_reject_invalid_params(kind, params):
     with pytest.raises(ValueError):
         PolicyStrategy(kind, params=params)
 
 
 def test_threshold_policy_obeys_label_availability_before_deciding():
-    subject = Engine(MajorityModel, NeverAlarm,
-                     policy("performance", monitor_window=2, error_threshold=0.5),
-                     warmup=1, window=8, metric_window=2)
+    subject = Engine(
+        MajorityModel,
+        NeverAlarm,
+        policy("performance", monitor_window=2, error_threshold=0.5),
+        warmup=1,
+        window=8,
+        metric_window=2,
+    )
     for i in range(4):
         subject.observe_batch([event(i, y=False, delay=3)])
     assert subject.labeled == 1
@@ -92,10 +113,16 @@ def test_threshold_policy_obeys_label_availability_before_deciding():
 
 
 def promotion_engine(budget=20):
-    return Engine(MajorityModel, NeverAlarm,
-                  PolicyStrategy("periodic", every=3, cooldown=0, min_samples=1, min_window=1),
-                  warmup=1, window=8, metric_window=2, training_budget=budget,
-                  promotion={"validation_samples": 1, "min_improvement": 0})
+    return Engine(
+        MajorityModel,
+        NeverAlarm,
+        PolicyStrategy("periodic", every=3, cooldown=0, min_samples=1, min_window=1),
+        warmup=1,
+        window=8,
+        metric_window=2,
+        training_budget=budget,
+        promotion={"validation_samples": 1, "min_improvement": 0},
+    )
 
 
 def test_promotion_candidate_uses_disjoint_past_training_and_holdout():
@@ -155,9 +182,14 @@ def test_failed_candidate_does_not_replace_incumbent():
                 raise RuntimeError("training failed")
             super().learn(x, y)
 
-    subject = Engine(FailingModel, NeverAlarm,
-                     PolicyStrategy("periodic", every=1, cooldown=0, min_samples=1, min_window=1),
-                     warmup=1, window=4, metric_window=2)
+    subject = Engine(
+        FailingModel,
+        NeverAlarm,
+        PolicyStrategy("periodic", every=1, cooldown=0, min_samples=1, min_window=1),
+        warmup=1,
+        window=4,
+        metric_window=2,
+    )
     subject.observe_batch([event(0)])
     incumbent = subject.model
     with pytest.raises(RuntimeError, match="training failed"):
@@ -173,9 +205,7 @@ def test_detector_binary_error_contract_and_pickle(name):
     for i in range(80):
         assert isinstance(subject.update(i % 2), bool)
     restored = pickle.loads(pickle.dumps(subject))
-    assert [subject.update(i % 3 == 0) for i in range(80)] == [
-        restored.update(i % 3 == 0) for i in range(80)
-    ]
+    assert [subject.update(i % 3 == 0) for i in range(80)] == [restored.update(i % 3 == 0) for i in range(80)]
     assert subject.signal == "released_label_binary_prediction_error"
     with pytest.raises(ValueError, match="binary"):
         subject.update(0.2)
@@ -199,8 +229,9 @@ def test_new_options_do_not_change_historical_config_serialization():
     assert "params" not in config.policy.model_dump()
     assert "task_evaluation" not in TrackingConfig().model_dump()
     with pytest.raises(ValueError, match="promotion gate"):
-        Config.model_validate({"policy": {"name": "online", "action": "learn_one"},
-                               "promotion": {"validation_samples": 8}})
+        Config.model_validate(
+            {"policy": {"name": "online", "action": "learn_one"}, "promotion": {"validation_samples": 8}}
+        )
     with pytest.raises(ValueError, match="leave min_window"):
         Config.model_validate({"replay_window": 64, "promotion": {"validation_samples": 32}})
 
@@ -232,10 +263,17 @@ def test_promotion_insufficient_prefix_still_records_every_released_label():
             pass
 
     observer = Observer()
-    subject = Engine(MajorityModel, NeverAlarm,
-                     PolicyStrategy("periodic", every=1, cooldown=0, min_samples=1, min_window=1),
-                     warmup=1, window=8, metric_window=1, min_retrain_window=3,
-                     observer=observer, promotion={"validation_samples": 2, "min_improvement": 0})
+    subject = Engine(
+        MajorityModel,
+        NeverAlarm,
+        PolicyStrategy("periodic", every=1, cooldown=0, min_samples=1, min_window=1),
+        warmup=1,
+        window=8,
+        metric_window=1,
+        min_retrain_window=3,
+        observer=observer,
+        promotion={"validation_samples": 2, "min_improvement": 0},
+    )
     for i in range(4):
         subject.observe_batch([event(i)])
     assert observer.labels == [0, 1, 2, 3]
@@ -244,10 +282,14 @@ def test_promotion_insufficient_prefix_still_records_every_released_label():
 
 
 def test_default_monitor_can_reach_minimum_when_metric_window_is_smaller():
-    subject = Engine(MajorityModel, NeverAlarm,
-                     PolicyStrategy("performance", cooldown=0, min_samples=1, min_window=3,
-                                    params={"error_threshold": 0}),
-                     warmup=1, window=8, metric_window=1)
+    subject = Engine(
+        MajorityModel,
+        NeverAlarm,
+        PolicyStrategy("performance", cooldown=0, min_samples=1, min_window=3, params={"error_threshold": 0}),
+        warmup=1,
+        window=8,
+        metric_window=1,
+    )
     for i in range(4):
         subject.observe_batch([event(i)])
     assert subject.recent_errors.maxlen == 3

@@ -590,8 +590,7 @@ def render_report(
             f"{' / '.join(row['best_strategies'])} | {row['best_accuracy_mean'] * 100:.2f} |"
         )
     group_index = {
-        (row["model"], row["dataset"], row["mode"], row["strategy"]): row
-        for row in comparison["groups"]
+        (row["model"], row["dataset"], row["mode"], row["strategy"]): row for row in comparison["groups"]
     }
     tree_adwin = group_index[("hoeffding_tree", "agrawal", "streaming", "adwin@2900")]
     tree_ddm = group_index[("hoeffding_tree", "agrawal", "streaming", "ddm@2900")]

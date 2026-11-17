@@ -31,9 +31,9 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
     backend = as_backend(client)
     points, stamps = system_metric_points(report.get("system_metrics"))
     missing = missing_metric_points(client, run_id, points)
-    backend.log_batch(run_id, metrics=[
-        MetricPoint(key, value, step, stamps[key, step]) for key, step, value in missing
-    ])
+    backend.log_batch(
+        run_id, metrics=[MetricPoint(key, value, step, stamps[key, step]) for key, step, value in missing]
+    )
     root = Path(directory) / "artifacts"
     uploaded = 0
     for folder in ("plots", "data"):
@@ -42,17 +42,26 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
             uploaded += sum(1 for path in (root / folder).rglob("*") if path.is_file())
     figures = log_detailed_figures(report, run_id)
     system = report.get("system_metrics") or {}
-    backend.log_batch(run_id, tags={
-        "detailed_figures": str(len(figures)),
-        "system_metrics_collector": system.get("collector", "absent"),
-        "run_artifacts": f"{uploaded} files; plots/ and data/",
-    })
+    backend.log_batch(
+        run_id,
+        tags={
+            "detailed_figures": str(len(figures)),
+            "system_metrics_collector": system.get("collector", "absent"),
+            "run_artifacts": f"{uploaded} files; plots/ and data/",
+        },
+    )
     result = {
-        "system_metric_points": len(points), "artifact_files": uploaded, "detailed_figures": len(figures),
+        "system_metric_points": len(points),
+        "artifact_files": uploaded,
+        "detailed_figures": len(figures),
     }
     if "training_history" in report:
         result["training_rounds"] = publish_training_history(
-            client, run_id, directory, report, include_checkpoints=include_checkpoints,
+            client,
+            run_id,
+            directory,
+            report,
+            include_checkpoints=include_checkpoints,
         )
     manifest = publish_sdk_observations(client, run_id, directory, report, result.get("training_rounds", []))
     if manifest:

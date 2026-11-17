@@ -20,20 +20,27 @@ def main():
     except KeyError:
         client.create_project(project, description="Concept drift detection and retraining policy benchmarks")
     client.set_active_project(project)
-    client.update_project(project, new_display_name="Continual Benchmark",
-                          new_description="Benchmark de deteccao de drift e politicas de retreinamento")
+    client.update_project(
+        project,
+        new_display_name="Continual Benchmark",
+        new_description="Benchmark de deteccao de drift e politicas de retreinamento",
+    )
     name = os.environ["BENCH_ZENML_ARTIFACT_STORE"]
     client.get_secret("benchmark-minio-artifacts")
     try:
         client.get_stack_component(StackComponentType.ARTIFACT_STORE, name)
     except KeyError:
         client.create_stack_component(
-            name, "s3", StackComponentType.ARTIFACT_STORE,
-            {"path": "s3://zenml-artifacts",
-             "key": "{{benchmark-minio-artifacts.key}}",
-             "secret": "{{benchmark-minio-artifacts.secret}}",
-             "client_kwargs": {"endpoint_url": os.environ["S3_ENDPOINT_URL"], "region_name": "us-east-1"},
-             "config_kwargs": {"s3": {"addressing_style": "path"}}},
+            name,
+            "s3",
+            StackComponentType.ARTIFACT_STORE,
+            {
+                "path": "s3://zenml-artifacts",
+                "key": "{{benchmark-minio-artifacts.key}}",
+                "secret": "{{benchmark-minio-artifacts.secret}}",
+                "client_kwargs": {"endpoint_url": os.environ["S3_ENDPOINT_URL"], "region_name": "us-east-1"},
+                "config_kwargs": {"s3": {"addressing_style": "path"}},
+            },
         )
     configure_local_stack(os.environ.get("BENCH_STATE", "/state/runs"))
     print("Benchmark project and S3 stack configured")

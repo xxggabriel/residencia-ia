@@ -24,34 +24,57 @@ FINAL_KEY = "campaigns/example/runs/unit/final.json"
 @pytest.fixture
 def publisher():
     return catalog.Publisher(
-        Mock(), bucket="test-bucket", domain="domain", project="project",
-        portal="https://catalog.example", mlflow_arn="arn:aws:sagemaker:us-east-1:0:mlflow-app/app-x",
+        Mock(),
+        bucket="test-bucket",
+        domain="domain",
+        project="project",
+        portal="https://catalog.example",
+        mlflow_arn="arn:aws:sagemaker:us-east-1:0:mlflow-app/app-x",
         mlflow_ui="https://mlflow.example",
     )
 
 
 def event(key, bucket="test-bucket"):
-    return {"source": "aws.s3", "detail-type": "Object Created",
-            "detail": {"bucket": {"name": bucket}, "object": {"key": key, "version-id": "event-version"}}}
+    return {
+        "source": "aws.s3",
+        "detail-type": "Object Created",
+        "detail": {"bucket": {"name": bucket}, "object": {"key": key, "version-id": "event-version"}},
+    }
 
 
 def test_snapshot_reads_pinned_objects_and_rejects_hash_mismatch(publisher):
-    manifest = {"snapshot_id": SNAPSHOT_ID, "version": "snapshot-v1", "rows": 42, "license": "test",
-                "prepared": {"sha256": PREPARED, "bytes": 123, "parquet": {
-                    "key": PARQUET_KEY, "sha256": PREPARED, "version_id": "data-v1"}}}
+    manifest = {
+        "snapshot_id": SNAPSHOT_ID,
+        "version": "snapshot-v1",
+        "rows": 42,
+        "license": "test",
+        "prepared": {
+            "sha256": PREPARED,
+            "bytes": 123,
+            "parquet": {"key": PARQUET_KEY, "sha256": PREPARED, "version_id": "data-v1"},
+        },
+    }
     raw = json.dumps(manifest).encode()
-    marker = {"snapshot_id": SNAPSHOT_ID, "manifest_key": MANIFEST_KEY, "manifest_version_id": "manifest-v1",
-              "manifest_sha256": catalog.digest(raw), "prepared_sha256": PREPARED}
+    marker = {
+        "snapshot_id": SNAPSHOT_ID,
+        "manifest_key": MANIFEST_KEY,
+        "manifest_version_id": "manifest-v1",
+        "manifest_sha256": catalog.digest(raw),
+        "prepared_sha256": PREPARED,
+    }
     objects = {MARKER_KEY: json.dumps(marker).encode(), MANIFEST_KEY: raw}
     publisher.s3.get_object.side_effect = lambda **kw: {"Body": io.BytesIO(objects[kw["Key"]])}
     publisher.s3.head_object.return_value = {"ContentLength": 123, "Metadata": {"sha256": PREPARED}}
     fields = publisher.snapshot(SNAPSHOT, "marker-v1")
     assert fields["SnapshotManifestSha256"] == marker["manifest_sha256"]
     assert [call.kwargs["VersionId"] for call in publisher.s3.get_object.call_args_list] == [
-        "marker-v1", "manifest-v1",
+        "marker-v1",
+        "manifest-v1",
     ]
     publisher.s3.head_object.assert_called_once_with(
-        Bucket="test-bucket", Key=PARQUET_KEY, VersionId="data-v1",
+        Bucket="test-bucket",
+        Key=PARQUET_KEY,
+        VersionId="data-v1",
     )
     objects[MANIFEST_KEY] += b" "
     with pytest.raises(ValueError, match="manifest hash"):
@@ -67,15 +90,33 @@ def test_event_ignores_wrong_bucket_and_non_final_keys(publisher):
 
 def test_replayed_evaluation_updates_catalog_once_and_preserves_metrics(publisher):
     fields = {"SnapshotManifestSha256": "c" * 64, "PreparedSha256": PREPARED, "MlflowEvaluationCount": 0}
-    final = {"kind": "zia", "campaign_id": "example", "run_id": "unit",
-             "snapshot": {"id": SNAPSHOT_ID, "manifest_sha256": "c" * 64, "prepared_sha256": PREPARED},
-             "links": {"mlflow_run_id": RUN_ID, "mlflow_experiment_id": "5", "mlflow_artifact_uri": "s3://x"}}
-    run = {"info": {"run_id": RUN_ID, "experiment_id": "5", "artifact_uri": "s3://x", "status": "FINISHED",
-                    "lifecycle_stage": "deleted"},
-           "data": {"metrics": [{"key": "holdout/log_loss", "value": 0.3}], "tags": []}}
-    original = {"id": "asset", "revision": "1", "name": "snapshot", "description": "snapshot",
-                "formsOutput": [{"formName": "SnapshotMetadata", "content": json.dumps(fields)},
-                                {"formName": "AssetCommonDetailsForm", "content": '{"readMe":"Original"}'}]}
+    final = {
+        "kind": "zia",
+        "campaign_id": "example",
+        "run_id": "unit",
+        "snapshot": {"id": SNAPSHOT_ID, "manifest_sha256": "c" * 64, "prepared_sha256": PREPARED},
+        "links": {"mlflow_run_id": RUN_ID, "mlflow_experiment_id": "5", "mlflow_artifact_uri": "s3://x"},
+    }
+    run = {
+        "info": {
+            "run_id": RUN_ID,
+            "experiment_id": "5",
+            "artifact_uri": "s3://x",
+            "status": "FINISHED",
+            "lifecycle_stage": "deleted",
+        },
+        "data": {"metrics": [{"key": "holdout/log_loss", "value": 0.3}], "tags": []},
+    }
+    original = {
+        "id": "asset",
+        "revision": "1",
+        "name": "snapshot",
+        "description": "snapshot",
+        "formsOutput": [
+            {"formName": "SnapshotMetadata", "content": json.dumps(fields)},
+            {"formName": "AssetCommonDetailsForm", "content": '{"readMe":"Original"}'},
+        ],
+    }
     publisher.read = Mock(return_value=json.dumps(final).encode())
     publisher.snapshot = Mock(return_value=fields)
     publisher.ensure_asset = Mock(side_effect=lambda *_: original)

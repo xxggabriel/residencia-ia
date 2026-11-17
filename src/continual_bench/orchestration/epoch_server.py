@@ -31,11 +31,19 @@ def dataset_readiness():
         raise ValueError("all-dataset 100-example two-epoch smoke receipt is absent")
     receipt = json.loads(path.read_text())
     rows = receipt.get("datasets", [])
-    if (not receipt.get("complete") or len(rows) != len(DATASETS)
-            or {r["dataset"] for r in rows} != set(DATASETS)
-            or any(not r.get("complete") or r.get("unique_examples") != 100 or r.get("epochs") != 2
-                   or r.get("code_sha256") != environment()["code_sha256"]
-                   or r.get("runtime_fingerprint") != dataset_fingerprint() for r in rows)):
+    if (
+        not receipt.get("complete")
+        or len(rows) != len(DATASETS)
+        or {r["dataset"] for r in rows} != set(DATASETS)
+        or any(
+            not r.get("complete")
+            or r.get("unique_examples") != 100
+            or r.get("epochs") != 2
+            or r.get("code_sha256") != environment()["code_sha256"]
+            or r.get("runtime_fingerprint") != dataset_fingerprint()
+            for r in rows
+        )
+    ):
         raise ValueError("dataset smoke receipt is incomplete, stale or mismatched")
     return {"ready": True, "datasets": len(rows), "code_sha256": environment()["code_sha256"]}
 
@@ -50,13 +58,25 @@ def perform_epoch(config):
     atomic_write(directory / "job.json", json.dumps(status).encode())
     try:
         with (directory / "worker.log").open("a") as output:
-            command = [sys.executable, "-m", "continual_bench.cli", "epoch-job", str(submitted),
-                       "--state", str(directory / "runs"), "--cache", os.environ["BENCH_DATASET_CACHE"],
-                       "--real-directory", os.environ["BENCH_DATASETS"], "--services"]
+            command = [
+                sys.executable,
+                "-m",
+                "continual_bench.cli",
+                "epoch-job",
+                str(submitted),
+                "--state",
+                str(directory / "runs"),
+                "--cache",
+                os.environ["BENCH_DATASET_CACHE"],
+                "--real-directory",
+                os.environ["BENCH_DATASETS"],
+                "--services",
+            ]
             if os.environ.get("BENCH_DATASET_DOWNLOAD") == "true":
                 command.append("--download")
-            subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, check=True,
-                           timeout=config.max_seconds + 180)
+            subprocess.run(
+                command, stdout=output, stderr=subprocess.STDOUT, check=True, timeout=config.max_seconds + 180
+            )
         paths = list((directory / "runs").glob("*/epoch-receipt.json"))
         if len(paths) != 1:
             raise ValueError("epoch publication did not produce exactly one receipt")

@@ -75,13 +75,21 @@ class HoeffdingTreeModel:
         self.classifier.learn_one(dict(x), bool(y))
 
 
-def hoeffding_multiclass(grace_period: int = 25, max_depth: int = 12, max_size: float = 64,
-                         **params) -> NativeEstimator:
-    return NativeEstimator(tree.HoeffdingTreeClassifier(grace_period=grace_period, max_depth=max_depth,
-                                                        max_size=max_size, **params))
+def hoeffding_multiclass(
+    grace_period: int = 25, max_depth: int = 12, max_size: float = 64, **params
+) -> NativeEstimator:
+    return NativeEstimator(
+        tree.HoeffdingTreeClassifier(
+            grace_period=grace_period, max_depth=max_depth, max_size=max_size, **params
+        )
+    )
 
 
-def hoeffding_regressor(grace_period: int = 50, max_depth: int = 12, max_size: float = 64,
-                        **params) -> NativeEstimator:
-    return NativeEstimator(tree.HoeffdingTreeRegressor(grace_period=grace_period, max_depth=max_depth,
-                                                       max_size=max_size, **params))
+def hoeffding_regressor(
+    grace_period: int = 50, max_depth: int = 12, max_size: float = 64, **params
+) -> NativeEstimator:
+    return NativeEstimator(
+        tree.HoeffdingTreeRegressor(
+            grace_period=grace_period, max_depth=max_depth, max_size=max_size, **params
+        )
+    )

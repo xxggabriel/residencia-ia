@@ -22,8 +22,14 @@ from continual_bench.retraining.rules import Oracle
 
 from .zia_metrics import decide
 
-DEFAULTS = {"offline_blocks": None, "mc_samples": 100, "delta": 0.95, "n_alphas": 10, "seed": 0,
-            "comparison_rules": ["cara", "cara_cumulative", "cara_periodic", "upf", "oracle", "frozen"]}
+DEFAULTS = {
+    "offline_blocks": None,
+    "mc_samples": 100,
+    "delta": 0.95,
+    "n_alphas": 10,
+    "seed": 0,
+    "comparison_rules": ["cara", "cara_cumulative", "cara_periodic", "upf", "oracle", "frozen"],
+}
 
 
 def settings(tracking_settings: dict) -> dict:
@@ -56,12 +62,23 @@ class ZiaLearner:
         self.history.check_interrupted()
         timer = time.monotonic()
         self.model.fit(
-            fit_x, fit_y, False, config=self.config, tracker=self.tracker, timestamps=fit_timestamps,
-            capture_sigterm=self.history.stop_requested is None, stop_requested=self.history.stop_requested,
+            fit_x,
+            fit_y,
+            False,
+            config=self.config,
+            tracker=self.tracker,
+            timestamps=fit_timestamps,
+            capture_sigterm=self.history.stop_requested is None,
+            stop_requested=self.history.stop_requested,
         )
         fit = self.history.capture(
-            self.model.training_summary, action="candidate", block_index=index, start=fit_start,
-            timestamps=fit_timestamps, seconds=time.monotonic() - timer, current_block_start=start,
+            self.model.training_summary,
+            action="candidate",
+            block_index=index,
+            start=fit_start,
+            timestamps=fit_timestamps,
+            seconds=time.monotonic() - timer,
+            current_block_start=start,
         )
         payload, extension = self.model.payload()
         path = self.scratch / f"{fit['fit_id']}.{extension}"
@@ -78,8 +95,19 @@ class ZiaLearner:
 
 
 def stream_matrix(
-    blocks, model, threshold, config, replay, options, *, history, scratch, tracker=None, progress=None,
-    resume=None, checkpoint=None,
+    blocks,
+    model,
+    threshold,
+    config,
+    replay,
+    options,
+    *,
+    history,
+    scratch,
+    tracker=None,
+    progress=None,
+    resume=None,
+    checkpoint=None,
 ) -> tuple[PerformanceMatrix, list[dict]]:
     learner = ZiaLearner(model, threshold, config, replay, history, scratch, tracker)
     state = None
@@ -87,19 +115,27 @@ def stream_matrix(
         state, learner.rows, learner.window = resume
 
     def report_block(blocks_completed, rows_processed, candidates):
-        progress(rows_processed, {
-            "matrix/blocks_completed": blocks_completed,
-            "matrix/rows_processed": rows_processed,
-            "matrix/candidate_models": candidates,
-            "matrix/model_block_pairs": blocks_completed * (blocks_completed - 1) // 2,
-        })
+        progress(
+            rows_processed,
+            {
+                "matrix/blocks_completed": blocks_completed,
+                "matrix/rows_processed": rows_processed,
+                "matrix/candidate_models": candidates,
+                "matrix/model_block_pairs": blocks_completed * (blocks_completed - 1) // 2,
+            },
+        )
 
     return build_matrix(
-        blocks, learner, offline=options["offline_blocks"], seed=options["seed"],
+        blocks,
+        learner,
+        offline=options["offline_blocks"],
+        seed=options["seed"],
         on_block_complete=report_block if progress is not None else None,
-        state=state, checkpoint=(
+        state=state,
+        checkpoint=(
             (lambda state: checkpoint((state, learner.rows, learner.window)))
-            if checkpoint is not None else None
+            if checkpoint is not None
+            else None
         ),
         loss_dtype=np.bool_,
     )
@@ -127,26 +163,43 @@ def simulation_of(policy, matrix: PerformanceMatrix) -> SimResult:
         errors.append(float(matrix.err[deployed, j]))
         if j in retrains:
             deployed = j
-    return SimResult(policy.kind, policy.alpha, list(policy.retrains), served, errors,
-                     policy.rule.parameters(), list(getattr(policy.rule, "forecasts", [])))
+    return SimResult(
+        policy.kind,
+        policy.alpha,
+        list(policy.retrains),
+        served,
+        errors,
+        policy.rule.parameters(),
+        list(getattr(policy.rule, "forecasts", [])),
+    )
 
 
 def finalize(policy, matrix: PerformanceMatrix, states: list[dict], options: dict) -> tuple[dict, dict]:
     """Paper-style analysis and the flat scalar metrics of the policy that ran."""
-    analysis = analyze(matrix, rules=tuple(options["comparison_rules"]), n_alphas=options["n_alphas"],
-                       focus_alpha=policy.alpha, delta=options["delta"], samples=options["mc_samples"],
-                       seed=options["seed"])
+    analysis = analyze(
+        matrix,
+        rules=tuple(options["comparison_rules"]),
+        n_alphas=options["n_alphas"],
+        focus_alpha=policy.alpha,
+        delta=options["delta"],
+        samples=options["mc_samples"],
+        seed=options["seed"],
+    )
     analysis["setup"]["policy_missing_features"] = POLICY_MISSING_FEATURES
     result = simulation_of(policy, matrix)
     oracle = simulate(Oracle(), matrix, policy.alpha)
-    metrics = deployed_metrics(analysis, policy.kind if policy.kind in analysis["rules"] else "oracle",
-                               result, oracle)
+    metrics = deployed_metrics(
+        analysis, policy.kind if policy.kind in analysis["rules"] else "oracle", result, oracle
+    )
     metrics["retraining_matrix_fit_seconds"] = float(np.nansum(matrix.fit_seconds))
     metrics["retraining_offline_batches"] = matrix.offline
     metrics["retraining_online_batches"] = matrix.horizon
     analysis["deployed"] = {
-        "policy": policy.kind, "alpha": policy.alpha, "retrain_points": list(policy.retrains),
-        "served_by": result.deployed, "parameters": json_parameters(result.parameters),
+        "policy": policy.kind,
+        "alpha": policy.alpha,
+        "retrain_points": list(policy.retrains),
+        "served_by": result.deployed,
+        "parameters": json_parameters(result.parameters),
         "oracle_retrain_points": oracle.retrains,
         "model_rows": [s["rows"] for s in states],
     }

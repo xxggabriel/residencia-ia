@@ -30,7 +30,8 @@ def parent_observation_points(report):
     for row in data["retention"].get("series") or ():
         yield from scalar_points(
             {key: value for key, value in row.items() if key != "step"},
-            f"{PREFIX}/retention/checkpoints", row["step"],
+            f"{PREFIX}/retention/checkpoints",
+            row["step"],
         )
 
 
@@ -45,7 +46,9 @@ def fit_observation_points(fit, *, include_metadata=True):
                 raise ValueError(f"invalid {axis} sequence for fit {fit['fit_id']}")
             yield from scalar_points(row["metrics"], path, index)
             yield from scalar_points(
-                {key: row.get(key) for key in ("first_step", "last_step")}, path, index,
+                {key: row.get(key) for key in ("first_step", "last_step")},
+                path,
+                index,
             )
             for scope, values in row.get("scopes", {}).items():
                 yield from scalar_points(values, f"{path}/{scope}", index)
@@ -63,8 +66,9 @@ def observation_tags(report):
     for key in ("dataset", "dataset_version", "model", "policy", "seed", "environment", "protocol"):
         value = data["lineage"].get(key)
         if isinstance(value, dict):
-            value = next((value[k] for k in ("name", "family", "execution", "platform") if value.get(k)),
-                         None)
+            value = next(
+                (value[k] for k in ("name", "family", "execution", "platform") if value.get(k)), None
+            )
         if type(value) in (str, int, float):
             tags[f"cb-observation-{key.replace('_', '-')}"] = str(value)[:500]
     return tags
@@ -139,12 +143,13 @@ def write_observation_evidence(directory, report, parent_run_id=None, children=(
         atomic_write(manifest_path, _json_bytes(manifest))
     if parent_run_id is not None:
         bindings = {
-            "version": data["version"], "parent_mlflow_run_id": parent_run_id,
+            "version": data["version"],
+            "parent_mlflow_run_id": parent_run_id,
             "children": {child["fit_id"]: child["run_id"] for child in children},
         }
         atomic_write(root / "mlflow-lineage.json", _json_bytes(bindings))
         _bind_plot_manifest(manifest_path, bindings)
-        lineage = _json_bytes(bindings).replace(b"<", br"\u003c")
+        lineage = _json_bytes(bindings).replace(b"<", rb"\u003c")
         for relative in PAGE_PATHS:
             page = root / relative
             if page.is_file():
@@ -157,10 +162,17 @@ def write_observation_evidence(directory, report, parent_run_id=None, children=(
             fit_root = root / "fits" / child["fit_id"]
             if fit_root.is_dir():
                 _bind_plot_manifest(fit_root / "plots-manifest.json", bindings, child["fit_id"])
-                atomic_write(fit_root / "mlflow-lineage.json", _json_bytes({
-                    "version": data["version"], "parent_mlflow_run_id": parent_run_id,
-                    "child_mlflow_run_id": child["run_id"], "fit_id": child["fit_id"],
-                }))
+                atomic_write(
+                    fit_root / "mlflow-lineage.json",
+                    _json_bytes(
+                        {
+                            "version": data["version"],
+                            "parent_mlflow_run_id": parent_run_id,
+                            "child_mlflow_run_id": child["run_id"],
+                            "fit_id": child["fit_id"],
+                        }
+                    ),
+                )
     return root
 
 
@@ -173,8 +185,9 @@ def publish_sdk_observations(client, run_id, directory, report, children):
     if root is None:
         return None
     log_metric_points(client, run_id, parent_observation_points(report))
-    client.log_batch(run_id, tags=[RunTag(key, value) for key, value in observation_tags(report).items()],
-                     synchronous=True)
+    client.log_batch(
+        run_id, tags=[RunTag(key, value) for key, value in observation_tags(report).items()], synchronous=True
+    )
     for path in sorted(root.iterdir()):
         if path.is_file():
             client.log_artifact(run_id, str(path), artifact_path=ARTIFACT_ROOT)

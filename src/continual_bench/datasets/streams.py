@@ -85,8 +85,14 @@ class ZiaStreamProvider:
 
     def spec(self, dataset):
         source = zia.DATASETS[dataset]
-        return StreamDataset(dataset, self.name, tuple(source["classes"]), source["model"],
-                             dict(self.BLOCK_ROWS), dict(self.MODEL_PARAMS.get(dataset, {})))
+        return StreamDataset(
+            dataset,
+            self.name,
+            tuple(source["classes"]),
+            source["model"],
+            dict(self.BLOCK_ROWS),
+            dict(self.MODEL_PARAMS.get(dataset, {})),
+        )
 
     def prepare(self, root, dataset, scope):
         return zia.prepare(root, dataset, scope)
@@ -117,16 +123,25 @@ class CatalogStreamProvider:
     def names(self):
         from .catalog import CATALOG
 
-        return tuple(spec.name for spec in CATALOG if spec.task in ("binary", "multiclass")
-                     and spec.prepare_kind != "none")
+        return tuple(
+            spec.name
+            for spec in CATALOG
+            if spec.task in ("binary", "multiclass") and spec.prepare_kind != "none"
+        )
 
     def _source(self, dataset, scope):
         from .catalog import dataset_spec, load_dataset
 
         spec = dataset_spec(dataset)
         examples = self.EXAMPLES[scope]
-        source = load_dataset(dataset, self.cache, examples=examples, seed=self.SEED,
-                              download=self.download, real_directory=self.real_directory)
+        source = load_dataset(
+            dataset,
+            self.cache,
+            examples=examples,
+            seed=self.SEED,
+            download=self.download,
+            real_directory=self.real_directory,
+        )
         return spec, source
 
     def spec(self, dataset, classes=None):
@@ -169,8 +184,9 @@ class CatalogStreamProvider:
         times = np.array([int(sample.timestamp) for sample in samples], dtype=np.int64)
         y = np.array([index[str(sample.y)] for sample in samples], dtype=np.uint8)
         names = [_column_name(name) for name in features]
-        schema = pa.schema([("event_time", pa.int64()), ("label", pa.uint8()),
-                            *((name, pa.float32()) for name in names)])
+        schema = pa.schema(
+            [("event_time", pa.int64()), ("label", pa.uint8()), *((name, pa.float32()) for name in names)]
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(dir=path.parent, prefix=".prepare-") as temp:
             output = Path(temp) / "prepared.parquet"
@@ -180,10 +196,16 @@ class CatalogStreamProvider:
             )
             pq.write_table(table, output, compression="zstd", row_group_size=65_536)
             manifest = {
-                "format": FORMAT, "provider": self.name, "dataset": dataset, "scope": scope,
+                "format": FORMAT,
+                "provider": self.name,
+                "dataset": dataset,
+                "scope": scope,
                 "source": self._source_entry(spec, labels, source),
-                "license": "see dataset source", "rows": len(samples), "features": names,
-                "sha256": sha256_file(output), "bytes": output.stat().st_size,
+                "license": "see dataset source",
+                "rows": len(samples),
+                "features": names,
+                "sha256": sha256_file(output),
+                "bytes": output.stat().st_size,
             }
             output.replace(path)
             atomic_write(manifest_path, json.dumps(manifest, indent=2).encode())
@@ -194,10 +216,16 @@ class CatalogStreamProvider:
             json.dumps(source.manifest() or {}, sort_keys=True, default=str).encode()
         ).hexdigest()
         return {
-            "catalog": spec.name, "family": spec.family, "task": spec.task, "classes": labels,
-            "model": default_model(len(labels)), "examples": self.EXAMPLES, "seed": self.SEED,
+            "catalog": spec.name,
+            "family": spec.family,
+            "task": spec.task,
+            "classes": labels,
+            "model": default_model(len(labels)),
+            "examples": self.EXAMPLES,
+            "seed": self.SEED,
             # Revision of the generated stream: the catalog source manifest digest.
-            "revision": f"catalog-{upstream[:12]}", "upstream_sha256": upstream,
+            "revision": f"catalog-{upstream[:12]}",
+            "upstream_sha256": upstream,
         }
 
     def load_manifest(self, root, dataset, scope):
@@ -207,11 +235,15 @@ class CatalogStreamProvider:
         manifest = json.loads(manifest_path.read_text())
         with ParquetFile(path) as source:
             names = source.schema_arrow.names
-            if (manifest.get("format") != FORMAT or manifest.get("provider") != self.name
-                    or manifest["dataset"] != dataset or manifest["scope"] != scope
-                    or source.metadata.num_rows != manifest["rows"]
-                    or manifest["bytes"] != path.stat().st_size
-                    or names != ["event_time", "label", *manifest["features"]]):
+            if (
+                manifest.get("format") != FORMAT
+                or manifest.get("provider") != self.name
+                or manifest["dataset"] != dataset
+                or manifest["scope"] != scope
+                or source.metadata.num_rows != manifest["rows"]
+                or manifest["bytes"] != path.stat().st_size
+                or names != ["event_time", "label", *manifest["features"]]
+            ):
                 raise ValueError(f"prepared input contract mismatch: {path}")
         return path, manifest
 

@@ -21,17 +21,23 @@ def test_logistic_objective_matches_logsumexp_with_extreme_scores():
     regularization = 0.001
 
     loss, gradient = model._objective_and_grad(
-        features, labels, weights.ravel(), weights.shape, regularization,
+        features,
+        labels,
+        weights.ravel(),
+        weights.shape,
+        regularization,
     )
     logits = features @ weights[:-1] + weights[-1]
     log_probabilities = logits - logsumexp(logits, axis=1, keepdims=True)
     expected_loss = -log_probabilities[np.arange(len(labels)), labels].mean()
     expected_loss += regularization / 2 * np.square(weights[:-1]).sum()
     residuals = np.exp(log_probabilities) - np.eye(3)[labels]
-    expected_gradient = np.vstack((
-        features.T @ residuals / len(labels) + regularization * weights[:-1],
-        residuals.mean(axis=0),
-    ))
+    expected_gradient = np.vstack(
+        (
+            features.T @ residuals / len(labels) + regularization * weights[:-1],
+            residuals.mean(axis=0),
+        )
+    )
     assert loss == pytest.approx(expected_loss, rel=1e-12)
     np.testing.assert_allclose(gradient.reshape(weights.shape), expected_gradient, rtol=1e-12, atol=1e-15)
 
@@ -96,8 +102,17 @@ def test_zia_detectors_receive_the_same_binary_errors(policy):
 
     detector = Recorder()
     offsets = []
-    assert drift_alarms(detector, policy, np.array([[0.5, 0.5], [0.8, 0.2], [0.1, 0.9]]),
-                        np.array([1, 1, 0]), {}, on_alarm=offsets.append) == 1
+    assert (
+        drift_alarms(
+            detector,
+            policy,
+            np.array([[0.5, 0.5], [0.8, 0.2], [0.1, 0.9]]),
+            np.array([1, 1, 0]),
+            {},
+            on_alarm=offsets.append,
+        )
+        == 1
+    )
     assert detector.errors == [0, 1, 1]
     assert offsets == [1]
 
@@ -120,10 +135,20 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
     timestamps = np.arange(10_000) // 13
     y = (np.arange(10_000) % 4).astype(np.uint8)
     pq.write_table(pa.table({"event_time": timestamps, "label": y, "feature": y.astype(np.float32)}), path)
-    (folder / "smoke.json").write_bytes(encoded({
-        "dataset": "social", "scope": "smoke", "source": DATASETS["social"], "format": FORMAT,
-        "features": ["feature"], "rows": 10_000, "bytes": path.stat().st_size, "sha256": sha256_file(path),
-    }))
+    (folder / "smoke.json").write_bytes(
+        encoded(
+            {
+                "dataset": "social",
+                "scope": "smoke",
+                "source": DATASETS["social"],
+                "format": FORMAT,
+                "features": ["feature"],
+                "rows": 10_000,
+                "bytes": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+        )
+    )
     tracking = TrackingConfig.model_validate(
         yaml.safe_load(Path("configs/base/tracking.yaml").read_text())
     ).model_dump()
@@ -132,8 +157,15 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
     for policy in POLICIES:
         output = tmp_path / policy
         progress = []
-        report = run(tmp_path, "social", "smoke", policy, output, tracking,
-                     progress=lambda step, metrics: progress.append((step, metrics)))
+        report = run(
+            tmp_path,
+            "social",
+            "smoke",
+            policy,
+            output,
+            tracking,
+            progress=lambda step, metrics: progress.append((step, metrics)),
+        )
         reports[policy] = report
         summary, holdout = report["metrics"], report["holdout"]
         assert summary["initial_train_rows"] + summary["n"] + holdout["n"] == 10_000
@@ -163,16 +195,21 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
         windows = report["windows"]
         assert all(a["end_time_ms"] < b["start_time_ms"] for a, b in zip(windows, windows[1:]))
         assert report["contract"]["holdout_start"] == 8996
-        assert sum((output / version["file"]).stat().st_size
-                   for version in report["model_versions"]) == summary["model_storage_bytes"]
+        assert (
+            sum((output / version["file"]).stat().st_size for version in report["model_versions"])
+            == summary["model_storage_bytes"]
+        )
         assert summary["aws_cost_total_usd"] > 0
         fits = json.loads((output / "training-history.json").read_text())["fits"]
         assert fits == report["training_history"]
         steps = [point for fit in fits for point in fit["steps"]]
         assert [point["global_step"] for point in steps] == list(range(1, len(steps) + 1))
-        assert all([point["step"] for point in fit["steps"]] == list(range(1, len(fit["steps"]) + 1))
-                   and fit["training_presentations"] == sum(point["metrics"]["train_samples"]
-                                                            for point in fit["steps"]) for fit in fits)
+        assert all(
+            [point["step"] for point in fit["steps"]] == list(range(1, len(fit["steps"]) + 1))
+            and fit["training_presentations"]
+            == sum(point["metrics"]["train_samples"] for point in fit["steps"])
+            for fit in fits
+        )
         assert summary["training_presentations"] == sum(
             fit["training_presentations"] for fit in fits if fit["deployed_version"] is not None
         )
@@ -231,8 +268,11 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
     assert "upf_paper_auc" not in reports["frozen"]["metrics"] and "retraining" not in reports["frozen"]
     adapted = tracking_report(reports["upf"], prediction_manifest(tmp_path / "upf", reports["upf"]))
     series = adapted["tracking"]["series"]
-    assert {"retraining/cost_vs_alpha/upf", "retraining/retrains_vs_alpha/oracle",
-            "retraining/cumulative_strategy_cost/cara"} <= set(series)
+    assert {
+        "retraining/cost_vs_alpha/upf",
+        "retraining/retrains_vs_alpha/oracle",
+        "retraining/cumulative_strategy_cost/cara",
+    } <= set(series)
     assert adapted["tracking"]["metrics"]["upf_paper_auc"] == reports["upf"]["metrics"]["upf_paper_auc"]
     assert adapted["tracking"]["availability"]["upf_paper_auc"]["status"] == "available"
     write_zia_artifacts(tmp_path / "upf", reports["upf"], adapted)
@@ -256,8 +296,12 @@ def test_smoke_coverage_temporal_ties_and_policies(tmp_path):
     assert tracking["tracking"]["metrics"]["drift_tp"] is None
     assert {w["scope"] for w in tracking["windows"]} == {"prequential"}
     write_zia_artifacts(replay, report, tracking)
-    for artifact in ("data/index.json", "plots/performance/holdout_confusion.svg",
-                     "plots/performance/fading_accuracy.svg", "plots/costs/aws_usd.svg"):
+    for artifact in (
+        "data/index.json",
+        "plots/performance/holdout_confusion.svg",
+        "plots/performance/fading_accuracy.svg",
+        "plots/costs/aws_usd.svg",
+    ):
         assert (replay / "artifacts" / artifact).is_file()
 
 
@@ -323,10 +367,20 @@ def test_binary_run_records_and_replays_the_cost_threshold(tmp_path):
     feature = rng.random(10_000).astype(np.float32)
     y = (rng.random(10_000) < 0.3 * feature).astype(np.uint8)
     pq.write_table(pa.table({"event_time": np.arange(10_000) // 7, "label": y, "feature": feature}), path)
-    (folder / "smoke.json").write_bytes(encoded({
-        "dataset": "ecommerce", "scope": "smoke", "source": DATASETS["ecommerce"], "format": FORMAT,
-        "features": ["feature"], "rows": 10_000, "bytes": path.stat().st_size, "sha256": sha256_file(path),
-    }))
+    (folder / "smoke.json").write_bytes(
+        encoded(
+            {
+                "dataset": "ecommerce",
+                "scope": "smoke",
+                "source": DATASETS["ecommerce"],
+                "format": FORMAT,
+                "features": ["feature"],
+                "rows": 10_000,
+                "bytes": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+        )
+    )
     raw = yaml.safe_load(Path("configs/base/tracking.yaml").read_text())
     raw["costs"].update(false_positive=1.0, false_negative=9.0)
     tracking = TrackingConfig.model_validate(raw).model_dump()

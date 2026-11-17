@@ -29,9 +29,11 @@ def publish_source(store, dataset, *, cache, workdir, examples, seed, real_direc
     else:
         source = load_dataset(dataset, cache, examples=examples, seed=seed, download=download)
         path = Path(workdir) / "source.json"
-        path.write_bytes(canonical({
-            "manifest": source.manifest(), "samples": [asdict(row) for row in source.samples_iter()]
-        }))
+        path.write_bytes(
+            canonical(
+                {"manifest": source.manifest(), "samples": [asdict(row) for row in source.samples_iter()]}
+            )
+        )
         metadata = {"format": "task-samples-v1", "examples": str(examples), "seed": str(seed)}
     sha256 = sha256_path(path)
     if path.stat().st_size > MAX_BYTES:
@@ -94,6 +96,4 @@ def materialize_source(store, dataset, sha256, workdir, config, evaluator):
     if (head.metadata.get("examples"), head.metadata.get("seed")) != (str(config.examples), str(config.seed)):
         raise ValueError(f"{dataset} sample bundle does not match the requested count and seed")
     value = json.loads(target.read_bytes())
-    return PreparedImageSource(
-        (TaskSample(**sample) for sample in value["samples"]), value["manifest"]
-    )
+    return PreparedImageSource((TaskSample(**sample) for sample in value["samples"]), value["manifest"])

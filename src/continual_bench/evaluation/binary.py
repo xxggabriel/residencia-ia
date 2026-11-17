@@ -29,11 +29,17 @@ def continual_evaluation(source, factory, settings):
     probes = {}
     for task, function in enumerate(source.functions):
         generator = source.generator(function, source.seed + 2_000_000 + task)
-        probes[task] = [({str(k): v for k, v in x.items()}, bool(y))
-                        for x, y in itertools.islice(generator, settings["probe_samples"])]
-    return ContinualEvaluation(factory, probes, source.boundaries + [source.samples],
-                               reference_budget=settings["reference_budget"],
-                               references_enabled=settings["continual_references"])
+        probes[task] = [
+            ({str(k): v for k, v in x.items()}, bool(y))
+            for x, y in itertools.islice(generator, settings["probe_samples"])
+        ]
+    return ContinualEvaluation(
+        factory,
+        probes,
+        source.boundaries + [source.samples],
+        reference_budget=settings["reference_budget"],
+        references_enabled=settings["continual_references"],
+    )
 
 
 @dataclass

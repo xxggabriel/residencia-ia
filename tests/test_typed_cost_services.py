@@ -21,8 +21,15 @@ def test_typed_costs_in_service_environment(dataset, policy, priced_time):
     source = load_dataset(dataset, os.environ["BENCH_DATASET_CACHE"], examples=100)
     kwargs = {"policy": policy, "warmup": 10, "every": 20}
     if priced_time:
-        kwargs["costs"] = {"regression_scale": 10, "regression_error": 2, "classification_error": 3,
-                           "train_sample": 0.02, "update": 0.3, "train_second": 2, "predict_second": 3}
+        kwargs["costs"] = {
+            "regression_scale": 10,
+            "regression_error": 2,
+            "classification_error": 3,
+            "train_sample": 0.02,
+            "update": 0.3,
+            "train_second": 2,
+            "predict_second": 3,
+        }
     report = run_typed(source, root, **kwargs)
     costs = report["costs"]
     config = costs["settings"]
@@ -39,14 +46,22 @@ def test_typed_costs_in_service_environment(dataset, policy, priced_time):
     assert costs["metrics"]["cost_training_time"] == pytest.approx(
         report["compute"]["training_seconds"] * config["train_second"]
     )
-    assert costs["metrics"]["cost_total"] == pytest.approx(sum(
-        v for k, v in costs["metrics"].items() if k != "cost_total"
-    ))
+    assert costs["metrics"]["cost_total"] == pytest.approx(
+        sum(v for k, v in costs["metrics"].items() if k != "cost_total")
+    )
     assert run_typed(source, root, **kwargs) == report
     directory = root / report["identity"]
     assert json.loads((directory / "report.json").read_text())["costs"] == costs
-    (directory / "typed-cost-evidence.json").write_text(json.dumps({
-        "run_key": report["run_key"], "dataset": dataset, "policy": policy,
-        "costs": costs, "publication": "local_report_only_no_mlflow_publisher",
-        "replay_idempotent": True,
-    }, indent=2))
+    (directory / "typed-cost-evidence.json").write_text(
+        json.dumps(
+            {
+                "run_key": report["run_key"],
+                "dataset": dataset,
+                "policy": policy,
+                "costs": costs,
+                "publication": "local_report_only_no_mlflow_publisher",
+                "replay_idempotent": True,
+            },
+            indent=2,
+        )
+    )

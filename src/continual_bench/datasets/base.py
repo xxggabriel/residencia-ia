@@ -23,12 +23,23 @@ class EventSamples:
 
     def samples_iter(self):
         for event in self.source.events():
-            yield TaskSample(event.event_id, event.seq, event.timestamp, event.available_at,
-                             event.x, "1" if event.y else "0", task_id=event.concept)
+            yield TaskSample(
+                event.event_id,
+                event.seq,
+                event.timestamp,
+                event.available_at,
+                event.x,
+                "1" if event.y else "0",
+                task_id=event.concept,
+            )
 
     def manifest(self):
-        return {**self.source.manifest(), "task": "multiclass", "labels": ["0", "1"],
-                "target_conversion": "explicit binary boolean to class strings, no information loss"}
+        return {
+            **self.source.manifest(),
+            "task": "multiclass",
+            "labels": ["0", "1"],
+            "target_conversion": "explicit binary boolean to class strings, no information loss",
+        }
 
 
 def as_sample_source(source):

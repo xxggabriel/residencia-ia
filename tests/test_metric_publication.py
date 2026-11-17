@@ -34,8 +34,10 @@ class Client:
         self.params = {}
         self.operations = []
         self.fail_after = None
-        self.run = SimpleNamespace(info=SimpleNamespace(run_id="existing-run"),
-                                   inputs=SimpleNamespace(dataset_inputs=["already-present"]))
+        self.run = SimpleNamespace(
+            info=SimpleNamespace(run_id="existing-run"),
+            inputs=SimpleNamespace(dataset_inputs=["already-present"]),
+        )
 
     def get_metric_history(self, run_id, key):
         assert run_id == "existing-run"
@@ -113,8 +115,10 @@ def report_fixture(tmp_path):
         "tracking": {
             "version": metric_tracking.VERSION,
             "metrics": {"accuracy": 0.75, "roc_auc": None},
-            "series": {"windows/accuracy": [{"step": 5, "value": 0.5}, {"step": 10, "value": 1}],
-                       "windows/roc_auc": [{"step": 5, "value": None}]},
+            "series": {
+                "windows/accuracy": [{"step": 5, "value": 0.5}, {"step": 10, "value": 1}],
+                "windows/roc_auc": [{"step": 5, "value": None}],
+            },
             "availability": {"roc_auc": "single_class", "windows/roc_auc": "single_class"},
             "settings": {"calibration_bins": 10, "threshold": 0.5},
         },
@@ -280,27 +284,52 @@ def test_all_null_metrics_are_preserved_without_fake_logs(tmp_path):
 
 def test_native_publication_all_window_keys_none_and_retry(tmp_path, monkeypatch):
     report = report_fixture(tmp_path)
-    report.update({"protocol": "fixture", "metrics": {"n": 2, "accuracy": 0.5, "roc_auc": None},
-                   "windows": [{"end_seq": 5, "n": 2, "accuracy": 0.5, "roc_auc": None, "errors": 1}],
-                   "updates": [{"train_samples": 3}], "alarms": []})
-    config = {"dataset": {"name": "sea", "seed": 42, "samples": 4},
-              "model": {"name": "logistic", "params": {}}, "mode": "incremental", "name": "fixture",
-              "protocol_version": "1", "policy": {"name": "online", "every": 1, "cooldown": 0},
-              "detector": {"name": "none"}}
-    catalog = {"dataset_version": "dataset-version", "model_version_id": "version",
-               "model_state_sha256": "model-sha", "model_versions_count": 1}
+    report.update(
+        {
+            "protocol": "fixture",
+            "metrics": {"n": 2, "accuracy": 0.5, "roc_auc": None},
+            "windows": [{"end_seq": 5, "n": 2, "accuracy": 0.5, "roc_auc": None, "errors": 1}],
+            "updates": [{"train_samples": 3}],
+            "alarms": [],
+        }
+    )
+    config = {
+        "dataset": {"name": "sea", "seed": 42, "samples": 4},
+        "model": {"name": "logistic", "params": {}},
+        "mode": "incremental",
+        "name": "fixture",
+        "protocol_version": "1",
+        "policy": {"name": "online", "every": 1, "cooldown": 0},
+        "detector": {"name": "none"},
+    }
+    catalog = {
+        "dataset_version": "dataset-version",
+        "model_version_id": "version",
+        "model_state_sha256": "model-sha",
+        "model_versions_count": 1,
+    }
     client = Client()
     monkeypatch.setattr(sys.modules["mlflow.tracking"], "MlflowClient", lambda: client)
-    monkeypatch.setattr(services, "register_final_model", lambda *args: {
-        "registered_model": "fixture-model", "registered_model_version": "1"})
+    monkeypatch.setattr(
+        services,
+        "register_final_model",
+        lambda *args: {"registered_model": "fixture-model", "registered_model_version": "1"},
+    )
     path = str(tmp_path / "report.json")
     first = services.MLflowTracker().publish("key", config, report, [path], catalog)
     history = copy.deepcopy(client.histories)
     second = services.MLflowTracker().publish("key", config, report, [path], catalog)
     assert first == second
     assert client.histories == history
-    assert set(client.histories) >= {"accuracy", "n", "errors", "summary_n", "summary_accuracy",
-                                     "training_used", "tracking_v1/summary/accuracy"}
+    assert set(client.histories) >= {
+        "accuracy",
+        "n",
+        "errors",
+        "summary_n",
+        "summary_accuracy",
+        "training_used",
+        "tracking_v1/summary/accuracy",
+    }
     assert "roc_auc" not in client.histories
     assert "summary_roc_auc" not in client.histories
     assert "summary_roc_auc" not in client.params
@@ -326,8 +355,9 @@ def test_known_keys_skip_absent_histories_and_present_keys_are_checked_once(tmp_
     def get_run(run_id):
         assert run_id == "existing-run"
         calls.append("run")
-        return SimpleNamespace(data=SimpleNamespace(metrics={k: rows[-1].value
-                                                            for k, rows in client.histories.items()}))
+        return SimpleNamespace(
+            data=SimpleNamespace(metrics={k: rows[-1].value for k, rows in client.histories.items()})
+        )
 
     def get_history(run_id, name):
         calls.append(name)
@@ -365,7 +395,8 @@ def test_explicit_known_keys_avoids_get_run_and_absent_history():
     client.get_run = client.get_metric_history = unexpected
     points = [("new-key", 0, 0.3), ("unavailable-key", 0, None)]
     assert metric_tracking.missing_metric_points(client, "existing-run", points, known_keys=set()) == [
-        ("new-key", 0, 0.3)]
+        ("new-key", 0, 0.3)
+    ]
 
 
 def test_execution_first_success_cache_isolated_and_native_republication_safe(tmp_path):
@@ -396,7 +427,10 @@ def test_execution_first_success_cache_isolated_and_native_republication_safe(tm
     payload = json.loads(Path(first["sidecar_path"]).read_text())
     assert payload["tracking"]["execution_scope"] == metric_tracking.EXECUTION_SCOPE
     assert payload["tracking"]["availability"]["pipeline_elapsed_seconds"] == {
-        "status": "available", "reason": None, "scope": metric_tracking.EXECUTION_SCOPE}
+        "status": "available",
+        "reason": None,
+        "scope": metric_tracking.EXECUTION_SCOPE,
+    }
     assert any(item["path"] == "tracking/execution-v1.json" for item in payload["files"])
     assert client.tags["tracking_v1_origin"] == "native"
     assert client.tags["tracking_v1_unavailable_count"] == "1"

@@ -34,14 +34,24 @@ def evidence():
     return {
         "metrics": accumulator.values(),
         "observed": 10,
-        "config": {"warmup": 2, "metric_window": 2, "batch_size": 1, "training_budget": 8,
-                   "dataset": {"epoch": 1000}, "detector": {"name": "adwin"}},
+        "config": {
+            "warmup": 2,
+            "metric_window": 2,
+            "batch_size": 1,
+            "training_budget": 8,
+            "dataset": {"epoch": 1000},
+            "detector": {"name": "adwin"},
+        },
         "dataset": {"sha256": "a" * 64, "changepoints": [4]},
         "protocol": "event_prequential",
-        "windows": [{"end_seq": seq, "n": 2, "accuracy": accuracy}
-                    for seq, accuracy in [(3, 0.4), (5, 0.6), (7, 0.8), (9, 0.9)]],
-        "updates": [{"seq": 3, "action": "reset_retrain", "train_samples": 4, "seconds": 2},
-                    {"seq": 5, "action": "reset_retrain", "train_samples": 4, "seconds": 3}],
+        "windows": [
+            {"end_seq": seq, "n": 2, "accuracy": accuracy}
+            for seq, accuracy in [(3, 0.4), (5, 0.6), (7, 0.8), (9, 0.9)]
+        ],
+        "updates": [
+            {"seq": 3, "action": "reset_retrain", "train_samples": 4, "seconds": 2},
+            {"seq": 5, "action": "reset_retrain", "train_samples": 4, "seconds": 3},
+        ],
         "alarms": [],
         "training": {"blocked_decisions": 0},
         "retention_probes": [],
@@ -57,12 +67,14 @@ def reference(report, **changes):
         "protocol": report["protocol"],
         "evidence_uri": "fixture://external-reference",
         "evidence_sha256": "b" * 64,
-        "evaluation_scope": {"evaluation_n": report["metrics"]["n"],
-                             "warmup": report["config"]["warmup"],
-                             "metric_window": report["config"]["metric_window"],
-                             "batch_size": report["config"]["batch_size"],
-                             "split": report.get("split"),
-                             "training_budget": report["config"].get("training_budget")},
+        "evaluation_scope": {
+            "evaluation_n": report["metrics"]["n"],
+            "warmup": report["config"]["warmup"],
+            "metric_window": report["config"]["metric_window"],
+            "batch_size": report["config"]["batch_size"],
+            "split": report.get("split"),
+            "training_budget": report["config"].get("training_budget"),
+        },
     }
     value.update(changes)
     return value
@@ -80,8 +92,7 @@ def test_historical_confusion_recovers_counts_without_inventing_scores():
     assert derived["balanced_accuracy"] == 0.5
 
 
-@pytest.mark.parametrize("changes,positives", [({"accuracy": 0.123}, 4), ({"f1": 0.9}, 0),
-                                             ({"f1": 0}, 8)])
+@pytest.mark.parametrize("changes,positives", [({"accuracy": 0.123}, 4), ({"f1": 0.9}, 0), ({"f1": 0}, 8)])
 def test_impossible_historical_confusion_rejected(changes, positives):
     summary = {"n": 8, "accuracy": 0.5, "f1": 0.5}
     summary.update(changes)
@@ -110,8 +121,9 @@ def test_cost_prices_presentations_including_warmup_and_replay():
 
 def test_offline_cost_uses_purged_initial_fit_not_warmup_or_zero_updates():
     report = evidence()
-    report.update(split={"train": [0, 69], "purged_label_delay": [69, 72], "test": [72, 120]},
-                  updates=[], training={})
+    report.update(
+        split={"train": [0, 69], "purged_label_delay": [69, 72], "test": [72, 120]}, updates=[], training={}
+    )
     report["config"]["training_budget"] = None
     tracking = build_tracking(report, settings(costs={"train_sample": 2}))
     metrics = tracking["metrics"]
@@ -126,8 +138,9 @@ def test_nonzero_time_prices_require_timers_but_measured_zero_is_available():
     absent = build_tracking(evidence(), configured)
     assert absent["metrics"]["cost_total"] is None
     assert absent["metrics"]["prediction_seconds"] is None
-    measured = build_tracking(evidence(), configured,
-                              observation={"warmup_train_seconds": 0, "prediction_seconds": 0})
+    measured = build_tracking(
+        evidence(), configured, observation={"warmup_train_seconds": 0, "prediction_seconds": 0}
+    )
     assert measured["metrics"]["initial_train_seconds"] == 0
     assert measured["metrics"]["train_seconds"] == 5
     assert measured["metrics"]["cost_total"] == 14  # Four errors and 5 measured train seconds.
@@ -137,8 +150,15 @@ def test_nonzero_time_prices_require_timers_but_measured_zero_is_available():
 def test_missing_cost_and_unmeasured_quantities_are_null_not_zero():
     report = build_tracking(evidence(), settings())
     assert report["metrics"]["cost_total"] == pytest.approx(4.11)
-    for key in ("cost_scpe", "energy_kwh", "financial_ros", "ci_test_coverage",
-                "performance_forecast_mae", "drift_roc_auc", "platform_time_overhead_ratio"):
+    for key in (
+        "cost_scpe",
+        "energy_kwh",
+        "financial_ros",
+        "ci_test_coverage",
+        "performance_forecast_mae",
+        "drift_roc_auc",
+        "platform_time_overhead_ratio",
+    ):
         assert report["metrics"][key] is None
         assert report["availability"][key]["status"] == "unavailable"
         assert report["availability"][key]["reason"]
@@ -153,8 +173,7 @@ def test_detectors_match_earliest_unused_alarm_and_count_duplicates_as_false_ala
     report["observed"] = 120
     report["metrics"]["n"] = 118  # Evaluated offsets [2,120), consistent with the alarm at 12.
     report["dataset"]["changepoints"] = [40, 80]
-    report["alarms"] = [{"seq": seq, "released_at": 1000 + seq + 3}
-                        for seq in (45, 40, 40, 12, 80, 90)]
+    report["alarms"] = [{"seq": seq, "released_at": 1000 + seq + 3} for seq in (45, 40, 40, 12, 80, 90)]
     metrics, details, reason = detector_metrics(report, settings(detection_window=10))
     assert reason is None
     assert [item["alarm_seq"] for item in details["matches"]] == [40, 80]
@@ -206,12 +225,14 @@ def test_recovery_requires_two_complete_consecutive_postchange_windows():
     report = evidence()
     report["dataset"]["changepoints"] = [4]
     report["observed"] = 13
-    report["windows"] = [{"end_seq": 3, "n": 2, "accuracy": 0.8},
-                         {"end_seq": 4, "n": 2, "accuracy": 1},  # Straddles the boundary.
-                         {"end_seq": 6, "n": 2, "accuracy": 0.9},
-                         {"end_seq": 8, "n": 2, "accuracy": 0.5},  # Resets consecutive streak.
-                         {"end_seq": 10, "n": 2, "accuracy": 0.9},
-                         {"end_seq": 11, "n": 1, "accuracy": 1}]  # Partial is insufficient.
+    report["windows"] = [
+        {"end_seq": 3, "n": 2, "accuracy": 0.8},
+        {"end_seq": 4, "n": 2, "accuracy": 1},  # Straddles the boundary.
+        {"end_seq": 6, "n": 2, "accuracy": 0.9},
+        {"end_seq": 8, "n": 2, "accuracy": 0.5},  # Resets consecutive streak.
+        {"end_seq": 10, "n": 2, "accuracy": 0.9},
+        {"end_seq": 11, "n": 1, "accuracy": 1},
+    ]  # Partial is insufficient.
     metrics, rows = recovery_metrics(report, settings(recovery_tolerance=0, recovery_windows=2))
     assert metrics["recovery_delay_mean_samples"] is None
     assert metrics["recovery_recovered_changes"] == 0
@@ -238,9 +259,12 @@ def test_scpe_and_learning_speed_require_comparable_reference_scope():
     configured = settings(costs={"train_sample": 0.5})
     costs = configured["costs"]
     configured["reference"] = reference(
-        report, oracle_cost=20, cost_settings=costs,
+        report,
+        oracle_cost=20,
+        cost_settings=costs,
         baseline_curve=[{"step": 4, "value": 0.6}, {"step": 8, "value": 0.8}],
-        baseline_target=0.8, curve_scope="window_end_source_offset_including_warmup",
+        baseline_target=0.8,
+        curve_scope="window_end_source_offset_including_warmup",
     )
     result = build_tracking(report, configured)
     assert result["metrics"]["cost_scpe"] == -55  # Cost4(errors)+5(training)=9 versus20.
@@ -249,17 +273,26 @@ def test_scpe_and_learning_speed_require_comparable_reference_scope():
     assert result["metrics"]["l99"] is result["metrics"]["l100"] is None
 
 
-@pytest.mark.parametrize("field,value", [
-    ("dataset_sha256", "c" * 64), ("protocol", "temporal_holdout"),
-    ("evidence_sha256", "bad"), ("evaluation_scope", {}),
-    ("curve_scope", "labeled_window_index"), ("cost_settings", {}),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("dataset_sha256", "c" * 64),
+        ("protocol", "temporal_holdout"),
+        ("evidence_sha256", "bad"),
+        ("evaluation_scope", {}),
+        ("curve_scope", "labeled_window_index"),
+        ("cost_settings", {}),
+    ],
+)
 def test_incompatible_reference_is_rejected(field, value):
     report = evidence()
     configured = settings(costs={})
     configured["reference"] = reference(
-        report, oracle_cost=1, cost_settings=configured["costs"],
-        baseline_curve=[{"step": 8, "value": 0.8}], baseline_target=0.8,
+        report,
+        oracle_cost=1,
+        cost_settings=configured["costs"],
+        baseline_curve=[{"step": 8, "value": 0.8}],
+        baseline_target=0.8,
         curve_scope="window_end_source_offset_including_warmup",
     )
     configured["reference"][field] = value
@@ -357,117 +390,130 @@ def test_observability_helpers_have_explicit_zero_reference_and_target_censoring
 def test_censored_tail_detections_and_alarms_do_not_enter_complete_followup_counts():
     report = evidence()
     report.update(observed=20)
-    report['metrics']['n'] = 18
-    report['dataset']['changepoints'] = [5, 15]
-    report['alarms'] = [{'seq': value} for value in (3, 6, 16, 17)]
+    report["metrics"]["n"] = 18
+    report["dataset"]["changepoints"] = [5, 15]
+    report["alarms"] = [{"seq": value} for value in (3, 6, 16, 17)]
     values, details, _ = detector_metrics(report, settings(detection_window=10))
-    assert (values['drift_tp'], values['drift_fp'], values['drift_fn']) == (1, 1, 0)
-    assert values['drift_precision'] == 0.5
-    assert values['drift_recall'] == 1
-    assert values['drift_complete_followup_changes'] == values['drift_censored_changes'] == 1
-    assert values['drift_observed_detections'] == 2
-    assert details['matches'][1]['alarm_seq'] == 16
-    assert details['matches'][1]['censored'] is True
-    assert details['censored_alarm_count'] == 2
-    assert values['drift_stable_exposure_samples'] == 3
-    assert values['drift_false_alarm_rate'] == pytest.approx(1 / 3)
+    assert (values["drift_tp"], values["drift_fp"], values["drift_fn"]) == (1, 1, 0)
+    assert values["drift_precision"] == 0.5
+    assert values["drift_recall"] == 1
+    assert values["drift_complete_followup_changes"] == values["drift_censored_changes"] == 1
+    assert values["drift_observed_detections"] == 2
+    assert details["matches"][1]["alarm_seq"] == 16
+    assert details["matches"][1]["censored"] is True
+    assert details["censored_alarm_count"] == 2
+    assert values["drift_stable_exposure_samples"] == 3
+    assert values["drift_false_alarm_rate"] == pytest.approx(1 / 3)
 
 
 def test_known_stable_ground_truth_is_distinct_from_unknown_real_ground_truth():
     report = evidence()
-    report['dataset']['changepoints'] = []
-    report['alarms'] = [{'seq': 3}]
+    report["dataset"]["changepoints"] = []
+    report["alarms"] = [{"seq": 3}]
     values, _, reason = detector_metrics(report, settings())
     assert reason is None
-    assert values['drift_stable_exposure_samples'] == 8
-    assert values['drift_false_alarm_rate'] == 1 / 8
-    assert values['drift_recall'] is None
-    report['dataset']['changepoints'] = None
+    assert values["drift_stable_exposure_samples"] == 8
+    assert values["drift_false_alarm_rate"] == 1 / 8
+    assert values["drift_recall"] is None
+    report["dataset"]["changepoints"] = None
     values, _, reason = detector_metrics(report, settings())
-    assert values['drift_false_alarm_rate'] is None
-    assert reason == 'no_ground_truth_changepoints'
+    assert values["drift_false_alarm_rate"] is None
+    assert reason == "no_ground_truth_changepoints"
 
 
 def test_binary_probability_extensions_are_not_regression_aliases():
     report = evidence()
-    predictions = [{'label': True, 'probability': 0.8}, {'label': False, 'probability': 0.3}]
+    predictions = [{"label": True, "probability": 0.8}, {"label": False, "probability": 0.3}]
     tracking = build_tracking(report, settings(), predictions=predictions)
-    assert tracking['metrics']['mae_probability'] == pytest.approx(0.25)
-    assert tracking['metrics']['mse_probability'] == report['metrics']['brier']
-    assert tracking['metrics']['mae'] is tracking['metrics']['mse'] is None
-    assert 'mae' not in tracking['aliases'] and 'mse' not in tracking['aliases']
+    assert tracking["metrics"]["mae_probability"] == pytest.approx(0.25)
+    assert tracking["metrics"]["mse_probability"] == report["metrics"]["brier"]
+    assert tracking["metrics"]["mae"] is tracking["metrics"]["mse"] is None
+    assert "mae" not in tracking["aliases"] and "mse" not in tracking["aliases"]
 
 
 def test_upf_retraining_cost_and_posthoc_update_grid_have_separate_contracts():
     report = evidence()
     configured = settings(upf_alpha=2, upf_alphas=[0, 1, 2])
     frozen = build_tracking(report, configured)
-    errors = sum(1 - row['accuracy'] for row in report['windows'])
-    assert frozen['metrics']['upf_total_cost'] == pytest.approx(4 + errors)
-    report['updates'][0]['action'] = 'learn_one'
+    errors = sum(1 - row["accuracy"] for row in report["windows"])
+    assert frozen["metrics"]["upf_total_cost"] == pytest.approx(4 + errors)
+    report["updates"][0]["action"] = "learn_one"
     incremental = build_tracking(report, configured)
-    assert incremental['metrics']['upf_total_cost'] is None
-    assert incremental['metrics']['posthoc_update_event_cost'] == pytest.approx(4 + errors)
-    assert 'posthoc_cost_sensitivity' not in incremental['metrics']
-    assert incremental['series']['posthoc_cost_sensitivity'] == [
-        {'step': i, 'value': 2 * alpha + errors} for i, alpha in enumerate([0, 1, 2])
+    assert incremental["metrics"]["upf_total_cost"] is None
+    assert incremental["metrics"]["posthoc_update_event_cost"] == pytest.approx(4 + errors)
+    assert "posthoc_cost_sensitivity" not in incremental["metrics"]
+    assert incremental["series"]["posthoc_cost_sensitivity"] == [
+        {"step": i, "value": 2 * alpha + errors} for i, alpha in enumerate([0, 1, 2])
     ]
-    metadata = incremental['series_metadata']['posthoc_cost_sensitivity']
-    assert metadata['alpha_grid'] == [0, 1, 2]
-    assert metadata['paper_UPF_AUC'] is False
-    assert incremental['metrics']['upf_paper_cost_auc'] is None
-    report['updates'] = []
-    report['config']['policy'] = {'name': 'online'}
-    assert build_tracking(report, configured)['metrics']['upf_total_cost'] is None
+    metadata = incremental["series_metadata"]["posthoc_cost_sensitivity"]
+    assert metadata["alpha_grid"] == [0, 1, 2]
+    assert metadata["paper_UPF_AUC"] is False
+    assert incremental["metrics"]["upf_paper_cost_auc"] is None
+    report["updates"] = []
+    report["config"]["policy"] = {"name": "online"}
+    assert build_tracking(report, configured)["metrics"]["upf_total_cost"] is None
 
 
 def test_global_roi_requires_every_update_to_have_priced_evaluated_shadow_horizon():
     report = evidence()
-    configured = settings(costs={'train_sample': 1}, adaptation_shadows=True)
-    comparison = {**report['updates'][0], 'evaluated': 2, 'old_weighted_loss': 2, 'new_weighted_loss': 1}
-    partial = build_tracking(report, configured, observation={'comparisons': [comparison]})
-    values = partial['metrics']
-    assert values['adaptation_roi_aggregate'] == 1 / 4
-    assert values['adaptation_roi_global'] is None
-    assert values['adaptation_roi_omitted_updates'] == 1
-    assert values['adaptation_roi_omitted_priced_cost'] == 4
-    assert partial['adaptation_coverage']['omitted_update_seqs'] == [5]
-    unseen = {**report['updates'][1], 'evaluated': 0, 'old_weighted_loss': 0, 'new_weighted_loss': 0}
-    tail = build_tracking(report, configured, observation={'comparisons': [comparison, unseen]})
-    assert tail['metrics']['adaptation_roi_global'] is None
+    configured = settings(costs={"train_sample": 1}, adaptation_shadows=True)
+    comparison = {**report["updates"][0], "evaluated": 2, "old_weighted_loss": 2, "new_weighted_loss": 1}
+    partial = build_tracking(report, configured, observation={"comparisons": [comparison]})
+    values = partial["metrics"]
+    assert values["adaptation_roi_aggregate"] == 1 / 4
+    assert values["adaptation_roi_global"] is None
+    assert values["adaptation_roi_omitted_updates"] == 1
+    assert values["adaptation_roi_omitted_priced_cost"] == 4
+    assert partial["adaptation_coverage"]["omitted_update_seqs"] == [5]
+    unseen = {**report["updates"][1], "evaluated": 0, "old_weighted_loss": 0, "new_weighted_loss": 0}
+    tail = build_tracking(report, configured, observation={"comparisons": [comparison, unseen]})
+    assert tail["metrics"]["adaptation_roi_global"] is None
     unseen.update(evaluated=2, old_weighted_loss=3, new_weighted_loss=1)
-    complete = build_tracking(report, configured, observation={'comparisons': [comparison, unseen]})
-    assert complete['metrics']['adaptation_roi_global'] == 3 / 8
-    assert complete['metrics']['adaptation_roi_omitted_priced_cost'] == 0
-    assert complete['adaptation_coverage']['all_updates_comparable'] is True
+    complete = build_tracking(report, configured, observation={"comparisons": [comparison, unseen]})
+    assert complete["metrics"]["adaptation_roi_global"] == 3 / 8
+    assert complete["metrics"]["adaptation_roi_omitted_priced_cost"] == 0
+    assert complete["adaptation_coverage"]["all_updates_comparable"] is True
 
 
 def test_canonical_speed_requires_fixed_test_training_iterations_not_stream_offsets():
     report = evidence()
     configured = settings(target_accuracy=0.8)
-    configured['reference'] = reference(
-        report, curve_scope='training_iteration_fixed_test', test_dataset_sha256='d' * 64,
-        baseline_target=0.8, baseline_curve=[{'step': 10, 'value': 0.7}, {'step': 20, 'value': 0.8}],
-        method_curve=[{'step': 5, 'value': 0.8}, {'step': 8, 'value': 0.9}],
+    configured["reference"] = reference(
+        report,
+        curve_scope="training_iteration_fixed_test",
+        test_dataset_sha256="d" * 64,
+        baseline_target=0.8,
+        baseline_curve=[{"step": 10, "value": 0.7}, {"step": 20, "value": 0.8}],
+        method_curve=[{"step": 5, "value": 0.8}, {"step": 8, "value": 0.9}],
     )
     tracking = build_tracking(report, configured)
-    assert tracking['metrics']['iterations_to_target'] == 5
-    assert tracking['metrics']['l99'] == tracking['metrics']['l100'] == 4
-    assert tracking['metrics']['prequential_samples_ratio_l100'] is None
-    configured['reference']['test_dataset_sha256'] = 'not-a-version'
-    with pytest.raises(ValueError, match='test dataset SHA256'):
+    assert tracking["metrics"]["iterations_to_target"] == 5
+    assert tracking["metrics"]["l99"] == tracking["metrics"]["l100"] == 4
+    assert tracking["metrics"]["prequential_samples_ratio_l100"] is None
+    configured["reference"]["test_dataset_sha256"] = "not-a-version"
+    with pytest.raises(ValueError, match="test dataset SHA256"):
         build_tracking(report, configured)
 
 
-@pytest.mark.parametrize('curve', [[], [{'step': -1, 'value': 0.8}],
-                                   [{'step': 2, 'value': float('nan')}],
-                                   [{'step': 2, 'value': 0.8}, {'step': 1, 'value': 0.9}]])
+@pytest.mark.parametrize(
+    "curve",
+    [
+        [],
+        [{"step": -1, "value": 0.8}],
+        [{"step": 2, "value": float("nan")}],
+        [{"step": 2, "value": 0.8}, {"step": 1, "value": 0.9}],
+    ],
+)
 def test_reference_learning_curves_reject_invalid_order_or_scores(curve):
     report = evidence()
     configured = settings()
-    configured['reference'] = reference(report, curve_scope='window_end_source_offset_including_warmup',
-                                        baseline_target=0.8, baseline_curve=curve)
-    with pytest.raises(ValueError, match='learning curve'):
+    configured["reference"] = reference(
+        report,
+        curve_scope="window_end_source_offset_including_warmup",
+        baseline_target=0.8,
+        baseline_curve=curve,
+    )
+    with pytest.raises(ValueError, match="learning curve"):
         build_tracking(report, configured)
 
 
@@ -477,44 +523,61 @@ def test_episode_probe_dataset_is_saved_with_independent_version_and_source_line
     from continual_bench.application.runner import run
     from continual_bench.config import Config
 
-    config = Config.model_validate({
-        'name': 'probe-evidence', 'mode': 'streaming',
-        'dataset': {'name': 'sea', 'samples': 120, 'label_delay': 2},
-        'warmup': 20, 'metric_window': 20, 'replay_window': 30,
-        'policy': {'name': 'none', 'min_window': 10}, 'tracking': {'probe_samples': 3},
-    })
+    config = Config.model_validate(
+        {
+            "name": "probe-evidence",
+            "mode": "streaming",
+            "dataset": {"name": "sea", "samples": 120, "label_delay": 2},
+            "warmup": 20,
+            "metric_window": 20,
+            "replay_window": 30,
+            "policy": {"name": "none", "min_window": 10},
+            "tracking": {"probe_samples": 3},
+        }
+    )
     report = run(config, tmp_path)
-    metadata = report['tracking']['probe_dataset']
-    raw = (tmp_path / config.identity() / 'continual-probes.json').read_bytes()
+    metadata = report["tracking"]["probe_dataset"]
+    raw = (tmp_path / config.identity() / "continual-probes.json").read_bytes()
     probes = json.loads(raw)
-    assert metadata['sha256'] == hashlib.sha256(raw).hexdigest()
-    assert metadata['rows'] == sum(len(row['rows']) for row in probes['episodes']) == 9
-    assert probes['task_ends'] == [40, 80, 120]
-    assert [row['episode'] for row in probes['episodes']] == [0, 1, 2]
-    assert probes['dataset_sha256'] == metadata['source_dataset_sha256'] == report['dataset']['sha256']
-    assert probes['code_sha256'] == metadata['code_sha256'] == report['environment']['code_sha256']
+    assert metadata["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert metadata["rows"] == sum(len(row["rows"]) for row in probes["episodes"]) == 9
+    assert probes["task_ends"] == [40, 80, 120]
+    assert [row["episode"] for row in probes["episodes"]] == [0, 1, 2]
+    assert probes["dataset_sha256"] == metadata["source_dataset_sha256"] == report["dataset"]["sha256"]
+    assert probes["code_sha256"] == metadata["code_sha256"] == report["environment"]["code_sha256"]
 
 
-@pytest.mark.parametrize('f1', [1.01, -0.01, float('nan'), float('inf')])
+@pytest.mark.parametrize("f1", [1.01, -0.01, float("nan"), float("inf")])
 def test_historical_f1_out_of_range_is_rejected(f1):
-    with pytest.raises(ValueError, match='historical'):
-        confusion_metrics({'n': 8, 'accuracy': 0.5, 'f1': f1}, positives=4)
+    with pytest.raises(ValueError, match="historical"):
+        confusion_metrics({"n": 8, "accuracy": 0.5, "f1": f1}, positives=4)
 
 
-@pytest.mark.parametrize('field,value', [('evidence_sha256', 'z' * 64), ('evidence_sha256', None),
-                                        ('evidence_uri', ''), ('evidence_uri', 3),
-                                        ('baseline_target', float('nan')), ('baseline_target', -0.1),
-                                        ('baseline_target', 1.1),
-                                        ('baseline_curve', [{'step': True, 'value': 0.8}]),
-                                        ('baseline_curve', [{'step': 2, 'value': True}]),
-                                        ('baseline_curve', [{'step': 2}])])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("evidence_sha256", "z" * 64),
+        ("evidence_sha256", None),
+        ("evidence_uri", ""),
+        ("evidence_uri", 3),
+        ("baseline_target", float("nan")),
+        ("baseline_target", -0.1),
+        ("baseline_target", 1.1),
+        ("baseline_curve", [{"step": True, "value": 0.8}]),
+        ("baseline_curve", [{"step": 2, "value": True}]),
+        ("baseline_curve", [{"step": 2}]),
+    ],
+)
 def test_invalid_reference_provenance_and_curves_fail_before_derivation(field, value):
     report = evidence()
     configured = settings()
-    configured['reference'] = reference(report, baseline_target=0.8,
-                                        baseline_curve=[{'step': 2, 'value': 0.8}],
-                                        curve_scope='window_end_source_offset_including_warmup')
-    configured['reference'][field] = value
+    configured["reference"] = reference(
+        report,
+        baseline_target=0.8,
+        baseline_curve=[{"step": 2, "value": 0.8}],
+        curve_scope="window_end_source_offset_including_warmup",
+    )
+    configured["reference"][field] = value
     with pytest.raises(ValueError):
         build_tracking(report, configured)
 
@@ -522,11 +585,14 @@ def test_invalid_reference_provenance_and_curves_fail_before_derivation(field, v
 def test_fixed_test_speed_cannot_be_activated_without_method_curve():
     report = evidence()
     configured = settings()
-    configured['reference'] = reference(report, baseline_target=0.8,
-                                        baseline_curve=[{'step': 2, 'value': 0.8}],
-                                        curve_scope='training_iteration_fixed_test',
-                                        test_dataset_sha256='d' * 64)
-    with pytest.raises(ValueError, match='learning curve'):
+    configured["reference"] = reference(
+        report,
+        baseline_target=0.8,
+        baseline_curve=[{"step": 2, "value": 0.8}],
+        curve_scope="training_iteration_fixed_test",
+        test_dataset_sha256="d" * 64,
+    )
+    with pytest.raises(ValueError, match="learning curve"):
         build_tracking(report, configured)
 
 
@@ -535,29 +601,35 @@ def test_every_static_tracking_output_has_catalog_definition_and_no_semantic_ali
 
     catalog, _ = metric_catalog()
     tracking = build_tracking(evidence(), settings())
-    assert (tracking['metrics'].keys() | tracking['series'].keys()) <= catalog['definitions'].keys()
-    for alias in ('mae', 'mse', 'iterations_to_target', 'adaptation_roi_global',
-                  'posthoc_cost_sensitivity', 'drift_false_alarm_rate'):
-        assert alias not in tracking['aliases']
-    assert catalog['definitions']['posthoc_cost_sensitivity']['representation'] == 'series'
-    assert catalog['definitions']['drift_false_alarm_rate']['unit'] == 'alarms/example'
+    assert (tracking["metrics"].keys() | tracking["series"].keys()) <= catalog["definitions"].keys()
+    for alias in (
+        "mae",
+        "mse",
+        "iterations_to_target",
+        "adaptation_roi_global",
+        "posthoc_cost_sensitivity",
+        "drift_false_alarm_rate",
+    ):
+        assert alias not in tracking["aliases"]
+    assert catalog["definitions"]["posthoc_cost_sensitivity"]["representation"] == "series"
+    assert catalog["definitions"]["drift_false_alarm_rate"]["unit"] == "alarms/example"
 
 
 def test_historical_summary_without_probability_losses_does_not_invent_zero():
-    derived = confusion_metrics({'n': 8, 'accuracy': 0.5, 'f1': 0.5}, positives=4)
-    assert derived['brier'] is derived['log_loss'] is None
-    assert derived['tp'] == derived['fp'] == derived['tn'] == derived['fn'] == 2
+    derived = confusion_metrics({"n": 8, "accuracy": 0.5, "f1": 0.5}, positives=4)
+    assert derived["brier"] is derived["log_loss"] is None
+    assert derived["tp"] == derived["fp"] == derived["tn"] == derived["fn"] == 2
 
 
 def test_metric_catalog_prefers_installed_package_asset_over_repository_fallback(tmp_path, monkeypatch):
     import continual_bench.evaluation.tracking as module
 
-    package = tmp_path / 'project' / 'src' / 'continual_bench'
+    package = tmp_path / "project" / "src" / "continual_bench"
     package.mkdir(parents=True)
-    (package / 'metric-definitions.json').write_text('{"version":"package-asset"}')
-    monkeypatch.setattr(module, '__file__', str(package / 'evaluation' / 'tracking.py'))
+    (package / "metric-definitions.json").write_text('{"version":"package-asset"}')
+    monkeypatch.setattr(module, "__file__", str(package / "evaluation" / "tracking.py"))
     catalog, raw = module.metric_catalog()
-    assert catalog == {'version': 'package-asset'}
+    assert catalog == {"version": "package-asset"}
     assert json.loads(raw) == catalog
 
 
@@ -566,37 +638,41 @@ def test_retention_curves_keep_latest_equal_step_but_preserve_every_raw_probe():
 
     report = evidence()
     probes = [
-        {'concept': 0, 'observed_seq': 5, 'accuracy': 0.4, 'drop_from_best_probe': 0.2},
-        {'concept': 0, 'observed_seq': 9, 'accuracy': 0.6, 'drop_from_best_probe': 0.1},
-        {'concept': 1, 'observed_seq': 9, 'accuracy': 0.5, 'drop_from_best_probe': 0.3},
-        {'concept': 0, 'observed_seq': 9, 'accuracy': 0.9, 'drop_from_best_probe': 0.0},
-        {'concept': 1, 'observed_seq': 9, 'accuracy': 0.7, 'drop_from_best_probe': 0.1},
+        {"concept": 0, "observed_seq": 5, "accuracy": 0.4, "drop_from_best_probe": 0.2},
+        {"concept": 0, "observed_seq": 9, "accuracy": 0.6, "drop_from_best_probe": 0.1},
+        {"concept": 1, "observed_seq": 9, "accuracy": 0.5, "drop_from_best_probe": 0.3},
+        {"concept": 0, "observed_seq": 9, "accuracy": 0.9, "drop_from_best_probe": 0.0},
+        {"concept": 1, "observed_seq": 9, "accuracy": 0.7, "drop_from_best_probe": 0.1},
     ]
-    report['retention_probes'] = copy.deepcopy(probes)
+    report["retention_probes"] = copy.deepcopy(probes)
     tracking = build_tracking(report, settings())
-    assert tracking['retention_probes'] == report['retention_probes'] == probes
-    assert tracking['retention_probes'] is not report['retention_probes']
-    assert tracking['series']['retention_accuracy/concept_0'] == [
-        {'step': 5, 'value': 0.4}, {'step': 9, 'value': 0.9},
+    assert tracking["retention_probes"] == report["retention_probes"] == probes
+    assert tracking["retention_probes"] is not report["retention_probes"]
+    assert tracking["series"]["retention_accuracy/concept_0"] == [
+        {"step": 5, "value": 0.4},
+        {"step": 9, "value": 0.9},
     ]
-    assert tracking['series']['retention_drop/concept_0'] == [
-        {'step': 5, 'value': 0.2}, {'step': 9, 'value': 0.0},
+    assert tracking["series"]["retention_drop/concept_0"] == [
+        {"step": 5, "value": 0.2},
+        {"step": 9, "value": 0.0},
     ]
-    assert tracking['series']['retention_accuracy/concept_1'] == [{'step': 9, 'value': 0.7}]
-    assert tracking['metrics']['retention_final_mean_accuracy'] == pytest.approx(0.8)
-    metadata = tracking['series_metadata']['retention_accuracy/concept_0']
-    assert metadata['duplicate_step_policy'] == (
-        'latest probe at equal source sequence (final label drain wins)'
+    assert tracking["series"]["retention_accuracy/concept_1"] == [{"step": 9, "value": 0.7}]
+    assert tracking["metrics"]["retention_final_mean_accuracy"] == pytest.approx(0.8)
+    metadata = tracking["series_metadata"]["retention_accuracy/concept_0"]
+    assert metadata["duplicate_step_policy"] == (
+        "latest probe at equal source sequence (final label drain wins)"
     )
-    assert metadata['raw_probes'] == 'retention_probes'
+    assert metadata["raw_probes"] == "retention_probes"
     points = metric_points(tracking)
-    assert [(step, value) for key, step, value in points
-            if key == 'tracking_v1/retention_accuracy/concept_0'] == [(5, 0.4), (9, 0.9)]
+    assert [
+        (step, value) for key, step, value in points if key == "tracking_v1/retention_accuracy/concept_0"
+    ] == [(5, 0.4), (9, 0.9)]
     # Nonduplicate curves retain exactly their original values and source steps.
-    report['retention_probes'] = probes[:3]
+    report["retention_probes"] = probes[:3]
     unique = build_tracking(report, settings())
-    assert unique['series']['retention_accuracy/concept_0'] == [
-        {'step': 5, 'value': 0.4}, {'step': 9, 'value': 0.6},
+    assert unique["series"]["retention_accuracy/concept_0"] == [
+        {"step": 5, "value": 0.4},
+        {"step": 9, "value": 0.6},
     ]
 
 
@@ -606,24 +682,35 @@ def test_incremental_stagger_knn_final_drain_repeated_probe_step_can_publish(tmp
     from continual_bench.application.runner import run
     from continual_bench.config import Config
 
-    config = Config.model_validate({
-        'name': 'retention-final-drain', 'mode': 'incremental',
-        'dataset': {'name': 'stagger', 'samples': 315, 'seed': 42, 'label_delay': 3},
-        'model': {'name': 'knn', 'params': {'n_neighbors': 3, 'window_size': 32}},
-        'warmup': 100, 'metric_window': 100, 'batch_size': 32, 'replay_window': 100,
-        'training_budget': 215,
-        'detector': {'name': 'none'},
-        'policy': {'name': 'online', 'action': 'learn_one', 'min_samples': 100,
-                   'min_window': 20, 'cooldown': 0},
-        'tracking': {'continual_references': False, 'probe_samples': 4},
-    })
+    config = Config.model_validate(
+        {
+            "name": "retention-final-drain",
+            "mode": "incremental",
+            "dataset": {"name": "stagger", "samples": 315, "seed": 42, "label_delay": 3},
+            "model": {"name": "knn", "params": {"n_neighbors": 3, "window_size": 32}},
+            "warmup": 100,
+            "metric_window": 100,
+            "batch_size": 32,
+            "replay_window": 100,
+            "training_budget": 215,
+            "detector": {"name": "none"},
+            "policy": {
+                "name": "online",
+                "action": "learn_one",
+                "min_samples": 100,
+                "min_window": 20,
+                "cooldown": 0,
+            },
+            "tracking": {"continual_references": False, "probe_samples": 4},
+        }
+    )
     report = run(config, tmp_path)
-    tracking = report['tracking']
-    assert report['observed'] == report['labeled'] == 315
-    assert tracking['retention_probes'] == report['retention_probes']
-    counts = Counter((row['concept'], row['observed_seq']) for row in report['retention_probes'])
+    tracking = report["tracking"]
+    assert report["observed"] == report["labeled"] == 315
+    assert tracking["retention_probes"] == report["retention_probes"]
+    counts = Counter((row["concept"], row["observed_seq"]) for row in report["retention_probes"])
     assert any(count > 1 and seq == 314 for (_, seq), count in counts.items())
-    for name, entries in tracking['series'].items():
-        if name.startswith(('retention_accuracy/', 'retention_drop/')):
-            assert len(entries) == len({row['step'] for row in entries})
+    for name, entries in tracking["series"].items():
+        if name.startswith(("retention_accuracy/", "retention_drop/")):
+            assert len(entries) == len({row["step"] for row in entries})
     assert metric_points(tracking)

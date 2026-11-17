@@ -64,7 +64,7 @@ def processing_request(spec, *, bucket, role, image, git_sha, name=None, kms_key
                         "S3UploadMode": "EndOfJob",
                     },
                 }
-            ]
+            ],
         },
         "StoppingCondition": {"MaxRuntimeInSeconds": spec["max_runtime_seconds"]},
         "Environment": {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"},
@@ -72,8 +72,9 @@ def processing_request(spec, *, bucket, role, image, git_sha, name=None, kms_key
     }
 
 
-def training_request(spec, *, bucket, role, image, git_sha, name=None, hyperparameters=None,
-                     kms_key_arn=None):
+def training_request(
+    spec, *, bucket, role, image, git_sha, name=None, hyperparameters=None, kms_key_arn=None
+):
     name = name or job_name("train", git_sha)
     return {
         "TrainingJobName": name,
@@ -185,8 +186,11 @@ def main():
     parser.add_argument("--bucket")
     parser.add_argument("--role")
     parser.add_argument("--kms-key-arn", help="SSE-KMS key for job outputs (default: the data bucket key)")
-    parser.add_argument("--mlflow-arn", default=os.environ.get("MLFLOW_TRACKING_URI"),
-                        help="SageMaker MLflow App ARN for Training and Tuning")
+    parser.add_argument(
+        "--mlflow-arn",
+        default=os.environ.get("MLFLOW_TRACKING_URI"),
+        help="SageMaker MLflow App ARN for Training and Tuning",
+    )
     parser.add_argument("--model-data")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--delete-after", action="store_true")
@@ -232,11 +236,13 @@ def main():
     if args.mlflow_arn and args.kind in {"training", "tuning"}:
         definition = request["TrainingJobDefinition"] if args.kind == "tuning" else request
         name_key = "TrainingJobName" if args.kind == "training" else "HyperParameterTuningJobName"
-        definition["Environment"].update({
-            "MLFLOW_TRACKING_URI": args.mlflow_arn,
-            "BENCH_NATIVE_EXECUTION_ID": request[name_key],
-            "BENCH_NATIVE_STAGE": args.kind,
-        })
+        definition["Environment"].update(
+            {
+                "MLFLOW_TRACKING_URI": args.mlflow_arn,
+                "BENCH_NATIVE_EXECUTION_ID": request[name_key],
+                "BENCH_NATIVE_STAGE": args.kind,
+            }
+        )
         if args.kms_key_arn:
             definition["Environment"]["BENCH_KMS_KEY_ID"] = args.kms_key_arn
     if args.dry_run:

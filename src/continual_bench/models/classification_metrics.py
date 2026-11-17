@@ -42,9 +42,11 @@ class ClassificationCounts:
         self.loss = 0.0
 
     def add(self, labels, probabilities):
-        if (probabilities.shape != (len(labels), self.classes)
-                or not np.isfinite(probabilities).all()
-                or np.any((probabilities < 0) | (probabilities > 1))):
+        if (
+            probabilities.shape != (len(labels), self.classes)
+            or not np.isfinite(probabilities).all()
+            or np.any((probabilities < 0) | (probabilities > 1))
+        ):
             raise ValueError("invalid classification probabilities")
         predicted = decide(probabilities, self.threshold)
         self.confusion += np.bincount(
@@ -81,12 +83,17 @@ class ClassificationCounts:
             nonempty = (positive + negative)[::-1] > 0
             tp, fp = tp[nonempty], fp[nonempty]
             recall = [0.0, *(tp / tp[-1]).tolist()]
-            pr = {"recall": recall,
-                  "precision": [1.0, *(tp / (tp + fp)).tolist()]}
+            pr = {"recall": recall, "precision": [1.0, *(tp / (tp + fp)).tolist()]}
             if fp[-1]:
                 roc = {"fpr": [0.0, *(fp / fp[-1]).tolist()], "tpr": recall}
         return classification_quality(
-            self.confusion.tolist(), classes, positive_class=classes[1], decision_threshold=self.threshold,
-            average_precision=ap, recall_at_fpr=low_fpr, ranking_method="uniform_histogram_4096_bins",
-            pr_curve=pr, roc_curve=roc,
+            self.confusion.tolist(),
+            classes,
+            positive_class=classes[1],
+            decision_threshold=self.threshold,
+            average_precision=ap,
+            recall_at_fpr=low_fpr,
+            ranking_method="uniform_histogram_4096_bins",
+            pr_curve=pr,
+            roc_curve=roc,
         )

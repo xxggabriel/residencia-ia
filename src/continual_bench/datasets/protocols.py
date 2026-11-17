@@ -9,8 +9,12 @@ from .base import stable_identity
 def split_class_tasks(samples, class_order, classes_per_task=2):
     """Split MNIST/CIFAR protocol on prepared samples; preserves labels and splits."""
     class_order = tuple(str(c) for c in class_order)
-    if (not class_order or len(set(class_order)) != len(class_order) or classes_per_task < 1
-            or len(class_order) % classes_per_task):
+    if (
+        not class_order
+        or len(set(class_order)) != len(class_order)
+        or classes_per_task < 1
+        or len(class_order) % classes_per_task
+    ):
         raise ValueError("class order must be unique and evenly divisible into tasks")
     mapping = {label: i // classes_per_task for i, label in enumerate(class_order)}
     seen = set()
@@ -47,9 +51,14 @@ def permuted_tasks(samples, tasks, seed, feature_order):
             if set(sample.x) != set(feature_order):
                 raise ValueError("permutation feature schema mismatch")
             identity = stable_identity([sample.sample_id, task, permutation])
-            transformed.append(replace(sample, sample_id=identity,
-                                       task_id=task,
-                                       x={k: sample.x[v] for k, v in zip(feature_order, permutation)}))
+            transformed.append(
+                replace(
+                    sample,
+                    sample_id=identity,
+                    task_id=task,
+                    x={k: sample.x[v] for k, v in zip(feature_order, permutation)},
+                )
+            )
         output.append(transformed)
     return output, permutations
 

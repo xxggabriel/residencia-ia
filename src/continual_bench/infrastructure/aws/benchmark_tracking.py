@@ -24,15 +24,25 @@ def aws_metric_points(report, headline=None):
     points.extend(parent_observation_points(report))
     if (tracking := report.get("tracking")) and tracking.get("version"):
         points.extend((key, step, value) for key, step, value in metric_points(tracking) if value is not None)
-    points.extend((f"final/{key}", 0, value) for key, value in (headline or {}).items()
-                  if type(value) in (int, float) and math.isfinite(value))
-    items = [{"key": sanitize_mlflow_name(key), "value": float(value), "step": step, "timestamp": 0}
-             for key, step, value in points]
+    points.extend(
+        (f"final/{key}", 0, value)
+        for key, value in (headline or {}).items()
+        if type(value) in (int, float) and math.isfinite(value)
+    )
+    items = [
+        {"key": sanitize_mlflow_name(key), "value": float(value), "step": step, "timestamp": 0}
+        for key, step, value in points
+    ]
     for seq, sample in enumerate((report.get("system_metrics") or {}).get("samples", [])):
         items.extend(
-            {"key": sanitize_mlflow_name(f"system/{key}"), "value": float(value),
-             "step": seq, "timestamp": sample["timestamp_ms"]}
-            for key, value in sample["values"].items() if type(value) in (int, float) and math.isfinite(value)
+            {
+                "key": sanitize_mlflow_name(f"system/{key}"),
+                "value": float(value),
+                "step": seq,
+                "timestamp": sample["timestamp_ms"],
+            }
+            for key, value in sample["values"].items()
+            if type(value) in (int, float) and math.isfinite(value)
         )
     return items
 
@@ -45,7 +55,8 @@ class BenchmarkMlflowRun(SageMakerMlflowTracker):
         directory = Path(directory)
         if "training_history" in report:
             if json.loads((directory / HISTORY_FILE).read_bytes()) != {
-                "version": 1, "fits": report["training_history"],
+                "version": 1,
+                "fits": report["training_history"],
             }:
                 raise ValueError("retained training history differs from the benchmark report")
             if not (directory / "artifacts" / "data" / "index.json").is_file():
@@ -67,7 +78,10 @@ class BenchmarkMlflowRun(SageMakerMlflowTracker):
             store = S3ObjectStore(bucket, kms_key_id=os.environ.get("BENCH_KMS_KEY_ID"))
         self.stage_observation_artifacts(directory, report, child_runs, store)
         artifacts = upload_directory_to_mlflow_artifacts(
-            store, directory, self.artifact_uri, immutable=self.spot,
+            store,
+            directory,
+            self.artifact_uri,
+            immutable=self.spot,
         )
         if not artifacts["files"]:
             raise RuntimeError("MLflow did not publish benchmark artifacts")
@@ -80,8 +94,11 @@ class BenchmarkMlflowRun(SageMakerMlflowTracker):
         if not self.log_batch(tags=tags):
             raise RuntimeError("MLflow did not mark benchmark evidence complete")
         return {
-            "mlflow_run_id": run_id, "mlflow_experiment_id": self.experiment_id,
-            "artifact_uri": self.artifact_uri, "artifacts": artifacts, "child_runs": child_runs,
+            "mlflow_run_id": run_id,
+            "mlflow_experiment_id": self.experiment_id,
+            "artifact_uri": self.artifact_uri,
+            "artifacts": artifacts,
+            "child_runs": child_runs,
         }
 
     def finish_publication(self):

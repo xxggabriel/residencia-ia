@@ -184,8 +184,13 @@ class S3ObjectStore:
         condition = {"IfNoneMatch": "*"} if revision is None else {"IfMatch": revision}
         try:
             response = self.client.put_object(
-                Bucket=self.bucket, Key=clean_key(key), Body=data, ContentType="application/json",
-                ChecksumSHA256=_checksum(data), **condition, **self._encryption(),
+                Bucket=self.bucket,
+                Key=clean_key(key),
+                Body=data,
+                ContentType="application/json",
+                ChecksumSHA256=_checksum(data),
+                **condition,
+                **self._encryption(),
             )
         except Exception as error:
             if error_code(error) in CONFLICT_CODES:

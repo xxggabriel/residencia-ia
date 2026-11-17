@@ -67,6 +67,9 @@ def missing_metric_points(client, run_id, points, known_keys=None, *, max_worker
                 if not _finite(value) or value != by_step[step]:
                     raise ValueError(f"remote metric conflicts for {key} at step {step}")
                 existing.add(step)
-        missing.extend((key, step, value) for step, value in by_step.items()
-                       if step not in existing and value is not None)
+        missing.extend(
+            (key, step, value)
+            for step, value in by_step.items()
+            if step not in existing and value is not None
+        )
     return missing

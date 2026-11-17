@@ -35,7 +35,8 @@ class ModelFamily:
     def factory(self, task: str, **params) -> Callable:
         if not self.supports(task):
             raise IncompatibleComponent(
-                f"model {self.name} does not support {task} targets; supported={list(self.tasks)}")
+                f"model {self.name} does not support {task} targets; supported={list(self.tasks)}"
+            )
         return partial(resolve(self.builders[task]), **params)
 
     def build(self, task: str, **params):
@@ -43,23 +44,47 @@ class ModelFamily:
 
 
 MODELS: Registry[ModelFamily] = Registry("model")
-MODELS.add(ModelFamily("logistic", {
-    BINARY: "continual_bench.models.linear:RiverModel",
-    MULTICLASS: "continual_bench.models.linear:logistic_multiclass",
-}, "SGD logistic regression with incremental scaling and one-hot nominals"))
-MODELS.add(ModelFamily("linear_regression", {
-    REGRESSION: "continual_bench.models.linear:LinearRegressor",
-}, "Standardized SGD linear regression"))
-MODELS.add(ModelFamily("hoeffding_tree", {
-    BINARY: "continual_bench.models.tree:HoeffdingTreeModel",
-    MULTICLASS: "continual_bench.models.tree:hoeffding_multiclass",
-    REGRESSION: "continual_bench.models.tree:hoeffding_regressor",
-}, "Bounded Hoeffding tree on native numeric/nominal features"))
-MODELS.add(ModelFamily("knn", {
-    BINARY: "continual_bench.models.neighbors:KNNModel",
-    MULTICLASS: "continual_bench.models.neighbors:knn_multiclass",
-    REGRESSION: "continual_bench.models.neighbors:knn_regressor",
-}, "Exact KNN over a FIFO window with incremental scaling"))
+MODELS.add(
+    ModelFamily(
+        "logistic",
+        {
+            BINARY: "continual_bench.models.linear:RiverModel",
+            MULTICLASS: "continual_bench.models.linear:logistic_multiclass",
+        },
+        "SGD logistic regression with incremental scaling and one-hot nominals",
+    )
+)
+MODELS.add(
+    ModelFamily(
+        "linear_regression",
+        {
+            REGRESSION: "continual_bench.models.linear:LinearRegressor",
+        },
+        "Standardized SGD linear regression",
+    )
+)
+MODELS.add(
+    ModelFamily(
+        "hoeffding_tree",
+        {
+            BINARY: "continual_bench.models.tree:HoeffdingTreeModel",
+            MULTICLASS: "continual_bench.models.tree:hoeffding_multiclass",
+            REGRESSION: "continual_bench.models.tree:hoeffding_regressor",
+        },
+        "Bounded Hoeffding tree on native numeric/nominal features",
+    )
+)
+MODELS.add(
+    ModelFamily(
+        "knn",
+        {
+            BINARY: "continual_bench.models.neighbors:KNNModel",
+            MULTICLASS: "continual_bench.models.neighbors:knn_multiclass",
+            REGRESSION: "continual_bench.models.neighbors:knn_regressor",
+        },
+        "Exact KNN over a FIFO window with incremental scaling",
+    )
+)
 
 # Historical defaults of the typed/epoch evaluators; binary keeps the engine default.
 DEFAULT_MODELS = {BINARY: "logistic", MULTICLASS: "hoeffding_tree", REGRESSION: "linear_regression"}

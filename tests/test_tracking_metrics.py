@@ -19,15 +19,32 @@ def test_known_confusion_matrix_and_calibration():
     examples = [(True, 0.8)] * 3 + [(False, 0.7)] + [(False, 0.2)] * 4 + [(True, 0.4)] * 2
     values = accumulate(examples).values()
     expected = {
-        "n": 10, "tp": 3, "fp": 1, "tn": 4, "fn": 2, "errors": 3,
-        "accuracy": 0.7, "error_rate": 0.3, "precision": 0.75, "recall": 0.6,
-        "specificity": 0.8, "false_positive_rate": 0.2, "false_negative_rate": 0.4,
-        "negative_predictive_value": 2 / 3, "balanced_accuracy": 0.7,
-        "f1": 2 / 3, "f1_macro": (2 / 3 + 8 / 11) / 2,
+        "n": 10,
+        "tp": 3,
+        "fp": 1,
+        "tn": 4,
+        "fn": 2,
+        "errors": 3,
+        "accuracy": 0.7,
+        "error_rate": 0.3,
+        "precision": 0.75,
+        "recall": 0.6,
+        "specificity": 0.8,
+        "false_positive_rate": 0.2,
+        "false_negative_rate": 0.4,
+        "negative_predictive_value": 2 / 3,
+        "balanced_accuracy": 0.7,
+        "f1": 2 / 3,
+        "f1_macro": (2 / 3 + 8 / 11) / 2,
         "f1_weighted": (5 * 2 / 3 + 5 * 8 / 11) / 10,
-        "mcc": 10 / math.sqrt(600), "cohen_kappa": 0.4,
-        "positive_rate": 0.5, "predicted_positive_rate": 0.4,
-        "roc_auc": 23 / 25, "average_precision": 14 / 15, "ece": 0.33, "mce": 0.7,
+        "mcc": 10 / math.sqrt(600),
+        "cohen_kappa": 0.4,
+        "positive_rate": 0.5,
+        "predicted_positive_rate": 0.4,
+        "roc_auc": 23 / 25,
+        "average_precision": 14 / 15,
+        "ece": 0.33,
+        "mce": 0.7,
     }
     for key, value in expected.items():
         assert values[key] == pytest.approx(value), key
@@ -48,21 +65,27 @@ def test_original_five_metrics_are_bit_for_bit_unchanged():
         q = min(max(p, 1e-15), 1 - 1e-15)
         loss -= math.log(q if y else 1 - q)
     expected = {
-        "n": n, "accuracy": correct / n, "f1": 2 * tp / (2 * tp + fp + fn),
-        "brier": brier / n, "log_loss": loss / n,
+        "n": n,
+        "accuracy": correct / n,
+        "f1": 2 * tp / (2 * tp + fp + fn),
+        "brier": brier / n,
+        "log_loss": loss / n,
     }
     values = accumulate(examples).values()
     assert {key: values[key] for key in expected} == expected
 
 
-@pytest.mark.parametrize("examples,auc,ap", [
-    ([(True, 0.9), (True, 0.8), (False, 0.2), (False, 0.1)], 1, 1),
-    ([(False, 0.9), (False, 0.8), (True, 0.2), (True, 0.1)], 0, 5 / 12),
-    ([(True, 0.5), (False, 0.5), (True, 0.5), (False, 0.5)], 0.5, 0.5),
-    ([(True, 0.9), (False, 0.8), (True, 0.7), (False, 0.6)], 0.75, 5 / 6),
-    ([(True, 0.9), (False, 0.9), (True, 0.1), (False, 0.1)], 0.5, 0.5),
-    ([(True, 0.8), (True, 0.8), (False, 0.8), (True, 0.2), (False, 0.2)], 7 / 12, 29 / 45),
-])
+@pytest.mark.parametrize(
+    "examples,auc,ap",
+    [
+        ([(True, 0.9), (True, 0.8), (False, 0.2), (False, 0.1)], 1, 1),
+        ([(False, 0.9), (False, 0.8), (True, 0.2), (True, 0.1)], 0, 5 / 12),
+        ([(True, 0.5), (False, 0.5), (True, 0.5), (False, 0.5)], 0.5, 0.5),
+        ([(True, 0.9), (False, 0.8), (True, 0.7), (False, 0.6)], 0.75, 5 / 6),
+        ([(True, 0.9), (False, 0.9), (True, 0.1), (False, 0.1)], 0.5, 0.5),
+        ([(True, 0.8), (True, 0.8), (False, 0.8), (True, 0.2), (False, 0.2)], 7 / 12, 29 / 45),
+    ],
+)
 def test_ranking_known_perfect_reversed_ties_and_ap_not_roc(examples, auc, ap):
     # All orderings must agree, including different orderings inside tie groups.
     for ordering in permutations(examples):
@@ -82,8 +105,7 @@ def test_roc_matches_pairwise_wins_and_half_ties():
 def test_calibration_boundary_zero_one_and_internal_bin_edges():
     # 0.1 must be in a different bin from 0.09. Scores 0.9 and 1 share the last.
     # Gaps: bin0=.045; bin1=.35; bin9=.45. Equal bin populations give ECE=.28166...
-    examples = [(False, 0), (False, 0.09), (True, 0.1), (False, 0.2 - 0.0000000001),
-                (False, 0.9), (True, 1)]
+    examples = [(False, 0), (False, 0.09), (True, 0.1), (False, 0.2 - 0.0000000001), (False, 0.9), (True, 1)]
     values = accumulate(examples).values()
     middle_gap = abs((0.1 + 0.2 - 0.0000000001) / 2 - 0.5)
     assert values["ece"] == pytest.approx((0.045 + middle_gap + 0.45) / 3)

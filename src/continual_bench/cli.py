@@ -62,21 +62,33 @@ def smoke_command(args):
     results = []
     for dataset in ("sea", "agrawal", "stagger"):
         for mode in ("streaming", "incremental", "offline"):
-            policies = (["none"] if mode == "offline"
-                        else (["none", "periodic", "drift"] if args.baselines else ["drift"]))
+            policies = (
+                ["none"]
+                if mode == "offline"
+                else (["none", "periodic", "drift"] if args.baselines else ["drift"])
+            )
             for policy in policies:
-                config = Config.model_validate({
-                    "name": "smoke",
-                    "mode": mode,
-                    "dataset": {"name": dataset, "samples": args.samples, "label_delay": 3},
-                    "warmup": 50,
-                    "metric_window": 50,
-                    "policy": {"name": policy, "every": 100, "cooldown": 50, "min_samples": 50,
-                               "min_window": 25},
-                })
+                config = Config.model_validate(
+                    {
+                        "name": "smoke",
+                        "mode": mode,
+                        "dataset": {"name": dataset, "samples": args.samples, "label_delay": 3},
+                        "warmup": 50,
+                        "metric_window": 50,
+                        "policy": {
+                            "name": policy,
+                            "every": 100,
+                            "cooldown": 50,
+                            "min_samples": 50,
+                            "min_window": 25,
+                        },
+                    }
+                )
                 results.append(_summary(_execute(config, args)))
-                print(json.dumps({"dataset": dataset, "mode": mode, "policy": policy, **results[-1]}),
-                      flush=True)
+                print(
+                    json.dumps({"dataset": dataset, "mode": mode, "policy": policy, **results[-1]}),
+                    flush=True,
+                )
     Path(args.state).mkdir(parents=True, exist_ok=True)
     (Path(args.state) / "smoke-summary.json").write_text(json.dumps(results, indent=2))
 
@@ -111,13 +123,21 @@ def campaign_command(args):
     executor = None
     if args.zenml:
         from .orchestration.zenml_pipeline import execute_pipeline as executor
-    emit(execute_campaign(specification, args.state, services=args.services, zenml=args.zenml,
-                          executor=executor))
+    emit(
+        execute_campaign(
+            specification, args.state, services=args.services, zenml=args.zenml, executor=executor
+        )
+    )
 
 
-@command("typed", lambda p: (p.add_argument("config"),
-                             p.add_argument("--state", default="state/task_evaluation-typed"),
-                             p.add_argument("--services", action="store_true", help="publish to MLflow")))
+@command(
+    "typed",
+    lambda p: (
+        p.add_argument("config"),
+        p.add_argument("--state", default="state/task_evaluation-typed"),
+        p.add_argument("--services", action="store_true", help="publish to MLflow"),
+    ),
+)
 def typed_command(args):
     from pathlib import Path
 
@@ -133,7 +153,9 @@ def typed_command(args):
         from .infrastructure.benchmark_tracking import publish_local_benchmark
 
         output["tracking"] = publish_local_benchmark(
-            Path(args.state) / result["run_key"], result, experiment_name="continual-bench/typed",
+            Path(args.state) / result["run_key"],
+            result,
+            experiment_name="continual-bench/typed",
         )
     emit(output)
 
@@ -154,8 +176,13 @@ def datasets_command(args):
     if args.dataset == "all":
         result = smoke_all(args.state, args.cache, download=args.download, real_directory=args.real_directory)
     else:
-        result = run_epochs(EpochConfig(dataset=args.dataset), args.state, args.cache,
-                            download=args.download, real_directory=args.real_directory)
+        result = run_epochs(
+            EpochConfig(dataset=args.dataset),
+            args.state,
+            args.cache,
+            download=args.download,
+            real_directory=args.real_directory,
+        )
     emit(result)
 
 
@@ -176,13 +203,15 @@ def epoch_job_command(args):
     if args.services:
         from .orchestration.epoch_pipeline import execute_epoch_pipeline
 
-        result = execute_epoch_pipeline(config, args.state, args.cache,
-                                        real_directory=args.real_directory, download=args.download)
+        result = execute_epoch_pipeline(
+            config, args.state, args.cache, real_directory=args.real_directory, download=args.download
+        )
     else:
         from .evaluation.epochs import run_epochs
 
-        result = run_epochs(config, args.state, args.cache, real_directory=args.real_directory,
-                            download=args.download)
+        result = run_epochs(
+            config, args.state, args.cache, real_directory=args.real_directory, download=args.download
+        )
     emit(result)
 
 
@@ -220,8 +249,10 @@ def iterative_worker_command(args):
                 try:
                     _resume_iterative_publication(target, name, args.campaign)
                 except Exception as error:
-                    print(f"{args.worker} [{name}] TRACKING RETRY FAILED {type(error).__name__}: {error}",
-                          flush=True)
+                    print(
+                        f"{args.worker} [{name}] TRACKING RETRY FAILED {type(error).__name__}: {error}",
+                        flush=True,
+                    )
             continue
         target = out / "results" / name
         target.mkdir(parents=True, exist_ok=True)
@@ -234,20 +265,48 @@ def iterative_worker_command(args):
                 from .infrastructure.iterative_tracking import IterativeMlflowTracker
 
                 family = make_model(name, data.task)[1]["family"]
-                tracker = IterativeMlflowTracker(os.environ["MLFLOW_TRACKING_URI"], dataset=name,
-                                                 task=data.task, model=family, campaign=args.campaign,
-                                                 git_sha=os.environ.get("BENCH_GIT_REVISION", "uncommitted"))
-                tracker.start({"max_epochs": args.max_epochs, "patience": args.patience, "min_delta": 0.0,
-                               "eval_metric": "validation:mae" if data.task == "regression"
-                               else "validation:log_loss", "validation_fraction": 0.1, "seed": 42,
-                               "restore_best_weights": True, "epochs_per_update": args.max_epochs},
-                              len(data))
-            run_iterative(data, target, max_epochs=args.max_epochs, patience=args.patience, tracker=tracker,
-                          log=lambda line: print(f"{args.worker} {line}", flush=True))
+                tracker = IterativeMlflowTracker(
+                    os.environ["MLFLOW_TRACKING_URI"],
+                    dataset=name,
+                    task=data.task,
+                    model=family,
+                    campaign=args.campaign,
+                    git_sha=os.environ.get("BENCH_GIT_REVISION", "uncommitted"),
+                )
+                tracker.start(
+                    {
+                        "max_epochs": args.max_epochs,
+                        "patience": args.patience,
+                        "min_delta": 0.0,
+                        "eval_metric": "validation:mae"
+                        if data.task == "regression"
+                        else "validation:log_loss",
+                        "validation_fraction": 0.1,
+                        "seed": 42,
+                        "restore_best_weights": True,
+                        "epochs_per_update": args.max_epochs,
+                    },
+                    len(data),
+                )
+            run_iterative(
+                data,
+                target,
+                max_epochs=args.max_epochs,
+                patience=args.patience,
+                tracker=tracker,
+                log=lambda line: print(f"{args.worker} {line}", flush=True),
+            )
         except BaseException as error:  # noqa: BLE001 - recorded per dataset, other datasets continue
-            (target / "failed.json").write_text(json.dumps(
-                {"dataset": name, "error": type(error).__name__, "message": str(error)[:2000],
-                 "trace": traceback.format_exc()[-4000:]}))
+            (target / "failed.json").write_text(
+                json.dumps(
+                    {
+                        "dataset": name,
+                        "error": type(error).__name__,
+                        "message": str(error)[:2000],
+                        "trace": traceback.format_exc()[-4000:],
+                    }
+                )
+            )
             print(f"{args.worker} [{name}] FAILED {type(error).__name__}: {error}", flush=True)
             if isinstance(error, (KeyboardInterrupt, SystemExit)):
                 raise
@@ -266,8 +325,13 @@ def _resume_iterative_publication(directory, dataset, campaign):
     if report.get("complete") is not True or (report.get("mlflow") or {}).get("mlflow_run_id"):
         return
     model = report["model"]["family"]
-    tracker = IterativeMlflowTracker(os.environ["MLFLOW_TRACKING_URI"], dataset=dataset, task=report["task"],
-                                     model=model, campaign=campaign)
+    tracker = IterativeMlflowTracker(
+        os.environ["MLFLOW_TRACKING_URI"],
+        dataset=dataset,
+        task=report["task"],
+        model=model,
+        campaign=campaign,
+    )
     tracker.resume_publication(directory)
 
 
@@ -276,13 +340,17 @@ def components_command(args):
     from .application.components import default_registry
 
     registry = default_registry(tuple(args.plugin))
-    emit({
-        "datasets": [{"name": s.name, "task": s.task or "declared_by_manifest", "family": s.family}
-                     for s in registry.sources],
-        "models": [{"name": m.name, "tasks": list(m.tasks)} for m in registry.models],
-        "detectors": list(registry.catalogs["detector"].names()),
-        "policies": list(registry.catalogs["policy"].names()),
-    })
+    emit(
+        {
+            "datasets": [
+                {"name": s.name, "task": s.task or "declared_by_manifest", "family": s.family}
+                for s in registry.sources
+            ],
+            "models": [{"name": m.name, "tasks": list(m.tasks)} for m in registry.models],
+            "detectors": list(registry.catalogs["detector"].names()),
+            "policies": list(registry.catalogs["policy"].names()),
+        }
+    )
 
 
 def _matrix_options(parser):
@@ -302,14 +370,22 @@ def matrix_command(args):
     matrix = load_model(ExperimentMatrix, args.config)
     if args.dry_run:
         plan = matrix.plan()
-        emit({"matrix": plan["matrix"], "evaluator": plan["evaluator"], "cases": len(plan["cases"]),
-              "planned": [{"case": case_key(c), **describe(c)} for c in plan["cases"]],
-              "skipped": plan["skipped"]})
+        emit(
+            {
+                "matrix": plan["matrix"],
+                "evaluator": plan["evaluator"],
+                "cases": len(plan["cases"]),
+                "planned": [{"case": case_key(c), **describe(c)} for c in plan["cases"]],
+                "skipped": plan["skipped"],
+            }
+        )
         return
-    journal = execute_matrix(matrix, args.state, cache=args.cache, real_directory=args.real_directory,
-                             services=args.services)
-    emit({"complete": journal["complete"], "cases": len(journal["cases"]),
-          "skipped": len(journal["skipped"])})
+    journal = execute_matrix(
+        matrix, args.state, cache=args.cache, real_directory=args.real_directory, services=args.services
+    )
+    emit(
+        {"complete": journal["complete"], "cases": len(journal["cases"]), "skipped": len(journal["skipped"])}
+    )
 
 
 def _aws_options(parser):

@@ -31,9 +31,17 @@ def backfill():
 @pytest.fixture
 def offline():
     probabilities = [0.8, 0.2, 0.7, 0.1]
-    events = [{"seq": seq, "event_id": f"event-{seq}", "x": {"value": float(seq), "category": "a"},
-               "y": label, "timestamp": 1000 + seq, "available_at": 1003 + seq}
-              for seq, label in enumerate([True, False, True, False, False, True])]
+    events = [
+        {
+            "seq": seq,
+            "event_id": f"event-{seq}",
+            "x": {"value": float(seq), "category": "a"},
+            "y": label,
+            "timestamp": 1000 + seq,
+            "available_at": 1003 + seq,
+        }
+        for seq, label in enumerate([True, False, True, False, False, True])
+    ]
 
     def summary(rows):
         metrics = Metrics()
@@ -43,11 +51,20 @@ def offline():
 
     test = list(zip(events[2:], probabilities))
     report = {
-        "run_key": "fixture-run", "complete": True, "observed": 6,
-        "config": {"mode": "offline", "model": {"name": "logistic"}, "warmup": 1,
-                   "training_budget": None, "metric_window": 2, "batch_size": 1,
-                   "policy": {"name": "none", "action": "reset_retrain"},
-                   "detector": {"name": "none"}, "dataset": {"epoch": 1000}},
+        "run_key": "fixture-run",
+        "complete": True,
+        "observed": 6,
+        "config": {
+            "mode": "offline",
+            "model": {"name": "logistic"},
+            "warmup": 1,
+            "training_budget": None,
+            "metric_window": 2,
+            "batch_size": 1,
+            "policy": {"name": "none", "action": "reset_retrain"},
+            "detector": {"name": "none"},
+            "dataset": {"epoch": 1000},
+        },
         "protocol": "temporal_holdout",
         "metrics": summary(test),
         "windows": [{"end_seq": 3, **summary(test[:2])}, {"end_seq": 5, **summary(test[2:])}],
@@ -55,8 +72,12 @@ def offline():
         "dataset": {"sha256": "a" * 64, "changepoints": None},
         "environment": {"code_sha256": "b" * 64},
         "model_versions": {"state_sha256": "c" * 64},
-        "updates": [], "alarms": [], "retention_probes": [],
-        "compute_seconds": 12, "wall_seconds_this_attempt": 15, "peak_rss_bytes_process": 4000,
+        "updates": [],
+        "alarms": [],
+        "retention_probes": [],
+        "compute_seconds": 12,
+        "wall_seconds_this_attempt": 15,
+        "peak_rss_bytes_process": 4000,
     }
     receipt = {"model_uri": "models:/frozen-offline/1", "mlflow_run_id": "tracked"}
     return report, events, probabilities, receipt
@@ -64,7 +85,9 @@ def offline():
 
 def recovered_response(request, probabilities):
     return {
-        "uri": request["uri"], "model": request["model"], "fresh_process": True,
+        "uri": request["uri"],
+        "model": request["model"],
+        "fresh_process": True,
         "seqs": [row["seq"] for row in request["rows"]],
         "event_ids": [row["event_id"] for row in request["rows"]],
         "probabilities": probabilities,
@@ -104,8 +127,14 @@ def test_frozen_score_enrichment_is_exact_and_leaves_original_and_timers_untouch
     assert tracking["metrics"]["ece"] == pytest.approx(0.5)
     assert tracking["metrics"]["mae_probability"] == pytest.approx(0.5)
     assert tracking["series"]["roc_auc"] == [{"step": 3, "value": 1}, {"step": 5, "value": 0}]
-    for key in ("prediction_seconds", "prediction_latency_mean_seconds", "initial_train_seconds",
-                "train_seconds", "cl_average_accuracy", "cl_forward_transfer"):
+    for key in (
+        "prediction_seconds",
+        "prediction_latency_mean_seconds",
+        "initial_train_seconds",
+        "train_seconds",
+        "cl_average_accuracy",
+        "cl_forward_transfer",
+    ):
         assert tracking["metrics"][key] is None
     assert tracking["metrics"]["evaluation_compute_seconds"] == 12
     assert tracking["metrics"]["evaluation_attempt_wall_seconds"] == 15
@@ -115,8 +144,10 @@ def test_frozen_score_enrichment_is_exact_and_leaves_original_and_timers_untouch
 def test_legacy_default_keeps_all_score_metrics_missing(backfill, offline):
     report, events, _, _ = offline
     tracking = backfill.enriched_report(report, events, TrackingConfig().model_dump(mode="json"))["tracking"]
-    assert all(tracking["metrics"][key] is None
-               for key in ("roc_auc", "average_precision", "ece", "mce", "mae_probability"))
+    assert all(
+        tracking["metrics"][key] is None
+        for key in ("roc_auc", "average_precision", "ece", "mce", "mae_probability")
+    )
 
 
 @pytest.mark.parametrize("change", ["n", "accuracy", "f1", "brier", "log_loss", "window"])
@@ -225,9 +256,16 @@ def test_unknown_prediction_ledger_is_never_replaced(monkeypatch, backfill, offl
     assert ledger.read_bytes() == b"unknown evidence" and not requests
 
 
-@pytest.mark.parametrize("change", [{"fresh_process": False}, {"seqs": [3, 2, 4, 5]},
-                                    {"event_ids": []}, {"uri": "models:/other/1"},
-                                    {"bundled_loader": "/app/src/continual_bench/adapters/model_loader.py"}])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"fresh_process": False},
+        {"seqs": [3, 2, 4, 5]},
+        {"event_ids": []},
+        {"uri": "models:/other/1"},
+        {"bundled_loader": "/app/src/continual_bench/adapters/model_loader.py"},
+    ],
+)
 def test_invalid_subprocess_identity_is_rejected_before_writing_supplements(
     monkeypatch, backfill, offline, tmp_path, change
 ):
@@ -285,13 +323,19 @@ def test_helper_casts_numeric_schema_and_uses_bundled_inference_only(schema_type
         seen.append(str(frame["value"].dtype))
         return [0.2, 0.8]
 
-    model = SimpleNamespace(_model_impl=SimpleNamespace(model=type("RiverModel", (), {})()),
-                            metadata=SimpleNamespace(get_input_schema=lambda: SimpleNamespace(inputs=schema)),
-                            predict=predict)
-    request = {"uri": "models:/fixture/1", "model": "logistic", "rows": [
-        {"seq": 2, "event_id": "a", "features": {"value": 1}},
-        {"seq": 3, "event_id": "b", "features": {"value": 2}},
-    ]}
+    model = SimpleNamespace(
+        _model_impl=SimpleNamespace(model=type("RiverModel", (), {})()),
+        metadata=SimpleNamespace(get_input_schema=lambda: SimpleNamespace(inputs=schema)),
+        predict=predict,
+    )
+    request = {
+        "uri": "models:/fixture/1",
+        "model": "logistic",
+        "rows": [
+            {"seq": 2, "event_id": "a", "features": {"value": 1}},
+            {"seq": 3, "event_id": "b", "features": {"value": 2}},
+        ],
+    }
     response = helper.recover_loaded(request, model, loader, implementation)
     assert response["probabilities"] == [0.2, 0.8]
     assert response["seqs"] == [2, 3] and response["event_ids"] == ["a", "b"]
@@ -317,8 +361,9 @@ def test_recovery_helper_import_does_not_load_training_package_in_fresh_process(
         "import runpy,sys;runpy.run_path(sys.argv[1],run_name='import_only');"
         "assert not any(k.startswith('continual_bench') for k in sys.modules)"
     )
-    subprocess.run([sys.executable, "-c", code, str(helper_path)],
-                   check=True, capture_output=True, timeout=30)
+    subprocess.run(
+        [sys.executable, "-c", code, str(helper_path)], check=True, capture_output=True, timeout=30
+    )
 
 
 def test_cli_recovers_only_offline_when_opted_in_and_replay_preserves_originals(
@@ -339,11 +384,16 @@ def test_cli_recovers_only_offline_when_opted_in_and_replay_preserves_originals(
         directory = state / item["run_key"]
         directory.mkdir(parents=True)
         raw = backfill.json_bytes(item)
-        saved = {"report.json": raw, "events.jsonl": event_raw,
-                 "receipt.json": backfill.json_bytes(receipt),
-                 "job.json": backfill.json_bytes({"status": "succeeded", "started_at": 1, "finished_at": 5}),
-                 "manifest.json": b"original manifest", "checkpoint.bin": b"original checkpoint",
-                 "models.bin": b"original models", "training-source.zip": b"original source"}
+        saved = {
+            "report.json": raw,
+            "events.jsonl": event_raw,
+            "receipt.json": backfill.json_bytes(receipt),
+            "job.json": backfill.json_bytes({"status": "succeeded", "started_at": 1, "finished_at": 5}),
+            "manifest.json": b"original manifest",
+            "checkpoint.bin": b"original checkpoint",
+            "models.bin": b"original models",
+            "training-source.zip": b"original source",
+        }
         for name, blob in saved.items():
             path = directory / name
             path.write_bytes(blob)
@@ -351,17 +401,37 @@ def test_cli_recovers_only_offline_when_opted_in_and_replay_preserves_originals(
         records.append({"report": item, "receipt": receipt, "sha256": hashlib.sha256(raw).hexdigest()})
         rows.append({"run_key": item["run_key"], "config": item["config"]})
     inputs = tmp_path / "inputs.json"
-    inputs.write_bytes(backfill.json_bytes({
-        "complete_campaign": True, "runs_verified": 2, "records": records,
-    }))
+    inputs.write_bytes(
+        backfill.json_bytes(
+            {
+                "complete_campaign": True,
+                "runs_verified": 2,
+                "records": records,
+            }
+        )
+    )
     manifest = tmp_path / "manifest.json"
-    manifest.write_bytes(backfill.json_bytes({"source_sha256": report["environment"]["code_sha256"],
-                                             "configurations": rows}))
+    manifest.write_bytes(
+        backfill.json_bytes({"source_sha256": report["environment"]["code_sha256"], "configurations": rows})
+    )
     profile = tmp_path / "profile.json"
     profile.write_text("{}")
     output = tmp_path / "backfill.json"
-    argv = ["backfill_tracking_metrics.py", "--inputs", str(inputs), "--manifest", str(manifest),
-            "--settings", str(profile), "--state", str(state), "--output", str(output), "--workers", "1"]
+    argv = [
+        "backfill_tracking_metrics.py",
+        "--inputs",
+        str(inputs),
+        "--manifest",
+        str(manifest),
+        "--settings",
+        str(profile),
+        "--state",
+        str(state),
+        "--output",
+        str(output),
+        "--workers",
+        "1",
+    ]
     requests = install_fake_inference(monkeypatch, backfill, probabilities)
     monkeypatch.setattr(sys, "argv", argv)
     backfill.main()
@@ -376,8 +446,10 @@ def test_cli_recovers_only_offline_when_opted_in_and_replay_preserves_originals(
     assert not (state / prequential["run_key"] / "predictions.jsonl").exists()
     backfill.main()
     assert len(requests) == 1
-    assert all(path.read_bytes() == blob and path.stat().st_mtime_ns == stamp
-               for path, (blob, stamp) in originals.items())
+    assert all(
+        path.read_bytes() == blob and path.stat().st_mtime_ns == stamp
+        for path, (blob, stamp) in originals.items()
+    )
 
 
 def test_fresh_helper_loads_a_local_pyfunc_bundled_implementation_without_training(tmp_path):
@@ -412,18 +484,30 @@ def test_fresh_helper_loads_a_local_pyfunc_bundled_implementation_without_traini
     (data / "marker").write_text("frozen untrained test fixture")
     destination = tmp_path / "model"
     mlflow.pyfunc.save_model(
-        path=str(destination), loader_module="continual_bench.adapters.model_loader", data_path=str(data),
-        code_paths=[str(package)], pip_requirements=["numpy", "pandas"],
+        path=str(destination),
+        loader_module="continual_bench.adapters.model_loader",
+        data_path=str(data),
+        code_paths=[str(package)],
+        pip_requirements=["numpy", "pandas"],
         input_example=pd.DataFrame({"value": [2.0]}),
-        signature=ModelSignature(inputs=Schema([ColSpec("double", "value")]),
-                                 outputs=Schema([ColSpec("double")])),
+        signature=ModelSignature(
+            inputs=Schema([ColSpec("double", "value")]), outputs=Schema([ColSpec("double")])
+        ),
     )
-    request = {"uri": str(destination), "model": "logistic", "rows": [
-        {"seq": seq, "event_id": f"event-{seq}", "features": {"value": seq}} for seq in range(2, 6)
-    ]}
+    request = {
+        "uri": str(destination),
+        "model": "logistic",
+        "rows": [{"seq": seq, "event_id": f"event-{seq}", "features": {"value": seq}} for seq in range(2, 6)],
+    }
     helper = Path(__file__).parents[1] / "scripts/recover_offline_scores.py"
-    completed = subprocess.run([sys.executable, str(helper)], input=json.dumps(request), text=True,
-                               capture_output=True, timeout=60, check=True)
+    completed = subprocess.run(
+        [sys.executable, str(helper)],
+        input=json.dumps(request),
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=True,
+    )
     response = json.loads(completed.stdout)
     assert response["probabilities"] == [0.8, 0.2, 0.7, 0.1]
     assert Path(response["bundled_loader"]).is_relative_to(destination / "code")

@@ -257,9 +257,7 @@ class SageMakerExperimentsTracker:
     ) -> str | None:
         parameters = format_trial_parameters(hyperparameters)
         try:
-            response = self.client.describe_trial_component(
-                TrialComponentName=self.trial_component_name
-            )
+            response = self.client.describe_trial_component(TrialComponentName=self.trial_component_name)
             self.trial_component_arn = response["TrialComponentArn"]
             if hyperparameters is not None:
                 self.client.update_trial_component(
@@ -336,9 +334,7 @@ class SageMakerExperimentsTracker:
         hyperparameters: dict[str, Any] | IterativeTrainingConfig | None = None,
     ) -> bool:
         result = self.start(hyperparameters)
-        return bool(
-            result["experiment_arn"] and result["trial_arn"] and result["trial_component_arn"]
-        )
+        return bool(result["experiment_arn"] and result["trial_arn"] and result["trial_component_arn"])
 
     def log_hyperparameters(
         self,

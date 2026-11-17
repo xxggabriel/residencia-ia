@@ -32,7 +32,9 @@ class Prequential(BinaryProtocol):
             min_retrain_window=config.policy.min_window,
             versions=run.versions,
             observer=OnlineObservability(
-                settings, continual_evaluation(run.source, run.model_factory, settings), current_rss_bytes,
+                settings,
+                continual_evaluation(run.source, run.model_factory, settings),
+                current_rss_bytes,
                 warmup=config.warmup,
             ),
             promotion=config.promotion.model_dump() if config.promotion else None,

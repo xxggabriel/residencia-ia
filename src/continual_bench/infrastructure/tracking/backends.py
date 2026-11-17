@@ -21,8 +21,9 @@ def _point(point: MetricPoint | dict | tuple) -> MetricPoint:
     if isinstance(point, MetricPoint):
         return point
     if isinstance(point, dict):
-        return MetricPoint(point["key"], float(point["value"]), int(point.get("step", 0)),
-                           int(point.get("timestamp", 0)))
+        return MetricPoint(
+            point["key"], float(point["value"]), int(point.get("step", 0)), int(point.get("timestamp", 0))
+        )
     key, step, value = point
     return MetricPoint(key, float(value), int(step), 0)
 
@@ -37,8 +38,11 @@ class MlflowClientBackend:
     @staticmethod
     def _record(run: Any) -> RunRecord:
         return RunRecord(
-            run.info.run_id, run.info.status, getattr(run.info, "artifact_uri", None),
-            dict(run.data.tags), set(run.data.metrics),
+            run.info.run_id,
+            run.info.status,
+            getattr(run.info, "artifact_uri", None),
+            dict(run.data.tags),
+            set(run.data.metrics),
         )
 
     def search_runs(self, experiment_id, filter_string):
@@ -63,7 +67,9 @@ class MlflowClientBackend:
         from mlflow.entities import Metric, Param, RunTag
 
         for chunk, chunk_params, chunk_tags in batch_payloads(
-            [_point(p) for p in metrics], list((params or {}).items()), list((tags or {}).items()),
+            [_point(p) for p in metrics],
+            list((params or {}).items()),
+            list((tags or {}).items()),
         ):
             entities = {
                 "metrics": [Metric(p.key, p.value, p.timestamp, p.step) for p in chunk],
@@ -90,7 +96,9 @@ class RestBackend:
     def _record(run: dict) -> RunRecord:
         info, data = run.get("info") or {}, run.get("data") or {}
         return RunRecord(
-            info.get("run_id"), info.get("status", "RUNNING"), info.get("artifact_uri"),
+            info.get("run_id"),
+            info.get("status", "RUNNING"),
+            info.get("artifact_uri"),
             {tag["key"]: tag["value"] for tag in data.get("tags") or ()},
             {metric["key"] for metric in data.get("metrics") or ()},
         )
@@ -106,12 +114,16 @@ class RestBackend:
             payload["page_token"] = token
 
     def create_run(self, experiment_id, tags, run_name=None):
-        response = self.request("POST", f"{self.API}/runs/create", payload={
-            "experiment_id": experiment_id,
-            "start_time": int(time.time() * 1000),
-            "run_name": run_name or tags.get("mlflow.runName"),
-            "tags": [{"key": key, "value": value} for key, value in tags.items()],
-        })
+        response = self.request(
+            "POST",
+            f"{self.API}/runs/create",
+            payload={
+                "experiment_id": experiment_id,
+                "start_time": int(time.time() * 1000),
+                "run_name": run_name or tags.get("mlflow.runName"),
+                "tags": [{"key": key, "value": value} for key, value in tags.items()],
+            },
+        )
         return self._record(response["run"])
 
     def get_run(self, run_id):
@@ -129,7 +141,9 @@ class RestBackend:
 
     def log_batch(self, run_id, metrics=(), params=None, tags=None):
         for chunk, chunk_params, chunk_tags in batch_payloads(
-            [_point(p) for p in metrics], list((params or {}).items()), list((tags or {}).items()),
+            [_point(p) for p in metrics],
+            list((params or {}).items()),
+            list((tags or {}).items()),
         ):
             payload: dict[str, Any] = {"run_id": run_id}
             if chunk:
@@ -143,9 +157,15 @@ class RestBackend:
             self.request("POST", f"{self.API}/runs/log-batch", payload=payload)
 
     def set_terminated(self, run_id, status="FINISHED"):
-        self.request("POST", f"{self.API}/runs/update", payload={
-            "run_id": run_id, "status": status, "end_time": int(time.time() * 1000),
-        })
+        self.request(
+            "POST",
+            f"{self.API}/runs/update",
+            payload={
+                "run_id": run_id,
+                "status": status,
+                "end_time": int(time.time() * 1000),
+            },
+        )
 
 
 def as_backend(client: Any):

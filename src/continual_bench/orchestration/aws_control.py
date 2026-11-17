@@ -120,8 +120,13 @@ def plan_campaign(ctx, event):
         "control_function": release.control_function,
         "capacity": {
             k: evidence[k]
-            for k in ("required_vcpus", "fargate_vcpu_quota", "max_parallel_admitted", "running_in_parallel",
-                      "queued")
+            for k in (
+                "required_vcpus",
+                "fargate_vcpu_quota",
+                "max_parallel_admitted",
+                "running_in_parallel",
+                "queued",
+            )
             if k in evidence
         },
     }

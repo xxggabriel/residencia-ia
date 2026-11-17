@@ -33,9 +33,14 @@ def prepare(name, directory, source_directory=None):
             os.replace(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)
-    receipt.update({"source": REAL_SOURCES[name]["url"], "openml_id": REAL_SOURCES[name]["openml_id"],
-                    "openml_version": REAL_SOURCES[name]["version"],
-                    "license": REAL_SOURCES[name]["license"]})
+    receipt.update(
+        {
+            "source": REAL_SOURCES[name]["url"],
+            "openml_id": REAL_SOURCES[name]["openml_id"],
+            "openml_version": REAL_SOURCES[name]["version"],
+            "license": REAL_SOURCES[name]["license"],
+        }
+    )
     atomic_write(directory / f"{name}.admission.json", json.dumps(receipt, indent=2).encode())
     return receipt
 

@@ -13,8 +13,14 @@ class AsyncMetricWriter:
     has been handed to ``send`` — callers flush before final writes or a finish.
     """
 
-    def __init__(self, send: Callable[[list[dict]], object], interval: float, *, coalesce: bool = True,
-                 max_pending: int = 1000):
+    def __init__(
+        self,
+        send: Callable[[list[dict]], object],
+        interval: float,
+        *,
+        coalesce: bool = True,
+        max_pending: int = 1000,
+    ):
         self._send = send
         self._interval = interval
         self._coalesce = coalesce

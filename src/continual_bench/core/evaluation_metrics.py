@@ -13,8 +13,9 @@ def _integer(value, name, minimum=0):
 
 
 def _accuracy(value):
-    if value is not None and (type(value) not in (int, float)
-                              or not math.isfinite(value) or not 0 <= value <= 1):
+    if value is not None and (
+        type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1
+    ):
         raise ValueError("accuracy must be finite in [0,1] or None")
     return value
 
@@ -48,14 +49,18 @@ def task_matrix_metrics(matrix, initial=None):
         current, diagonal = matrix[last][task], matrix[task][task]
         history = [matrix[row][task] for row in range(task, last)]
         backward.append(current - diagonal if current is not None and diagonal is not None else None)
-        forgetting.append(max(history) - current
-                          if current is not None and all(v is not None for v in history) else None)
+        forgetting.append(
+            max(history) - current if current is not None and all(v is not None for v in history) else None
+        )
         retention.append(current)
-    forward = [matrix[task - 1][task] - initial[task]
-               if initial is not None and matrix[task - 1][task] is not None and initial[task] is not None
-               else None for task in range(1, last + 1)]
+    forward = [
+        matrix[task - 1][task] - initial[task]
+        if initial is not None and matrix[task - 1][task] is not None and initial[task] is not None
+        else None
+        for task in range(1, last + 1)
+    ]
     values = {
-        "gem_average_accuracy": mean(matrix[last][:last + 1]),
+        "gem_average_accuracy": mean(matrix[last][: last + 1]),
         "gem_backward_transfer": mean(backward),
         "gem_forward_transfer": mean(forward),
         "postlearning_forgetting": mean(forgetting),
@@ -64,12 +69,21 @@ def task_matrix_metrics(matrix, initial=None):
     return {
         "available": True,
         "metrics": values,
-        "availability": {name: {"available": value is not None,
-                                "reason": None if value is not None else (
-                                    "insufficient_tasks" if not last else
-                                    "missing_initial_baseline" if name == "gem_forward_transfer"
-                                    and initial is None else "missing_required_cell")}
-                         for name, value in values.items()},
+        "availability": {
+            name: {
+                "available": value is not None,
+                "reason": None
+                if value is not None
+                else (
+                    "insufficient_tasks"
+                    if not last
+                    else "missing_initial_baseline"
+                    if name == "gem_forward_transfer" and initial is None
+                    else "missing_required_cell"
+                ),
+            }
+            for name, value in values.items()
+        },
         "completed_tasks": len(matrix),
         "declared_tasks": width,
         "contract": {
@@ -110,8 +124,12 @@ def validate_temporal_holdout(train, test, *, cutoff):
             last_seq, last_stamp = event.seq, event.timestamp
     if train[-1].seq >= test[0].seq:
         raise ValueError("training sequence overlaps test sequence")
-    return {"train_samples": len(train), "test_samples": len(test), "cutoff": cutoff,
-            "contract": "train features and labels < cutoff <= test features; IDs disjoint"}
+    return {
+        "train_samples": len(train),
+        "test_samples": len(test),
+        "cutoff": cutoff,
+        "contract": "train features and labels < cutoff <= test features; IDs disjoint",
+    }
 
 
 class NearFutureEvaluation:
@@ -180,12 +198,21 @@ class NearFutureEvaluation:
                 _accuracy(probability)
                 if probability is None:
                     raise ValueError("frozen-model probability cannot be None")
-                additions.append((window, {
-                    "event_id": event.event_id, "seq": event.seq, "timestamp": event.timestamp,
-                    "available_at": event.available_at,
-                    "probability": probability, "label": None,
-                    "released_at": None, "fingerprint": fingerprint,
-                }))
+                additions.append(
+                    (
+                        window,
+                        {
+                            "event_id": event.event_id,
+                            "seq": event.seq,
+                            "timestamp": event.timestamp,
+                            "available_at": event.available_at,
+                            "probability": probability,
+                            "label": None,
+                            "released_at": None,
+                            "fingerprint": fingerprint,
+                        },
+                    )
+                )
         # Commit only once all prediction calls and contracts have succeeded.
         if new_window is not None:
             self.windows.append(new_window)
@@ -228,19 +255,29 @@ class NearFutureEvaluation:
             released = [row for row in predictions if row["label"] is not None]
             correct = sum((row["probability"] >= 0.5) == row["label"] for row in released)
             complete = len(released) == self.horizon
-            windows.append({
-                **{key: value for key, value in window.items() if key not in ("model", "predictions")},
-                "predicted": len(predictions), "released": len(released), "complete": complete,
-                "near_future_accuracy": correct / self.horizon if complete else None,
-                "observed_accuracy": correct / len(released) if released else None,
-                "reason": None if complete else "incomplete_horizon_or_unreleased_labels",
-                "predictions": copy.deepcopy(predictions),
-            })
+            windows.append(
+                {
+                    **{key: value for key, value in window.items() if key not in ("model", "predictions")},
+                    "predicted": len(predictions),
+                    "released": len(released),
+                    "complete": complete,
+                    "near_future_accuracy": correct / self.horizon if complete else None,
+                    "observed_accuracy": correct / len(released) if released else None,
+                    "reason": None if complete else "incomplete_horizon_or_unreleased_labels",
+                    "predictions": copy.deepcopy(predictions),
+                }
+            )
         completed = [row["near_future_accuracy"] for row in windows if row["complete"]]
-        return {"version": "semana09-near-future-v1", "windows": windows,
-                "near_future_accuracy": sum(completed) / len(completed) if completed else None,
-                "completed_windows": len(completed), "scheduled_windows": len(windows),
-                "horizon": self.horizon, "gap": self.gap, "max_windows": self.max_windows,
-                "reason": None if completed else "no_complete_frozen_horizon",
-                "contract": "equal complete-window weights; frozen before gap; labels scored after release",
-                "scope": "bounded binary operational NFA; not UPF performance forecasting"}
+        return {
+            "version": "semana09-near-future-v1",
+            "windows": windows,
+            "near_future_accuracy": sum(completed) / len(completed) if completed else None,
+            "completed_windows": len(completed),
+            "scheduled_windows": len(windows),
+            "horizon": self.horizon,
+            "gap": self.gap,
+            "max_windows": self.max_windows,
+            "reason": None if completed else "no_complete_frozen_horizon",
+            "contract": "equal complete-window weights; frozen before gap; labels scored after release",
+            "scope": "bounded binary operational NFA; not UPF performance forecasting",
+        }

@@ -23,8 +23,12 @@ class ComponentRegistry:
             policies = Registry("policy")
             for name, policy in POLICIES.items():
                 policies.add(Spec(name, policy))
-        self.catalogs = {"source": sources.copy(), "model": models.copy(),
-                         "detector": detectors.copy(), "policy": policies.copy()}
+        self.catalogs = {
+            "source": sources.copy(),
+            "model": models.copy(),
+            "detector": detectors.copy(),
+            "policy": policies.copy(),
+        }
 
     @property
     def sources(self) -> Registry[DatasetSpec]:
@@ -72,7 +76,8 @@ class ComponentRegistry:
         task = task or spec.task
         if task is not None and not self.models.get(model_name).supports(task):
             raise IncompatibleComponent(
-                f"model {model_name} does not support {task} targets of dataset {dataset_name}")
+                f"model {model_name} does not support {task} targets of dataset {dataset_name}"
+            )
 
 
 def default_registry(plugins=()):

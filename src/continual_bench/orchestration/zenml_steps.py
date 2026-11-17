@@ -13,8 +13,12 @@ logger = logging.getLogger(__name__)
 @step(enable_cache=False, enable_step_logs=True)
 def materialize(config_data: dict, directory: str) -> dict:
     config = Config.model_validate(config_data)
-    logger.info("Materializing dataset=%s mode=%s samples=%d", config.dataset.name, config.mode,
-                config.dataset.samples)
+    logger.info(
+        "Materializing dataset=%s mode=%s samples=%d",
+        config.dataset.name,
+        config.mode,
+        config.dataset.samples,
+    )
     manifest = prepare(config, directory)
     logger.info("Materialization complete; event manifest persisted")
     return manifest
@@ -28,8 +32,11 @@ def benchmark(manifest: dict, config_data: dict, directory: str, use_services: b
         from continual_bench.infrastructure.services import KafkaTransport
 
         transport = KafkaTransport()
-    logger.info("Benchmark started; mode=%s transport=%s", validated.mode,
-                "kafka" if transport is not None else "local_jsonl")
+    logger.info(
+        "Benchmark started; mode=%s transport=%s",
+        validated.mode,
+        "kafka" if transport is not None else "local_jsonl",
+    )
     report = evaluate(validated, manifest, directory, transport)
     logger.info("Benchmark completed; complete=%s", report["complete"])
     return report
@@ -57,8 +64,13 @@ def audit_drift_and_retraining(report: dict, config_data: dict) -> dict:
         raise ValueError("Training exceeded the configured budget")
     if config.policy.name == "online" and len(updates) != config.dataset.samples - config.warmup:
         raise ValueError("Online policy did not update every post-warmup label")
-    logger.info("Strategy audit: detector=%s policy=%s alarms=%d updates=%d; guards passed",
-                config.detector.name, config.policy.name, len(alarms), len(updates))
+    logger.info(
+        "Strategy audit: detector=%s policy=%s alarms=%d updates=%d; guards passed",
+        config.detector.name,
+        config.policy.name,
+        len(alarms),
+        len(updates),
+    )
     return report
 
 

@@ -19,8 +19,23 @@ from .loader import deep_merge, load_document, load_model
 from .typed import TypedConfig
 
 __all__ = [
-    "Component", "Config", "DEFAULT_TRACKING", "CostConfig", "DatasetConfig", "FutureEvaluationConfig",
-    "IterativeConfig", "IterativeHyperparameters", "IterativeTrainingConfig", "PolicyConfig",
-    "PromotionConfig", "Strict", "TrackingConfig", "load_config", "EpochConfig", "TypedConfig",
-    "deep_merge", "load_document", "load_model",
+    "Component",
+    "Config",
+    "DEFAULT_TRACKING",
+    "CostConfig",
+    "DatasetConfig",
+    "FutureEvaluationConfig",
+    "IterativeConfig",
+    "IterativeHyperparameters",
+    "IterativeTrainingConfig",
+    "PolicyConfig",
+    "PromotionConfig",
+    "Strict",
+    "TrackingConfig",
+    "load_config",
+    "EpochConfig",
+    "TypedConfig",
+    "deep_merge",
+    "load_document",
+    "load_model",
 ]

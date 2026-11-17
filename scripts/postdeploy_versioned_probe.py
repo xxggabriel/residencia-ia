@@ -35,14 +35,26 @@ assert report["complete"] and report["transport"] == "kafka"
 assert report["model_versions"]["count"] == 151 and len(report["updates"]) == 150
 assert (directory / "mlflow-model/.ready.json").is_file()
 assert report["environment"]["code_sha256"] == environment()["code_sha256"]
-request = {"dataset": "electricity", "uri": receipt["model_uri"],
-           "probe": report["model_versions"]["inference_probe"]}
+request = {
+    "dataset": "electricity",
+    "uri": receipt["model_uri"],
+    "probe": report["model_versions"]["inference_probe"],
+}
 checked = subprocess.run(
     [sys.executable, str(Path(__file__).with_name("registry_inference_probe.py"))],
-    input=json.dumps(request), text=True, capture_output=True, check=True,
+    input=json.dumps(request),
+    text=True,
+    capture_output=True,
+    check=True,
 )
-result = {"complete": True, "config": cfg.model_dump(mode="json"), "receipt": receipt,
-          "model_versions": report["model_versions"], "metrics": report["metrics"],
-          "source_sha256": environment()["code_sha256"], "registry_probe": json.loads(checked.stdout)}
+result = {
+    "complete": True,
+    "config": cfg.model_dump(mode="json"),
+    "receipt": receipt,
+    "model_versions": report["model_versions"],
+    "metrics": report["metrics"],
+    "source_sha256": environment()["code_sha256"],
+    "registry_probe": json.loads(checked.stdout),
+}
 (root / "validation.json").write_text(json.dumps(result, indent=2) + "\n")
 print("Final deployed pipeline and Registry inference verified:", receipt["model_uri"])

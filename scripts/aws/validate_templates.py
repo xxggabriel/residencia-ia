@@ -124,8 +124,13 @@ def check(path: Path) -> list[str]:
             compute = props.get("ComputeResources") or {}
             if compute.get("Type") not in ({"Ref": "FargateCapacity"}, "FARGATE", "FARGATE_SPOT"):
                 errors.append(f"{where}: compute environment must be Fargate")
-        if kind in ("AWS::EC2::Instance", "AWS::EC2::LaunchTemplate", "AWS::EC2::SpotFleet",
-                    "AWS::EC2::EC2Fleet", "AWS::AutoScaling::AutoScalingGroup"):
+        if kind in (
+            "AWS::EC2::Instance",
+            "AWS::EC2::LaunchTemplate",
+            "AWS::EC2::SpotFleet",
+            "AWS::EC2::EC2Fleet",
+            "AWS::AutoScaling::AutoScalingGroup",
+        ):
             errors.append(f"{where}: workers are serverless Fargate tasks, never EC2 capacity")
     return errors
 

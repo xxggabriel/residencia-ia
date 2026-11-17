@@ -46,8 +46,10 @@ class PolicyConfig(Strict):
     @model_validator(mode="after")
     def validate_builtin_policy(self):
         if self.name in BATCH_POLICY_KINDS:
-            raise ValueError(f"policy {self.name} decides per batch from a performance matrix; "
-                             "run it through the batch-prequential Zia pipeline")
+            raise ValueError(
+                f"policy {self.name} decides per batch from a performance matrix; "
+                "run it through the batch-prequential Zia pipeline"
+            )
         if self.name in POLICIES and self.params:
             PolicyStrategy(kind=self.name, **self.model_dump(exclude={"name"}))
         return self
@@ -86,17 +88,30 @@ class AwsCostConfig(Strict):
     @classmethod
     def explicit_regional_prices(cls, value):
         if isinstance(value, dict) and value.get("region", "us-east-1") != "us-east-1":
-            required = {"vcpu_hour_usd", "memory_gb_hour_usd", "storage_gb_month_usd",
-                        "compute_source", "storage_source", "price_date"}
+            required = {
+                "vcpu_hour_usd",
+                "memory_gb_hour_usd",
+                "storage_gb_month_usd",
+                "compute_source",
+                "storage_source",
+                "price_date",
+            }
             if not required <= value.keys():
                 raise ValueError("another AWS region requires explicit prices, sources and price_date")
         return value
 
     @model_validator(mode="after")
     def supported_allocation(self):
-        options = {0.25: {0.5, 1, 2}, 0.5: set(range(1, 5)), 1: set(range(2, 9)),
-                   2: set(range(4, 17)), 4: set(range(8, 31)), 8: set(range(16, 61, 4)),
-                   16: set(range(32, 121, 8)), 32: {60, 120, 244}}
+        options = {
+            0.25: {0.5, 1, 2},
+            0.5: set(range(1, 5)),
+            1: set(range(2, 9)),
+            2: set(range(4, 17)),
+            4: set(range(8, 31)),
+            8: set(range(16, 61, 4)),
+            16: set(range(32, 121, 8)),
+            32: {60, 120, 244},
+        }
         if self.memory_gb not in options.get(self.vcpus, set()):
             raise ValueError("unsupported Fargate vCPU/memory allocation")
         return self
@@ -145,9 +160,12 @@ class TrackingConfig(Strict):
     def valid_alphas(self):
         import math
 
-        if (len(self.upf_alphas) < 2 or len(self.upf_alphas) > 100
-                or any(not math.isfinite(a) or a < 0 for a in self.upf_alphas)
-                or tuple(sorted(set(self.upf_alphas))) != self.upf_alphas):
+        if (
+            len(self.upf_alphas) < 2
+            or len(self.upf_alphas) > 100
+            or any(not math.isfinite(a) or a < 0 for a in self.upf_alphas)
+            or tuple(sorted(set(self.upf_alphas))) != self.upf_alphas
+        ):
             raise ValueError("upf_alphas must be finite, nonnegative, unique and increasing")
         return self
 
@@ -180,14 +198,18 @@ class Config(Strict):
     tracking: TrackingConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     promotion: PromotionConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     # Groups a campaign in one MLflow experiment; None keeps the per-policy/detector experiments.
-    mlflow_experiment: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_./-]{1,200}$",
-                                          exclude_if=lambda value: value is None)
+    mlflow_experiment: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9_./-]{1,200}$", exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_protocol(self):
         if self.promotion is not None:
-            if (self.mode == "offline" or self.policy.action != "reset_retrain"
-                    or self.policy.name in {"none", "online"}):
+            if (
+                self.mode == "offline"
+                or self.policy.action != "reset_retrain"
+                or self.policy.name in {"none", "online"}
+            ):
                 raise ValueError("promotion gate requires a prequential reset_retrain policy")
             if self.promotion.validation_samples + self.policy.min_window > self.replay_window:
                 raise ValueError("promotion must leave min_window training samples in replay")
@@ -206,8 +228,11 @@ class Config(Strict):
             raise ValueError("offline label delay leaves no training labels available before test")
         if self.policy.name == "online" and self.policy.action != "learn_one":
             raise ValueError("online policy must explicitly use learn_one")
-        if (self.policy.name == "online" and self.training_budget is not None
-                and self.training_budget < self.dataset.samples - self.warmup):
+        if (
+            self.policy.name == "online"
+            and self.training_budget is not None
+            and self.training_budget < self.dataset.samples - self.warmup
+        ):
             raise ValueError("online budget must cover every post-warmup label")
         if self.mode == "offline" and self.training_budget is not None:
             raise ValueError("training_budget controls post-warmup prequential learning only")
@@ -232,8 +257,10 @@ class Config(Strict):
 
         task = CATALOG.get(self.dataset.name).task if self.dataset.name in CATALOG else None
         if task not in (None, BINARY):
-            raise ValueError(f"dataset {self.dataset.name} has {task} targets; the drift/retraining "
-                             "engine is binary, use the typed or epoch evaluator")
+            raise ValueError(
+                f"dataset {self.dataset.name} has {task} targets; the drift/retraining "
+                "engine is binary, use the typed or epoch evaluator"
+            )
         if self.model.name in MODELS and not MODELS.get(self.model.name).supports(BINARY):
             raise ValueError(f"model {self.model.name} does not support binary targets")
 

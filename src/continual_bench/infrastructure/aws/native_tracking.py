@@ -45,11 +45,13 @@ class NativeJobRun(BenchmarkMlflowRun):
     @property
     def mlflow_tags(self):
         tags = super().mlflow_tags
-        tags.extend([
-            {"key": "cb-sagemaker-job", "value": self.job_name},
-            {"key": "cb-pipeline-execution-id", "value": self.execution},
-            {"key": "cb-native-stage", "value": self.stage},
-        ])
+        tags.extend(
+            [
+                {"key": "cb-sagemaker-job", "value": self.job_name},
+                {"key": "cb-pipeline-execution-id", "value": self.execution},
+                {"key": "cb-native-stage", "value": self.stage},
+            ]
+        )
         if arn := os.environ.get("TRAINING_JOB_ARN"):
             tags.append({"key": "cb-sagemaker-job-arn", "value": arn})
         return tags
@@ -57,10 +59,18 @@ class NativeJobRun(BenchmarkMlflowRun):
 
 @contextmanager
 def track_native_job(
-    tracking_uri, execution, stage, job_name, *, dataset=None, scope=None, model_name=None,
+    tracking_uri,
+    execution,
+    stage,
+    job_name,
+    *,
+    dataset=None,
+    scope=None,
+    model_name=None,
 ):
-    tracker = NativeJobRun(tracking_uri, execution, stage, job_name, dataset=dataset, scope=scope,
-                           model_name=model_name)
+    tracker = NativeJobRun(
+        tracking_uri, execution, stage, job_name, dataset=dataset, scope=scope, model_name=model_name
+    )
     if not tracker.start()["run_id"]:
         raise RuntimeError("SageMaker MLflow did not create a run for this job")
     try:

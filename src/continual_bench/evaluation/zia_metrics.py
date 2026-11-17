@@ -65,23 +65,30 @@ class ClassificationMetrics(ClassificationCounts):
             tp = p[::-1].cumsum()
             fp = n[::-1].cumsum()
             recall_curve = tp / actual[i] if actual[i] else np.zeros_like(tp)
-            rows.append({
-                "support": int(actual[i]),
-                "precision": ratio(correct[i], predicted[i]),
-                "recall": ratio(correct[i], actual[i]),
-                "f1": ratio(2 * correct[i], predicted[i] + actual[i]),
-                "pr_auc": average_precision(p, n),
-                "roc_auc": ratio(np.dot(p, n.cumsum() - n / 2), actual[i] * n.sum()),
-                "ece": ratio(gaps.sum(), total),
-                "mce": float(np.max(np.divide(gaps, counts, out=np.zeros(10), where=counts > 0))) if total
-                else None,
-                "recall_at_fpr_0_01": float(recall_curve[fp <= 0.01 * n.sum()].max(initial=0))
-                if actual[i] and n.sum() else None,
-            })
+            rows.append(
+                {
+                    "support": int(actual[i]),
+                    "precision": ratio(correct[i], predicted[i]),
+                    "recall": ratio(correct[i], actual[i]),
+                    "f1": ratio(2 * correct[i], predicted[i] + actual[i]),
+                    "pr_auc": average_precision(p, n),
+                    "roc_auc": ratio(np.dot(p, n.cumsum() - n / 2), actual[i] * n.sum()),
+                    "ece": ratio(gaps.sum(), total),
+                    "mce": float(np.max(np.divide(gaps, counts, out=np.zeros(10), where=counts > 0)))
+                    if total
+                    else None,
+                    "recall_at_fpr_0_01": float(recall_curve[fp <= 0.01 * n.sum()].max(initial=0))
+                    if actual[i] and n.sum()
+                    else None,
+                }
+            )
         result = {
-            "n": total, "accuracy": ratio(correct.sum(), total),
-            "errors": total - int(correct.sum()), "error_rate": ratio(total - correct.sum(), total),
-            "log_loss": ratio(self.loss, total), "brier": ratio(self.squared_error, total),
+            "n": total,
+            "accuracy": ratio(correct.sum(), total),
+            "errors": total - int(correct.sum()),
+            "error_rate": ratio(total - correct.sum(), total),
+            "log_loss": ratio(self.loss, total),
+            "brier": ratio(self.squared_error, total),
             "mae_probability": ratio(self.absolute_error, total),
         }
         for name in ("precision", "recall", "f1", "pr_auc", "roc_auc"):
@@ -94,11 +101,20 @@ class ClassificationMetrics(ClassificationCounts):
         result["f1_weighted"] = ratio(sum(r["support"] * (r["f1"] or 0) for r in rows), total)
         if self.classes == 2:
             tn, fp, fn, tp = map(int, self.confusion.ravel())
-            result.update(rows[1], tp=tp, tn=tn, fp=fp, fn=fn, false_positive_rate=ratio(fp, fp + tn),
-                          false_negative_rate=ratio(fn, fn + tp), specificity=ratio(tn, tn + fp),
-                          negative_predictive_value=ratio(tn, tn + fn), positive_rate=ratio(tp + fn, total),
-                          predicted_positive_rate=ratio(tp + fp, total),
-                          mcc=ratio(tp * tn - fp * fn, ((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))**0.5))
+            result.update(
+                rows[1],
+                tp=tp,
+                tn=tn,
+                fp=fp,
+                fn=fn,
+                false_positive_rate=ratio(fp, fp + tn),
+                false_negative_rate=ratio(fn, fn + tp),
+                specificity=ratio(tn, tn + fp),
+                negative_predictive_value=ratio(tn, tn + fn),
+                positive_rate=ratio(tp + fn, total),
+                predicted_positive_rate=ratio(tp + fp, total),
+                mcc=ratio(tp * tn - fp * fn, ((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)) ** 0.5),
+            )
             result["average_precision"] = result["pr_auc"]
             result["mse_probability"] = result["brier"]
         return result, rows

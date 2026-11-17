@@ -33,11 +33,16 @@ class Job(BaseModel):
 
 def identity(job):
     _, manifest = load_manifest(DATA_ROOT, job.dataset, job.scope)
-    return hashlib.sha256(encoded({
-        "job": job.model_dump(), "input_sha256": manifest["sha256"],
-        "tracking_sha256": sha256_file(Path("configs/base/tracking.yaml")),
-        "code_sha256": environment()["code_sha256"],
-    })).hexdigest()[:24]
+    return hashlib.sha256(
+        encoded(
+            {
+                "job": job.model_dump(),
+                "input_sha256": manifest["sha256"],
+                "tracking_sha256": sha256_file(Path("configs/base/tracking.yaml")),
+                "code_sha256": environment()["code_sha256"],
+            }
+        )
+    ).hexdigest()[:24]
 
 
 def perform(job):
@@ -48,11 +53,22 @@ def perform(job):
     atomic_write(directory / "job.json", encoded(status))
     try:
         with (directory / "worker.log").open("a") as log:
-            with subprocess.Popen([
-                sys.executable, "-m", "continual_bench.evaluation.zia",
-                str(DATA_ROOT), job.dataset, job.scope, job.policy, str(directory),
-                "--campaign", job.campaign,
-            ], stdout=log, stderr=subprocess.STDOUT) as process:
+            with subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "continual_bench.evaluation.zia",
+                    str(DATA_ROOT),
+                    job.dataset,
+                    job.scope,
+                    job.policy,
+                    str(directory),
+                    "--campaign",
+                    job.campaign,
+                ],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            ) as process:
                 timeout = TIMEOUTS[job.scope]
                 try:
                     exit_code = process.wait(timeout=timeout)
@@ -78,15 +94,26 @@ def perform(job):
         from continual_bench.infrastructure.metric_tracking import publish_execution
 
         receipt["tracking"] = publish_execution(
-            MlflowClient(), receipt["mlflow_run_id"],
-            tracking_report(report, prediction_manifest(directory, report)), directory, elapsed,
+            MlflowClient(),
+            receipt["mlflow_run_id"],
+            tracking_report(report, prediction_manifest(directory, report)),
+            directory,
+            elapsed,
         )
         atomic_write(receipt_path, encoded(receipt))
-        status.update(status="succeeded", receipt=receipt, summary={
-            "complete": report["complete"], "protocol": report["protocol"],
-            "dataset": job.dataset, "policy": job.policy, "model": report["model"],
-            "samples": report["metrics"]["dataset_rows"], "metrics": report["metrics"],
-        })
+        status.update(
+            status="succeeded",
+            receipt=receipt,
+            summary={
+                "complete": report["complete"],
+                "protocol": report["protocol"],
+                "dataset": job.dataset,
+                "policy": job.policy,
+                "model": report["model"],
+                "samples": report["metrics"]["dataset_rows"],
+                "metrics": report["metrics"],
+            },
+        )
     except Exception as error:
         status.update(status="failed", error=str(error))
     finally:

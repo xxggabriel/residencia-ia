@@ -215,8 +215,14 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tra
     threshold = float(params.get("decision_threshold", 0.5))
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("decision_threshold must be between 0 and 1")
-    model = make_zia_model(model_name, classes, config=iter_config, dataset=dataset,
-                           decision_threshold=threshold, model_params=dataset_model_params(dataset))
+    model = make_zia_model(
+        model_name,
+        classes,
+        config=iter_config,
+        dataset=dataset,
+        decision_threshold=threshold,
+        model_params=dataset_model_params(dataset),
+    )
     if model.name == "xgboost" and "max_depth" in params:
         model.params["max_depth"] = int(params["max_depth"])
 
@@ -323,42 +329,72 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tra
         "inference_seconds": inference_seconds,
         "inference_scope": effort["evaluation_scope"],
         "checkpoint_validation_inference_seconds": prediction_seconds,
-        "predictions_per_second": scored / inference_seconds if inference_seconds and (
-            loop_resources["predictions_per_second"] is not None or scored == val_rows
-        ) else None,
+        "predictions_per_second": scored / inference_seconds
+        if inference_seconds and (loop_resources["predictions_per_second"] is not None or scored == val_rows)
+        else None,
         "tracking_overhead_seconds": loop_resources["tracking_overhead_seconds"] + tracking_seconds,
     }
     scopes = {**loop_result["observation_scopes"], "validation": checkpoint_quality}
     fit = epoch_fit(
-        loop_result["history"], action="initial", start_seq=train_start, end_seq=val_stop,
-        train_samples=train_rows, validation_samples=val_rows,
-        train_seconds=loop_result["training_duration_seconds"], checkpoint=checkpoint, deployed_version=0,
+        loop_result["history"],
+        action="initial",
+        start_seq=train_start,
+        end_seq=val_stop,
+        train_samples=train_rows,
+        validation_samples=val_rows,
+        train_seconds=loop_result["training_duration_seconds"],
+        checkpoint=checkpoint,
+        deployed_version=0,
         summary={
-            **metadata["training"], "selection_scope": loop_result["selection_scope"],
-            "selection_metric": loop_result["selection_metric"], "last_epoch": loop_result["last_epoch"],
+            **metadata["training"],
+            "selection_scope": loop_result["selection_scope"],
+            "selection_metric": loop_result["selection_metric"],
+            "last_epoch": loop_result["last_epoch"],
             "checkpoint_epoch": loop_result["checkpoint_epoch"],
         },
         observation_steps=loop_result["observation_steps"],
         observation_epochs=loop_result["observation_epochs"],
-        observed_step_kind=loop_result["observed_step_kind"], promotion_status="promoted",
-        observation_effort=effort, observation_resources=resources, observation_scopes=scopes,
+        observed_step_kind=loop_result["observed_step_kind"],
+        promotion_status="promoted",
+        observation_effort=effort,
+        observation_resources=resources,
+        observation_scopes=scopes,
         data_scope={"train": [train_start, train_stop], "validation": [val_start, val_stop]},
     )
     report = {
-        "version": "sagemaker-native-training-v1", "complete": True, "dataset": dataset, "scope": scope,
-        "validation": summary, "metadata": metadata, "training": dict(loop_result), "environment": env,
+        "version": "sagemaker-native-training-v1",
+        "complete": True,
+        "dataset": dataset,
+        "scope": scope,
+        "validation": summary,
+        "metadata": metadata,
+        "training": dict(loop_result),
+        "environment": env,
         "training_history": [fit],
         "tracking_observations": observations(
-            "binary" if len(classes) == 2 else "multiclass", scopes,
-            effort=effort, resources=resources,
-            windows=[{
-                "step": row["epoch"], "scope": "validation", "coordinate": "epoch",
-                "quality": row["scopes"]["validation"],
-            } for row in loop_result["observation_epochs"] if "validation" in row["scopes"]],
+            "binary" if len(classes) == 2 else "multiclass",
+            scopes,
+            effort=effort,
+            resources=resources,
+            windows=[
+                {
+                    "step": row["epoch"],
+                    "scope": "validation",
+                    "coordinate": "epoch",
+                    "quality": row["scopes"]["validation"],
+                }
+                for row in loop_result["observation_epochs"]
+                if "validation" in row["scopes"]
+            ],
             lineage={
-                "dataset": dataset, "dataset_version": manifest["sha256"], "model": model.name,
-                "policy": str(params.get("policy", "frozen")), "seed": iter_config.seed,
-                "environment": env, "checkpoint": checkpoint, "protocol": "native_chronological_validation",
+                "dataset": dataset,
+                "dataset_version": manifest["sha256"],
+                "model": model.name,
+                "policy": str(params.get("policy", "frozen")),
+                "seed": iter_config.seed,
+                "environment": env,
+                "checkpoint": checkpoint,
+                "protocol": "native_chronological_validation",
                 "code_revision": env["code_sha256"],
             },
         ),
@@ -453,8 +489,9 @@ def native_pipeline_job(command):
         else:
             dataset = str(params.get("dataset", os.environ.get("BENCH_DATASET", "generic")))
             model_name = str(params.get("model", os.environ.get("BENCH_MODEL", "generic")))
-        with track_native_job(uri, execution, stage, job_name, dataset=dataset, scope=scope,
-                              model_name=model_name) as tracker:
+        with track_native_job(
+            uri, execution, stage, job_name, dataset=dataset, scope=scope, model_name=model_name
+        ) as tracker:
             tracker.log_hyperparameters(params)
             result = train(model_dir=model_dir, params=params, tracker=tracker, finish_tracker=False)
             tracker.publish_training_evidence(result, model_dir)
@@ -471,8 +508,9 @@ def native_pipeline_job(command):
     if manifest["sha256"] != digest:
         raise ValueError("Prepared snapshot manifest does not match the pipeline input")
     model_name, _ = _resolve_spec(dataset, manifest, {})
-    with track_native_job(uri, execution, stage, job_name, dataset=dataset, scope=scope,
-                          model_name=model_name) as tracker:
+    with track_native_job(
+        uri, execution, stage, job_name, dataset=dataset, scope=scope, model_name=model_name
+    ) as tracker:
         tracker.log_hyperparameters({"scope": scope, "dataset_sha256": digest})
         report = process(data_path.parent, directory / "output", tracker=tracker)
         if report[data_path.name]["rows"] != manifest["rows"]:

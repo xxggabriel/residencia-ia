@@ -20,8 +20,19 @@ class FixtureSource:
 
 
 def records(n=30, delay=0):
-    return [TaskSample(str(i), i, i, i + delay, {"x": float(i % 3)}, str(i % 3),
-                       task_id=i // 10, split="test" if i % 5 == 4 else "train") for i in range(n)]
+    return [
+        TaskSample(
+            str(i),
+            i,
+            i,
+            i + delay,
+            {"x": float(i % 3)},
+            str(i % 3),
+            task_id=i // 10,
+            split="test" if i % 5 == 4 else "train",
+        )
+        for i in range(n)
+    ]
 
 
 def test_friedman_runs_native_regression_and_complete_replay_is_idempotent(tmp_path):
@@ -54,8 +65,9 @@ def test_multiclass_metrics_keep_three_classes_and_exclude_heldout_training(tmp_
 
 @pytest.mark.parametrize("policy", ["none", "online", "periodic"])
 def test_typed_baselines_obey_training_budgets_and_heldout_split(tmp_path, policy):
-    report = run_typed(FixtureSource(records()), tmp_path, policy=policy, warmup=3,
-                       every=5, window=4, training_budget=7)
+    report = run_typed(
+        FixtureSource(records()), tmp_path, policy=policy, warmup=3, every=5, window=4, training_budget=7
+    )
     assert report["training"]["postwarmup_samples"] <= 7
     if policy == "none":
         assert report["updates"] == []
@@ -75,8 +87,10 @@ def test_typed_predicts_before_release_and_never_trains_test_labels(tmp_path):
         def learn_one(self, x, y):
             learned.append((x["x"], y))
 
-    data = [TaskSample(str(i), i, i, i + 2, {"x": float(i)}, str(i % 2),
-                       split="test" if i == 4 else "train") for i in range(10)]
+    data = [
+        TaskSample(str(i), i, i, i + 2, {"x": float(i)}, str(i % 2), split="test" if i == 4 else "train")
+        for i in range(10)
+    ]
     report = run_typed(FixtureSource(data), tmp_path, warmup=2, model_factory=AuditModel)
     predictions = json.loads((tmp_path / report["identity"] / "predictions.json").read_text())
     assert [r["training_labels_available"] for r in predictions[:4]] == [0, 0, 0, 1]
@@ -128,11 +142,20 @@ def test_typed_prefix_budget_records_selection_and_rejects_insufficient_warmup(t
 
 @pytest.mark.parametrize("policy", ["none", "online", "periodic"])
 def test_costs_are_independent_of_policy(tmp_path, policy):
-    report = run_typed(FixtureSource(records()), tmp_path, policy=policy, warmup=3,
-                       costs={"train_sample": 2, "update": 3})
+    report = run_typed(
+        FixtureSource(records()), tmp_path, policy=policy, warmup=3, costs={"train_sample": 2, "update": 3}
+    )
     costs = report["costs"]
     assert costs["metrics"]["cost_total"] >= 0
     assert costs["consumption"]["training_presentations"] == 3 + report["training"]["postwarmup_samples"]
     assert costs["metrics"]["cost_update_events"] == 3 * len(report["updates"])
-    assert run_typed(FixtureSource(records()), tmp_path, policy=policy, warmup=3,
-                     costs={"train_sample": 2, "update": 3}) == report
+    assert (
+        run_typed(
+            FixtureSource(records()),
+            tmp_path,
+            policy=policy,
+            warmup=3,
+            costs={"train_sample": 2, "update": 3},
+        )
+        == report
+    )

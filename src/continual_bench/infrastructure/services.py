@@ -167,10 +167,16 @@ class MLflowTracker:
             else client.create_run(
                 experiment_id,
                 tags={
-                    "mlflow.runName": "-".join((config["dataset"]["name"], config["model"]["name"],
-                                                config["mode"], config["detector"]["name"],
-                                                config["policy"]["name"],
-                                                str(config["dataset"]["seed"]))),
+                    "mlflow.runName": "-".join(
+                        (
+                            config["dataset"]["name"],
+                            config["model"]["name"],
+                            config["mode"],
+                            config["detector"]["name"],
+                            config["policy"]["name"],
+                            str(config["dataset"]["seed"]),
+                        )
+                    ),
                     "run_key": identity,
                     "protocol": report["protocol"],
                     "dataset": config["dataset"]["name"],
@@ -182,32 +188,38 @@ class MLflowTracker:
         # Deterministic metric keys/steps; inspect histories before append to tolerate partial publication.
         params = {"summary_" + key: value for key, value in report["metrics"].items() if value is not None}
         params.update({key: config[key] for key in ("mode", "name", "protocol_version")})
-        params.update({
-            "seed": config["dataset"]["seed"],
-            "policy": config["policy"]["name"],
-            "detector": config["detector"]["name"],
-            "dataset_sha256": report["dataset"]["sha256"],
-            "code_sha256": report["environment"]["code_sha256"],
-            "samples": config["dataset"]["samples"],
-            "training_budget": config.get("training_budget"),
-            "policy_every": config["policy"]["every"],
-            "policy_cooldown": config["policy"]["cooldown"],
-            "dataset": config["dataset"]["name"],
-            "dataset_version": catalog["dataset_version"],
-            "dataset_source": report["dataset"]["source"],
-            "dataset_source_version": report["dataset"]["version"],
-            "dataset_license": report["dataset"]["license"],
-            "model_version_id": catalog["model_version_id"],
-            "model_state_sha256": catalog["model_state_sha256"],
-            "model_versions_count": catalog["model_versions_count"],
-            "model": config["model"]["name"],
-            "model_params": json.dumps(config["model"]["params"], sort_keys=True),
-        })
-        client.log_batch(run_id, params=[Param(key, str(value)) for key, value in params.items()],
-                         synchronous=True)
-        metrics = [(key, window["end_seq"], value)
-                   for window in report["windows"] for key, value in window.items()
-                   if key != "end_seq" and value is not None]
+        params.update(
+            {
+                "seed": config["dataset"]["seed"],
+                "policy": config["policy"]["name"],
+                "detector": config["detector"]["name"],
+                "dataset_sha256": report["dataset"]["sha256"],
+                "code_sha256": report["environment"]["code_sha256"],
+                "samples": config["dataset"]["samples"],
+                "training_budget": config.get("training_budget"),
+                "policy_every": config["policy"]["every"],
+                "policy_cooldown": config["policy"]["cooldown"],
+                "dataset": config["dataset"]["name"],
+                "dataset_version": catalog["dataset_version"],
+                "dataset_source": report["dataset"]["source"],
+                "dataset_source_version": report["dataset"]["version"],
+                "dataset_license": report["dataset"]["license"],
+                "model_version_id": catalog["model_version_id"],
+                "model_state_sha256": catalog["model_state_sha256"],
+                "model_versions_count": catalog["model_versions_count"],
+                "model": config["model"]["name"],
+                "model_params": json.dumps(config["model"]["params"], sort_keys=True),
+            }
+        )
+        client.log_batch(
+            run_id, params=[Param(key, str(value)) for key, value in params.items()], synchronous=True
+        )
+        metrics = [
+            (key, window["end_seq"], value)
+            for window in report["windows"]
+            for key, value in window.items()
+            if key != "end_seq" and value is not None
+        ]
         log_metric_points(client, run_id, metrics)
         for path in files:
             client.log_artifact(run_id, path)
@@ -219,35 +231,59 @@ class MLflowTracker:
             from continual_bench.models.serving import inference_frame
 
             schema = infer_signature(inference_frame(report["model_versions"]["inference_probe"]["features"]))
-            dataset = Dataset(name=config["dataset"]["name"], digest=catalog["dataset_version"][:32],
-                              source_type="s3", source=json.dumps({"uri": catalog["dataset_uri"]}),
-                              schema=schema.inputs.to_json(),
-                              profile=json.dumps({"num_rows": config["dataset"]["samples"],
-                                                  "num_features": len(schema.inputs.inputs)}))
-            client.log_inputs(run_id, datasets=[DatasetInput(dataset, tags=[
-                InputTag("mlflow.data.context", report["protocol"]),
-                InputTag("dataset_sha256", catalog["dataset_version"]),
-                InputTag("label_delay", str(config["dataset"]["label_delay"])),
-            ])])
+            dataset = Dataset(
+                name=config["dataset"]["name"],
+                digest=catalog["dataset_version"][:32],
+                source_type="s3",
+                source=json.dumps({"uri": catalog["dataset_uri"]}),
+                schema=schema.inputs.to_json(),
+                profile=json.dumps(
+                    {"num_rows": config["dataset"]["samples"], "num_features": len(schema.inputs.inputs)}
+                ),
+            )
+            client.log_inputs(
+                run_id,
+                datasets=[
+                    DatasetInput(
+                        dataset,
+                        tags=[
+                            InputTag("mlflow.data.context", report["protocol"]),
+                            InputTag("dataset_sha256", catalog["dataset_version"]),
+                            InputTag("label_delay", str(config["dataset"]["label_delay"])),
+                        ],
+                    )
+                ],
+            )
         registry = register_final_model(client, run, config, report, Path(files[0]).parent, catalog)
-        summaries = [("summary_" + key, 0, value)
-                     for key, value in report["metrics"].items() if value is not None]
+        summaries = [
+            ("summary_" + key, 0, value) for key, value in report["metrics"].items() if value is not None
+        ]
         used = sum(update["train_samples"] for update in report.get("candidates", report["updates"]))
         summaries.append(("training_used", 0, used))
         log_metric_points(client, run_id, summaries)
-        client.log_batch(run_id, tags=[RunTag("update_count", str(len(report["updates"]))),
-                               RunTag("alarm_count", str(len(report["alarms"]))),
-                               RunTag("campaign", config["name"]),
-                               RunTag("registered_model", registry["registered_model"]),
-                               RunTag("registered_model_version", registry["registered_model_version"])],
-                         synchronous=True)
+        client.log_batch(
+            run_id,
+            tags=[
+                RunTag("update_count", str(len(report["updates"]))),
+                RunTag("alarm_count", str(len(report["alarms"]))),
+                RunTag("campaign", config["name"]),
+                RunTag("registered_model", registry["registered_model"]),
+                RunTag("registered_model_version", registry["registered_model_version"]),
+            ],
+            synchronous=True,
+        )
         artifacts = publish_run_artifacts(client, run_id, Path(files[0]).parent, report)
         # The tracking completion tag stays the last write before termination.
         tracking = publish_tracking(client, run_id, report, Path(files[0]).parent, objects=objects)
         client.set_terminated(run_id, "FINISHED")
-        return {"mlflow_run_id": run_id, "mlflow_experiment_id": experiment_id,
-                "mlflow_experiment_name": name, **registry, "run_artifacts": artifacts,
-                **({"tracking": tracking} if tracking else {})}
+        return {
+            "mlflow_run_id": run_id,
+            "mlflow_experiment_id": experiment_id,
+            "mlflow_experiment_name": name,
+            **registry,
+            "run_artifacts": artifacts,
+            **({"tracking": tracking} if tracking else {}),
+        }
 
 
 def publish(config, report, root):
@@ -265,14 +301,26 @@ def publish(config, report, root):
         catalog = publish_catalog(objects, report, directory)
         atomic_write(directory / "catalog-links.json", json.dumps(catalog, indent=2).encode())
         uris = [objects.upload(f"{identity}/{Path(path).name}", path) for path in files]
-        metadata_files = [directory / name for name in ("model-versions.json", "model-metadata.json",
-                                                       "dataset-catalog.json", "catalog-links.json")]
+        metadata_files = [
+            directory / name
+            for name in (
+                "model-versions.json",
+                "model-metadata.json",
+                "dataset-catalog.json",
+                "catalog-links.json",
+            )
+        ]
         atomic_write(directory / "config.json", config.model_dump_json(indent=2).encode())
         atomic_write(directory / "environment.json", json.dumps(report["environment"], indent=2).encode())
         metadata_files += [directory / "config.json", directory / "environment.json"]
-        tracked = MLflowTracker().publish(identity, config.model_dump(mode="json"), report,
-                                          files[:2] + [str(p) for p in metadata_files], catalog,
-                                          objects=objects)
+        tracked = MLflowTracker().publish(
+            identity,
+            config.model_dump(mode="json"),
+            report,
+            files[:2] + [str(p) for p in metadata_files],
+            catalog,
+            objects=objects,
+        )
         receipt = {"run_key": identity, **tracked, **catalog, "objects": uris}
         atomic_write(directory / "receipt.json", json.dumps(receipt, indent=2).encode())
         return receipt

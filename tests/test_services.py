@@ -83,9 +83,13 @@ def test_browser_run_search_accepts_only_configured_origin():
 
     def request(origin):
         return urllib.request.Request(
-            uri, data=json.dumps({"experiment_ids": [experiment.experiment_id], "max_results": 5}).encode(),
-            headers={"Content-Type": "application/json", "Authorization": "Basic " + credentials,
-                     "Origin": origin},
+            uri,
+            data=json.dumps({"experiment_ids": [experiment.experiment_id], "max_results": 5}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Basic " + credentials,
+                "Origin": origin,
+            },
         )
 
     with urllib.request.urlopen(request("http://192.168.100.27:15000"), timeout=15) as response:

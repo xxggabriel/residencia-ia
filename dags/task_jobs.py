@@ -10,9 +10,11 @@ WORKER = "http://dataset-worker:8088"
 
 
 def request(path, payload=None):
-    call = urllib.request.Request(WORKER + path,
-                                  data=None if payload is None else json.dumps(payload).encode(),
-                                  headers={"Content-Type": "application/json"})
+    call = urllib.request.Request(
+        WORKER + path,
+        data=None if payload is None else json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
     with urllib.request.urlopen(call, timeout=30) as response:
         return json.load(response)
 

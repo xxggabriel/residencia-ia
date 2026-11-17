@@ -131,8 +131,10 @@ def check_predictions(report, tracking, raw, events, native):
     # Python 3.12 sum() and sequential += can differ by an ulp. The independent
     # recomputation uses accurate summation; remote history/sidecar checks stay exact.
     mae = math.fsum(abs(int(row["label"]) - row["probability"]) for row in rows) / len(rows)
-    require(math.isclose(tracking["metrics"]["mae_probability"], mae, rel_tol=0, abs_tol=1e-15),
-            "published probability MAE differs")
+    require(
+        math.isclose(tracking["metrics"]["mae_probability"], mae, rel_tol=0, abs_tol=1e-15),
+        "published probability MAE differs",
+    )
     by_seq = {row["seq"]: row for row in rows}
     covered = []
     for window in report["windows"]:

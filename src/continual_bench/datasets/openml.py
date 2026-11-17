@@ -21,12 +21,22 @@ REAL_SOURCES = {
         "target": "class",
         "positive": "UP",
         "labels": ["UP", "DOWN"],
-        "columns": ["date", "day", "period", "nswprice", "nswdemand", "vicprice", "vicdemand",
-                    "transfer", "class"],
+        "columns": [
+            "date",
+            "day",
+            "period",
+            "nswprice",
+            "nswdemand",
+            "vicprice",
+            "vicdemand",
+            "transfer",
+            "class",
+        ],
         "nominal": ["day", "class"],
         "license": "Public",
-        "normalization": ("Published header declares Normalize and ReplaceMissingValues; "
-                          "fit scope is unspecified"),
+        "normalization": (
+            "Published header declares Normalize and ReplaceMissingValues; fit scope is unspecified"
+        ),
     },
     "airlines": {
         "openml_id": 1169,
@@ -39,8 +49,7 @@ REAL_SOURCES = {
         "target": "Delay",
         "positive": "1",
         "labels": ["0", "1"],
-        "columns": ["Airline", "Flight", "AirportFrom", "AirportTo", "DayOfWeek", "Time",
-                    "Length", "Delay"],
+        "columns": ["Airline", "Flight", "AirportFrom", "AirportTo", "DayOfWeek", "Time", "Length", "Delay"],
         "nominal": ["Airline", "AirportFrom", "AirportTo", "DayOfWeek", "Delay"],
         "license": "Public",
         "normalization": "No additional normalization in this adapter",
@@ -89,9 +98,15 @@ class RealSource:
         with self.path.open(encoding="utf-8", newline="") as stream:
             self.schema = read_schema(stream)
         _validate_schema(self.schema, self.spec)
-        descriptor = {"adapter": "openml-dense-arff-v1", "raw_sha256": self.spec["sha256"],
-                      "selection": [0, samples], "schema": self.schema,
-                      "positive_label": self.spec["positive"], "epoch": epoch, "delay": label_delay}
+        descriptor = {
+            "adapter": "openml-dense-arff-v1",
+            "raw_sha256": self.spec["sha256"],
+            "selection": [0, samples],
+            "schema": self.schema,
+            "positive_label": self.spec["positive"],
+            "epoch": epoch,
+            "delay": label_delay,
+        }
         self.version = hashlib.sha256(json.dumps(descriptor, sort_keys=True).encode()).hexdigest()
 
     def events(self):
@@ -103,26 +118,43 @@ class RealSource:
             timestamp = self.epoch + seq
             identity = hashlib.sha256(f"{self.spec['sha256']}:{seq}".encode()).hexdigest()
             count += 1
-            yield Event(identity, seq, timestamp, timestamp + self.delay, row,
-                        target == self.spec["positive"], None)
+            yield Event(
+                identity, seq, timestamp, timestamp + self.delay, row, target == self.spec["positive"], None
+            )
         if count != self.samples:
             raise ValueError("Source has fewer rows than the declared prefix")
 
     def manifest(self):
         return {
-            "name": self.name, "version": self.version, "samples": self.samples,
-            "source": self.spec["url"], "source_metadata":
-                f"https://www.openml.org/api/v1/json/data/{self.spec['openml_id']}",
-            "openml_id": self.spec["openml_id"], "openml_version": self.spec["version"],
-            "license": self.spec["license"], "license_note": "Exact source catalog label; not an SPDX grant",
-            "raw_sha256": self.spec["sha256"], "raw_rows": self.spec["rows"],
-            "raw_path": str(self.path), "selection": {"kind": "published_prefix", "range": [0, self.samples]},
-            "schema": self.schema, "target": self.spec["target"], "positive_label": self.spec["positive"],
-            "seed_ignored": True, "requested_seed": self.seed, "changepoints": None,
+            "name": self.name,
+            "version": self.version,
+            "samples": self.samples,
+            "source": self.spec["url"],
+            "source_metadata": f"https://www.openml.org/api/v1/json/data/{self.spec['openml_id']}",
+            "openml_id": self.spec["openml_id"],
+            "openml_version": self.spec["version"],
+            "license": self.spec["license"],
+            "license_note": "Exact source catalog label; not an SPDX grant",
+            "raw_sha256": self.spec["sha256"],
+            "raw_rows": self.spec["rows"],
+            "raw_path": str(self.path),
+            "selection": {"kind": "published_prefix", "range": [0, self.samples]},
+            "schema": self.schema,
+            "target": self.spec["target"],
+            "positive_label": self.spec["positive"],
+            "seed_ignored": True,
+            "requested_seed": self.seed,
+            "changepoints": None,
             "timestamp_kind": "simulated_epoch_plus_published_row_index_seconds",
-            "real_event_timestamps_known": False, "real_label_availability_known": False,
-            "label_delay_seconds": self.delay, "normalization": self.spec["normalization"],
+            "real_event_timestamps_known": False,
+            "real_label_availability_known": False,
+            "label_delay_seconds": self.delay,
+            "normalization": self.spec["normalization"],
             "order": "Published file order, unchanged; not an assertion of verified calendar chronology",
-            "limitations": ["No known ground-truth drift points", "Replay clock is not real event time",
-                            "Label delay is simulated", "Source preprocessing cannot be undone"],
+            "limitations": [
+                "No known ground-truth drift points",
+                "Replay clock is not real event time",
+                "Label delay is simulated",
+                "Source preprocessing cannot be undone",
+            ],
         }

@@ -56,9 +56,18 @@ class ExperimentMatrix(Strict):
 
     @model_validator(mode="after")
     def bounded(self):
-        size = len(self.datasets) * len(self.models) * len(self.seeds) * (
-            len(self.modes) * len(self.strategies) if self.evaluator == "binary"
-            else len(self.typed_policies) if self.evaluator == "typed" else 1)
+        size = (
+            len(self.datasets)
+            * len(self.models)
+            * len(self.seeds)
+            * (
+                len(self.modes) * len(self.strategies)
+                if self.evaluator == "binary"
+                else len(self.typed_policies)
+                if self.evaluator == "typed"
+                else 1
+            )
+        )
         if size > MAX_CASES:
             raise ValueError(f"matrix expands to {size} combinations; limit is {MAX_CASES}")
         return self
@@ -95,14 +104,30 @@ class ExperimentMatrix(Strict):
         for mode, strategy in product(self.modes, self.strategies):
             if mode == "offline" and strategy.policy.name != "none":
                 continue  # Offline is a frozen holdout; adaptive strategies do not apply.
-            yield {**deepcopy(self.base), "name": self.name, "mode": mode, "model": model.model_dump(),
-                   "dataset": self._dataset(entry, seed), "detector": strategy.detector.model_dump(),
-                   "policy": strategy.policy.model_dump()}, Config
+            yield (
+                {
+                    **deepcopy(self.base),
+                    "name": self.name,
+                    "mode": mode,
+                    "model": model.model_dump(),
+                    "dataset": self._dataset(entry, seed),
+                    "detector": strategy.detector.model_dump(),
+                    "policy": strategy.policy.model_dump(),
+                },
+                Config,
+            )
 
     def _typed(self, entry, model, seed):
         for policy in self.typed_policies:
-            yield {**deepcopy(self.base), "policy": policy, "model": model.model_dump(),
-                   "dataset": self._dataset(entry, seed)}, TypedConfig
+            yield (
+                {
+                    **deepcopy(self.base),
+                    "policy": policy,
+                    "model": model.model_dump(),
+                    "dataset": self._dataset(entry, seed),
+                },
+                TypedConfig,
+            )
 
     def _epochs(self, entry, model, seed):
         case = {**deepcopy(self.base), "dataset": entry.name, "seed": seed, "model": model.model_dump()}
@@ -126,8 +151,14 @@ class ExperimentMatrix(Strict):
                 except ValidationError as error:
                     if self.on_incompatible == "error":
                         raise
-                    skipped.append({"dataset": entry.name, "model": model.name, "seed": seed,
-                                    "reason": error.errors()[0]["msg"]})
+                    skipped.append(
+                        {
+                            "dataset": entry.name,
+                            "model": model.name,
+                            "seed": seed,
+                            "reason": error.errors()[0]["msg"],
+                        }
+                    )
                     continue
                 key = case_key(config)
                 if key not in keys:  # Offline cases repeat across strategies.
@@ -146,19 +177,41 @@ def case_key(config) -> str:
 def describe(config) -> dict:
     """Comparison coordinates of a case, independent of its evaluator."""
     if isinstance(config, Config):
-        return {"dataset": config.dataset.name, "seed": config.dataset.seed, "model": config.model.name,
-                "mode": config.mode, "detector": config.detector.name, "policy": config.policy.name}
+        return {
+            "dataset": config.dataset.name,
+            "seed": config.dataset.seed,
+            "model": config.model.name,
+            "mode": config.mode,
+            "detector": config.detector.name,
+            "policy": config.policy.name,
+        }
     if isinstance(config, TypedConfig):
-        return {"dataset": config.dataset.name, "seed": config.dataset.seed,
-                "model": config.model.name if config.model else None, "mode": "typed_prequential",
-                "detector": None, "policy": config.policy}
-    return {"dataset": config.dataset, "seed": config.seed,
-            "model": config.model.name if config.model else None, "mode": "epochs", "detector": None,
-            "policy": None}
+        return {
+            "dataset": config.dataset.name,
+            "seed": config.dataset.seed,
+            "model": config.model.name if config.model else None,
+            "mode": "typed_prequential",
+            "detector": None,
+            "policy": config.policy,
+        }
+    return {
+        "dataset": config.dataset,
+        "seed": config.seed,
+        "model": config.model.name if config.model else None,
+        "mode": "epochs",
+        "detector": None,
+        "policy": None,
+    }
 
 
 def _execute_case(
-    config, root: Path, cache: str, real_directory: str | None, *, source=None, progress=None,
+    config,
+    root: Path,
+    cache: str,
+    real_directory: str | None,
+    *,
+    source=None,
+    progress=None,
     checkpoint=None,
 ):
     if isinstance(config, Config):
@@ -173,13 +226,23 @@ def _execute_case(
         if source is None:
             source = make_source(default_registry(), config.dataset)
         return run_typed(
-            source, str(root / "typed"), progress=progress, checkpoint=checkpoint,
+            source,
+            str(root / "typed"),
+            progress=progress,
+            checkpoint=checkpoint,
             **config.model_dump(exclude={"dataset"}),
         )
     from continual_bench.evaluation.epochs import run_epochs
 
-    return run_epochs(config, str(root / "epochs"), cache, real_directory=real_directory, source=source,
-                      progress=progress, checkpoint=checkpoint)
+    return run_epochs(
+        config,
+        str(root / "epochs"),
+        cache,
+        real_directory=real_directory,
+        source=source,
+        progress=progress,
+        checkpoint=checkpoint,
+    )
 
 
 def _headline(report) -> dict:
@@ -188,8 +251,10 @@ def _headline(report) -> dict:
         return report["epochs"][-1]["metrics"] | {"cost_total": report["costs"]["metrics"]["cost_total"]}
     if "per_task" in report:
         split = next((s for s in ("test", "validation", "train") if report["metrics"][s]["n"]), "train")
-        return report["metrics"][split] | {"split": split,
-                                            "cost_total": report["costs"]["metrics"]["cost_total"]}
+        return report["metrics"][split] | {
+            "split": split,
+            "cost_total": report["costs"]["metrics"]["cost_total"],
+        }
     summary = {k: report["metrics"].get(k) for k in ("accuracy", "f1", "brier", "log_loss", "roc_auc")}
     return summary | {"updates": len(report.get("updates", [])), "alarms": len(report.get("alarms", []))}
 
@@ -209,16 +274,30 @@ def _publish_local_case(directory, name, config, report=None, *, run_key=None):
     return publish_local_benchmark(run_dir, report, experiment_name=f"continual-bench/local-matrix/{name}")
 
 
-def execute_matrix(matrix: ExperimentMatrix, root, *, cache="state/datasets", real_directory=None,
-                   max_seconds=86_400, services=False):
+def execute_matrix(
+    matrix: ExperimentMatrix,
+    root,
+    *,
+    cache="state/datasets",
+    real_directory=None,
+    max_seconds=86_400,
+    services=False,
+):
     """Run every planned case once; a rerun resumes, reusing completed reports."""
     plan = matrix.plan()
     directory = Path(root) / matrix.identity()
     journal_path = directory / "matrix.json"
     with run_lock(root, "matrix-" + matrix.identity()):
-        journal = json.loads(journal_path.read_text()) if journal_path.exists() else {
-            "matrix": matrix.model_dump(mode="json"), "skipped": plan["skipped"], "cases": {},
-            "complete": False}
+        journal = (
+            json.loads(journal_path.read_text())
+            if journal_path.exists()
+            else {
+                "matrix": matrix.model_dump(mode="json"),
+                "skipped": plan["skipped"],
+                "cases": {},
+                "complete": False,
+            }
+        )
         started = time.monotonic()
         for config in plan["cases"]:
             key = case_key(config)
@@ -226,7 +305,10 @@ def execute_matrix(matrix: ExperimentMatrix, root, *, cache="state/datasets", re
             if prior.get("status") == "passed":
                 if services and not prior.get("tracking"):
                     prior["tracking"] = _publish_local_case(
-                        directory, plan["matrix"], config, run_key=prior["run_key"],
+                        directory,
+                        plan["matrix"],
+                        config,
+                        run_key=prior["run_key"],
                     )
                     atomic_write(journal_path, json.dumps(journal, indent=2).encode())
                 continue
@@ -241,12 +323,19 @@ def execute_matrix(matrix: ExperimentMatrix, root, *, cache="state/datasets", re
                     tracking = _publish_local_case(directory, plan["matrix"], config, report)
             except Exception as error:
                 # Store type only: third-party error strings can contain credential URLs.
-                journal["cases"][key] = {"status": "failed", "error_type": type(error).__name__,
-                                         **describe(config)}
+                journal["cases"][key] = {
+                    "status": "failed",
+                    "error_type": type(error).__name__,
+                    **describe(config),
+                }
                 atomic_write(journal_path, json.dumps(journal, indent=2).encode())
                 raise
-            journal["cases"][key] = {"status": "passed", **describe(config), "run_key": report["run_key"],
-                                     "metrics": _headline(report)}
+            journal["cases"][key] = {
+                "status": "passed",
+                **describe(config),
+                "run_key": report["run_key"],
+                "metrics": _headline(report),
+            }
             if tracking:
                 journal["cases"][key]["tracking"] = tracking
             atomic_write(journal_path, json.dumps(journal, indent=2).encode())

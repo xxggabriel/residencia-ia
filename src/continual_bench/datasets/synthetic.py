@@ -77,9 +77,23 @@ class SyntheticSource:
 class MovingSyntheticSource:
     """River-native continuously moving binary concepts; no discrete truth points."""
 
-    def __init__(self, name, samples, seed, label_delay, epoch, *, n_features=10,
-                 n_drift_features=2, mag_change=0.001, noise_percentage=0.05,
-                 sigma=0.1, n_centroids=20, n_drift_centroids=10, change_speed=0.001):
+    def __init__(
+        self,
+        name,
+        samples,
+        seed,
+        label_delay,
+        epoch,
+        *,
+        n_features=10,
+        n_drift_features=2,
+        mag_change=0.001,
+        noise_percentage=0.05,
+        sigma=0.1,
+        n_centroids=20,
+        n_drift_centroids=10,
+        change_speed=0.001,
+    ):
         validate_bounds(samples, seed, label_delay, epoch)
         if name not in {"hyperplane", "rbf_drift"}:
             raise ValueError("unsupported moving synthetic source")
@@ -88,15 +102,27 @@ class MovingSyntheticSource:
         if name == "hyperplane":
             if not 1 <= n_drift_features <= n_features or not 0 < mag_change <= 1:
                 raise ValueError("hyperplane requires moving features and positive mag_change")
-            params = dict(seed=seed, n_features=n_features, n_drift_features=n_drift_features,
-                          mag_change=mag_change, noise_percentage=noise_percentage, sigma=sigma)
+            params = dict(
+                seed=seed,
+                n_features=n_features,
+                n_drift_features=n_drift_features,
+                mag_change=mag_change,
+                noise_percentage=noise_percentage,
+                sigma=sigma,
+            )
             constructor = synth.Hyperplane
         else:
             if not 1 <= n_drift_centroids <= n_centroids <= 10_000 or not 0 < change_speed <= 1:
                 raise ValueError("rbf_drift requires moving centroids and positive change_speed")
-            params = dict(seed_model=seed, seed_sample=seed, n_classes=2, n_features=n_features,
-                          n_centroids=n_centroids, n_drift_centroids=n_drift_centroids,
-                          change_speed=change_speed)
+            params = dict(
+                seed_model=seed,
+                seed_sample=seed,
+                n_classes=2,
+                n_features=n_features,
+                n_centroids=n_centroids,
+                n_drift_centroids=n_drift_centroids,
+                change_speed=change_speed,
+            )
             constructor = synth.RandomRBFDrift
         # Instantiate now so native parameter errors fail before a run is admitted.
         constructor(**params)
@@ -111,36 +137,68 @@ class MovingSyntheticSource:
             if y not in (0, 1):
                 raise ValueError("binary generator emitted a non-binary target")
             timestamp = self.epoch + seq
-            yield Event(stable_identity([self.version, seq]), seq, timestamp, timestamp + self.label_delay,
-                        {str(k): v for k, v in x.items()}, bool(y), None)
+            yield Event(
+                stable_identity([self.version, seq]),
+                seq,
+                timestamp,
+                timestamp + self.label_delay,
+                {str(k): v for k, v in x.items()},
+                bool(y),
+                None,
+            )
 
     def manifest(self):
-        return {"adapter": "river-moving-v2", "name": self.name, "version": self.version,
-                "river_version": "0.26.1",
-                "samples": self.samples, "seed": self.seed, "params": self.params,
-                "task": "binary", "drift_kind": "continuously_moving_concept",
-                "changepoints": None, "timestamp_kind": "simulated_ordinal_seconds",
-                "epoch": self.epoch, "label_delay_seconds": self.label_delay,
-                "license": "BSD-3-Clause (generator implementation)",
-                "source": "https://github.com/online-ml/river/tree/0.26.1/river/datasets/synth"}
+        return {
+            "adapter": "river-moving-v2",
+            "name": self.name,
+            "version": self.version,
+            "river_version": "0.26.1",
+            "samples": self.samples,
+            "seed": self.seed,
+            "params": self.params,
+            "task": "binary",
+            "drift_kind": "continuously_moving_concept",
+            "changepoints": None,
+            "timestamp_kind": "simulated_ordinal_seconds",
+            "epoch": self.epoch,
+            "label_delay_seconds": self.label_delay,
+            "license": "BSD-3-Clause (generator implementation)",
+            "source": "https://github.com/online-ml/river/tree/0.26.1/river/datasets/synth",
+        }
 
 
 class FriedmanDriftSource:
     """Native regression samples; binary runner rejection prevents target collapse."""
 
-    def __init__(self, samples, seed, label_delay=0, epoch=0, *, name="friedman_drift",
-                 drift_type="gra", position=None, transition_window=0):
+    def __init__(
+        self,
+        samples,
+        seed,
+        label_delay=0,
+        epoch=0,
+        *,
+        name="friedman_drift",
+        drift_type="gra",
+        position=None,
+        transition_window=0,
+    ):
         validate_bounds(samples, seed, label_delay, epoch)
         count = 3 if drift_type == "lea" else 2
         position = tuple(position or (samples * i // (count + 1) for i in range(1, count + 1)))
-        if (len(position) != count or tuple(sorted(set(position))) != position
-                or position[0] < 1 or position[-1] >= samples):
+        if (
+            len(position) != count
+            or tuple(sorted(set(position))) != position
+            or position[0] < 1
+            or position[-1] >= samples
+        ):
             raise ValueError("drift positions must be strictly increasing inside the sample range")
-        if transition_window < 0 or (drift_type == "gsg" and
-                                   any(b - a <= transition_window for a, b in zip(position, position[1:]))):
+        if transition_window < 0 or (
+            drift_type == "gsg" and any(b - a <= transition_window for a, b in zip(position, position[1:]))
+        ):
             raise ValueError("transition windows must be nonnegative and nonoverlapping")
-        self.params = dict(seed=seed, drift_type=drift_type, position=position,
-                           transition_window=transition_window)
+        self.params = dict(
+            seed=seed, drift_type=drift_type, position=position, transition_window=transition_window
+        )
         synth.FriedmanDrift(**self.params)
         self.name, self.samples, self.seed = name, samples, seed
         self.label_delay, self.epoch = label_delay, epoch
@@ -151,19 +209,33 @@ class FriedmanDriftSource:
         for seq, (x, y) in enumerate(islice(synth.FriedmanDrift(**self.params), self.samples)):
             timestamp = self.epoch + seq
             identity = stable_identity([self.version, seq])
-            yield TaskSample(identity, seq, timestamp, timestamp + self.label_delay,
-                             {str(k): v for k, v in x.items()}, float(y))
+            yield TaskSample(
+                identity,
+                seq,
+                timestamp,
+                timestamp + self.label_delay,
+                {str(k): v for k, v in x.items()},
+                float(y),
+            )
 
     def events(self):
         raise ValueError("FriedmanDrift is regression; use samples_iter() and a regression evaluator")
 
     def manifest(self):
         # River uses a zero-based counter: the new regime starts at seq=position.
-        return {"adapter": "river-friedman-v1", "name": self.name, "version": self.version,
-                "river_version": "0.26.1",
-                "task": "regression", "samples": self.samples, "params": self.params,
-                "changepoints": list(self.params["position"]),
-                "drift_kind": "concept", "epoch": self.epoch,
-                "timestamp_kind": "simulated_ordinal_seconds", "label_delay_seconds": self.label_delay,
-                "license": "BSD-3-Clause (generator implementation)",
-                "source": "https://github.com/online-ml/river/blob/0.26.1/river/datasets/synth/friedman.py"}
+        return {
+            "adapter": "river-friedman-v1",
+            "name": self.name,
+            "version": self.version,
+            "river_version": "0.26.1",
+            "task": "regression",
+            "samples": self.samples,
+            "params": self.params,
+            "changepoints": list(self.params["position"]),
+            "drift_kind": "concept",
+            "epoch": self.epoch,
+            "timestamp_kind": "simulated_ordinal_seconds",
+            "label_delay_seconds": self.label_delay,
+            "license": "BSD-3-Clause (generator implementation)",
+            "source": "https://github.com/online-ml/river/blob/0.26.1/river/datasets/synth/friedman.py",
+        }

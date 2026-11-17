@@ -19,8 +19,13 @@ def test_native_pipeline_uses_processing_output_and_tracks_each_job(monkeypatch)
     monkeypatch.syspath_prepend(str(scripts))
     make = run_path(str(scripts / "native_pipeline.py"))["pipeline_definition"]
     definition = make(
-        bucket="b", role="role", runtime_image="runtime", ml_image="ml",
-        git_sha="a" * 40, key_arn="key", mlflow_arn="app",
+        bucket="b",
+        role="role",
+        runtime_image="runtime",
+        ml_image="ml",
+        git_sha="a" * 40,
+        key_arn="key",
+        mlflow_arn="app",
     )
     steps = {step["Type"]: step for step in definition["Steps"]}
     processing = steps["Processing"]["Arguments"]

@@ -38,8 +38,11 @@ def supplemental_report(report, directory=None, *, near_future=None):
     settings = report.get("tracking", {}).get("settings", {})
     continual = report.get("tracking", {}).get("continual") or {}
     rows = continual.get("matrix", [])
-    matrix = [[row["accuracies"].get(str(task)) for task in range(len(rows[0]["accuracies"]))]
-              for row in rows] if rows else []
+    matrix = (
+        [[row["accuracies"].get(str(task)) for task in range(len(rows[0]["accuracies"]))] for row in rows]
+        if rows
+        else []
+    )
     candidates = report.get("candidates", report.get("updates", []))
     retrains = [row for row in candidates if row["action"] == "reset_retrain"]
     rejected = [row for row in candidates if not row.get("promoted", True)]
@@ -58,15 +61,25 @@ def supplemental_report(report, directory=None, *, near_future=None):
         "version": "semana09-metrics-v1",
         "detection": validated_detection(report, settings.get("detection_window", 500)),
         "task_matrix": task_matrix_metrics(matrix),
-        "near_future": near_future.report() if near_future is not None else {
-            "near_future_accuracy": None, "reason": "frozen_future_predictions_not_captured"},
+        "near_future": near_future.report()
+        if near_future is not None
+        else {"near_future_accuracy": None, "reason": "frozen_future_predictions_not_captured"},
         "resources": {
             "source": "residency-metrics-v1",
-            "metrics": {name: value
-                        for name, value in report.get("tracking", {}).get("metrics", {}).items()
-                        if name in {"train_seconds", "prediction_seconds", "process_peak_rss_bytes",
-                                    "sampled_rss_byte_seconds", "retrain_count",
-                                    "update_count", "cost_total"}},
+            "metrics": {
+                name: value
+                for name, value in report.get("tracking", {}).get("metrics", {}).items()
+                if name
+                in {
+                    "train_seconds",
+                    "prediction_seconds",
+                    "process_peak_rss_bytes",
+                    "sampled_rss_byte_seconds",
+                    "retrain_count",
+                    "update_count",
+                    "cost_total",
+                }
+            },
             "candidates": candidate_resources,
             "unit": settings.get("costs", {}).get("unit") if settings.get("costs") else None,
             "interpretation": "scenario cost is not measured currency, energy or carbon",
@@ -75,6 +88,8 @@ def supplemental_report(report, directory=None, *, near_future=None):
     if directory is not None:
         from continual_bench.infrastructure.storage import atomic_write
 
-        atomic_write(Path(directory) / "task_evaluation-metrics.json",
-                     json.dumps(supplement, sort_keys=True, indent=2, allow_nan=False).encode())
+        atomic_write(
+            Path(directory) / "task_evaluation-metrics.json",
+            json.dumps(supplement, sort_keys=True, indent=2, allow_nan=False).encode(),
+        )
     return supplement

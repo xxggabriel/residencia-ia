@@ -15,10 +15,12 @@ def pyfunc_dependencies(model_name):
 
         version = xgboost.__version__
         marker = "sys_platform == 'linux' and platform_machine == 'x86_64'"
-        requirements.extend([
-            f"xgboost-cpu=={version}; {marker}",
-            f"xgboost=={version}; sys_platform != 'linux' or platform_machine != 'x86_64'",
-        ])
+        requirements.extend(
+            [
+                f"xgboost-cpu=={version}; {marker}",
+                f"xgboost=={version}; sys_platform != 'linux' or platform_machine != 'x86_64'",
+            ]
+        )
     return requirements
 
 

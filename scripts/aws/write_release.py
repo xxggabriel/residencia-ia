@@ -16,7 +16,13 @@ import tempfile
 
 SPOT_BACKEND = "batch-fargate-spot"
 STABLE_FIELDS = (
-    "version", "git_sha", "stack", "region", "images", "job_definitions", "control_function",
+    "version",
+    "git_sha",
+    "stack",
+    "region",
+    "images",
+    "job_definitions",
+    "control_function",
     "benchmark_compute",
 )
 

@@ -35,7 +35,8 @@ def release(collector, item, now=None):
 
 def detector_report(points=None, alarms=(11, 12, 29), observed=40, warmup=5):
     return {
-        "dataset": {"changepoints": points}, "observed": observed,
+        "dataset": {"changepoints": points},
+        "observed": observed,
         "metrics": {"n": observed - warmup},
         "config": {"detector": {"name": "adwin"}, "dataset": {"epoch": 100}},
         "alarms": [{"seq": seq, "released_at": 100 + seq + 2} for seq in alarms],
@@ -69,11 +70,18 @@ def test_task_matrix_missing_cells_propagate_and_positive_bwt_is_retained():
     assert task_matrix_metrics([[0.4]])["metrics"]["gem_backward_transfer"] is None
 
 
-@pytest.mark.parametrize("matrix,initial", [
-    ([[0.5], [0.3]], None), ([[0.5, 0.3], [0.4]], None),
-    ([[float("nan")]], None), ([[1.01]], None), ([[True]], None),
-    ([[0.3]], []), ([[0.5]], [float("inf")]),
-])
+@pytest.mark.parametrize(
+    "matrix,initial",
+    [
+        ([[0.5], [0.3]], None),
+        ([[0.5, 0.3], [0.4]], None),
+        ([[float("nan")]], None),
+        ([[1.01]], None),
+        ([[True]], None),
+        ([[0.3]], []),
+        ([[0.5]], [float("inf")]),
+    ],
+)
 def test_invalid_task_matrices_are_rejected(matrix, initial):
     with pytest.raises(ValueError):
         task_matrix_metrics(matrix, initial)
@@ -93,10 +101,18 @@ def test_detector_matching_reuses_one_to_one_censored_implementation():
     assert validated_detection(detector_report(), 5)["metrics"]["drift_f1"] is None
 
 
-@pytest.mark.parametrize("points,alarms,tolerance", [
-    ([20, 10], [21], 5), ([10, 10], [11], 5), ([True], [11], 5),
-    ([10], [11, 11], 5), ([40], [], 5), ([10], [40], 5), ([10], [11], 0),
-])
+@pytest.mark.parametrize(
+    "points,alarms,tolerance",
+    [
+        ([20, 10], [21], 5),
+        ([10, 10], [11], 5),
+        ([True], [11], 5),
+        ([10], [11, 11], 5),
+        ([40], [], 5),
+        ([10], [40], 5),
+        ([10], [11], 0),
+    ],
+)
 def test_invalid_annotation_contract_rejected(points, alarms, tolerance):
     with pytest.raises(ValueError):
         validated_detection(detector_report(points, alarms), tolerance)

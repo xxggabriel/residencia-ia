@@ -23,8 +23,21 @@ def download(root, dataset):
         url = f"https://huggingface.co/datasets/ziadatalabs/{spec['repo']}/resolve/{spec['revision']}/{name}"
         if not partial.is_file() or sha256_file(partial) != expected:
             subprocess.run(
-                ["curl", "--fail", "--location", "--retry", "4", "--connect-timeout", "15",
-                 "--continue-at", "-", "--output", str(partial), url], check=True,
+                [
+                    "curl",
+                    "--fail",
+                    "--location",
+                    "--retry",
+                    "4",
+                    "--connect-timeout",
+                    "15",
+                    "--continue-at",
+                    "-",
+                    "--output",
+                    str(partial),
+                    url,
+                ],
+                check=True,
             )
         if sha256_file(partial) != expected:
             partial.unlink()

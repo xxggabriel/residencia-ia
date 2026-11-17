@@ -21,8 +21,15 @@ class PartitionedSamples:
 
     def samples_iter(self):
         for index in range(20):
-            yield TaskSample(str(index), index, index, index, {"x": float(index)}, str(index % 2),
-                             split="train" if index < 16 else "test")
+            yield TaskSample(
+                str(index),
+                index,
+                index,
+                index,
+                {"x": float(index)},
+                str(index % 2),
+                split="train" if index < 16 else "test",
+            )
 
 
 def check_artifacts(directory, report):

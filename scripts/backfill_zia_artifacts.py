@@ -37,7 +37,12 @@ def main():
                     raise ValueError(f"local Zia receipt differs from MLflow: {key}")
                 report = json.loads((directory / "report.json").read_text())
                 result = publish_artifacts(
-                    client, directory, run.info.run_id, report, args.data, derived=True,
+                    client,
+                    directory,
+                    run.info.run_id,
+                    report,
+                    args.data,
+                    derived=True,
                     elapsed_seconds=status["finished_at"] - status["started_at"],
                 )
                 receipt.update(result)

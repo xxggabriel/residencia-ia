@@ -21,12 +21,15 @@ from .arff import file_sha256
 
 SPECS = {
     "insects": {
-        "variant": "abrupt_balanced", "source_version": "River-0.26.1-public-file-mapping",
+        "variant": "abrupt_balanced",
+        "source_version": "River-0.26.1-public-file-mapping",
         "source": "https://sites.google.com/view/uspdsrepository",
-        "url": ("https://drive.google.com/uc?export=download&"
-                "id=1WQoIuuVgiuXfzv4kvao6XuLQG37V923O&confirm=t"),
-        "filename": "abrupt_balanced.csv", "expected_bytes": 14_151_769,
-        "max_bytes": 20 * 1024**2, "expected_rows": 52_848, "features": 33,
+        "url": ("https://drive.google.com/uc?export=download&id=1WQoIuuVgiuXfzv4kvao6XuLQG37V923O&confirm=t"),
+        "filename": "abrupt_balanced.csv",
+        "expected_bytes": 14_151_769,
+        "max_bytes": 20 * 1024**2,
+        "expected_rows": 52_848,
+        "features": 33,
         "license": "CC-BY-4.0 (USP repository; attribution retained)",
         "license_reference": "https://sites.google.com/view/uspdsrepository",
         "license_note": "Repository warns that external-source datasets can have additional restrictions.",
@@ -35,14 +38,18 @@ SPECS = {
         "variant": "uci-224-ten-batches-corrected-batch10",
         "source_version": "UCI224-batch10-corrected-2013-10-14",
         "source": "https://archive.ics.uci.edu/dataset/224/gas+sensor+array+drift+dataset",
-        "url": ("https://archive.ics.uci.edu/static/public/224/"
-                "gas%2Bsensor%2Barray%2Bdrift%2Bdataset.zip"),
-        "filename": "gas-sensor-array-drift.zip", "expected_bytes": None,
-        "max_bytes": 16 * 1024**2, "expected_rows": 13_910, "features": 128,
+        "url": ("https://archive.ics.uci.edu/static/public/224/gas%2Bsensor%2Barray%2Bdrift%2Bdataset.zip"),
+        "filename": "gas-sensor-array-drift.zip",
+        "expected_bytes": None,
+        "max_bytes": 16 * 1024**2,
+        "expected_rows": 13_910,
+        "features": 128,
         "license": "CC-BY-4.0 (current UCI catalog)",
         "license_reference": "https://archive.ics.uci.edu/dataset/224/gas+sensor+array+drift+dataset",
-        "license_note": ("Current UCI license says CC-BY-4.0; legacy descriptive text says research-only. "
-                         "This Residencia IA acquisition is for research; no additional terms accepted."),
+        "license_note": (
+            "Current UCI license says CC-BY-4.0; legacy descriptive text says research-only. "
+            "This Residencia IA acquisition is for research; no additional terms accepted."
+        ),
     },
 }
 
@@ -151,8 +158,11 @@ def _download(url, path, *, max_bytes, timeout=60, opener=None):
                     output.write(block)
                 output.flush()
                 os.fsync(output.fileno())
-            return {"bytes": total, "etag": response.headers.get("ETag"),
-                    "last_modified": response.headers.get("Last-Modified")}
+            return {
+                "bytes": total,
+                "etag": response.headers.get("ETag"),
+                "last_modified": response.headers.get("Last-Modified"),
+            }
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"dataset origin rejected acquisition with HTTP {error.code}") from None
 
@@ -168,8 +178,11 @@ def _acquire(name, cache, *, download):
         if not raw.is_file() or not receipt_path.is_file() or raw.is_symlink() or receipt_path.is_symlink():
             raise ValueError("incomplete or symlinked stream cache; choose a new isolated cache directory")
         receipt = json.loads(receipt_path.read_text())
-        if (receipt.get("url") != spec["url"] or receipt.get("source_version") != spec["source_version"]
-                or receipt.get("raw_sha256") != file_sha256(raw)):
+        if (
+            receipt.get("url") != spec["url"]
+            or receipt.get("source_version") != spec["source_version"]
+            or receipt.get("raw_sha256") != file_sha256(raw)
+        ):
             raise ValueError("stream cache checksum or source contract mismatch")
         return raw, receipt
     if not download:
@@ -181,9 +194,15 @@ def _acquire(name, cache, *, download):
         if spec["expected_bytes"] is not None and transport["bytes"] != spec["expected_bytes"]:
             raise ValueError("source byte length differs from the pinned variant")
         admission = _validate(name, path)
-        receipt = {"schema_version": 1, "url": spec["url"], "source_version": spec["source_version"],
-                   "raw_sha256": file_sha256(path), **transport, **admission,
-                   "checksum_policy": "observed full-file SHA256 pinned in immutable acquisition receipt"}
+        receipt = {
+            "schema_version": 1,
+            "url": spec["url"],
+            "source_version": spec["source_version"],
+            "raw_sha256": file_sha256(path),
+            **transport,
+            **admission,
+            "checksum_policy": "observed full-file SHA256 pinned in immutable acquisition receipt",
+        }
         (stage / "acquisition.json").write_text(json.dumps(receipt, sort_keys=True, indent=2))
         try:
             os.rename(stage, directory)
@@ -200,8 +219,14 @@ class RealStreamSource:
         self.name, self.path, self.receipt = name, Path(raw), receipt
         self.samples, self.seed = limit, seed
         spec = SPECS[name]
-        self.version = _digest({"adapter": "original-real-stream-v1", "name": name,
-                                "raw_sha256": receipt["raw_sha256"], "limit": limit})
+        self.version = _digest(
+            {
+                "adapter": "original-real-stream-v1",
+                "name": name,
+                "raw_sha256": receipt["raw_sha256"],
+                "limit": limit,
+            }
+        )
         self.spec = spec
 
     def samples_iter(self):
@@ -211,29 +236,50 @@ class RealStreamSource:
             if index >= self.samples:
                 break
             identity = _digest([self.receipt["raw_sha256"], index])
-            yield TaskSample(identity, index, index, index, x, label,
-                             task_id=batch - 1 if batch is not None else None,
-                             group=str(batch) if batch is not None else None)
+            yield TaskSample(
+                identity,
+                index,
+                index,
+                index,
+                x,
+                label,
+                task_id=batch - 1 if batch is not None else None,
+                group=str(batch) if batch is not None else None,
+            )
 
     def manifest(self):
-        return {"name": self.name, "task": "multiclass", "adapter": "original-real-stream-v1",
-                "version": self.version, "source_version": self.spec["source_version"],
-                "source": self.spec["source"], "download_source": self.spec["url"],
-                "variant": self.spec["variant"], "license": self.spec["license"],
-                "license_reference": self.spec["license_reference"],
-                "license_note": self.spec["license_note"],
-                "raw_sha256": self.receipt["raw_sha256"], "raw_bytes": self.receipt["bytes"],
-                "raw_rows": self.receipt["rows"], "samples": self.samples,
-                "schema": {"features": self.spec["features"], "target": "six-class original string label"},
-                "raw_class_counts": self.receipt["labels"], "files": self.receipt["files"],
-                "order": ("published CSV row order" if self.name == "insects"
-                          else "batch1..batch10, row order"),
-                "selection": {"kind": "published_prefix", "seq_range": [0, self.samples]},
-                "timestamp_kind": "simulated_ordinal; not original per-example collection time",
-                "changepoints": None, "seed_ignored": True, "requested_seed": self.seed,
-                "cache": str(self.path.parent), "label_delay_seconds": 0,
-                "limitations": ["Prefix smoke may contain fewer classes and batches than the complete source",
-                                "No true per-example drift annotations were supplied or invented"]}
+        return {
+            "name": self.name,
+            "task": "multiclass",
+            "adapter": "original-real-stream-v1",
+            "version": self.version,
+            "source_version": self.spec["source_version"],
+            "source": self.spec["source"],
+            "download_source": self.spec["url"],
+            "variant": self.spec["variant"],
+            "license": self.spec["license"],
+            "license_reference": self.spec["license_reference"],
+            "license_note": self.spec["license_note"],
+            "raw_sha256": self.receipt["raw_sha256"],
+            "raw_bytes": self.receipt["bytes"],
+            "raw_rows": self.receipt["rows"],
+            "samples": self.samples,
+            "schema": {"features": self.spec["features"], "target": "six-class original string label"},
+            "raw_class_counts": self.receipt["labels"],
+            "files": self.receipt["files"],
+            "order": ("published CSV row order" if self.name == "insects" else "batch1..batch10, row order"),
+            "selection": {"kind": "published_prefix", "seq_range": [0, self.samples]},
+            "timestamp_kind": "simulated_ordinal; not original per-example collection time",
+            "changepoints": None,
+            "seed_ignored": True,
+            "requested_seed": self.seed,
+            "cache": str(self.path.parent),
+            "label_delay_seconds": 0,
+            "limitations": [
+                "Prefix smoke may contain fewer classes and batches than the complete source",
+                "No true per-example drift annotations were supplied or invented",
+            ],
+        }
 
 
 def prepare_real_stream(name, cache, limit=100, seed=42, *, download=False):

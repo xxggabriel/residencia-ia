@@ -31,8 +31,9 @@ def logistic_multiclass(learning_rate: float = 0.05) -> EncodedEstimator:
     """One-vs-rest logistic regression over the shared scaler/one-hot encoding."""
     if not 0 < learning_rate <= 1:
         raise ValueError("learning_rate must be in (0,1]")
-    return EncodedEstimator(multiclass.OneVsRestClassifier(
-        linear_model.LogisticRegression(optimizer=optim.SGD(learning_rate))))
+    return EncodedEstimator(
+        multiclass.OneVsRestClassifier(linear_model.LogisticRegression(optimizer=optim.SGD(learning_rate)))
+    )
 
 
 class LinearRegressor:

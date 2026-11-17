@@ -31,7 +31,10 @@ class TrackingBackend(Protocol):
     def search_runs(self, experiment_id: str, filter_string: str) -> list[RunRecord]: ...
 
     def create_run(
-        self, experiment_id: str, tags: dict[str, str], run_name: str | None = None,
+        self,
+        experiment_id: str,
+        tags: dict[str, str],
+        run_name: str | None = None,
     ) -> RunRecord: ...
 
     def get_run(self, run_id: str) -> RunRecord: ...

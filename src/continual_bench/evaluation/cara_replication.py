@@ -29,27 +29,74 @@ BATCHES, OFFLINE, GRID = 100, 25, 100
 REFERENCE = "ac2a600a3bbc5729087318087c9def96104c9023"
 RULES = ("cara", "cara_cumulative", "cara_periodic", "markov", "frozen", "oracle_staleness", "always_retrain")
 DRIFT_RULES = ("adwin", "ddm")
-DATASETS = ("covcon-d", "covcon-s", "circle-d", "circle-s", "gauss-d", "gauss-s", "electricity", "airlines",
-            "covertype")
+DATASETS = (
+    "covcon-d",
+    "covcon-s",
+    "circle-d",
+    "circle-s",
+    "gauss-d",
+    "gauss-s",
+    "electricity",
+    "airlines",
+    "covertype",
+)
 # Tables 2-4 of the paper: CARA-T, CARA-CT, CARA-P, Oracle (retrains/accuracy), NR, Markov.
 PAPER = {
-    "scpe": {"covcon-d": (17.72, 19.26, 16.3), "covcon-s": (15.58, 22.94, 104.79),
-             "circle-d": (45.61, 47.29, 84.96), "circle-s": (33.89, 45.15, 79.34),
-             "gauss-d": (8.63, 59.93, 135.95), "gauss-s": (66.62, 96.38, 202.09),
-             "electricity": (8.32, 40.32, 64.07), "airlines": (6.11, 5.48, 5.45),
-             "covertype": (26.39, 27.92, 38.37)},
-    "accuracy_oracle": {"covcon-d": 0.76, "covcon-s": 0.8, "circle-d": 0.97, "circle-s": 0.96,
-                        "gauss-d": 0.92, "gauss-s": 1.0, "electricity": 0.71, "airlines": 0.62,
-                        "covertype": 0.76},
-    "accuracy_cara_t": {"covcon-d": 0.7, "covcon-s": 0.79, "circle-d": 0.96, "circle-s": 0.93,
-                        "gauss-d": 0.9, "gauss-s": 0.99, "electricity": 0.68, "airlines": 0.6,
-                        "covertype": 0.66},
-    "retrains_oracle": {"covcon-d": 11.2, "covcon-s": 8.21, "circle-d": 3.89, "circle-s": 3.09,
-                        "gauss-d": 2.23, "gauss-s": 1.92, "electricity": 2.36, "airlines": 25.23,
-                        "covertype": 19.42},
-    "retrains_cara_t": {"covcon-d": 13.89, "covcon-s": 10.05, "circle-d": 5.67, "circle-s": 3.56,
-                        "gauss-d": 2.62, "gauss-s": 2.57, "electricity": 2.39, "airlines": 27.69,
-                        "covertype": 16.62},
+    "scpe": {
+        "covcon-d": (17.72, 19.26, 16.3),
+        "covcon-s": (15.58, 22.94, 104.79),
+        "circle-d": (45.61, 47.29, 84.96),
+        "circle-s": (33.89, 45.15, 79.34),
+        "gauss-d": (8.63, 59.93, 135.95),
+        "gauss-s": (66.62, 96.38, 202.09),
+        "electricity": (8.32, 40.32, 64.07),
+        "airlines": (6.11, 5.48, 5.45),
+        "covertype": (26.39, 27.92, 38.37),
+    },
+    "accuracy_oracle": {
+        "covcon-d": 0.76,
+        "covcon-s": 0.8,
+        "circle-d": 0.97,
+        "circle-s": 0.96,
+        "gauss-d": 0.92,
+        "gauss-s": 1.0,
+        "electricity": 0.71,
+        "airlines": 0.62,
+        "covertype": 0.76,
+    },
+    "accuracy_cara_t": {
+        "covcon-d": 0.7,
+        "covcon-s": 0.79,
+        "circle-d": 0.96,
+        "circle-s": 0.93,
+        "gauss-d": 0.9,
+        "gauss-s": 0.99,
+        "electricity": 0.68,
+        "airlines": 0.6,
+        "covertype": 0.66,
+    },
+    "retrains_oracle": {
+        "covcon-d": 11.2,
+        "covcon-s": 8.21,
+        "circle-d": 3.89,
+        "circle-s": 3.09,
+        "gauss-d": 2.23,
+        "gauss-s": 1.92,
+        "electricity": 2.36,
+        "airlines": 25.23,
+        "covertype": 19.42,
+    },
+    "retrains_cara_t": {
+        "covcon-d": 13.89,
+        "covcon-s": 10.05,
+        "circle-d": 5.67,
+        "circle-s": 3.56,
+        "gauss-d": 2.62,
+        "gauss-s": 2.57,
+        "electricity": 2.39,
+        "airlines": 27.69,
+        "covertype": 16.62,
+    },
 }
 
 
@@ -105,8 +152,11 @@ class ForestLearner:
         positions = forest.classes_.tolist()
         if positive is None:
             return prediction, None
-        scores = (totals[:, positions.index(positive)] / denominator if positive in positions
-                  else np.zeros(x.shape[0]))
+        scores = (
+            totals[:, positions.index(positive)] / denominator
+            if positive in positions
+            else np.zeros(x.shape[0])
+        )
         return prediction, scores
 
     @staticmethod
@@ -118,16 +168,26 @@ class ForestLearner:
         return pickle_state(state), "pkl"
 
 
-def batches_for(name, *, directory="~/.cache/continual-bench/datasets", electricity_path=None,
-                airlines_path=None, covertype_path=None, batches=BATCHES):
+def batches_for(
+    name,
+    *,
+    directory="~/.cache/continual-bench/datasets",
+    electricity_path=None,
+    airlines_path=None,
+    covertype_path=None,
+    batches=BATCHES,
+):
     base, _, variant = name.partition("-")
     if base in ("gauss", "circle", "covcon"):
         stream = getattr(data, f"cara_{base}")(batches)
         queries = data.cara_static_queries(base, batches) if variant == "s" else None
         return stream, queries, 20.0
     paths = {"electricity": electricity_path, "airlines": airlines_path, "covertype": covertype_path}
-    files = {"electricity": "elec.csv", "airlines": "airlines.csv",
-             "covertype": "covtype.libsvm.binary.scale.bz2"}
+    files = {
+        "electricity": "elec.csv",
+        "airlines": "airlines.csv",
+        "covertype": "covtype.libsvm.binary.scale.bz2",
+    }
     path = Path(paths[base] or Path(directory).expanduser() / files[base]).expanduser()
     return data.cara_real_batches(base, path, batches), None, None if base == "airlines" else 20.0
 
@@ -141,8 +201,19 @@ class Phase:
     drift_updates: dict | None = None
 
 
-def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_baselines=False,
-                tracking_dataset=None, phase_name=None, initial=None, drift_backend=None):
+def build_phase(
+    batches,
+    learner,
+    gamma,
+    queries=None,
+    *,
+    workers=1,
+    drift_baselines=False,
+    tracking_dataset=None,
+    phase_name=None,
+    initial=None,
+    drift_backend=None,
+):
     """Train and score each candidate inside a single phase, using the reference's 90/10 split."""
     from sklearn.metrics.pairwise import rbf_kernel
     from sklearn.model_selection import train_test_split
@@ -155,8 +226,9 @@ def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_basel
         before = time.perf_counter()
         models.append(learner.fit(i, x, y))
         fit_seconds.append(time.perf_counter() - before)
-    own_errors = [learner.losses(model, x, y).astype(bool)
-                  for model, (x, _, y, _) in zip(models, splits, strict=True)]
+    own_errors = [
+        learner.losses(model, x, y).astype(bool) for model, (x, _, y, _) in zip(models, splits, strict=True)
+    ]
 
     def score(t):
         x, _, y, _ = splits[t]
@@ -165,7 +237,7 @@ def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_basel
         # points only, then sum query costs in the same units as the reference.
         weights = rbf_kernel(query, x, gamma=gamma).sum(axis=0) / len(y)
         stale, accuracy, errors = [], [], []
-        for m, model in enumerate(models[:t + 1]):
+        for m, model in enumerate(models[: t + 1]):
             accuracy.append(1.0 - learner.losses(model, query, labels).mean())
             loss = own_errors[m] if m == t else learner.losses(model, x, y).astype(bool)
             if drift_baselines or drift_backend is not None:
@@ -174,8 +246,11 @@ def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_basel
                 stale.append(0.0)
                 continue
             old_x, old_loss = splits[m][0], own_errors[m]
-            old_cost = (rbf_kernel(query, old_x[old_loss], gamma=gamma).sum() / len(old_loss)
-                        if old_loss.any() else 0.0)
+            old_cost = (
+                rbf_kernel(query, old_x[old_loss], gamma=gamma).sum() / len(old_loss)
+                if old_loss.any()
+                else 0.0
+            )
             stale.append(float(weights[loss].sum() - old_cost))
         return stale, accuracy, errors
 
@@ -184,8 +259,8 @@ def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_basel
     errors = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for t, (costs, scores, losses) in enumerate(pool.map(score, range(size))):
-            stale[:t + 1, t] = costs
-            accuracy[:t + 1, t] = scores
+            stale[: t + 1, t] = costs
+            accuracy[: t + 1, t] = scores
             errors.append(losses)
     phase = Phase(stale, accuracy, errors)
     drift = None
@@ -196,9 +271,16 @@ def build_phase(batches, learner, gamma, queries=None, *, workers=1, drift_basel
             drift[f"{detector}_alarm_count"] = sum(event["detector"] == detector for event in drift["alarms"])
     if tracking_dataset is not None:
         phase.tracking = candidate_report(
-            tracking_dataset, learner.seed, [(x, y, test, labels) for x, test, y, labels in splits],
-            models, learner, fit_seconds, protocol=f"CARA-paper-{phase_name}-candidates", initial=initial,
-            duration_before_tracking=time.perf_counter() - started, drift=drift,
+            tracking_dataset,
+            learner.seed,
+            [(x, y, test, labels) for x, test, y, labels in splits],
+            models,
+            learner,
+            fit_seconds,
+            protocol=f"CARA-paper-{phase_name}-candidates",
+            initial=initial,
+            duration_before_tracking=time.perf_counter() - started,
+            drift=drift,
             evaluation={
                 "rbf_gamma": gamma,
                 "policy_query_scope": "static_queries" if queries is not None else "batch_holdout",
@@ -289,8 +371,17 @@ def _mean(values):
     return float(np.mean(available)) if available else None
 
 
-def replicate(name, seeds=5, *, kappa_points=GRID, kappa_max=None, progress=None,
-              workers=1, drift_backend=None, **options):
+def replicate(
+    name,
+    seeds=5,
+    *,
+    kappa_points=GRID,
+    kappa_max=None,
+    progress=None,
+    workers=1,
+    drift_backend=None,
+    **options,
+):
     """Evaluate the CARA variants against a retrospective phase-local Oracle."""
     if seeds < 1 or kappa_points < 2 or workers < 1:
         raise ValueError("CARA needs at least one seed and worker, and at least two kappa points")
@@ -307,20 +398,38 @@ def replicate(name, seeds=5, *, kappa_points=GRID, kappa_max=None, progress=None
     matrices = []
     for seed in range(seeds):
         learner = ForestLearner(seed)
-        offline = build_phase(batches[:OFFLINE], learner, gamma, offline_queries, workers=workers,
-                              tracking_dataset=name, phase_name="offline")
+        offline = build_phase(
+            batches[:OFFLINE],
+            learner,
+            gamma,
+            offline_queries,
+            workers=workers,
+            tracking_dataset=name,
+            phase_name="offline",
+        )
         online = build_phase(
-            batches[OFFLINE:], learner, gamma, online_queries, workers=workers,
-            drift_backend=drift_backend, tracking_dataset=name, phase_name="online", initial=0,
+            batches[OFFLINE:],
+            learner,
+            gamma,
+            online_queries,
+            workers=workers,
+            drift_backend=drift_backend,
+            tracking_dataset=name,
+            phase_name="online",
+            initial=0,
         )
         matrices.append((offline, online))
         emit({"event": "matrix", "dataset": name, "seed": seed})
 
     # The authors choose the smallest offline boundary over seeds, rounded to the next
     # integer. Solve the same boundary with a bracketed search instead of fsolve on a plateau.
-    top = kappa_max if kappa_max is not None else min(
-        math.floor(alpha_max_same_batch(phase.stale.T, 0, 1, len(phase.stale) - 1)) + 1
-        for phase, _ in matrices
+    top = (
+        kappa_max
+        if kappa_max is not None
+        else min(
+            math.floor(alpha_max_same_batch(phase.stale.T, 0, 1, len(phase.stale) - 1)) + 1
+            for phase, _ in matrices
+        )
     )
     kappas = np.linspace(0.0, top, kappa_points).tolist()
     emit({"event": "grid", "dataset": name, "kappa_max": top, "points": kappa_points})
@@ -331,22 +440,34 @@ def replicate(name, seeds=5, *, kappa_points=GRID, kappa_max=None, progress=None
         emit({"event": "analysis", "dataset": name, "seed": seed})
 
     curves = {
-        rule: {metric: [_mean(run[i][rule][metric] for run in runs) for i in range(len(kappas))]
-               for metric in runs[0][0][rule]}
+        rule: {
+            metric: [_mean(run[i][rule][metric] for run in runs) for i in range(len(kappas))]
+            for metric in runs[0][0][rule]
+        }
         for rule in (*RULES, *(DRIFT_RULES if drift_backend else ()))
     }
     summary = {
-        rule: {"strategy_scpe": _mean(metrics["strategy_scpe"][1:]),
-               "accuracy": _mean(metrics["average_accuracy"][1:]),
-               "retrains": _mean(metrics["retrains"][1:])}
+        rule: {
+            "strategy_scpe": _mean(metrics["strategy_scpe"][1:]),
+            "accuracy": _mean(metrics["average_accuracy"][1:]),
+            "retrains": _mean(metrics["retrains"][1:]),
+        }
         for rule, metrics in curves.items()
     }
-    return {"dataset": name, "seeds": seeds, "reference": REFERENCE, "kappa_max": top,
-            "summary": summary, "kappa": kappas, "curves": curves, "drift_backend": drift_backend,
-            "kappa_range": "offline-oracle" if kappa_max is None else "fixed",
-            "kernel_gamma": gamma if gamma is not None else "1/n_features",
-            "oracle_retrains": summary["oracle_staleness"]["retrains"],
-            "candidate_tracking": [{"offline": a.tracking, "online": b.tracking} for a, b in matrices]}
+    return {
+        "dataset": name,
+        "seeds": seeds,
+        "reference": REFERENCE,
+        "kappa_max": top,
+        "summary": summary,
+        "kappa": kappas,
+        "curves": curves,
+        "drift_backend": drift_backend,
+        "kappa_range": "offline-oracle" if kappa_max is None else "fixed",
+        "kernel_gamma": gamma if gamma is not None else "1/n_features",
+        "oracle_retrains": summary["oracle_staleness"]["retrains"],
+        "candidate_tracking": [{"offline": a.tracking, "online": b.tracking} for a, b in matrices],
+    }
 
 
 def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fraction=0.25, **options):
@@ -358,9 +479,15 @@ def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fracti
         raise ValueError("showcase horizon exceeds the available batches")
     accuracy, deployed, changes, kappas, tracking = [], [], [], [], []
     for seed in range(seeds):
-        phase = build_phase(stream[:batches], ForestLearner(seed), gamma,
-                            None if queries is None else queries[:batches],
-                            tracking_dataset=name, phase_name="showcase", initial=offline)
+        phase = build_phase(
+            stream[:batches],
+            ForestLearner(seed),
+            gamma,
+            None if queries is None else queries[:batches],
+            tracking_dataset=name,
+            phase_name="showcase",
+            initial=offline,
+        )
         tracking.append(phase.tracking)
         history, online = phase.stale[:offline, :offline], phase.stale[offline:, offline:]
         kappa = fraction * alpha_max_same_batch(history.T, 0, 1, offline - 1)
@@ -375,8 +502,17 @@ def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fracti
         kappas.append(kappa)
     stack, scores = np.asarray(accuracy), np.asarray(deployed)
     marked = [t for t in range(offline, batches) if sum(t in run for run in changes) * 2 >= seeds]
-    return {"dataset": name, "rule": "cara", "seeds": seeds, "batches": batches, "offline": offline,
-            "alpha": float(np.mean(kappas)), "accuracy_mean": stack.mean(axis=0).tolist(),
-            "accuracy_std": stack.std(axis=0).tolist(), "schedule_mean": scores.mean(axis=0).tolist(),
-            "schedule_std": scores.std(axis=0).tolist(), "retrain_batches": marked,
-            "candidate_tracking": tracking}
+    return {
+        "dataset": name,
+        "rule": "cara",
+        "seeds": seeds,
+        "batches": batches,
+        "offline": offline,
+        "alpha": float(np.mean(kappas)),
+        "accuracy_mean": stack.mean(axis=0).tolist(),
+        "accuracy_std": stack.std(axis=0).tolist(),
+        "schedule_mean": scores.mean(axis=0).tolist(),
+        "schedule_std": scores.std(axis=0).tolist(),
+        "retrain_batches": marked,
+        "candidate_tracking": tracking,
+    }

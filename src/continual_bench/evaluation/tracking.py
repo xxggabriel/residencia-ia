@@ -112,13 +112,16 @@ def detector_metrics(report, settings, change_timestamps=None):
             start, end = max(point, evaluation_start), min(deadline, observed)
             if start < end:
                 intervals.append((start, end))
-            candidates = [
-                (a["seq"], i) for i, a in enumerate(alarms) if start <= a["seq"] < end
-            ]
+            candidates = [(a["seq"], i) for i, a in enumerate(alarms) if start <= a["seq"] < end]
             observed_detections += bool(candidates)
             followup_complete = point >= evaluation_start and deadline <= observed
-            row = {"change_seq": point, "deadline": deadline, "observed_end": end,
-                   "censored": not followup_complete, "alarm_seq": min(candidates)[0] if candidates else None}
+            row = {
+                "change_seq": point,
+                "deadline": deadline,
+                "observed_end": end,
+                "censored": not followup_complete,
+                "alarm_seq": min(candidates)[0] if candidates else None,
+            }
             if not followup_complete:
                 censored += 1
                 excluded.update(i for _, i in candidates)
@@ -160,10 +163,13 @@ def detector_metrics(report, settings, change_timestamps=None):
             drift_censored_changes=censored,
             drift_observed_detections=observed_detections,
         )
-        details.update(evaluation_range=[evaluation_start, observed],
-                       censored_alarm_count=len(excluded), stable_exposure_samples=stable_exposure,
-                       stable_false_alarms=stable_alarms,
-                       unmatched_rate_denominator="all evaluated examples; censored-window alarms excluded")
+        details.update(
+            evaluation_range=[evaluation_start, observed],
+            censored_alarm_count=len(excluded),
+            stable_exposure_samples=stable_exposure,
+            stable_false_alarms=stable_alarms,
+            unmatched_rate_denominator="all evaluated examples; censored-window alarms excluded",
+        )
         details["unavailable_reasons"] = {
             "drift_precision": "no_uncensored_alarms",
             "drift_recall": "no_complete_followup_changes",
@@ -181,11 +187,19 @@ def recovery_metrics(report, settings):
     rows = []
     windows = report["windows"]
     for index, point in enumerate(points):
-        previous = [w for w in windows if w["end_seq"] < point
-                    and w["n"] == report["config"]["metric_window"]]
+        previous = [
+            w for w in windows if w["end_seq"] < point and w["n"] == report["config"]["metric_window"]
+        ]
         if not previous:
-            rows.append({"change_seq": point, "delay": None, "available": False,
-                         "censored": False, "reason": "missing_prechange_window"})
+            rows.append(
+                {
+                    "change_seq": point,
+                    "delay": None,
+                    "available": False,
+                    "censored": False,
+                    "reason": "missing_prechange_window",
+                }
+            )
             continue
         target = previous[-1]["accuracy"] - settings["recovery_tolerance"]
         end = points[index + 1] if index + 1 < len(points) else report["observed"]
@@ -241,15 +255,17 @@ def validate_learning_curve(curve):
         step, value = point["step"], point["value"]
         if type(step) is not int or step <= previous:
             raise ValueError("learning curve steps must be nonnegative and strictly increasing")
-        if value is not None and (type(value) not in (int, float)
-                                  or not math.isfinite(value) or not 0 <= value <= 1):
+        if value is not None and (
+            type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1
+        ):
             raise ValueError("learning curve accuracies must be finite in [0,1] or null")
         previous = step
     return curve
 
 
-def build_tracking(report, settings, observation=None, continual=None, predictions=None,
-                   *, change_timestamps=None):
+def build_tracking(
+    report, settings, observation=None, continual=None, predictions=None, *, change_timestamps=None
+):
     settings = copy.deepcopy(settings)
     observation = observation or {}
     metrics = dict(report["metrics"])
@@ -401,25 +417,33 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
             available(key, None, "task_boundary_matrix_and_references_not_captured")
     detection, detection_details, reason = detector_metrics(report, settings, change_timestamps)
     for key, value in detection.items():
-        available(key, value, reason or detection_details.get("unavailable_reasons", {}).get(
-            key, "no_evaluated_exposure"))
+        available(
+            key,
+            value,
+            reason or detection_details.get("unavailable_reasons", {}).get(key, "no_evaluated_exposure"),
+        )
     recovery, recovery_details = recovery_metrics(report, settings)
     for key, value in recovery.items():
         available(key, value, "no_known_changes_or_recovery_not_observed")
     error_sum = sum(1 - w["accuracy"] for w in report["windows"])
     retrains = sum(u["action"] == "reset_retrain" for u in updates)
-    reset_only = (config.get("policy", {}).get("name") != "online"
-                  and config.get("policy", {}).get("action", "reset_retrain") == "reset_retrain"
-                  and all(u["action"] == "reset_retrain" for u in updates)
-                  and len(candidates) == len(updates))
+    reset_only = (
+        config.get("policy", {}).get("name") != "online"
+        and config.get("policy", {}).get("action", "reset_retrain") == "reset_retrain"
+        and all(u["action"] == "reset_retrain" for u in updates)
+        and len(candidates) == len(updates)
+    )
     available(
         "upf_total_cost",
         settings.get("upf_alpha", 1) * retrains + error_sum if reset_only else None,
         "incremental_updates_do_not_follow_the_UPF_retraining_contract",
         "reset_retrain_only_plus_sum_window_error_rates_fixed_policy_not_paper_reproduction",
     )
-    available("posthoc_update_event_cost", settings.get("upf_alpha", 1) * len(updates) + error_sum,
-              scope="all_update_events_including_learn_one_fixed_trajectory_scenario")
+    available(
+        "posthoc_update_event_cost",
+        settings.get("upf_alpha", 1) * len(updates) + error_sum,
+        scope="all_update_events_including_learn_one_fixed_trajectory_scenario",
+    )
     sensitivity = [
         {"alpha": alpha, "value": alpha * len(updates) + error_sum} for alpha in settings["upf_alphas"]
     ]
@@ -427,7 +451,8 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
         {"step": index, "value": row["value"]} for index, row in enumerate(sensitivity)
     ]
     availability["posthoc_cost_sensitivity"] = {
-        "status": "available", "reason": None,
+        "status": "available",
+        "reason": None,
         "scope": "series indexed by alpha grid position; see cost_sensitivity metadata; all update events",
     }
     area = sum(
@@ -440,9 +465,12 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
     costs = profile(settings.get("costs"))
     settings["costs"] = costs
     cost_report = account(
-        costs, errors=metrics["fp"] * costs["false_positive"] + metrics["fn"] * costs["false_negative"],
-        presentations=initial + used, updates=len(candidates),
-        train_seconds=metrics["train_seconds"], predict_seconds=metrics["prediction_seconds"],
+        costs,
+        errors=metrics["fp"] * costs["false_positive"] + metrics["fn"] * costs["false_negative"],
+        presentations=initial + used,
+        updates=len(candidates),
+        train_seconds=metrics["train_seconds"],
+        predict_seconds=metrics["prediction_seconds"],
         model_storage_bytes=report.get("model_versions", {}).get("storage_bytes"),
     )
     cost_total = cost_report["metrics"]["cost_total"]
@@ -454,8 +482,11 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
     def adaptation_cost(update):
         if costs is None or costs["predict_second"]:
             return None
-        return (update["train_samples"] * costs["train_sample"] + costs["update"]
-                + update["seconds"] * costs["train_second"])
+        return (
+            update["train_samples"] * costs["train_sample"]
+            + costs["update"]
+            + update["seconds"] * costs["train_second"]
+        )
 
     gain_rows = []
     for comparison in observation.get("comparisons", []):
@@ -486,21 +517,29 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
     eligible_seqs = {row["seq"] for row in eligible}
     omitted = [u for u in updates if u["seq"] not in eligible_seqs]
     omitted_costs = [adaptation_cost(u) for u in omitted]
-    all_comparable = (bool(updates) and len(gain_rows) == len(updates) and not omitted
-                      and all(row["seq"] == update["seq"]
-                              and row["train_samples"] == update["train_samples"]
-                              for row, update in zip(gain_rows, updates)))
-    available("adaptation_roi_global",
-              sum(row["realized_gain"] for row in eligible) / total_cost
-              if all_comparable and total_cost else None,
-              "requires_all_updates_priced_with_evaluated_future_shadow_horizons",
-              "all_postwarmup_updates_excluding_initial_fit_and_evaluation_overhead")
+    all_comparable = (
+        bool(updates)
+        and len(gain_rows) == len(updates)
+        and not omitted
+        and all(
+            row["seq"] == update["seq"] and row["train_samples"] == update["train_samples"]
+            for row, update in zip(gain_rows, updates)
+        )
+    )
+    available(
+        "adaptation_roi_global",
+        sum(row["realized_gain"] for row in eligible) / total_cost if all_comparable and total_cost else None,
+        "requires_all_updates_priced_with_evaluated_future_shadow_horizons",
+        "all_postwarmup_updates_excluding_initial_fit_and_evaluation_overhead",
+    )
     available("adaptation_roi_eligible_updates", len(eligible))
     available("adaptation_roi_omitted_updates", len(omitted))
     available("adaptation_roi_eligible_cost", total_cost if costs else None, "cost_profile_not_configured")
-    available("adaptation_roi_omitted_priced_cost",
-              sum(omitted_costs) if all(c is not None for c in omitted_costs) and costs else None,
-              "omitted_update_costs_not_fully_priced")
+    available(
+        "adaptation_roi_omitted_priced_cost",
+        sum(omitted_costs) if all(c is not None for c in omitted_costs) and costs else None,
+        "omitted_update_costs_not_fully_priced",
+    )
     rois = [row for row in gain_rows if row["roi"] is not None]
     impacted = sum(row["evaluated"] for row in rois)
     available(
@@ -530,8 +569,12 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
         if not required <= reference.keys() or reference["dataset_sha256"] != report["dataset"]["sha256"]:
             raise ValueError("metric reference must identify matching dataset and evidence")
         evidence_sha = reference["evidence_sha256"]
-        if (reference["protocol"] != report["protocol"] or not isinstance(evidence_sha, str)
-                or len(evidence_sha) != 64 or any(c.lower() not in "0123456789abcdef" for c in evidence_sha)):
+        if (
+            reference["protocol"] != report["protocol"]
+            or not isinstance(evidence_sha, str)
+            or len(evidence_sha) != 64
+            or any(c.lower() not in "0123456789abcdef" for c in evidence_sha)
+        ):
             raise ValueError("metric reference protocol/evidence hash mismatch")
         if not isinstance(reference["evidence_uri"], str) or not reference["evidence_uri"].strip():
             raise ValueError("metric reference requires a nonempty evidence URI")
@@ -564,14 +607,20 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
                 names = ((1, "prequential_samples_ratio_l100"), (0.99, "prequential_samples_ratio_l99"))
             elif curve_scope == "training_iteration_fixed_test":
                 test_sha = reference.get("test_dataset_sha256", "")
-                if (not isinstance(test_sha, str) or len(test_sha) != 64
-                        or any(c.lower() not in "0123456789abcdef" for c in test_sha)):
+                if (
+                    not isinstance(test_sha, str)
+                    or len(test_sha) != 64
+                    or any(c.lower() not in "0123456789abcdef" for c in test_sha)
+                ):
                     raise ValueError("fixed-test curves require a test dataset SHA256")
                 method_curve = validate_learning_curve(reference.get("method_curve"))
                 names = ((1, "learning_speed_l100"), (0.99, "learning_speed_l99"))
-                available("iterations_to_target", first_target(method_curve, settings["target_accuracy"]),
-                          "target_not_reached_at_recorded_fixed_test_iterations",
-                          "externally_provided_training_iterations_same_fixed_test:" + test_sha)
+                available(
+                    "iterations_to_target",
+                    first_target(method_curve, settings["target_accuracy"]),
+                    "target_not_reached_at_recorded_fixed_test_iterations",
+                    "externally_provided_training_iterations_same_fixed_test:" + test_sha,
+                )
             else:
                 raise ValueError("metric reference curve scope mismatch")
             for ratio, name in names:
@@ -664,22 +713,30 @@ def build_tracking(report, settings, observation=None, continual=None, predictio
         "recovery": recovery_details,
         "cost_sensitivity": sensitivity,
         "series_metadata": {
-            **{name: {
-                "step": "observed_seq",
-                "duplicate_step_policy": "latest probe at equal source sequence (final label drain wins)",
-                "raw_probes": "retention_probes",
-            } for name in retention_series},
+            **{
+                name: {
+                    "step": "observed_seq",
+                    "duplicate_step_policy": "latest probe at equal source sequence (final label drain wins)",
+                    "raw_probes": "retention_probes",
+                }
+                for name in retention_series
+            },
             "posthoc_cost_sensitivity": {
-                "step": "zero-based alpha grid index", "alpha_grid": [r["alpha"] for r in sensitivity],
+                "step": "zero-based alpha grid index",
+                "alpha_grid": [r["alpha"] for r in sensitivity],
                 "cost_basis": "all update events including learn_one; fixed policy trajectory",
-                "unit": "normalized_scenario_cost", "paper_UPF_AUC": False,
+                "unit": "normalized_scenario_cost",
+                "paper_UPF_AUC": False,
             },
         },
         "costs": cost_report,
         "adaptation": gain_rows,
-        "adaptation_coverage": {"updates": len(updates), "eligible_updates": len(eligible),
-                                "omitted_update_seqs": [u["seq"] for u in omitted],
-                                "all_updates_comparable": all_comparable},
+        "adaptation_coverage": {
+            "updates": len(updates),
+            "eligible_updates": len(eligible),
+            "omitted_update_seqs": [u["seq"] for u in omitted],
+            "all_updates_comparable": all_comparable,
+        },
         "definitions_sha256": hashlib.sha256(catalog_raw).hexdigest(),
         "aliases": aliases,
         "scopes": {
@@ -701,10 +758,18 @@ def save_tracking_files(directory, report, settings, observer=None, events=None)
     )
     predictions = observer.predictions if observer is not None else None
     changes = set(report["dataset"].get("changepoints") or ())
-    timestamps = ({event.seq: event.timestamp for event in events if event.seq in changes}
-                  if events is not None and changes else None)
+    timestamps = (
+        {event.seq: event.timestamp for event in events if event.seq in changes}
+        if events is not None and changes
+        else None
+    )
     tracking = build_tracking(
-        report, settings, observation, continual, predictions, change_timestamps=timestamps,
+        report,
+        settings,
+        observation,
+        continual,
+        predictions,
+        change_timestamps=timestamps,
     )
     _, definitions_raw = metric_catalog()
     atomic_write(directory / "metric-definitions.json", definitions_raw)
@@ -725,8 +790,10 @@ def save_tracking_files(directory, report, settings, observer=None, events=None)
             "dataset_sha256": report["dataset"]["sha256"],
             "code_sha256": report["environment"]["code_sha256"],
             "task_ends": observer.continual.task_ends,
-            "episodes": [{"episode": episode, "rows": [{"features": x, "label": bool(y)} for x, y in rows]}
-                         for episode, rows in sorted(observer.continual.probes.items())],
+            "episodes": [
+                {"episode": episode, "rows": [{"features": x, "label": bool(y)} for x, y in rows]}
+                for episode, rows in sorted(observer.continual.probes.items())
+            ],
             "protocol": "heldout_episode_probes_never_trained_independent_of_recurrent_concept_identity",
         }
         probes_raw = json.dumps(probes, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
@@ -735,8 +802,10 @@ def save_tracking_files(directory, report, settings, observer=None, events=None)
             "sha256": hashlib.sha256(probes_raw).hexdigest(),
             "rows": sum(len(rows) for rows in observer.continual.probes.values()),
             "episodes": len(observer.continual.probes),
-            "path": "continual-probes.json", "protocol": probes["protocol"],
-            "source_dataset_sha256": probes["dataset_sha256"], "code_sha256": probes["code_sha256"],
+            "path": "continual-probes.json",
+            "protocol": probes["protocol"],
+            "source_dataset_sha256": probes["dataset_sha256"],
+            "code_sha256": probes["code_sha256"],
         }
         references = []
         for item in observer.continual.reference_models:

@@ -53,10 +53,15 @@ def test_loading_version_rejects_lineage_corruption_with_unchanged_weights(tmp_p
 
 @pytest.mark.parametrize("mode", ["streaming", "incremental", "offline"])
 def test_each_trained_model_links_data_and_roundtrips(mode, tmp_path):
-    config = Config.model_validate({"name": "version-unit", "mode": mode,
-                                    "dataset": {"samples": 180, "label_delay": 3}, "warmup": 20,
-                                    "policy": {"name": "none" if mode == "offline" else "online",
-                                               "action": "learn_one"}})
+    config = Config.model_validate(
+        {
+            "name": "version-unit",
+            "mode": mode,
+            "dataset": {"samples": 180, "label_delay": 3},
+            "warmup": 20,
+            "policy": {"name": "none" if mode == "offline" else "online", "action": "learn_one"},
+        }
+    )
     report = run(config, tmp_path)
     directory = tmp_path / config.identity()
     metadata = report["model_versions"]

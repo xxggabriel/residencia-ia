@@ -95,7 +95,8 @@ class ReleaseManifest(Strict):
     job_definitions: dict[Literal["benchmark", "prepare"], str]
     control_function: str
     benchmark_compute: Literal["batch-fargate-spot"] | None = Field(
-        default=None, exclude_if=lambda value: value is None,
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     pipeline_execution_id: str | None = None
 

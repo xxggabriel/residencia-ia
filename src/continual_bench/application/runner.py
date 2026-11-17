@@ -74,7 +74,13 @@ def resume_contract(config: Config, manifest: dict, env: dict, transport) -> dic
 
 
 def evaluate(
-    config: Config, manifest: dict, root: str, transport=None, *, stop_after=None, progress=None,
+    config: Config,
+    manifest: dict,
+    root: str,
+    transport=None,
+    *,
+    stop_after=None,
+    progress=None,
     checkpoint=None,
 ) -> dict:
     """Returns complete report or bounded progress; service I/O is injected."""
@@ -120,8 +126,9 @@ def evaluate(
             events_path=events_path,
             model_factory=registry.factory("model", config.model.name, **config.model.params),
             detector_factory=registry.factory("detector", config.detector.name, **config.detector.params),
-            policy_factory=registry.factory("policy", config.policy.name,
-                                            **config.policy.model_dump(exclude={"name"})),
+            policy_factory=registry.factory(
+                "policy", config.policy.name, **config.policy.model_dump(exclude={"name"})
+            ),
             versions=ModelVersions(directory, manifest["sha256"], env["code_sha256"]),
             settings=settings,
             started=started,
@@ -171,11 +178,15 @@ def finalize(outcome, run, protocol, contract, env, started) -> dict:
     events = run.events() if config.detector.name != "none" and run.manifest.get("changepoints") else None
     save_tracking_files(directory, report, settings, outcome.observer, events=events)
     report["training_history"] = stream_training_history(
-        report, directory, versions=outcome.versions.entries, captured=outcome.observer.learning_steps,
+        report,
+        directory,
+        versions=outcome.versions.entries,
+        captured=outcome.observer.learning_steps,
         quality=BINARY_QUALITY,
     )
     report["tracking_observations"] = binary_observations(
-        report, outcome.observer,
+        report,
+        outcome.observer,
         duration_seconds=getattr(outcome.state, "evaluation_duration_seconds", report["compute_seconds"]),
         tracking_seconds=time.perf_counter() - tick,
     )
@@ -191,18 +202,28 @@ def finalize(outcome, run, protocol, contract, env, started) -> dict:
 def write_binary_artifacts(directory, report) -> dict:
     tracking = report.get("tracking") or {}
     figures = binary_figures(report) + system_figures(report["system_metrics"])
-    return write_artifacts(directory, figures, {
-        "summary/metrics": {"metrics": tracking.get("metrics"), "availability": tracking.get("availability"),
-                            "report_metrics": report["metrics"]},
-        "series/tracking": tracking.get("series"),
-        "series/windows": report["windows"],
-        "events/alarms": report["alarms"],
-        "events/adaptations": {"updates": report["updates"], "candidates": report.get("candidates", []),
-                               "training": report.get("training")},
-        "continual/retention_probes": report.get("retention_probes"),
-        "task_evaluation/supplemental": report.get("task_evaluation"),
-        "system/samples": report["system_metrics"],
-    })
+    return write_artifacts(
+        directory,
+        figures,
+        {
+            "summary/metrics": {
+                "metrics": tracking.get("metrics"),
+                "availability": tracking.get("availability"),
+                "report_metrics": report["metrics"],
+            },
+            "series/tracking": tracking.get("series"),
+            "series/windows": report["windows"],
+            "events/alarms": report["alarms"],
+            "events/adaptations": {
+                "updates": report["updates"],
+                "candidates": report.get("candidates", []),
+                "training": report.get("training"),
+            },
+            "continual/retention_probes": report.get("retention_probes"),
+            "task_evaluation/supplemental": report.get("task_evaluation"),
+            "system/samples": report["system_metrics"],
+        },
+    )
 
 
 def run(config: Config, root="state", *, services=False, source=None, progress=None, checkpoint=None):

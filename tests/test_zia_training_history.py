@@ -39,8 +39,15 @@ def test_incremental_tracks_single_row_before_holdout(tmp_path, dataset):
     path.with_suffix(".json").write_text(json.dumps(manifest))
 
     output = tmp_path / "run"
-    report = run(tmp_path, dataset, "smoke", "incremental", output, TrackingConfig().model_dump(),
-                 iterative_config={"max_epochs": 2})
+    report = run(
+        tmp_path,
+        dataset,
+        "smoke",
+        "incremental",
+        output,
+        TrackingConfig().model_dump(),
+        iterative_config={"max_epochs": 2},
+    )
     fit = report["training_history"][-1]
     assert (fit["start_seq"], fit["end_seq"]) == (8999, 9000)
     assert fit["train_samples"] == 1
@@ -69,8 +76,15 @@ def test_interrupted_fit_persists_history_without_a_deployed_checkpoint(tmp_path
     output = tmp_path / "run"
     with pytest.raises(InterruptedError, match="fit was interrupted"):
         run(
-            tmp_path, "social", "smoke", "incremental", output, TrackingConfig().model_dump(),
-            tracker=tracker, iterative_config={"max_epochs": 2}, stop_requested=lambda: tracker.interrupted,
+            tmp_path,
+            "social",
+            "smoke",
+            "incremental",
+            output,
+            TrackingConfig().model_dump(),
+            tracker=tracker,
+            iterative_config={"max_epochs": 2},
+            stop_requested=lambda: tracker.interrupted,
         )
     fit = json.loads((output / "training-fits-partial" / "fit-000001.json").read_text())
     assert fit["status"] == "interrupted" and fit["steps"][0]["step"] == 1

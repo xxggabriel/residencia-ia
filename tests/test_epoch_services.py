@@ -20,11 +20,20 @@ def test_epoch_pipeline_artifacts_and_publication_retry(priced_time):
     from zenml.client import Client
 
     root = Path(os.environ["SERVICE_TEST_STATE"])
-    config = EpochConfig(dataset="sea", examples=100, epochs=2,
-                         **({"costs": {"train_sample": 0.02, "update": 0.3,
-                                       "train_second": 2, "predict_second": 3}} if priced_time else {}))
+    config = EpochConfig(
+        dataset="sea",
+        examples=100,
+        epochs=2,
+        **(
+            {"costs": {"train_sample": 0.02, "update": 0.3, "train_second": 2, "predict_second": 3}}
+            if priced_time
+            else {}
+        ),
+    )
     result = execute_epoch_pipeline(
-        config, str(root), os.environ["BENCH_DATASET_CACHE"],
+        config,
+        str(root),
+        os.environ["BENCH_DATASET_CACHE"],
         real_directory=os.environ["BENCH_DATASETS"],
     )
     report, receipt = result["summary"], result["receipt"]
@@ -49,9 +58,9 @@ def test_epoch_pipeline_artifacts_and_publication_retry(priced_time):
         assert tracked.data.metrics["costs/total/" + key] == pytest.approx(value)
         cost_history = mlflow.get_metric_history(tracked.info.run_id, "costs/" + key)
         assert len(cost_history) == 2
-        assert {point.step: point.value for point in cost_history} == pytest.approx({
-            epoch["epoch"]: epoch["costs"]["metrics"][key] for epoch in report["epochs"]
-        })
+        assert {point.step: point.value for point in cost_history} == pytest.approx(
+            {epoch["epoch"]: epoch["costs"]["metrics"][key] for epoch in report["epochs"]}
+        )
     assert report["costs"]["settings"] == config.costs.model_dump()
     history = mlflow.get_metric_history(tracked.info.run_id, "accuracy")
     assert {point.step for point in history} == {1, 2}
@@ -65,14 +74,22 @@ def test_epoch_pipeline_artifacts_and_publication_retry(priced_time):
     assert all(str(step.status) == "completed" and step.outputs for step in steps)
 
     repeated = execute_epoch_pipeline(
-        config, str(root), os.environ["BENCH_DATASET_CACHE"],
+        config,
+        str(root),
+        os.environ["BENCH_DATASET_CACHE"],
         real_directory=os.environ["BENCH_DATASETS"],
     )
     assert repeated["receipt"] == receipt
     assert len(mlflow.get_metric_history(tracked.info.run_id, "accuracy")) == len(history)
-    evidence = {"run_key": report["run_key"], "mlflow_run_id": tracked.info.run_id,
-                "zenml_run_id": str(run.id), "zenml_steps_verified": len(steps),
-                "objects_sha256_verified": True, "publication_replay_idempotent": True,
-                "costs": report["costs"], "mlflow_costs_verified": True,
-                "code_sha256": report["contract"]["environment"]["code_sha256"]}
+    evidence = {
+        "run_key": report["run_key"],
+        "mlflow_run_id": tracked.info.run_id,
+        "zenml_run_id": str(run.id),
+        "zenml_steps_verified": len(steps),
+        "objects_sha256_verified": True,
+        "publication_replay_idempotent": True,
+        "costs": report["costs"],
+        "mlflow_costs_verified": True,
+        "code_sha256": report["contract"]["environment"]["code_sha256"],
+    }
     (directory / "epoch-service-evidence.json").write_text(json.dumps(evidence, indent=2))

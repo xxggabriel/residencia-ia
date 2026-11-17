@@ -18,9 +18,13 @@ from continual_bench.infrastructure.object_store import LocalObjectStore, get_js
 def spot_case(tmp_path):
     store = LocalObjectStore(tmp_path / "durable")
     release = publish_fixture_release(store)
-    request = CampaignRequest(campaign_id="spot-worker-test", matrix={
-        "kind": "experiment_matrix", "path": "configs/matrices/binary-comparison.yaml",
-    })
+    request = CampaignRequest(
+        campaign_id="spot-worker-test",
+        matrix={
+            "kind": "experiment_matrix",
+            "path": "configs/matrices/binary-comparison.yaml",
+        },
+    )
     plan = planning.build_plan(request, release)
     unit = RunUnit(**plan["units"][0])
     put_json(store, unit.unit_key, unit.model_dump(mode="json"))
@@ -97,14 +101,19 @@ def evaluate_result(root, values):
     report_path.write_text(json.dumps(report))
     (directory / "model.bin").write_bytes(bytes(values))
     return {
-        "report": report, "report_path": report_path,
-        "output": root / "run", "headline": {"accuracy": 0.5},
+        "report": report,
+        "report_path": report_path,
+        "output": root / "run",
+        "headline": {"accuracy": 0.5},
     }
 
 
 @pytest.mark.parametrize("fault", ["notice", "no_notice", "publication"])
 def test_spot_recovery_keeps_results_and_original_publication_path(
-    spot_case, tmp_path, monkeypatch, fault,
+    spot_case,
+    tmp_path,
+    monkeypatch,
+    fault,
 ):
     store, unit, release = spot_case
     first = fargate_env(release, "job-first")
@@ -167,7 +176,9 @@ def test_spot_recovery_keeps_results_and_original_publication_path(
     assert worker.run_unit(store, unit.unit_key, tmp_path / "second", env=second) == worker.EXIT_OK
     final = get_json(store, final_key)
     assert final["publication_attempt"] == {
-        "attempt_key": layout.attempt_key_for("job-first", "2"), "worker_id": "job-first", "attempt": 2,
+        "attempt_key": layout.attempt_key_for("job-first", "2"),
+        "worker_id": "job-first",
+        "attempt": 2,
     }
     if fault != "publication":  # A resumed publication keeps the evaluating attempt's record.
         assert final["attempt"]["recovery_reason"] == {"notice": "INTERRUPTED", "no_notice": "LOST"}[fault]
@@ -200,8 +211,12 @@ def test_ineligible_attempt_cannot_start_evaluation(spot_case, tmp_path, monkeyp
     else:
         # A duplicate execution of the same Batch attempt must not evaluate a second time.
         attempt_key = layout.attempt_key_for("job-blocked", "1")
-        put_json(store, layout.spot_claim_key(unit.campaign_id, unit.run_id, 1),
-                 {"attempt": 1, "attempt_key": attempt_key}, if_absent=True)
+        put_json(
+            store,
+            layout.spot_claim_key(unit.campaign_id, unit.run_id, 1),
+            {"attempt": 1, "attempt_key": attempt_key},
+            if_absent=True,
+        )
         expected = worker.EXIT_CONTRACT
 
     def forbidden(*args, **kwargs):
@@ -220,8 +235,11 @@ def test_zia_spot_worker_recovers_real_predictions_and_fit_lineage(tmp_path, mon
 
     def unit_for(campaign_id):
         request = CampaignRequest(
-            campaign_id=campaign_id, snapshot=snapshot.model_dump(), matrix={
-                "kind": "zia", "policies": ["incremental"],
+            campaign_id=campaign_id,
+            snapshot=snapshot.model_dump(),
+            matrix={
+                "kind": "zia",
+                "policies": ["incremental"],
             },
         )
         plan = planning.build_plan(request, release, snapshot_manifest=snapshot_manifest)
@@ -311,7 +329,12 @@ def test_spot_notice_flushes_mlflow_async_queue_before_the_task_stops(spot_case,
     assert worker.run_unit(store, unit.unit_key, tmp_path / "run", env=env) == worker.EXIT_INTERRUPTED
     assert ("state", "INTERRUPTED", True) in events
     assert events.index("flush") > events.index(("state", "INTERRUPTED", True))
-    status = get_json(store, layout.attempt_status_key(
-        unit.campaign_id, unit.run_id, layout.attempt_key_for("job-notice", "1"),
-    ))
+    status = get_json(
+        store,
+        layout.attempt_status_key(
+            unit.campaign_id,
+            unit.run_id,
+            layout.attempt_key_for("job-notice", "1"),
+        ),
+    )
     assert status["state"] == "INTERRUPTED" and status["checkpoint"].endswith("/000001/00000001.json")

@@ -48,11 +48,13 @@ class Engine:
         self.observer = observer
         self.promotion = promotion
         if promotion is not None:
-            if (set(promotion) - {"validation_samples", "min_improvement"}
-                    or not isinstance(promotion.get("validation_samples"), int)
-                    or promotion["validation_samples"] < 1
-                    or not 0 <= promotion.get("min_improvement", 0) <= 1
-                    or promotion["validation_samples"] + min_retrain_window > window):
+            if (
+                set(promotion) - {"validation_samples", "min_improvement"}
+                or not isinstance(promotion.get("validation_samples"), int)
+                or promotion["validation_samples"] < 1
+                or not 0 <= promotion.get("min_improvement", 0) <= 1
+                or promotion["validation_samples"] + min_retrain_window > window
+            ):
                 raise ValueError("invalid promotion holdout configuration")
         default_monitor = max(metric_window, getattr(policy, "min_window", 1))
         monitor_window = getattr(policy, "params", {}).get("monitor_window", default_monitor)
@@ -106,8 +108,11 @@ class Engine:
             prediction_seconds = time.perf_counter() - prediction_started
             if not 0 <= p <= 1:
                 raise ValueError("invalid prediction")
-            trace = (self.observer.before_prediction(event, self.model, self.labeled, prediction_seconds)
-                     if self.observer is not None else {})
+            trace = (
+                self.observer.before_prediction(event, self.model, self.labeled, prediction_seconds)
+                if self.observer is not None
+                else {}
+            )
             self.pending.append((event, p, trace))
             self.next_seq += 1
             self.last_timestamp = event.timestamp
@@ -150,12 +155,19 @@ class Engine:
             self.observer.warmup_train_seconds += seconds
             self.observer.warmup_train_samples += 1
         if observer := getattr(self.observer, "record_learning", None):
-            observer(event.seq, seconds, 1, initial=True,
-                     prediction=self._learning_prediction(event, p, trace))
+            observer(
+                event.seq, seconds, 1, initial=True, prediction=self._learning_prediction(event, p, trace)
+            )
         self.policy.updated(self.labeled)
         if self.versions is not None and event.seq == self.warmup - 1:
-            self._record_model({"action": "initial_fit", "seq_range": [0, self.warmup],
-                                "label_available_at": event.available_at, "released_at": now})
+            self._record_model(
+                {
+                    "action": "initial_fit",
+                    "seq_range": [0, self.warmup],
+                    "label_available_at": event.available_at,
+                    "released_at": now,
+                }
+            )
         if self.observer is not None:
             self.observer.after_label(event, p, trace, now, self.model, False)
 
@@ -174,10 +186,15 @@ class Engine:
         self.recent_errors.append(error)
         self.recent_error_sum += error
         alarm = self.detector.update(error)
-        decision = self.policy.decide(DecisionContext(
-            self.labeled, len(self.replay), alarm,
-            self.recent_error_sum / len(self.recent_errors), len(self.recent_errors),
-        ))
+        decision = self.policy.decide(
+            DecisionContext(
+                self.labeled,
+                len(self.replay),
+                alarm,
+                self.recent_error_sum / len(self.recent_errors),
+                len(self.recent_errors),
+            )
+        )
         if self.observer is not None:
             self.observer.monitor_seconds += time.perf_counter() - monitor_started
         if alarm:
@@ -220,8 +237,11 @@ class Engine:
 
     @staticmethod
     def _learning_prediction(event, probability, trace):
-        return {"probability": probability, "label": bool(event.y),
-                "model_version": trace.get("model_version")}
+        return {
+            "probability": probability,
+            "label": bool(event.y),
+            "model_version": trace.get("model_version"),
+        }
 
     def _update(self, event: Event, decision: Decision, train_samples: int, now: int, *, prediction=None):
         validation_count = self._validation_count
@@ -231,7 +251,9 @@ class Engine:
         validation, evaluation, checkpoint = {}, None, None
         if decision.action == "reset_retrain":
             promoted, validation, training_seconds, evaluation, checkpoint = self._retrain(
-                event, train_samples, started,
+                event,
+                train_samples,
+                started,
             )
         elif decision.action == "learn_one":
             self.model.learn(dict(event.x), event.y)
@@ -242,26 +264,45 @@ class Engine:
         self.policy.updated(self.labeled)
         self.training_used += train_samples
         record = {
-            "seq": event.seq, "labeled": self.labeled, "action": decision.action,
-            "reason": decision.reason, "train_samples": train_samples, "seconds": training_seconds,
+            "seq": event.seq,
+            "labeled": self.labeled,
+            "action": decision.action,
+            "reason": decision.reason,
+            "train_samples": train_samples,
+            "seconds": training_seconds,
         }
         training_end = event.seq + 1 - validation_count
-        training_start = (training_end - train_samples
-                          if decision.action == "reset_retrain" else event.seq)
-        self.candidates.append({**record, "promoted": promoted,
-                                "train_seq_range": [training_start, training_end], **validation})
+        training_start = training_end - train_samples if decision.action == "reset_retrain" else event.seq
+        self.candidates.append(
+            {**record, "promoted": promoted, "train_seq_range": [training_start, training_end], **validation}
+        )
         if observer := getattr(self.observer, "record_learning", None):
-            recorded = (self._learning_prediction(event, *prediction)
-                        if prediction is not None and decision.action == "learn_one" else None)
-            observer(event.seq, training_seconds, train_samples, prediction=recorded,
-                     validation=evaluation, checkpoint=checkpoint)
+            recorded = (
+                self._learning_prediction(event, *prediction)
+                if prediction is not None and decision.action == "learn_one"
+                else None
+            )
+            observer(
+                event.seq,
+                training_seconds,
+                train_samples,
+                prediction=recorded,
+                validation=evaluation,
+                checkpoint=checkpoint,
+            )
         if promoted:
             self.updates.append(record)
             if self.observer is not None:
                 self.observer.after_update(previous, record)
             if self.versions is not None:
-                self._record_model({"action": decision.action, "seq_range": [training_start, training_end],
-                                    "label_available_at": event.available_at, "released_at": now})
+                self._record_model(
+                    {
+                        "action": decision.action,
+                        "seq_range": [training_start, training_end],
+                        "label_available_at": event.available_at,
+                        "released_at": now,
+                    }
+                )
 
     def _retrain(self, event: Event, train_samples: int, started: float):
         """Fit a fresh candidate on the bounded replay; optionally gate it on a past-label holdout."""
@@ -283,16 +324,20 @@ class Engine:
             incumbent_accuracy = self.holdout_accuracy(incumbent, holdout, scorer=incumbent_metrics)
             gain = candidate_accuracy - incumbent_accuracy
             promoted = gain > self.promotion.get("min_improvement", 0)
-            validation = {"validation_samples": validation_count,
-                          "validation_seq_range": [event.seq - validation_count + 1, event.seq + 1],
-                          "candidate_accuracy": candidate_accuracy,
-                          "incumbent_accuracy": incumbent_accuracy,
-                          "accuracy_gain": gain,
-                          "validation_seconds": time.perf_counter() - started - training_seconds}
+            validation = {
+                "validation_samples": validation_count,
+                "validation_seq_range": [event.seq - validation_count + 1, event.seq + 1],
+                "candidate_accuracy": candidate_accuracy,
+                "incumbent_accuracy": incumbent_accuracy,
+                "accuracy_gain": gain,
+                "validation_seconds": time.perf_counter() - started - training_seconds,
+            }
             if capture:
                 began = time.perf_counter()
-                evaluation = {"promotion_validation/candidate": candidate_metrics.values(),
-                              "promotion_validation/incumbent": incumbent_metrics.values()}
+                evaluation = {
+                    "promotion_validation/candidate": candidate_metrics.values(),
+                    "promotion_validation/incumbent": incumbent_metrics.values(),
+                }
                 if not promoted and self.versions is not None:
                     checkpoint = self.versions.record_candidate(candidate, event.seq)
                 self.observer.instrumentation_seconds += time.perf_counter() - began
@@ -353,13 +398,20 @@ class Engine:
             "alarms": self.alarms,
             "updates": self.updates,
             "candidates": self.candidates,
-            "promotion": {"gate": self.promotion, "trained": len(self.candidates),
-                          "promoted": sum(c["promoted"] for c in self.candidates),
-                          "rejected": sum(not c["promoted"] for c in self.candidates),
-                          "training_seconds": sum(c["seconds"] for c in self.candidates)},
+            "promotion": {
+                "gate": self.promotion,
+                "trained": len(self.candidates),
+                "promoted": sum(c["promoted"] for c in self.candidates),
+                "rejected": sum(not c["promoted"] for c in self.candidates),
+                "training_seconds": sum(c["seconds"] for c in self.candidates),
+            },
             "detector_signal": "released_label_binary_prediction_error",
-            "training": {"budget": self.training_budget, "used": self.training_used,
-                         "blocked_decisions": self.budget_blocked, "excludes_warmup": True},
+            "training": {
+                "budget": self.training_budget,
+                "used": self.training_used,
+                "blocked_decisions": self.budget_blocked,
+                "excludes_warmup": True,
+            },
             "retention_probes": self.retention,
             "prediction_digest": self.audit,
             "compute_seconds": self.compute_seconds,

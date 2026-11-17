@@ -34,7 +34,7 @@ class RangeServer:
     def __call__(self, request, timeout):
         start, stop = map(int, request.headers["Range"].removeprefix("bytes=").split("-"))
         self.calls.append((start, stop))
-        return Response(self.payload[start:stop + 1], start, stop, len(self.payload), self.status)
+        return Response(self.payload[start : stop + 1], start, stop, len(self.payload), self.status)
 
 
 def test_range_reader_is_seekable_budgeted_cached_and_corruption_checked(tmp_path):

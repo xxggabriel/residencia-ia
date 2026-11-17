@@ -12,11 +12,20 @@ from continual_bench.infrastructure.training_tracking import training_checkpoint
 
 def fit(name, kind, start, checkpoint=None):
     return {
-        "fit_id": name, "action": "reset" if checkpoint else "online",
-        "start_seq": None, "end_seq": 10, "checkpoint": checkpoint,
-        "steps": [{"step": i, "global_step": start + i - 1, "kind": kind,
-                   "metrics": {"holdout:mae": 1 / i, "train_presentations": i, "missing": None}}
-                  for i in (1, 2)],
+        "fit_id": name,
+        "action": "reset" if checkpoint else "online",
+        "start_seq": None,
+        "end_seq": 10,
+        "checkpoint": checkpoint,
+        "steps": [
+            {
+                "step": i,
+                "global_step": start + i - 1,
+                "kind": kind,
+                "metrics": {"holdout:mae": 1 / i, "train_presentations": i, "missing": None},
+            }
+            for i in (1, 2)
+        ],
         "summary": {},
     }
 
@@ -49,10 +58,18 @@ def test_local_benchmark_groups_rounds_checks_checkpoints_and_reuses_parent(tmp_
     directory = tmp_path / "run"
     directory.mkdir()
     (directory / "model-versions.bin").write_bytes(b"prefixmodel")
-    checkpoint = {"file": "model-versions.bin", "offset": 6, "bytes": 5,
-                  "sha256": hashlib.sha256(b"model").hexdigest()}
-    report = {"complete": True, "run_key": "fixture", "metrics": {"test": {"mae": 0.1}},
-              "training_history": [fit("fit-01", "epoch", 1, checkpoint), fit("fit-02", "update", 3)]}
+    checkpoint = {
+        "file": "model-versions.bin",
+        "offset": 6,
+        "bytes": 5,
+        "sha256": hashlib.sha256(b"model").hexdigest(),
+    }
+    report = {
+        "complete": True,
+        "run_key": "fixture",
+        "metrics": {"test": {"mae": 0.1}},
+        "training_history": [fit("fit-01", "epoch", 1, checkpoint), fit("fit-02", "update", 3)],
+    }
     (directory / "report.json").write_text(json.dumps(report))
     write_training_artifacts(directory, report)
     first = publish_local_benchmark(directory, report, experiment_name="local", client=client)
@@ -61,7 +78,10 @@ def test_local_benchmark_groups_rounds_checks_checkpoints_and_reuses_parent(tmp_
     parent = first["mlflow_run_id"]
     assert client.get_run(parent).data.metrics["summary/test/mae"] == 0.1
     assert {x.path for x in client.list_artifacts(parent)} >= {
-        "training-history.json", "model-versions.bin", "plots", "data",
+        "training-history.json",
+        "model-versions.bin",
+        "plots",
+        "data",
     }
     one, two = [entry["run_id"] for entry in first["training_rounds"]]
     assert client.get_run(one).data.params["checkpoint_offset"] == "6"
@@ -80,10 +100,16 @@ def test_matrix_services_publishes_completed_case_without_training_again(tmp_pat
 
     monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
     monkeypatch.setenv("MLFLOW_TRACKING_URI", (tmp_path / "mlruns").as_uri())
-    config = matrix.ExperimentMatrix.model_validate({
-        "name": "typed-smoke", "evaluator": "typed", "datasets": [{"name": "sea", "samples": 100}],
-        "models": [{"name": "hoeffding_tree"}], "base": {"warmup": 10}, "on_incompatible": "error",
-    })
+    config = matrix.ExperimentMatrix.model_validate(
+        {
+            "name": "typed-smoke",
+            "evaluator": "typed",
+            "datasets": [{"name": "sea", "samples": 100}],
+            "models": [{"name": "hoeffding_tree"}],
+            "base": {"warmup": 10},
+            "on_incompatible": "error",
+        }
+    )
     state = tmp_path / "state"
     [case] = matrix.execute_matrix(config, state)["cases"].values()
     assert case["status"] == "passed" and "tracking" not in case

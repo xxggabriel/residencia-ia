@@ -79,12 +79,17 @@ class ClassificationScorer:
         ranking = binary_ranking(self.ranked_labels, self.ranked_scores, curves=curves)
         result = classification_quality(
             [[self.confusion[actual, predicted] for predicted in labels] for actual in labels],
-            labels, target_classes=classes, positive_class=self.observed_positive_class, **ranking,
+            labels,
+            target_classes=classes,
+            positive_class=self.observed_positive_class,
+            **ranking,
         )
         if self.observed_positive_class is not None:
-            result.update(ranking_evaluated_examples=len(self.ranked_labels),
-                          ranking_positive_examples=sum(self.ranked_labels),
-                          ranking_scope="examples_with_observed_positive_probability")
+            result.update(
+                ranking_evaluated_examples=len(self.ranked_labels),
+                ranking_positive_examples=sum(self.ranked_labels),
+                ranking_scope="examples_with_observed_positive_probability",
+            )
         return result
 
     def per_class(self):
@@ -102,12 +107,16 @@ class ClassificationScorer:
             return {"n": 0}
         rows = self.per_class().values()
         count = len(self.labels)
-        result = {"n": self.n, "accuracy": self.correct / self.n, "error_rate": 1 - self.correct / self.n,
-                  "log_loss": self.loss / self.n,
-                  "balanced_accuracy": sum(r["recall"] for r in rows) / count,
-                  "f1_macro": sum(r["f1"] for r in rows) / count,
-                  "precision_macro": sum(r["precision"] for r in rows) / count,
-                  "recall_macro": sum(r["recall"] for r in rows) / count}
+        result = {
+            "n": self.n,
+            "accuracy": self.correct / self.n,
+            "error_rate": 1 - self.correct / self.n,
+            "log_loss": self.loss / self.n,
+            "balanced_accuracy": sum(r["recall"] for r in rows) / count,
+            "f1_macro": sum(r["f1"] for r in rows) / count,
+            "precision_macro": sum(r["precision"] for r in rows) / count,
+            "recall_macro": sum(r["recall"] for r in rows) / count,
+        }
         if self.binary and len(self.labels) == 2:
             pr_auc = average_precision(self.truth, self.scores)
             if pr_auc is not None:
@@ -144,13 +153,22 @@ class RegressionScorer:
     def result(self):
         if not self.n:
             return {"n": 0}
-        return {"n": self.n, "mae": self.abs / self.n, "rmse": math.sqrt(self.sq / self.n),
-                "r2": 1 - self.sq / self.m2 if self.m2 > 0 else 0.0}
+        return {
+            "n": self.n,
+            "mae": self.abs / self.n,
+            "rmse": math.sqrt(self.sq / self.n),
+            "r2": 1 - self.sq / self.m2 if self.m2 > 0 else 0.0,
+        }
 
     def quality(self, target_unit):
         result = self.result()
-        return {"evaluated_examples": self.n, "mae": result.get("mae"), "rmse": result.get("rmse"),
-                "target_unit": target_unit, "residuals": self.residuals}
+        return {
+            "evaluated_examples": self.n,
+            "mae": result.get("mae"),
+            "rmse": result.get("rmse"),
+            "target_unit": target_unit,
+            "residuals": self.residuals,
+        }
 
 
 def score_rows(model, task_is_regression, rows, scorer=None):

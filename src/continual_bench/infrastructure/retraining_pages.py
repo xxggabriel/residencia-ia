@@ -11,8 +11,18 @@ AXES = {
     "time": "Timestamp (ms desde Unix epoch)",
 }
 FRACTIONS = {
-    "accuracy", "macro_f1", "positive_precision", "positive_recall", "average_precision",
-    "recall_at_fpr_0_01", "precision", "recall", "f1", "absolute_retention", "gem_bwt", "post_learning_fm",
+    "accuracy",
+    "macro_f1",
+    "positive_precision",
+    "positive_recall",
+    "average_precision",
+    "recall_at_fpr_0_01",
+    "precision",
+    "recall",
+    "f1",
+    "absolute_retention",
+    "gem_bwt",
+    "post_learning_fm",
 }
 INITIAL = {"initial", "initial_fit", "warmup"}
 
@@ -53,8 +63,18 @@ def _metrics(scopes, position=None):
             reason = (values.get("availability") or {}).get(key) or {}
             if _coordinate(value) or value is None:
                 # Scalar availability belongs in the table. Array/metadata keys belong in the sources.
-                if key in {"confusion_matrix", "classes", "class_support", "class_recall", "pr_curve",
-                           "roc_curve", "residuals", "ranking_method", "target_unit", "positive_class"}:
+                if key in {
+                    "confusion_matrix",
+                    "classes",
+                    "class_support",
+                    "class_recall",
+                    "pr_curve",
+                    "roc_curve",
+                    "residuals",
+                    "ranking_method",
+                    "target_unit",
+                    "positive_class",
+                }:
                     continue
                 yield [split, key, value, _unit(key, values), position, reason.get("reason")]
 
@@ -63,8 +83,10 @@ def page_data(report, fits, chart_data, window_panels, fit_series):
     observations = report["tracking_observations"]
     windows = observations.get("windows") or []
     lineage = observations.get("lineage") or {}
-    parent_scopes = {**(observations.get("scopes") or {}),
-                     **{key: observations.get(key) for key in ("effort", "resources", "drift", "retention")}}
+    parent_scopes = {
+        **(observations.get("scopes") or {}),
+        **{key: observations.get(key) for key in ("effort", "resources", "drift", "retention")},
+    }
     base = {key: lineage.get(key) or report.get(key) for key in ("dataset", "policy", "protocol")}
     overview = list(_metrics(parent_scopes))
     for window in windows:
@@ -90,17 +112,26 @@ def page_data(report, fits, chart_data, window_panels, fit_series):
         effort = fit.get("observation_effort") or {}
         resources = fit.get("observation_resources") or {}
         scopes = {**(fit.get("observation_scopes") or {}), "esforço": effort, "recursos": resources}
-        records.append({
-            "id": fit_id, "index": index,
-            "initial": fit.get("action") in INITIAL or fit.get("deployment_action") in INITIAL,
-            "action": fit.get("action"), "status": fit.get("status"),
-            "promotion": fit.get("promotion_status"), "axis": axis, "x": coordinate,
-            "start": fit.get("start_seq"), "end": fit.get("end_seq"), "time": fit.get("end_time_ms"),
-            "checkpoint": fit.get("checkpoint"), "version": fit.get("deployed_version"),
-            "duration": resources.get("duration_seconds", fit.get("train_seconds")),
-            "volume": effort.get("training_presentations", fit.get("training_presentations")),
-            "metrics": list(_metrics(scopes)),
-        })
+        records.append(
+            {
+                "id": fit_id,
+                "index": index,
+                "initial": fit.get("action") in INITIAL or fit.get("deployment_action") in INITIAL,
+                "action": fit.get("action"),
+                "status": fit.get("status"),
+                "promotion": fit.get("promotion_status"),
+                "axis": axis,
+                "x": coordinate,
+                "start": fit.get("start_seq"),
+                "end": fit.get("end_seq"),
+                "time": fit.get("end_time_ms"),
+                "checkpoint": fit.get("checkpoint"),
+                "version": fit.get("deployed_version"),
+                "duration": resources.get("duration_seconds", fit.get("train_seconds")),
+                "volume": effort.get("training_presentations", fit.get("training_presentations")),
+                "metrics": list(_metrics(scopes)),
+            }
+        )
 
     timeline = {}
     for axis in AXES:
@@ -117,15 +148,27 @@ def page_data(report, fits, chart_data, window_panels, fit_series):
     return {
         "overview": {"kind": "overview", "meta": base, "metrics": overview},
         "retraining-timeline": {
-            "kind": "timeline", "meta": base, "axes": AXES, "events": events, "timeline": timeline,
+            "kind": "timeline",
+            "meta": base,
+            "axes": AXES,
+            "events": events,
+            "timeline": timeline,
             "fits": [{key: value for key, value in row.items() if key != "metrics"} for row in records],
         },
         "retraining-explorer": {
-            "kind": "explorer", "meta": base, "axes": AXES,
-            "fits": [{**record, "series": {
-                axis: chart_data([panel for panel in fit_series(fit, axis) if panel.series])
-                for axis in ("step", "epoch")
-            }} for record, fit in zip(records, fits, strict=True)],
+            "kind": "explorer",
+            "meta": base,
+            "axes": AXES,
+            "fits": [
+                {
+                    **record,
+                    "series": {
+                        axis: chart_data([panel for panel in fit_series(fit, axis) if panel.series])
+                        for axis in ("step", "epoch")
+                    },
+                }
+                for record, fit in zip(records, fits, strict=True)
+            ],
         },
     }
 

@@ -73,8 +73,10 @@ class LocalDatasetManifest(_Strict):
             raise ValueError("timestamp order requires a timestamp column")
         if self.order == "batch" and any(f.batch is None for f in self.files):
             raise ValueError("batch order requires a batch ID for every file")
-        if self.changepoints is not None and (tuple(sorted(set(self.changepoints))) != self.changepoints
-                                             or any(p < 1 for p in self.changepoints)):
+        if self.changepoints is not None and (
+            tuple(sorted(set(self.changepoints))) != self.changepoints
+            or any(p < 1 for p in self.changepoints)
+        ):
             raise ValueError("invalid annotated changepoints")
         return self
 
@@ -107,8 +109,14 @@ class LocalManifestSource:
             self.paths.append(path)
         self.name, self.samples, self.seed = name, samples, seed
         self.label_delay, self.epoch = label_delay, epoch
-        self.version = stable_identity({"manifest": self.spec.model_dump(mode="json"), "samples": samples,
-                                  "epoch": epoch, "label_delay": label_delay})
+        self.version = stable_identity(
+            {
+                "manifest": self.spec.model_dump(mode="json"),
+                "samples": samples,
+                "epoch": epoch,
+                "label_delay": label_delay,
+            }
+        )
 
     def _rows(self, path):
         if self.spec.format == "arff":
@@ -141,8 +149,12 @@ class LocalManifestSource:
 
     def samples_iter(self, *, full_validation=False):
         seq, last_timestamp = 0, -1
-        metadata = {self.spec.target, self.spec.timestamp_column,
-                    self.spec.split_column, self.spec.group_column}
+        metadata = {
+            self.spec.target,
+            self.spec.timestamp_column,
+            self.spec.split_column,
+            self.spec.group_column,
+        }
         expected = set(self.spec.features) | (metadata - {None})
         for entry, path in zip(self.spec.files, self.paths):
             if file_sha256(path) != entry.sha256:
@@ -165,8 +177,11 @@ class LocalManifestSource:
                     else:
                         value = str(value)
                     x[key] = value
-                y = (float(raw[self.spec.target]) if self.spec.task == "regression"
-                     else str(raw[self.spec.target]))
+                y = (
+                    float(raw[self.spec.target])
+                    if self.spec.task == "regression"
+                    else str(raw[self.spec.target])
+                )
                 if self.spec.task == "regression":
                     if not math.isfinite(y):
                         raise ValueError("non-finite target")
@@ -183,8 +198,16 @@ class LocalManifestSource:
                 if split not in {"train", "validation", "test"}:
                     raise ValueError("invalid split")
                 group = str(raw[self.spec.group_column]) if self.spec.group_column else entry.batch
-                sample = TaskSample(stable_identity([entry.sha256, count]), seq, timestamp,
-                                    timestamp + self.label_delay, x, y, split=split, group=group)
+                sample = TaskSample(
+                    stable_identity([entry.sha256, count]),
+                    seq,
+                    timestamp,
+                    timestamp + self.label_delay,
+                    x,
+                    y,
+                    split=split,
+                    group=group,
+                )
                 seq, count = seq + 1, count + 1
                 yield sample
                 if seq >= self.samples and not full_validation:
@@ -209,16 +232,35 @@ class LocalManifestSource:
             if sample.split != "train":
                 raise ValueError("binary prequential stream must not mix held-out splits")
             previous = sample.timestamp
-            yield Event(sample.sample_id, sample.seq, sample.timestamp, sample.available_at,
-                        sample.x, sample.y == self.spec.positive_label, None)
+            yield Event(
+                sample.sample_id,
+                sample.seq,
+                sample.timestamp,
+                sample.available_at,
+                sample.x,
+                sample.y == self.spec.positive_label,
+                None,
+            )
 
     def manifest(self):
-        return {**self.spec.model_dump(mode="json"), "adapter": "local-manifest-v1", "version": self.version,
-                "source_version": self.spec.version, "samples": self.samples, "requested_seed": self.seed,
-                "source_changepoints": self.spec.changepoints,
-                "changepoints": ([p for p in self.spec.changepoints if p < self.samples]
-                                 if self.spec.changepoints is not None else None),
-                "seed_ignored": True, "cache": str(self.manifest_path.parent.resolve()),
-                "timestamp_kind": ("declared_source_integer" if self.spec.timestamp_column
-                                   else "simulated_ordinal"),
-                "label_delay_seconds": self.label_delay, "label_delay_is_simulated": True}
+        return {
+            **self.spec.model_dump(mode="json"),
+            "adapter": "local-manifest-v1",
+            "version": self.version,
+            "source_version": self.spec.version,
+            "samples": self.samples,
+            "requested_seed": self.seed,
+            "source_changepoints": self.spec.changepoints,
+            "changepoints": (
+                [p for p in self.spec.changepoints if p < self.samples]
+                if self.spec.changepoints is not None
+                else None
+            ),
+            "seed_ignored": True,
+            "cache": str(self.manifest_path.parent.resolve()),
+            "timestamp_kind": (
+                "declared_source_integer" if self.spec.timestamp_column else "simulated_ordinal"
+            ),
+            "label_delay_seconds": self.label_delay,
+            "label_delay_is_simulated": True,
+        }

@@ -32,10 +32,16 @@ class FixtureCheckpoint:
 
     def save(self, state, *, force=False):
         assert not self.requested() or force
-        self.archive = pickle.dumps((state, {
-            path.relative_to(self.root): path.read_bytes()
-            for path in self.root.rglob("*") if path.is_file() and path.name != ".lock"
-        }))
+        self.archive = pickle.dumps(
+            (
+                state,
+                {
+                    path.relative_to(self.root): path.read_bytes()
+                    for path in self.root.rglob("*")
+                    if path.is_file() and path.name != ".lock"
+                },
+            )
+        )
 
     def load(self):
         if self.archive is None:
@@ -71,17 +77,24 @@ def without_timer(rows):
 
 @pytest.mark.parametrize("mode", ["streaming", "incremental", "offline"])
 def test_binary_matrix_restores_metrics_delayed_labels_and_model_journal(mode, tmp_path):
-    config = Config.model_validate({
-        "mode": mode,
-        "warmup": 10,
-        "metric_window": 10,
-        "batch_size": 4,
-        "checkpoint_every": 100,
-        "dataset": {"name": "sea", "samples": 100, "label_delay": 5},
-        "policy": {"name": "none"} if mode == "offline" else {
-            "name": "periodic", "every": 10, "min_samples": 10, "min_window": 10,
-        },
-    })
+    config = Config.model_validate(
+        {
+            "mode": mode,
+            "warmup": 10,
+            "metric_window": 10,
+            "batch_size": 4,
+            "checkpoint_every": 100,
+            "dataset": {"name": "sea", "samples": 100, "label_delay": 5},
+            "policy": {"name": "none"}
+            if mode == "offline"
+            else {
+                "name": "periodic",
+                "every": 10,
+                "min_samples": 10,
+                "min_window": 10,
+            },
+        }
+    )
     expected = evaluate(config, tmp_path / "reference", tmp_path)
     actual, state = resumed_case(config, tmp_path, interrupt_after=18)
     assert 0 < state.next_seq < actual["observed"]
@@ -100,10 +113,16 @@ def test_binary_matrix_restores_metrics_delayed_labels_and_model_journal(mode, t
 
 
 def test_typed_matrix_recovers_without_notice_with_pending_labels_and_replay(tmp_path):
-    config = TypedConfig.model_validate({
-        "policy": "periodic", "warmup": 5, "every": 5, "window": 10,
-        "max_samples": 60, "dataset": {"name": "sea", "samples": 100, "label_delay": 6},
-    })
+    config = TypedConfig.model_validate(
+        {
+            "policy": "periodic",
+            "warmup": 5,
+            "every": 5,
+            "window": 10,
+            "max_samples": 60,
+            "dataset": {"name": "sea", "samples": 100, "label_delay": 6},
+        }
+    )
     expected = evaluate(config, tmp_path / "reference", tmp_path)
     actual, state = resumed_case(config, tmp_path, lose_after=49)
     assert state.pending
@@ -136,9 +155,12 @@ def test_epoch_matrix_restores_partial_holdout_and_completed_passes(tmp_path):
 
 
 def test_binary_checkpoint_rejects_a_new_evaluation_contract(tmp_path):
-    config = Config.model_validate({
-        "warmup": 10, "dataset": {"name": "sea", "samples": 100, "label_delay": 2},
-    })
+    config = Config.model_validate(
+        {
+            "warmup": 10,
+            "dataset": {"name": "sea", "samples": 100, "label_delay": 2},
+        }
+    )
     checkpoint = FixtureCheckpoint(tmp_path / "instance-before", interrupt_after=18)
     with pytest.raises(InterruptedError):
         evaluate(config, checkpoint.root, tmp_path, checkpoint)

@@ -14,7 +14,9 @@ T = TypeVar("T")
 
 
 def batch_payloads(
-    metrics: Sequence[M] = (), params: Sequence[P] = (), tags: Sequence[T] = (),
+    metrics: Sequence[M] = (),
+    params: Sequence[P] = (),
+    tags: Sequence[T] = (),
 ) -> Iterator[tuple[list[M], list[P], list[T]]]:
     """Yield the fewest requests that respect every MLflow limit.
 
@@ -24,10 +26,10 @@ def batch_payloads(
     metrics, params, tags = list(metrics), list(params), list(tags)
     m = p = t = 0
     while m < len(metrics) or p < len(params) or t < len(tags):
-        chunk_params = params[p:p + MAX_PARAMS]
-        chunk_tags = tags[t:t + MAX_TAGS]
+        chunk_params = params[p : p + MAX_PARAMS]
+        chunk_tags = tags[t : t + MAX_TAGS]
         room = min(MAX_METRICS, MAX_ENTITIES - len(chunk_params) - len(chunk_tags))
-        chunk_metrics = metrics[m:m + room]
+        chunk_metrics = metrics[m : m + room]
         p += len(chunk_params)
         t += len(chunk_tags)
         m += len(chunk_metrics)

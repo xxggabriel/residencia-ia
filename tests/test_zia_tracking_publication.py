@@ -58,15 +58,20 @@ def test_each_fit_has_its_own_steps_and_retry_preserves_the_child_runs(tmp_path,
         assert run.data.tags["mlflow.parentRunId"] == parent and run.data.tags["cb-step-kind"] == kind
         assert run.data.params["checkpoint_sha256"] == "a" * 64
         assert [(p.step, p.value) for p in client.get_metric_history(child_id, "loss")] == [
-            (1, losses[0]), (2, losses[1])
+            (1, losses[0]),
+            (2, losses[1]),
         ]
         assert [p.value for p in client.get_metric_history(child_id, "global_step")] == global_steps
 
 
 def test_rest_publisher_marks_only_verified_evidence_complete(tmp_path, monkeypatch):
     tracker = SageMakerMlflowTracker(
-        tracking_uri="http://mlflow.example", dataset="social", policy="online", model_name="logistic",
-        run_id="my-unit", attempt_key="job-1",
+        tracking_uri="http://mlflow.example",
+        dataset="social",
+        policy="online",
+        model_name="logistic",
+        run_id="my-unit",
+        attempt_key="job-1",
     )
     tracker.mlflow_run_id = "parent"
     tracker.experiment_id = "experiment"
@@ -88,20 +93,26 @@ def test_rest_publisher_marks_only_verified_evidence_complete(tmp_path, monkeypa
     report = {"training_history": [fit("fit-000001", "epoch", 1, [0.8, 0.6], 0)]}
     adapted = {
         "tracking": {
-            "version": "residency-metrics-v1", "metrics": {}, "availability": {}, "settings": {},
+            "version": "residency-metrics-v1",
+            "metrics": {},
+            "availability": {},
+            "settings": {},
             "series": {"fading_accuracy": [{"step": 18, "value": 0.7}]},
         }
     }
     result = tracker.publish_run_report(report, adapted=adapted, output_dir=output, store=store)
     assert result["child_runs"][0]["fit_id"] == "fit-000001" and result["published"]
-    child_log = next(event[2] for event in events if (event[2] or {}).get("metrics")
-                     and event[2]["run_id"] == "child")
+    child_log = next(
+        event[2] for event in events if (event[2] or {}).get("metrics") and event[2]["run_id"] == "child"
+    )
     assert [(p["step"], p["value"]) for p in child_log["metrics"] if p["key"] == "loss"] == [
-        (1, 0.8), (2, 0.6),
+        (1, 0.8),
+        (2, 0.6),
     ]
     assert any(
         p["key"] == "tracking_v1/fading_accuracy" and p["step"] == 18
-        for _, _, payload in events for p in (payload or {}).get("metrics", [])
+        for _, _, payload in events
+        for p in (payload or {}).get("metrics", [])
     )
     assert events[-2][2]["status"] == "FINISHED"
     assert {"key": "benchmark_complete", "value": "true"} in events[-1][2]["tags"]
@@ -115,7 +126,8 @@ def test_rest_publisher_marks_only_verified_evidence_complete(tmp_path, monkeypa
     assert not result["published"]
     assert all(
         tag != {"key": "benchmark_complete", "value": "true"}
-        for _, _, payload in events for tag in (payload or {}).get("tags", [])
+        for _, _, payload in events
+        for tag in (payload or {}).get("tags", [])
     )
 
 
@@ -128,7 +140,9 @@ def test_worker_retries_failed_tracking_from_archived_output(tmp_path, monkeypat
         matrix={"kind": "zia", "policies": ["frozen"]},
     )
     plan = planning.build_plan(
-        request, publish_fixture_release(store), snapshot_manifest=verify_snapshot(store, snapshot),
+        request,
+        publish_fixture_release(store),
+        snapshot_manifest=verify_snapshot(store, snapshot),
     )
     planning.publish_plan(store, plan)
     unit = plan["units"][0]
@@ -156,8 +170,9 @@ def test_worker_retries_failed_tracking_from_archived_output(tmp_path, monkeypat
             assert adapted["tracking"]["series"]
             assert (output_dir / "training-history.json").is_file()
             assert (output_dir / "model/model.tar.gz").is_file()
-            child_runs = [{"fit_id": round_["fit_id"], "run_id": "child"}
-                          for round_ in report["training_history"]]
+            child_runs = [
+                {"fit_id": round_["fit_id"], "run_id": "child"} for round_ in report["training_history"]
+            ]
             return {
                 "published": True,
                 "mlflow_run_id": "parent",
@@ -178,11 +193,17 @@ def test_worker_retries_failed_tracking_from_archived_output(tmp_path, monkeypat
         return materialize(*args, **kwargs)
 
     monkeypatch.setattr(worker, "materialize", read_data)
-    assert worker.run_unit(
-        store, unit["unit_key"], tmp_path / "first", tracker=Tracker(True),
-        registry=registry_error,
-        env={"AWS_BATCH_JOB_ID": "initial", "AWS_BATCH_JOB_ATTEMPT": "1"},
-    ) == worker.EXIT_FAILED
+    assert (
+        worker.run_unit(
+            store,
+            unit["unit_key"],
+            tmp_path / "first",
+            tracker=Tracker(True),
+            registry=registry_error,
+            env={"AWS_BATCH_JOB_ID": "initial", "AWS_BATCH_JOB_ATTEMPT": "1"},
+        )
+        == worker.EXIT_FAILED
+    )
     assert events[:3] == ["started", "downloading", 0]
     assert events[-1] > 0
     assert store.head(final_key) is None
@@ -207,19 +228,33 @@ def test_worker_retries_failed_tracking_from_archived_output(tmp_path, monkeypat
 
     monkeypatch.setattr(worker, "execute_zia", unexpected_training)
     monkeypatch.setattr(worker, "restore_benchmark_evidence", restore_after_live_start)
-    assert worker.run_unit(
-        store, unit["unit_key"], tmp_path / "second", tracker=Tracker(True), registry=registry,
-        env={"AWS_BATCH_JOB_ID": "retry-tracking", "AWS_BATCH_JOB_ATTEMPT": "1"},
-    ) == worker.EXIT_FAILED
+    assert (
+        worker.run_unit(
+            store,
+            unit["unit_key"],
+            tmp_path / "second",
+            tracker=Tracker(True),
+            registry=registry,
+            env={"AWS_BATCH_JOB_ID": "retry-tracking", "AWS_BATCH_JOB_ATTEMPT": "1"},
+        )
+        == worker.EXIT_FAILED
+    )
     assert store.head(final_key) is None
     retry_key = layout.attempt_status_key(request.campaign_id, unit["run_id"], "retry-tracking-1")
     failed = get_json(store, retry_key)
     assert failed["state"] == "TRACKING_FAILED"
     assert "stream endpoint offline" in failed["diagnostic"]["message"]
-    assert worker.run_unit(
-        store, unit["unit_key"], tmp_path / "third", tracker=Tracker(False), registry=registry,
-        env={"AWS_BATCH_JOB_ID": "retry-completed", "AWS_BATCH_JOB_ATTEMPT": "1"},
-    ) == worker.EXIT_OK
+    assert (
+        worker.run_unit(
+            store,
+            unit["unit_key"],
+            tmp_path / "third",
+            tracker=Tracker(False),
+            registry=registry,
+            env={"AWS_BATCH_JOB_ID": "retry-completed", "AWS_BATCH_JOB_ATTEMPT": "1"},
+        )
+        == worker.EXIT_OK
+    )
     final = get_json(store, final_key)
     assert final["attempt"]["attempt_key"] == "initial-1"
     assert final["model"]["model_package_arn"] == "arn:batch-package"
@@ -240,7 +275,9 @@ def test_worker_closes_live_zia_run_on_failure(tmp_path, monkeypatch, interrupte
         matrix={"kind": "zia", "policies": ["frozen"]},
     )
     plan = planning.build_plan(
-        request, publish_fixture_release(store), snapshot_manifest=verify_snapshot(store, snapshot),
+        request,
+        publish_fixture_release(store),
+        snapshot_manifest=verify_snapshot(store, snapshot),
     )
     planning.publish_plan(store, plan)
     [unit] = plan["units"]
@@ -284,10 +321,16 @@ def test_worker_closes_live_zia_run_on_failure(tmp_path, monkeypatch, interrupte
 
     monkeypatch.setattr(worker, "execute_zia", abort)
     monkeypatch.setattr(worker, "flush_partial_state", verify_before_flush)
-    assert worker.run_unit(
-        store, unit["unit_key"], tmp_path / "work", tracker=Tracker(),
-        env={"AWS_BATCH_JOB_ID": "live", "AWS_BATCH_JOB_ATTEMPT": "3"},
-    ) == worker.EXIT_FAILED
+    assert (
+        worker.run_unit(
+            store,
+            unit["unit_key"],
+            tmp_path / "work",
+            tracker=Tracker(),
+            env={"AWS_BATCH_JOB_ID": "live", "AWS_BATCH_JOB_ATTEMPT": "3"},
+        )
+        == worker.EXIT_FAILED
+    )
     assert events == ["live-3", "RUNNING", "progress", "KILLED" if interrupted else "FAILED"]
     status = get_json(store, layout.attempt_status_key(request.campaign_id, unit["run_id"], "live-3"))
     assert status["state"] == ("INTERRUPTED" if interrupted else "FAILED")
@@ -303,7 +346,9 @@ def test_worker_stops_after_sigterm_during_zia_publication(tmp_path):
         matrix={"kind": "zia", "policies": ["frozen"]},
     )
     plan = planning.build_plan(
-        request, publish_fixture_release(store), snapshot_manifest=verify_snapshot(store, snapshot),
+        request,
+        publish_fixture_release(store),
+        snapshot_manifest=verify_snapshot(store, snapshot),
     )
     planning.publish_plan(store, plan)
     [unit] = plan["units"]
@@ -327,10 +372,16 @@ def test_worker_stops_after_sigterm_during_zia_publication(tmp_path):
                 "artifacts_uploaded": {"files": sum(path.is_file() for path in output_dir.rglob("*"))},
             }
 
-    assert worker.run_unit(
-        store, unit["unit_key"], tmp_path / "work", tracker=Tracker(),
-        env={"AWS_BATCH_JOB_ID": "live", "AWS_BATCH_JOB_ATTEMPT": "1"},
-    ) == worker.EXIT_FAILED
+    assert (
+        worker.run_unit(
+            store,
+            unit["unit_key"],
+            tmp_path / "work",
+            tracker=Tracker(),
+            env={"AWS_BATCH_JOB_ID": "live", "AWS_BATCH_JOB_ATTEMPT": "1"},
+        )
+        == worker.EXIT_FAILED
+    )
     assert events == ["RUNNING", "publishing", "KILLED"]
     status = get_json(store, layout.attempt_status_key(request.campaign_id, unit["run_id"], "live-1"))
     assert status["state"] == "INTERRUPTED"

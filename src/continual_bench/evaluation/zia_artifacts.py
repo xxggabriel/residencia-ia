@@ -40,9 +40,11 @@ def tracking_report(report, predictions=None):
     for name in definitions["definitions"]:
         summary.setdefault(name, None)
     availability = {
-        name: {"status": "available" if value is not None else "unavailable",
-               "reason": None if value is not None else "undefined_or_requires_other_evaluation_evidence",
-               "scope": report["protocol"]}
+        name: {
+            "status": "available" if value is not None else "unavailable",
+            "reason": None if value is not None else "undefined_or_requires_other_evaluation_evidence",
+            "scope": report["protocol"],
+        }
         for name, value in summary.items()
     }
     windows = [w for w in report["windows"] if w["scope"] == "prequential"]
@@ -58,44 +60,71 @@ def tracking_report(report, predictions=None):
         {"step": index, "value": row["value"]} for index, row in enumerate(sensitivity)
     ]
     tracking = {
-        "version": VERSION, "definitions_sha256": hashlib.sha256(raw).hexdigest(),
-        "metrics": summary, "series": series, "availability": availability, "costs": report["costs"],
+        "version": VERSION,
+        "definitions_sha256": hashlib.sha256(raw).hexdigest(),
+        "metrics": summary,
+        "series": series,
+        "availability": availability,
+        "costs": report["costs"],
         "cost_sensitivity": sensitivity,
-        "settings": {"protocol": report["protocol"], "decision_rule": report["contract"]["decision_rule"],
-                     "block_rows": report["contract"]["block_rows"],
-                     "score_bins": report["contract"]["score_bins"], "costs": report["costs"]["settings"],
-                     "upf_alphas": [row["alpha"] for row in sensitivity]},
+        "settings": {
+            "protocol": report["protocol"],
+            "decision_rule": report["contract"]["decision_rule"],
+            "block_rows": report["contract"]["block_rows"],
+            "score_bins": report["contract"]["score_bins"],
+            "costs": report["costs"]["settings"],
+            "upf_alphas": [row["alpha"] for row in sensitivity],
+        },
     }
     retraining = report.get("retraining")
     if retraining:
         for name, rule in retraining["rules"].items():
             for key in ("cost", "retrains", "average_accuracy", "scpe", "strategy_cost"):
                 series[f"retraining/{key}_vs_alpha/{name}"] = [
-                    {"step": index, "value": row[key]} for index, row in enumerate(rule["curve"])
-                    if row[key] is not None]
+                    {"step": index, "value": row[key]}
+                    for index, row in enumerate(rule["curve"])
+                    if row[key] is not None
+                ]
         first = retraining["setup"]["offline_batches"]
         for name, values in retraining["cumulative_strategy_cost"].items():
             series[f"retraining/cumulative_strategy_cost/{name}"] = [
-                {"step": first + index, "value": value} for index, value in enumerate(values)
-                if value is not None]
+                {"step": first + index, "value": value}
+                for index, value in enumerate(values)
+                if value is not None
+            ]
         tracking["settings"]["retraining"] = {
-            "alphas": retraining["alphas"], "alpha_max": retraining["setup"]["alpha_max"],
-            "focus_alpha": retraining["setup"]["focus_alpha"], "timing": retraining["setup"]["timing"],
-            "offline_batches": first, "online_batches": retraining["setup"]["online_batches"],
+            "alphas": retraining["alphas"],
+            "alpha_max": retraining["setup"]["alpha_max"],
+            "focus_alpha": retraining["setup"]["focus_alpha"],
+            "timing": retraining["setup"]["timing"],
+            "offline_batches": first,
+            "online_batches": retraining["setup"]["online_batches"],
             "series_step": "alpha grid index (cost/retrains/accuracy/scpe) or online batch index",
         }
     if predictions:
         tracking["settings"]["fading_factor"] = predictions["fading_factor"]
-        tracking["prediction_archive"] = {"path": "predictions", "origin": predictions["origin"],
-                                          "rows": predictions["rows"]}
+        tracking["prediction_archive"] = {
+            "path": "predictions",
+            "origin": predictions["origin"],
+            "rows": predictions["rows"],
+        }
     updates = [{"seq": v["end_seq"], **v} for v in report["model_versions"][1:]]
     alarms = report.get("alarms")
     if alarms is None and report["policy"] == "drift":
-        alarms = [{"seq": u["seq"], "inferred_from": "drift_policy_reset"} for u in updates
-                  if u["action"] == "reset_retrain"]
-    return {"dataset": manifest, "environment": report["contract"]["environment"],
-            "tracking": tracking, "windows": windows, "updates": updates, "alarms": alarms or [],
-            "training": {"used": summary["training_used_post_warmup"]}}
+        alarms = [
+            {"seq": u["seq"], "inferred_from": "drift_policy_reset"}
+            for u in updates
+            if u["action"] == "reset_retrain"
+        ]
+    return {
+        "dataset": manifest,
+        "environment": report["contract"]["environment"],
+        "tracking": tracking,
+        "windows": windows,
+        "updates": updates,
+        "alarms": alarms or [],
+        "training": {"used": summary["training_used_post_warmup"]},
+    }
 
 
 def write_zia_artifacts(directory, report, adapted):
@@ -113,49 +142,105 @@ def write_zia_artifacts(directory, report, adapted):
     for scope, field in (("prequential", "prequential_confusion"), ("holdout", "holdout_confusion")):
         matrix = report[field]
         title = f"Matriz de confusão ({scope})"
-        figures.append(Figure("performance", f"{scope}_confusion", title, "heatmap", {
-            "rows": classes, "columns": classes, "matrix": matrix,
-            "x_label": "Predição", "y_label": "Classe real", "value_range": (0, max(map(max, matrix))),
-        }))
+        figures.append(
+            Figure(
+                "performance",
+                f"{scope}_confusion",
+                title,
+                "heatmap",
+                {
+                    "rows": classes,
+                    "columns": classes,
+                    "matrix": matrix,
+                    "x_label": "Predição",
+                    "y_label": "Classe real",
+                    "value_range": (0, max(map(max, matrix))),
+                },
+            )
+        )
     windows = [w for w in report["windows"] if w["scope"] == "holdout"]
     ranking = ("roc_auc", "average_precision") if len(classes) == 2 else ("macro_roc_auc", "macro_pr_auc")
     for group, name, title, keys in (
-        ("performance", "holdout_accuracy", "Acurácia no holdout",
-         ("accuracy", "balanced_accuracy", "f1_macro")),
+        (
+            "performance",
+            "holdout_accuracy",
+            "Acurácia no holdout",
+            ("accuracy", "balanced_accuracy", "f1_macro"),
+        ),
         ("probabilistic", "holdout_ranking", "Ranqueamento no holdout", ranking),
         ("probabilistic", "holdout_losses", "Brier e log loss no holdout", ("brier", "log_loss")),
     ):
         series = [
             {"name": key, "points": [[window["end_seq"], window.get(key)] for window in windows]}
-            for key in keys if any(_finite(window.get(key)) for window in windows)
+            for key in keys
+            if any(_finite(window.get(key)) for window in windows)
         ]
         if series:
-            figures.append(Figure(group, name, title, "line", {
-                "series": series, "x_label": "seq (fim da janela)", "y_label": "valor",
-            }))
+            figures.append(
+                Figure(
+                    group,
+                    name,
+                    title,
+                    "line",
+                    {
+                        "series": series,
+                        "x_label": "seq (fim da janela)",
+                        "y_label": "valor",
+                    },
+                )
+            )
     versions = report["model_versions"]
-    figures.append(Figure("adaptation", "model_storage", "Armazenamento acumulado dos modelos", "line", {
-        "series": [{"name": "bytes", "points": list(zip(
-            (v["end_seq"] for v in versions), accumulate(v["bytes"] for v in versions), strict=True,
-        ))}],
-        "x_label": "seq", "y_label": "bytes",
-    }))
+    figures.append(
+        Figure(
+            "adaptation",
+            "model_storage",
+            "Armazenamento acumulado dos modelos",
+            "line",
+            {
+                "series": [
+                    {
+                        "name": "bytes",
+                        "points": list(
+                            zip(
+                                (v["end_seq"] for v in versions),
+                                accumulate(v["bytes"] for v in versions),
+                                strict=True,
+                            )
+                        ),
+                    }
+                ],
+                "x_label": "seq",
+                "y_label": "bytes",
+            },
+        )
+    )
     write_observation_evidence(directory, report)
-    return write_artifacts(directory, figures, {
-        "summary/metrics": {"metrics": tracking["metrics"], "availability": tracking["availability"],
-                            "report_metrics": report["metrics"], "holdout": report["holdout"]},
-        "summary/classes": {"counts": report["class_counts"], "prequential": report["class_metrics"],
-                            "holdout": report["holdout_class_metrics"]},
-        "series/tracking": tracking["series"],
-        "series/windows": report["windows"],
-        "events/alarms": adapted["alarms"],
-        "events/adaptations": {"updates": adapted["updates"], "training": adapted["training"]},
-        "system/samples": report["system_metrics"],
-        "costs/accounting": {"learner": report["costs"], "evaluation": report["evaluation_aws_cost"]},
-        "model/explanation": report["model_explanation"],
-        "retraining/analysis": report.get("retraining"),
-        "training/history": None if history is None else {"version": 1, "fits": history},
-    })
+    return write_artifacts(
+        directory,
+        figures,
+        {
+            "summary/metrics": {
+                "metrics": tracking["metrics"],
+                "availability": tracking["availability"],
+                "report_metrics": report["metrics"],
+                "holdout": report["holdout"],
+            },
+            "summary/classes": {
+                "counts": report["class_counts"],
+                "prequential": report["class_metrics"],
+                "holdout": report["holdout_class_metrics"],
+            },
+            "series/tracking": tracking["series"],
+            "series/windows": report["windows"],
+            "events/alarms": adapted["alarms"],
+            "events/adaptations": {"updates": adapted["updates"], "training": adapted["training"]},
+            "system/samples": report["system_metrics"],
+            "costs/accounting": {"learner": report["costs"], "evaluation": report["evaluation_aws_cost"]},
+            "model/explanation": report["model_explanation"],
+            "retraining/analysis": report.get("retraining"),
+            "training/history": None if history is None else {"version": 1, "fits": history},
+        },
+    )
 
 
 def write_zia_campaign_artifacts(directory, units):
@@ -163,8 +248,16 @@ def write_zia_campaign_artifacts(directory, units):
     succeeded = [unit for unit in units if unit["status"] == "SUCCEEDED"]
     metrics = {
         "prequential": (
-            "accuracy", "balanced_accuracy", "f1_macro", "macro_roc_auc", "macro_pr_auc",
-            "log_loss", "train_seconds", "retrain_count", "scenario_total_cost", "aws_cost_total_usd",
+            "accuracy",
+            "balanced_accuracy",
+            "f1_macro",
+            "macro_roc_auc",
+            "macro_pr_auc",
+            "log_loss",
+            "train_seconds",
+            "retrain_count",
+            "scenario_total_cost",
+            "aws_cost_total_usd",
         ),
         "holdout": ("accuracy", "balanced_accuracy", "f1_macro", "macro_roc_auc", "macro_pr_auc", "log_loss"),
     }
@@ -175,17 +268,30 @@ def write_zia_campaign_artifacts(directory, units):
             values = [(unit.get(field) or {}).get(name) for unit in succeeded]
             if any(_finite(value) for value in values):
                 title = f"{scope} · {name} por política"
-                figures.append(Figure(f"comparison/{scope}", name, title, "bar", {
-                    "labels": [unit["labels"]["policy"] for unit in succeeded],
-                    "values": [value if _finite(value) else None for value in values],
-                    "x_label": name,
-                }))
-    return write_artifacts(directory, figures, {
-        "comparison/policies": [
-            {
-                key: unit[key] for key in ("run_id", "labels", "status", "final_uri", "metrics", "holdout")
-                if key in unit
-            }
-            for unit in units
-        ],
-    })
+                figures.append(
+                    Figure(
+                        f"comparison/{scope}",
+                        name,
+                        title,
+                        "bar",
+                        {
+                            "labels": [unit["labels"]["policy"] for unit in succeeded],
+                            "values": [value if _finite(value) else None for value in values],
+                            "x_label": name,
+                        },
+                    )
+                )
+    return write_artifacts(
+        directory,
+        figures,
+        {
+            "comparison/policies": [
+                {
+                    key: unit[key]
+                    for key in ("run_id", "labels", "status", "final_uri", "metrics", "holdout")
+                    if key in unit
+                }
+                for unit in units
+            ],
+        },
+    )

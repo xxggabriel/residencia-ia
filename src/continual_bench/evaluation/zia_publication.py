@@ -26,8 +26,10 @@ def dataset_source_uri(source):
     """Provenance URI of a prepared stream: the pinned Hugging Face file or the catalog entry."""
     if "repo" not in source:
         return f"catalog://{source.get('catalog', 'unknown')}"
-    return (f"https://huggingface.co/datasets/ziadatalabs/{source['repo']}"
-            f"/resolve/{source['revision']}/{source['file']}")
+    return (
+        f"https://huggingface.co/datasets/ziadatalabs/{source['repo']}"
+        f"/resolve/{source['revision']}/{source['file']}"
+    )
 
 
 def run_documents(report, adapted, base_uri):
@@ -38,14 +40,21 @@ def run_documents(report, adapted, base_uri):
     final = versions[-1]
     metadata = {
         "dataset": report["dataset"],
-        "model": report["model"], "model_params": report["model_params"], "features": manifest["features"],
-        "classes": source["classes"], "dataset_version": manifest["sha256"],
-        "code_sha256": env["code_sha256"], "state_sha256": final["sha256"],
-        "final_version_id": final["sha256"], "native_path": final["file"],
-        "payload": Path(final["file"]).name, "output": "class probabilities in classes order",
+        "model": report["model"],
+        "model_params": report["model_params"],
+        "features": manifest["features"],
+        "classes": source["classes"],
+        "dataset_version": manifest["sha256"],
+        "code_sha256": env["code_sha256"],
+        "state_sha256": final["sha256"],
+        "final_version_id": final["sha256"],
+        "native_path": final["file"],
+        "payload": Path(final["file"]).name,
+        "output": "class probabilities in classes order",
     }
     catalog = {
-        "dataset_version": manifest["sha256"], "source": manifest,
+        "dataset_version": manifest["sha256"],
+        "source": manifest,
         "feature_schema": {name: "numeric" for name in manifest["features"]},
         "selection": {"kind": report["scope"], "seq_range": [0, manifest["rows"]]},
     }
@@ -53,19 +62,34 @@ def run_documents(report, adapted, base_uri):
         "dataset_version": manifest["sha256"],
         "dataset_source_uri": dataset_source_uri(source),
         "dataset_catalog_uri": f"{base_uri}/dataset-catalog.json",
-        "model_states_uri": f"{base_uri}/models", "model_index_uri": f"{base_uri}/model-versions.json",
-        "model_state_sha256": final["sha256"], "model_versions_count": len(versions),
+        "model_states_uri": f"{base_uri}/models",
+        "model_index_uri": f"{base_uri}/model-versions.json",
+        "model_state_sha256": final["sha256"],
+        "model_versions_count": len(versions),
     }
     if "training_history" in report:
         links["training_history_uri"] = f"{base_uri}/training-history.json"
     files = {
-        "manifest.json": manifest, "environment.json": env, "model-metadata.json": metadata,
-        "model-versions.json": {"versions": versions, "final_version_id": final["sha256"],
-                                "count": len(versions), "storage_bytes": sum(v["bytes"] for v in versions)},
-        "dataset-catalog.json": catalog, "catalog-links.json": links,
-        "config.json": {"dataset": report["dataset"], "scope": report["scope"], "policy": report["policy"],
-                        "model": report["model"], "model_params": report["model_params"],
-                        "tracking": adapted["tracking"]["settings"], "contract": report["contract"]},
+        "manifest.json": manifest,
+        "environment.json": env,
+        "model-metadata.json": metadata,
+        "model-versions.json": {
+            "versions": versions,
+            "final_version_id": final["sha256"],
+            "count": len(versions),
+            "storage_bytes": sum(v["bytes"] for v in versions),
+        },
+        "dataset-catalog.json": catalog,
+        "catalog-links.json": links,
+        "config.json": {
+            "dataset": report["dataset"],
+            "scope": report["scope"],
+            "policy": report["policy"],
+            "model": report["model"],
+            "model_params": report["model_params"],
+            "tracking": adapted["tracking"]["settings"],
+            "contract": report["contract"],
+        },
     }
     return metadata, links, files
 
@@ -87,8 +111,13 @@ def replay_predictions(directory, report, root):
     blocks = batches(path, contract["block_rows"], contract["holdout_start"])
     warmup, _, _, _ = next(blocks)
     start = len(warmup)
-    with PredictionArchive(directory, classes, manifest["sha256"], "replayed_from_checkpoints",
-                           threshold=contract.get("decision_threshold")) as archive:
+    with PredictionArchive(
+        directory,
+        classes,
+        manifest["sha256"],
+        "replayed_from_checkpoints",
+        threshold=contract.get("decision_threshold"),
+    ) as archive:
         for (times, features, labels, holdout), window in zip(blocks, report["windows"], strict=True):
             while pending is not None and pending["end_seq"] <= start:
                 active, pending = pending, next(versions, None)
@@ -96,8 +125,11 @@ def replay_predictions(directory, report, root):
             probabilities = model.predict(features)
             errors = archive.add(start, times, labels, probabilities, holdout, active["end_seq"])
             start += len(labels)
-            if (start != window["end_seq"] or errors != window["errors"]
-                    or holdout != (window["scope"] == "holdout")):
+            if (
+                start != window["end_seq"]
+                or errors != window["errors"]
+                or holdout != (window["scope"] == "holdout")
+            ):
                 raise ValueError("prediction replay differs from recorded window")
 
 
@@ -160,20 +192,28 @@ def publish_model(client, run, directory, report, metadata, root):
             prediction = predictor.predict(example)
             target = staging / "model"
             mlflow.pyfunc.save_model(
-                path=str(target), loader_module=PYFUNC_LOADER, data_path=str(data),
+                path=str(target),
+                loader_module=PYFUNC_LOADER,
+                data_path=str(data),
                 code_paths=pyfunc_code_paths(staging),
                 pip_requirements=pyfunc_dependencies(report["model"]),
                 signature=infer_signature(example, prediction),
-                input_example=example, metadata={k: metadata[k] for k in (
-                    "dataset_version", "state_sha256", "code_sha256", "classes"
-                )},
+                input_example=example,
+                metadata={
+                    k: metadata[k] for k in ("dataset_version", "state_sha256", "code_sha256", "classes")
+                },
             )
             np.testing.assert_array_equal(mlflow.pyfunc.load_model(str(target)).predict(example), prediction)
             client.log_artifacts(run_id, str(target), artifact_path="model")
         return client.create_model_version(
-            name, source=run.info.artifact_uri.rstrip("/") + "/model", run_id=run_id,
-            tags={"dataset_version": metadata["dataset_version"], "model_sha256": metadata["state_sha256"],
-                  "code_sha256": metadata["code_sha256"]},
+            name,
+            source=run.info.artifact_uri.rstrip("/") + "/model",
+            run_id=run_id,
+            tags={
+                "dataset_version": metadata["dataset_version"],
+                "model_sha256": metadata["state_sha256"],
+                "code_sha256": metadata["code_sha256"],
+            },
         )
 
 
@@ -208,7 +248,9 @@ def _publish_artifacts(client, directory, run_id, report, root, derived=False, e
         tracking = adapted["tracking"]
         tracking["metrics"]["pipeline_elapsed_seconds"] = elapsed_seconds
         tracking["availability"]["pipeline_elapsed_seconds"] = {
-            "status": "available", "reason": None, "scope": EXECUTION_SCOPE,
+            "status": "available",
+            "reason": None,
+            "scope": EXECUTION_SCOPE,
         }
     write_zia_artifacts(directory, report, adapted)
     artifacts = publish_run_artifacts(client, run_id, directory, report, include_checkpoints=False)
@@ -218,17 +260,33 @@ def _publish_artifacts(client, directory, run_id, report, root, derived=False, e
         atomic_write(path, encoded(value))
         client.log_artifact(run_id, str(path))
     version = publish_model(client, run, directory, report, metadata, root)
-    client.log_batch(run_id, synchronous=True, tags=[
-        RunTag("registered_model", version.name), RunTag("registered_model_version", str(version.version)),
-    ])
+    client.log_batch(
+        run_id,
+        synchronous=True,
+        tags=[
+            RunTag("registered_model", version.name),
+            RunTag("registered_model_version", str(version.version)),
+        ],
+    )
     log_metric_points(client, run_id, [("training_used", 0, report["metrics"]["training_used_post_warmup"])])
     tracking = publish_tracking(client, run_id, adapted, directory, derived=derived)
     training_rounds = artifacts.get("training_rounds", [])
-    client.log_batch(run_id, tags=[RunTag("cb-training-round-count", str(len(training_rounds))),
-                                   RunTag("zia_artifacts_status", "complete")], synchronous=True)
-    return {"run_artifacts": artifacts, "tracking": tracking, "training_rounds": training_rounds,
-            "registered_model": version.name,
-            "registered_model_version": str(version.version), **links}
+    client.log_batch(
+        run_id,
+        tags=[
+            RunTag("cb-training-round-count", str(len(training_rounds))),
+            RunTag("zia_artifacts_status", "complete"),
+        ],
+        synchronous=True,
+    )
+    return {
+        "run_artifacts": artifacts,
+        "tracking": tracking,
+        "training_rounds": training_rounds,
+        "registered_model": version.name,
+        "registered_model_version": str(version.version),
+        **links,
+    }
 
 
 def publish(client, directory, run_id, experiment_id, report, root):
@@ -240,7 +298,10 @@ def publish(client, directory, run_id, experiment_id, report, root):
         client.set_tag(run_id, "benchmark_complete", "true")
         client.set_terminated(run_id, "FINISHED")
         receipt = {
-            "mlflow_run_id": run_id, "mlflow_experiment_id": experiment_id, "complete": True, **artifacts,
+            "mlflow_run_id": run_id,
+            "mlflow_experiment_id": experiment_id,
+            "complete": True,
+            **artifacts,
         }
         atomic_write(directory / "receipt.json", encoded(receipt))
         return receipt

@@ -23,8 +23,9 @@ def main():
     parser.add_argument("--covertype")
     parser.add_argument("--output", type=Path, default=Path("docs/results"))
     args = parser.parse_args()
-    options = dict(electricity_path=args.electricity, airlines_path=args.airlines,
-                   covertype_path=args.covertype)
+    options = dict(
+        electricity_path=args.electricity, airlines_path=args.airlines, covertype_path=args.covertype
+    )
     args.output.mkdir(parents=True, exist_ok=True)
     for name in args.datasets:
         showcase = schedule_showcase(

@@ -64,6 +64,7 @@ def oracle_schedule(cost: np.ndarray, kappa: float) -> list[int]:
 
 
 def fit_period(cost: np.ndarray, kappa: float) -> tuple[int, int]:
-    period = min(range(1, len(cost) + 1),
-                 key=lambda p: strategy_cost(cost, periodic_schedule(len(cost), p), kappa))
+    period = min(
+        range(1, len(cost) + 1), key=lambda p: strategy_cost(cost, periodic_schedule(len(cost), p), kappa)
+    )
     return period, (-len(cost)) % period
