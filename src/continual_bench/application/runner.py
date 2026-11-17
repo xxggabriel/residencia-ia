@@ -79,13 +79,15 @@ def evaluate(
     root: str,
     transport=None,
     *,
+    source=None,
     stop_after=None,
     progress=None,
     checkpoint=None,
 ) -> dict:
     """Returns complete report or bounded progress; service I/O is injected."""
     registry = default_registry(config.plugins)
-    source = make_source(registry, config.dataset)
+    if source is None:
+        source = make_source(registry, config.dataset)
     identity = config.identity()
     directory = Path(root) / identity
     checkpoints = LocalCheckpoints(root)
@@ -239,7 +241,9 @@ def run(config: Config, root="state", *, services=False, source=None, progress=N
         from continual_bench.infrastructure.services import KafkaTransport
 
         transport = KafkaTransport()
-    report = evaluate(config, manifest, root, transport, progress=progress, checkpoint=checkpoint)
+    report = evaluate(
+        config, manifest, root, transport, source=source, progress=progress, checkpoint=checkpoint
+    )
     if services:
         from continual_bench.infrastructure.services import publish
 
