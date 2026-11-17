@@ -1,4 +1,4 @@
-.PHONY: test lint format smoke compose-check aws-validate aws-smoke aws-images aws-lambda \
+.PHONY: test lint format install-hooks smoke compose-check aws-validate aws-smoke aws-images aws-lambda \
         aws-bootstrap aws-dataset-smoke aws-dataset-full \
         aws-dataset-fraud-full aws-dataset-ecommerce-full \
         aws-campaign-smoke aws-campaign-full aws-campaign-fraud-full aws-campaign-ecommerce-full \
@@ -18,6 +18,10 @@ lint:
 format:
 	uv run ruff format src tests dags examples scripts
 	uv run ruff check --fix src tests dags examples scripts
+
+install-hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/*
 
 smoke:
 	uv run continual-bench smoke --state state/smoke --samples 600 --baselines
