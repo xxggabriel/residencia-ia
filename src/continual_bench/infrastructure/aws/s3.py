@@ -165,12 +165,33 @@ class S3ObjectStore:
         )
 
     def get_bytes(self, key) -> bytes:
+        return self._get_object(key)["Body"].read()
+
+    def _get_object(self, key):
         try:
-            return self.client.get_object(Bucket=self.bucket, Key=clean_key(key))["Body"].read()
+            return self.client.get_object(Bucket=self.bucket, Key=clean_key(key))
         except Exception as error:
             if error_code(error) in {"404", "NoSuchKey", "NotFound"}:
                 raise FileNotFoundError(key) from error
             raise
+
+    def read_versioned(self, key):
+        response = self._get_object(key)
+        with response["Body"] as body:
+            return body.read(), response["ETag"]
+
+    def put_versioned(self, key, data, revision):
+        condition = {"IfNoneMatch": "*"} if revision is None else {"IfMatch": revision}
+        try:
+            response = self.client.put_object(
+                Bucket=self.bucket, Key=clean_key(key), Body=data, ContentType="application/json",
+                ChecksumSHA256=_checksum(data), **condition, **self._encryption(),
+            )
+        except Exception as error:
+            if error_code(error) in CONFLICT_CODES:
+                raise ObjectExists(key) from error
+            raise
+        return response["ETag"]
 
     def download(self, key, destination) -> Path:
         destination = Path(destination)

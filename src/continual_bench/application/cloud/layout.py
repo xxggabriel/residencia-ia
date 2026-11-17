@@ -97,6 +97,18 @@ def analytics_marker_key(campaign_id, run_id):
     return f"{run_prefix(campaign_id, run_id)}/analytics.json"
 
 
+def cancelled_key(campaign_id):
+    return f"{campaign_prefix(campaign_id)}/cancelled.json"
+
+
+def spot_attempt_prefix(campaign_id, run_id, attempt):
+    return f"{run_prefix(campaign_id, run_id)}/spot/attempt-{attempt:03d}"
+
+
+def spot_instance_key(campaign_id, run_id, attempt):
+    return f"{spot_attempt_prefix(campaign_id, run_id, attempt)}/instance.json"
+
+
 def event_key(campaign_id, run_id, stamp, job_id, status):
     return f"{run_prefix(campaign_id, run_id)}/events/{stamp}-{job_id}-{status}.json"
 

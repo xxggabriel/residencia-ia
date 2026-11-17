@@ -9,10 +9,18 @@ alerts through SNS and reconciles stopped executions; it never starts a benchmar
 
 import json
 import os
+import re
 import time
 
-from continual_bench.application.cloud import layout, lifecycle, planning, snapshots
-from continual_bench.application.cloud.contracts import CampaignRequest, DatasetRequest, SnapshotRef
+from continual_bench.application.cloud import layout, lifecycle, planning, snapshots, spot_lifecycle
+from continual_bench.application.cloud.contracts import (
+    CAMPAIGN_ID,
+    SPOT_BACKEND,
+    CampaignRequest,
+    DatasetRequest,
+    SnapshotRef,
+)
+from continual_bench.infrastructure.object_store import get_json, put_json
 
 TERMINAL_EXECUTION = ("FAILED", "TIMED_OUT", "ABORTED")
 
@@ -22,7 +30,7 @@ class Context:
 
     def __init__(self, env=None):
         self.env = os.environ if env is None else env
-        self._store = self._jobs = self._sns = None
+        self._store = self._jobs = self._spot_jobs = self._sns = None
 
     @property
     def store(self):
@@ -39,6 +47,14 @@ class Context:
 
             self._jobs = BatchJobs(self.env["BENCH_JOB_QUEUE"])
         return self._jobs
+
+    @property
+    def spot_jobs(self):
+        if self._spot_jobs is None:
+            from continual_bench.infrastructure.aws.spot import SpotJobs
+
+            self._spot_jobs = SpotJobs.from_env(self.env)
+        return self._spot_jobs
 
     def notify(self, subject, message):
         topic = self.env.get("BENCH_SNS_TOPIC")
@@ -63,6 +79,18 @@ class Context:
             queue=queue_capacity(self.env["BENCH_JOB_QUEUE"]),
         )
 
+    def spot_capacity(self, concurrency):
+        from continual_bench.infrastructure.aws.quotas import standard_spot_vcpu_quota
+
+        quota = standard_spot_vcpu_quota()
+        return {
+            "compute": SPOT_BACKEND,
+            "requested_instances": concurrency,
+            "required_vcpus": 2 * concurrency,
+            "standard_spot_vcpu_quota": quota,
+            "quota_supports_full_parallelism": quota >= 2 * concurrency,
+        }
+
     @property
     def project_root(self):
         return self.env.get("BENCH_PROJECT_ROOT") or self.env.get("LAMBDA_TASK_ROOT") or "."
@@ -86,11 +114,15 @@ def plan_campaign(ctx, event):
 
     request = CampaignRequest(**event["request"])
     release = planning.resolve_release(ctx.store, request.release)
+    spot = release.benchmark_compute == SPOT_BACKEND
+    if event.get("require_spot") and not spot:
+        raise planning.CampaignConflict(f"Release {release.git_sha} does not support Spot benchmarks")
+    if ctx.store.head(layout.cancelled_key(request.campaign_id)) is not None:
+        raise planning.CampaignConflict(f"Campaign {request.campaign_id} was explicitly cancelled")
     snapshot = snapshots.verify_snapshot(ctx.store, request.snapshot) if request.snapshot else None
     plan = planning.build_plan(request, release, snapshot_manifest=snapshot, project_root=ctx.project_root)
     verify_plan_sources(ctx.store, plan["units"])
-    evidence = ctx.capacity(plan["concurrency"])
-    from continual_bench.infrastructure.object_store import put_json
+    evidence = ctx.spot_capacity(plan["concurrency"]) if spot else ctx.capacity(plan["concurrency"])
 
     put_json(
         ctx.store,
@@ -98,13 +130,17 @@ def plan_campaign(ctx, event):
         {"capacity": evidence, "snapshot": plan["snapshot"], "release": release.git_sha},
     )
     published = planning.publish_plan(ctx.store, plan)
+    if spot:
+        execution_arn = event["execution_arn"]
+        if not spot_lifecycle.admit_execution(ctx.store, request.campaign_id, execution_arn):
+            raise planning.CampaignConflict(f"Campaign {request.campaign_id} already has an active workflow")
     return {
         **published,
         "timeouts": plan["timeouts"],
         "max_attempts": plan["max_attempts"],
         "bucket": ctx.env["BENCH_BUCKET"],
         "control_function": release.control_function,
-        "capacity": {
+        "capacity": evidence if spot else {
             k: evidence[k] for k in ("required_vcpus", "fargate_vcpu_quota", "max_parallel_admitted")
         },
     }
@@ -125,6 +161,10 @@ def record_attempt(ctx, event):
     return lifecycle.record_attempt(ctx.store, ctx.jobs, event["item"], error=error, prices=ctx.prices())
 
 
+def advance_spot_run(ctx, event):
+    return spot_lifecycle.SpotRun(ctx.store, ctx.spot_jobs, event["item"], event["execution_arn"]).advance()
+
+
 def consolidate(ctx, event):
     result = lifecycle.consolidate(ctx.store, event["campaign_id"], event.get("results"))
     if not result["complete"] and event.get("notify", True):
@@ -133,9 +173,23 @@ def consolidate(ctx, event):
 
 
 def reconcile_campaign(ctx, event):
-    return lifecycle.reconcile_campaign(
-        ctx.store, ctx.jobs, event["campaign_id"], event.get("reason", "requested")
-    )
+    campaign, reason = event["campaign_id"], event.get("reason", "requested")
+    if event.get("cancel"):
+        spot_lifecycle.cancel_campaign(ctx.store, campaign)
+    if _uses_spot(ctx.store, campaign):
+        owner = None
+        if execution_arn := event.get("execution_arn"):
+            owner = spot_lifecycle.stop_execution(ctx.store, campaign, execution_arn, reason)
+        return spot_lifecycle.reconcile_campaign(ctx.store, ctx.spot_jobs, campaign, reason, owner=owner)
+    return lifecycle.reconcile_campaign(ctx.store, ctx.jobs, campaign, reason)
+
+
+def _uses_spot(store, campaign):
+    try:
+        plan = get_json(store, layout.plan_key(campaign))
+    except FileNotFoundError:
+        return False
+    return plan["release"].get("benchmark_compute") == SPOT_BACKEND
 
 
 # Dataset pipeline -----------------------------------------------------------------------------------
@@ -183,6 +237,17 @@ def publish_snapshot(ctx, event):
     return {k: published[k] for k in ("manifest_uri", "marker_uri", "created", "snapshot_id")}
 
 
+def _observed_campaign(detail, name):
+    # Prefer the request over the name so a delimiter in the campaign ID is unambiguous.
+    try:
+        campaign = json.loads(detail.get("input") or "{}").get("request", {}).get("campaign_id", "")
+    except (AttributeError, TypeError, ValueError):
+        campaign = ""
+    if isinstance(campaign, str) and re.fullmatch(CAMPAIGN_ID, campaign):
+        return campaign
+    return name.split("--", 1)[0]
+
+
 # Lifecycle observation ------------------------------------------------------------------------------
 def observe(ctx, event):
     detail, kind = event.get("detail", {}), event.get("detail-type")
@@ -194,8 +259,6 @@ def observe(ctx, event):
             campaign, _, run_id = name[3:].rpartition("-")
         status = detail.get("status")
         if campaign and run_id:
-            from continual_bench.infrastructure.object_store import put_json
-
             put_json(
                 ctx.store,
                 layout.event_key(campaign, run_id, _stamp(), detail.get("jobId", "unknown"), status),
@@ -221,10 +284,30 @@ def observe(ctx, event):
             ctx.env.get("BENCH_BENCHMARK_STATE_MACHINE_SUFFIX", ":continual-bench-benchmark")
         ):
             # Execution names are `<campaign_id>` or `<campaign_id>--<retry-suffix>`.
-            campaign = name.split("--", 1)[0]
-            result["reconciliation"] = lifecycle.reconcile_campaign(
-                ctx.store, ctx.jobs, campaign, f"execution {status}"
-            )
+            campaign = _observed_campaign(detail, name)
+            if _uses_spot(ctx.store, campaign):
+                arn = detail["executionArn"]
+                if not spot_lifecycle.owns_execution(ctx.store, campaign, spot_lifecycle.execution_key(arn)):
+                    return result
+                owner = spot_lifecycle.stop_execution(
+                    ctx.store, campaign, arn, f"execution {status}"
+                )
+                if status == "ABORTED":
+                    spot_lifecycle.cancel_campaign(ctx.store, campaign)
+                # Give in-flight launch requests time to become visible after fencing new launches.
+                for delay in (0, 15, 30, 60):
+                    time.sleep(delay)
+                    result["reconciliation"] = spot_lifecycle.reconcile_campaign(
+                        ctx.store, ctx.spot_jobs, campaign, f"execution {status}", owner=owner
+                    )
+                    if delay and result["reconciliation"]["clean"]:
+                        break
+                if not result["reconciliation"]["clean"]:
+                    raise RuntimeError(f"Spot reconciliation still pending for {campaign}")
+            else:
+                result["reconciliation"] = lifecycle.reconcile_campaign(
+                    ctx.store, ctx.jobs, campaign, f"execution {status}"
+                )
         if status in TERMINAL_EXECUTION:
             ctx.notify(f"continual-bench execution {status}: {name}", result)
         return result
@@ -238,6 +321,7 @@ ACTIONS = {
         reconcile_unit,
         describe_job,
         record_attempt,
+        advance_spot_run,
         consolidate,
         reconcile_campaign,
         resolve_dataset,

@@ -24,7 +24,7 @@ aws cloudformation update-termination-protection --enable-termination-protection
 
 # Account-wide default; affects ECS clusters created afterwards (Batch creates its own cluster).
 aws ecs put-account-setting-default --name containerInsights --value enhanced >/dev/null
-for service in batch.amazonaws.com ecs.amazonaws.com; do
+for service in batch.amazonaws.com ecs.amazonaws.com spot.amazonaws.com; do
   aws iam create-service-linked-role --aws-service-name "$service" >/dev/null 2>&1 || true
 done
 

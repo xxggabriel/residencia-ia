@@ -257,9 +257,14 @@ def test_roles_are_separate_and_passrole_is_scoped():
 
 def test_network_is_private_with_required_endpoints():
     resources = template("modules/network.yaml")["Resources"]
+    endpoints = template("modules/interface-endpoints.yaml")["Resources"]
+    assert [name for name, resource in resources.items() if resource["Type"] == "AWS::EC2::VPCEndpoint"] == [
+        "S3GatewayEndpoint"
+    ]
+    assert all(r["Properties"]["VpcEndpointType"] == "Interface" for r in endpoints.values())
     services = {
         json.dumps(r["Properties"]["ServiceName"])
-        for r in resources.values()
+        for r in (resources | endpoints).values()
         if r["Type"] == "AWS::EC2::VPCEndpoint"
     }
     for service in (
@@ -379,8 +384,9 @@ def test_cfn_execution_role_can_lookup_and_clean_up_runtime_roles_without_iam_pa
     }
 
     prefix = "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/"
+    spot_suffix = template("modules/spot.yaml")["Parameters"]["WorkerResourceSuffix"]["Default"]
     expected = {
-        prefix + resource["Properties"]["RoleName"]["Fn::Sub"]
+        prefix + resource["Properties"]["RoleName"]["Fn::Sub"].replace("${WorkerResourceSuffix}", spot_suffix)
         for module in (CFN / "modules").glob("*.yaml")
         for resource in template(f"modules/{module.name}")["Resources"].values()
         if resource["Type"] == "AWS::IAM::Role"
@@ -449,28 +455,26 @@ def test_state_machines_validate_offline():
 def test_asl_validator_rejects_unsafe_definitions(tmp_path):
     definition = json.loads((ROOT / "infra" / "statemachines" / "benchmark.asl.json").read_text())
     broken = copy.deepcopy(definition)
-    states = broken["States"]["InlineRuns"]["ItemProcessor"]["States"]
-    states["UnitFailed"] = {"Type": "Fail", "Error": "X"}
-    del states["Submit"]["Parameters"]["Tags"]
-    states["Reconcile"]["Retry"] = []
+    states = broken["States"]["DistributedRuns"]["ItemProcessor"]["States"]
+    states["SpotControllerFailed"] = {"Type": "Fail", "Error": "X"}
+    states["ReconcileSpotAttempt"]["Retry"] = []
     broken["States"]["Orphan"] = {"Type": "Succeed"}
     path = tmp_path / "benchmark.asl.json"
     path.write_text(json.dumps(broken))
     errors = "\n".join(ASL.validate_file(path))
     assert (
         "Fail inside a Map" in errors
-        and "tags" in errors
         and "transient" in errors
         and "unreachable" in errors
     )
-    path.write_text(json.dumps(definition).replace("${JobQueue}", "${UnknownQueue}"))
+    path.write_text(json.dumps(definition).replace("${MapResultsBucket}", "${UnknownBucket}"))
     assert any("undefined substitutions" in e for e in ASL.validate_file(path))
     # Step Functions rejects a state name reused in another Map processor (DUPLICATE_STATE_NAME).
     reused = copy.deepcopy(definition)
     distributed = reused["States"]["DistributedRuns"]["ItemProcessor"]
-    distributed["States"]["Route"] = distributed["States"].pop("DistributedRoute")
+    distributed["States"]["Plan"] = distributed["States"].pop("SpotAttemptTerminal")
     path.write_text(json.dumps(reused))
-    assert any("duplicate state name 'Route'" in e for e in ASL.validate_file(path))
+    assert any("duplicate state name 'Plan'" in e for e in ASL.validate_file(path))
 
 
 def test_runtime_parameters_pin_build_outputs():
@@ -509,6 +513,12 @@ def test_release_manifest_composition_refuses_mismatched_deploys():
     from continual_bench.application.cloud.contracts import ReleaseManifest
 
     assert ReleaseManifest(**manifest).job_definitions["benchmark"].endswith(":4")
+    spot = release.compose(
+        {**outputs, "BenchmarkComputeBackend": "ec2-spot-c6a.large"}, build, "a" * 40, "stack", None,
+    )
+    assert ReleaseManifest(**spot).benchmark_compute == "ec2-spot-c6a.large"
+    with pytest.raises(SystemExit, match="unsupported benchmark backend"):
+        release.compose({**outputs, "BenchmarkComputeBackend": "fargate"}, build, "a" * 40, "stack", None)
     with pytest.raises(SystemExit):
         release.compose({**outputs, "GitSha": "b" * 40}, build, "a" * 40, "stack", None)
     with pytest.raises(SystemExit):
@@ -626,15 +636,14 @@ def test_sagemaker_experiments_iam_and_vpce_permissions():
         subs = {r["Fn::Sub"] for r in stmt["Resource"]}
         assert subs == expected_resources
 
-    vpce_stmt = template("modules/network.yaml")["Resources"]["SageMakerApiEndpoint"]["Properties"][
-        "PolicyDocument"
-    ]["Statement"][0]
+    endpoint = template("modules/interface-endpoints.yaml")["Resources"]["SageMakerApiEndpoint"]
+    vpce_stmt = endpoint["Properties"]["PolicyDocument"]["Statement"][0]
     assert required_actions <= set(vpce_stmt["Action"])
 
 
 def test_sagemaker_mlflow_app_is_serverless_and_wired_into_vpc_and_batch():
     execution = template("modules/execution.yaml")
-    network = template("modules/network.yaml")
+    network = template("modules/interface-endpoints.yaml")
     root = template("root.yaml")
 
     app = execution["Resources"]["MlflowApp"]
@@ -688,12 +697,16 @@ def test_timeouts_are_standardized_to_14400_seconds():
     assert dataset_asl["States"]["Prepare"]["TimeoutSeconds"] == 14400
 
 
-def test_benchmark_maps_apply_campaign_execution_timeout_to_the_batch_container():
+def test_benchmark_map_passes_durable_run_coordinates_to_the_spot_controller():
     states = json.loads((ROOT / "infra" / "statemachines" / "benchmark.asl.json").read_text())["States"]
-    for map_name, submit_name in (("InlineRuns", "Submit"), ("DistributedRuns", "DistributedSubmit")):
-        submit = states[map_name]["ItemProcessor"]["States"][submit_name]
-        assert submit["Parameters"]["Timeout"]["AttemptDurationSeconds.$"] == "$.item.run_timeout_seconds"
-        assert submit["TimeoutSecondsPath"] == "$.item.task_timeout_seconds"
+    distributed = states["DistributedRuns"]
+    assert distributed["MaxConcurrencyPath"] == "$.planned.plan.concurrency"
+    assert distributed["ItemSelector"]["execution_arn.$"] == "$$.Execution.Id"
+    advance = distributed["ItemProcessor"]["States"]["ReconcileSpotAttempt"]
+    assert advance["Parameters"]["Payload"] == {
+        "action": "advance_spot_run", "item.$": "$.item", "execution_arn.$": "$.execution_arn",
+    }
+    assert "batch:submitJob" not in json.dumps(states)
 
 
 def test_launch_input_pins_campaign_and_optional_snapshot_preparation_to_same_release():

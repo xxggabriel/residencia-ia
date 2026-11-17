@@ -52,6 +52,11 @@ Parameters:
   BenchmarkEphemeralGiB:
     Type: Number
     Default: 50
+  BenchmarkSpotDiskGiB:
+    Type: Number
+    Default: 50
+    MinValue: 30
+    MaxValue: 200
   BenchmarkTimeoutSeconds:
     Type: Number
     Default: 14400
@@ -81,6 +86,11 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: Use the Batch and acquisition log groups retained by a previous runtime stack.
+  ReuseBenchmarkSpotLogGroup:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Use the benchmark Spot log group retained by a previous runtime stack.
   AcquisitionComputeType:
     Type: String
     Default: BUILD_GENERAL1_LARGE
@@ -199,6 +209,11 @@ Resources:
         PrivateSubnets: !GetAtt Network.Outputs.PrivateSubnets
         WorkerSecurityGroupId: !GetAtt Network.Outputs.WorkerSecurityGroupId
         S3GatewayEndpointId: !GetAtt Network.Outputs.S3GatewayEndpointId
+        VpcId: !GetAtt Network.Outputs.VpcId
+        EndpointSubnets: !GetAtt Network.Outputs.EndpointSubnets
+        EndpointSecurityGroupId: !GetAtt Network.Outputs.EndpointSecurityGroupId
+        EnableStreaming: !Ref EnableStreaming
+        EnableFeatureStore: !Ref EnableFeatureStore
         RuntimeImage: !Ref RuntimeImage
         MlImage: !Ref MlImage
         GitSha: !Ref GitSha
@@ -209,6 +224,7 @@ Resources:
         BenchmarkVcpus: !Ref BenchmarkVcpus
         BenchmarkMemoryMiB: !Ref BenchmarkMemoryMiB
         BenchmarkEphemeralGiB: !Ref BenchmarkEphemeralGiB
+        BenchmarkSpotDiskGiB: !Ref BenchmarkSpotDiskGiB
         BenchmarkTimeoutSeconds: !Ref BenchmarkTimeoutSeconds
         PrepareVcpus: !Ref PrepareVcpus
         PrepareMemoryMiB: !Ref PrepareMemoryMiB
@@ -218,6 +234,7 @@ Resources:
         JobAttempts: !Ref JobAttempts
         LogRetentionDays: !Ref LogRetentionDays
         ReuseRuntimeLogGroups: !Ref ReuseRuntimeLogGroups
+        ReuseBenchmarkSpotLogGroup: !Ref ReuseBenchmarkSpotLogGroup
         AcquisitionComputeType: !Ref AcquisitionComputeType
         AcquisitionTimeoutMinutes: !Ref AcquisitionTimeoutMinutes
         EnableModelRegistry: !Ref EnableModelRegistry
@@ -337,6 +354,10 @@ Outputs:
     Value: !GetAtt Execution.Outputs.JobQueueArn
   BenchmarkJobDefinitionArn:
     Value: !GetAtt Execution.Outputs.BenchmarkJobDefinitionArn
+  BenchmarkComputeBackend:
+    Value: !GetAtt Execution.Outputs.BenchmarkComputeBackend
+  BenchmarkSpotLogGroupName:
+    Value: !GetAtt Execution.Outputs.BenchmarkSpotLogGroupName
   PrepareJobDefinitionArn:
     Value: !GetAtt Execution.Outputs.PrepareJobDefinitionArn
   ControlFunctionVersionArn:

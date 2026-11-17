@@ -7,6 +7,7 @@ the same campaign must reproduce it byte for byte, otherwise the request is refu
 """
 
 import hashlib
+import math
 from pathlib import Path
 
 from continual_bench.infrastructure.object_store import ObjectExists, get_json, put_json, put_json_once
@@ -15,6 +16,7 @@ from . import layout
 from .contracts import (
     EVALUATION_PROTOCOL,
     OFFLINE_MATRIX_FAMILIES,
+    SPOT_BACKEND,
     CampaignRequest,
     ReleaseManifest,
     RunUnit,
@@ -146,6 +148,13 @@ def build_plan(
         expansions = _zia_units(request, release, snapshot_manifest, tracking_sha256)
     else:
         expansions = _matrix_units(request, release, project_root)
+    spot = release.benchmark_compute == SPOT_BACKEND
+    release_contract = {
+        "git_sha": release.git_sha,
+        "runtime_image": release.images["runtime"].digest,
+        "job_definition": release.job_definitions["benchmark"],
+        **({"compute": SPOT_BACKEND} if spot else {}),
+    }
     units = []
     for kind, params, labels, extra in expansions:
         contract = {
@@ -153,11 +162,7 @@ def build_plan(
             "kind": kind,
             "params": params,
             "tracking_sha256": tracking_sha256,
-            "release": {
-                "git_sha": release.git_sha,
-                "runtime_image": release.images["runtime"].digest,
-                "job_definition": release.job_definitions["benchmark"],
-            },
+            "release": release_contract,
             **extra,
         }
         run_id, contract_sha256 = run_identity(request.campaign_id, contract)
@@ -178,11 +183,14 @@ def build_plan(
         raise ValueError("matrix produced duplicate execution contracts")
     if not units:
         raise ValueError("campaign matrix expanded to no runnable units")
-    concurrency = min(request.max_parallel, len(units))
+    concurrency = min(request.max_parallel or (256 if spot else 4), len(units))
+    recorded_request = request.model_dump(mode="json")
+    if not spot:
+        recorded_request.setdefault("max_parallel", 4)  # Match existing legacy plan documents.
     return {
         "version": PLAN_VERSION,
         "campaign_id": request.campaign_id,
-        "request": request.model_dump(mode="json"),
+        "request": recorded_request,
         "release": release.model_dump(mode="json"),
         "snapshot": (
             {
@@ -195,7 +203,7 @@ def build_plan(
         ),
         "units": [u.model_dump(mode="json") for u in units],
         "concurrency": concurrency,
-        "mode": "inline" if len(units) <= INLINE_LIMIT else "distributed",
+        "mode": "distributed" if spot or len(units) > INLINE_LIMIT else "inline",
         "timeouts": {
             "queue_seconds": request.queue_timeout_seconds,
             "run_seconds": request.run_timeout_seconds,
@@ -207,6 +215,19 @@ def build_plan(
 
 def map_items(plan: dict, store) -> list[dict]:
     """Only URIs and identifiers travel through Step Functions state; documents stay in S3."""
+    release = plan["release"]
+    options = {}
+    if release.get("benchmark_compute") == SPOT_BACKEND:
+        runtime, ml = release["images"]["runtime"], release["images"]["ml"]
+        timeouts = plan["timeouts"]
+        options = {
+            "runtime_image": f"{runtime['repository']}@{runtime['digest']}",
+            "inference_image": f"{ml['repository']}@{ml['digest']}",
+            "git_sha": release["git_sha"],
+            "queue_timeout_seconds": timeouts["queue_seconds"],
+            # Bound each Standard child’s execution history even at the maximum run timeout.
+            "poll_seconds": max(30, math.ceil(plan["max_attempts"] * timeouts["task_seconds"] / 1800)),
+        }
     return [
         {
             "campaign_id": plan["campaign_id"],
@@ -218,8 +239,10 @@ def map_items(plan: dict, store) -> list[dict]:
             "run_timeout_seconds": plan["timeouts"]["run_seconds"],
             "task_timeout_seconds": plan["timeouts"]["task_seconds"],
             "labels": u["labels"],
+            **({"contract_sha256": u["contract_sha256"], "placement_index": index} if options else {}),
+            **options,
         }
-        for u in plan["units"]
+        for index, u in enumerate(plan["units"])
     ]
 
 

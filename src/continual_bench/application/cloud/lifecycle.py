@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 from continual_bench.infrastructure.object_store import get_json, put_json
 
 from . import layout
+from .contracts import SPOT_BACKEND
 from .costs import attempt_estimate
 from .records import ensure_rows, put_row_once
 
@@ -191,6 +192,7 @@ def _publish_zia_comparisons(store, campaign_id, units):
 
 def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> dict:
     plan = get_json(store, layout.plan_key(campaign_id))
+    spot = plan["release"].get("benchmark_compute") == SPOT_BACKEND
     reported_by_run = reported_outcomes(results)
     units, analytics_errors = [], []
     for unit in plan["units"]:
@@ -198,7 +200,12 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
         if store.head(final_key) is not None:
             final = get_json(store, final_key)
             try:
-                analytics = ensure_rows(store, final)
+                if spot:
+                    from .spot_lifecycle import verify_publication
+
+                    analytics = verify_publication(store, final, unit["contract_sha256"])
+                else:
+                    analytics = ensure_rows(store, final)
             except Exception as error:  # Keep consolidating; the campaign is reported incomplete.
                 analytics = "error"
                 analytics_errors.append({"run_id": unit["run_id"], "error_type": type(error).__name__,
@@ -207,7 +214,7 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
                 {
                     "run_id": unit["run_id"],
                     "labels": unit["labels"],
-                    "status": "SUCCEEDED",
+                    "status": "PUBLICATION_FAILED" if spot and analytics == "error" else "SUCCEEDED",
                     "final_uri": store.uri(final_key),
                     "metrics": final.get("metrics"),
                     "holdout": final.get("holdout"),
@@ -221,12 +228,19 @@ def consolidate(store, campaign_id: str, results=None, *, clock=time.time) -> di
             )
         else:
             reported = reported_by_run.get(unit["run_id"], {})
+            if spot:
+                state_key = f"{layout.run_prefix(campaign_id, unit['run_id'])}/spot/state.json"
+                try:
+                    reported = get_json(store, state_key)
+                except FileNotFoundError:
+                    pass
             units.append(
                 {
                     "run_id": unit["run_id"],
                     "labels": unit["labels"],
                     "status": reported.get("status", "FAILED"),
                     "final_uri": None,
+                    **({"status_reason": reported.get("reason")} if spot else {}),
                 }
             )
     succeeded = sum(u["status"] == "SUCCEEDED" for u in units)

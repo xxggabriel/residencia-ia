@@ -35,7 +35,7 @@
       "Choices": [
         {"Variable": "$.resolved.decision", "StringEquals": "ready", "Next": "SnapshotReady"},
         {"Variable": "$.resolved.decision", "StringEquals": "publish", "Next": "PublishManifest"},
-        {"Variable": "$.resolved.decision", "StringEquals": "prepare", "Next": "Prepare"},
+        {"Variable": "$.resolved.decision", "StringEquals": "prepare", "Next": "EnsureEndpoints"},
         {"Variable": "$.resolved.decision", "StringEquals": "acquire", "Next": "Acquire"}
       ],
       "Default": "SnapshotFailed"
@@ -74,7 +74,30 @@
         }
       ],
       "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SnapshotFailed"}],
+      "Next": "EnsureEndpoints"
+    },
+    "EnsureEndpoints": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${EndpointsFunction}",
+        "Payload": {"execution_arn.$": "$$.Execution.Id"}
+      },
+      "ResultPath": null,
+      "Retry": [
+        {"ErrorEquals": ["EndpointsPending"], "IntervalSeconds": 15, "MaxAttempts": 60, "BackoffRate": 1},
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 6, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "EndpointSetupFailed"}],
       "Next": "Prepare"
+    },
+    "EndpointSetupFailed": {
+      "Type": "Fail",
+      "Error": "EndpointSetupFailed",
+      "Cause": "Private interface endpoints could not be provisioned. Check the endpoint stack and lifecycle Lambda logs."
     },
     "Prepare": {
       "Type": "Task",

@@ -302,22 +302,42 @@ def query(args):
 
 
 def reconcile(args):
-    from continual_bench.application.cloud.lifecycle import reconcile_campaign
-    from continual_bench.infrastructure.aws.batch import BatchJobs
+    from continual_bench.application.cloud import lifecycle, spot_lifecycle
+    from continual_bench.orchestration.aws_control import _uses_spot
 
-    store, jobs = _store(args), BatchJobs(args.queue or os.environ["BENCH_JOB_QUEUE"])
+    store = _store(args)
+    if _uses_spot(store, args.campaign):
+        from continual_bench.infrastructure.aws.spot import SpotJobs
+
+        jobs = SpotJobs.from_env({**os.environ, "BENCH_STACK": args.project})
+        reconcile_campaign = spot_lifecycle.reconcile_campaign
+        options = {}
+        if execution_arn := getattr(args, "execution_arn", None):
+            options["owner"] = spot_lifecycle.stop_execution(store, args.campaign, execution_arn, args.reason)
+    else:
+        from continual_bench.infrastructure.aws.batch import BatchJobs
+
+        jobs = BatchJobs(args.queue or os.environ["BENCH_JOB_QUEUE"])
+        reconcile_campaign = lifecycle.reconcile_campaign
+        options = {}
     for attempt in range(args.checks):
-        report = reconcile_campaign(store, jobs, args.campaign, args.reason)
+        report = reconcile_campaign(store, jobs, args.campaign, args.reason, **options)
         if report["clean"]:
             break
-        time.sleep(args.interval)
+        if attempt + 1 < args.checks:
+            time.sleep(args.interval)
     _emit(report)
     sys.exit(0 if report["clean"] else 1)
 
 
 def cancel(args):
+    from continual_bench.application.cloud.spot_lifecycle import cancel_campaign
     from continual_bench.infrastructure.aws.session import client
 
+    execution_name = args.execution_arn.rsplit(":", 1)[-1]
+    if execution_name != args.campaign and not execution_name.startswith(f"{args.campaign}--"):
+        raise SystemExit("execution ARN does not belong to this campaign")
+    cancel_campaign(_store(args), args.campaign)
     client("stepfunctions").stop_execution(
         executionArn=args.execution_arn,
         error="CampaignCancelled",
@@ -486,6 +506,7 @@ def configure(parser: argparse.ArgumentParser):
     def stop(command):
         command.add_argument("--campaign", required=True)
         command.add_argument("--queue")
+        command.add_argument("--project", default=os.environ.get("BENCH_STACK", "continual-bench"))
         command.add_argument("--checks", type=int, default=10)
         command.add_argument("--interval", type=int, default=30)
 

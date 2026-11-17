@@ -1,4 +1,4 @@
-"""Live MLflow metrics for an individual AWS Batch matrix attempt."""
+"""Live MLflow metrics for a cloud matrix case."""
 
 import math
 import time
@@ -35,25 +35,30 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
         return sanitize_mlflow_name(f"{self.project}-matrix")
 
     @property
+    def logical_run_id(self):
+        return self.unit.run_id
+
+    @property
     def run_name(self):
-        return f"{self.campaign_id}-{self.unit.run_id[:12]}-{self.attempt_key}"
+        base = f"{self.campaign_id}-{self.unit.run_id[:12]}"
+        return base if self.spot else f"{base}-{self.attempt_key}"
 
     @property
     def mlflow_tags(self):
         tags = {tag["key"]: tag["value"] for tag in super().mlflow_tags}
         tags.update({
             "cb-unit-id": self.unit.run_id,
-            "cb-batch-job-id": self.job_id,
-            "cb-attempt": self.attempt_key,
             "cb-evaluator": self.scope,
             "cb-contract-sha256": self.unit.contract_sha256,
         })
+        if not self.spot:
+            tags.update({"cb-batch-job-id": self.job_id, "cb-attempt": self.attempt_key})
         if self.unit.params.get("source_sha256"):
             tags["cb-source-sha256"] = self.unit.params["source_sha256"]
         return [{"key": key, "value": str(value)} for key, value in tags.items()]
 
     def metrics(self, step, values, prefix="progress"):
-        if not self.mlflow_run_id:
+        if not self.mlflow_run_id and not self.spot:
             return
         self.step = max(self.step, step)
         stamp = int(time.time() * 1000)
@@ -68,7 +73,7 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
 
     def flush(self):
         if self.pending:
-            self.log_batch(metrics=self.pending)
+            self.log_progress_metrics(self.pending)
             self.pending.clear()
             self.last_flush = time.monotonic()
 

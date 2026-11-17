@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,6 +30,10 @@ class StoredObject:
     version_id: str | None
     sha256: str | None
     metadata: dict = field(default_factory=dict)
+
+
+def json_bytes(value) -> bytes:
+    return json.dumps(value, sort_keys=True, indent=2, allow_nan=False).encode()
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -136,6 +141,33 @@ class LocalObjectStore:
             raise FileNotFoundError(key)
         return path.read_bytes()
 
+    def read_versioned(self, key):
+        data = self.get_bytes(key)
+        return data, sha256_bytes(data)
+
+    def put_versioned(self, key, data, revision):
+        """Compare-and-set a small coordination document."""
+        with self._coordinate(key):
+            if revision is not None:
+                try:
+                    _, current = self.read_versioned(key)
+                except FileNotFoundError as error:
+                    raise ObjectExists(key) from error
+                if revision != current:
+                    raise ObjectExists(key)
+            self.put_bytes(key, data, if_absent=revision is None, content_type="application/json")
+        return sha256_bytes(data)
+
+    @contextmanager
+    def _coordinate(self, key):
+        import fcntl
+
+        lock = self.meta / ".coordination" / clean_key(key)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with lock.open("a+b") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX)
+            yield
+
     def download(self, key, destination) -> Path:
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -156,8 +188,7 @@ def get_json(store, key):
 
 
 def put_json(store, key, value, *, if_absent=False) -> StoredObject:
-    data = json.dumps(value, sort_keys=True, indent=2, allow_nan=False).encode()
-    return store.put_bytes(key, data, if_absent=if_absent, content_type="application/json")
+    return store.put_bytes(key, json_bytes(value), if_absent=if_absent, content_type="application/json")
 
 
 def put_json_once(store, key, value) -> tuple[StoredObject, bool]:

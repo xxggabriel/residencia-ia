@@ -274,6 +274,8 @@ def test_sagemaker_profiles_build_valid_requests():
 
 
 def test_model_registry_registers_pending_candidates_once():
+    from uuid import NAMESPACE_URL, uuid5
+
     from continual_bench.infrastructure.aws.model_registry import SageMakerModelRegistry
 
     client = boto3.client(
@@ -287,6 +289,7 @@ def test_model_registry_registers_pending_candidates_once():
             {"ModelPackageArn": "arn:mp/1"},
             {
                 "ModelPackageGroupName": "g",
+                "ClientToken": str(uuid5(NAMESPACE_URL, "sagemaker:model-package:g:r1")),
                 "ModelPackageDescription": "d",
                 "ModelApprovalStatus": "PendingManualApproval",
                 "CustomerMetadataProperties": {"campaign_id": "c", "run_id": "r1"},

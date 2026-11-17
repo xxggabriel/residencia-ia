@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Disposable, private EC2 Spot workers for benchmark campaigns
+
+Parameters:
+  Project:
+    Type: String
+  DataBucketArn:
+    Type: String
+  DataKeyArn:
+    Type: String
+  S3GatewayEndpointId:
+    Type: String
+  RuntimeRepositoryArn:
+    Type: String
+  MlRepositoryArn:
+    Type: String
+  EnableModelRegistry:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+  ReuseWorkerLogs:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  WorkerResourceSuffix:
+    Type: String
+    Default: spot
+    AllowedPattern: "spot(-[a-z0-9-]+)?"
+    Description: Use a separate suffix for an isolated acceptance stack in the same project VPC.
+  WorkerAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id
+    Description: ECS-optimized AL2023 x86_64 AMI with Docker and the AWS CLI preinstalled.
+  WorkerDiskGiB:
+    Type: Number
+    Default: 50
+    MinValue: 30
+    MaxValue: 200
+    Description: Size of the temporary encrypted root disk that holds the image and benchmark workspace.
+
+Conditions:
+  ModelRegistry: !Equals [!Ref EnableModelRegistry, "true"]
+  CreateWorkerLogs: !Equals [!Ref ReuseWorkerLogs, "false"]
+
+Resources:
+  WorkerLogs:
+    Type: AWS::Logs::LogGroup
+    Condition: CreateWorkerLogs
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub "/${Project}/${WorkerResourceSuffix}"
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !Ref DataKeyArn
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-${WorkerResourceSuffix}-worker"
+      Path: !Sub "/${Project}/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: pull-and-log
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !Ref RuntimeRepositoryArn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/${WorkerResourceSuffix}:log-stream:*"
+        - PolicyName: read-snapshots-write-runs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadVerifiedInputs
+                Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource:
+                  - !Sub "${DataBucketArn}/releases/*"
+                  - !Sub "${DataBucketArn}/datasets/*/manifests/*"
+                  - !Sub "${DataBucketArn}/datasets/*/prepared/*"
+                  - !Sub "${DataBucketArn}/datasets/matrix/*"
+                  - !Sub "${DataBucketArn}/campaigns/*/units/*"
+                  - !Sub "${DataBucketArn}/campaigns/*/cancelled.json"
+                Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
+              - Sid: ReadAndWriteRunEvidence
+                Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:AbortMultipartUpload]
+                Resource:
+                  - !Sub "${DataBucketArn}/campaigns/*/runs/*"
+                  - !Sub "${DataBucketArn}/analytics/runs/*"
+                  - !Sub "${DataBucketArn}/analytics/metrics/*"
+                  - !Sub "${DataBucketArn}/analytics/windows/*"
+                  - !Sub "${DataBucketArn}/analytics/model_versions/*"
+                  - !Sub "${DataBucketArn}/mlflow/*"
+                Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
+              - Sid: ListForAccurateNotFound
+                Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !Ref DataBucketArn
+                Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
+              - Sid: BucketKeyThroughS3
+                Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey]
+                Resource: !Ref DataKeyArn
+                Condition: {StringEquals: {kms:ViaService: !Sub "s3.${AWS::Region}.amazonaws.com"}}
+        - PolicyName: sagemaker-experiments
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: TrackSageMakerExperiments
+                Effect: Allow
+                Action:
+                  - sagemaker:CreateExperiment
+                  - sagemaker:DescribeExperiment
+                  - sagemaker:UpdateExperiment
+                  - sagemaker:CreateTrial
+                  - sagemaker:DescribeTrial
+                  - sagemaker:UpdateTrial
+                  - sagemaker:CreateTrialComponent
+                  - sagemaker:DescribeTrialComponent
+                  - sagemaker:UpdateTrialComponent
+                  - sagemaker:AssociateTrialComponent
+                  - sagemaker:BatchPutMetrics
+                  - sagemaker:AddTags
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment/${Project}-*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial/${Project}-*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:experiment-trial-component/${Project}-*"
+              - Sid: TrackSageMakerMlflow
+                Effect: Allow
+                Action: [sagemaker:CallMlflowAppApi, sagemaker:DescribeMlflowApp,
+                         sagemaker:DescribeMlflowTrackingServer, "sagemaker-mlflow:*"]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:mlflow-app/*"
+                  - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:mlflow-tracking-server/*"
+        - !If
+          - ModelRegistry
+          - PolicyName: register-candidates
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Sid: ManageProjectGroups
+                  Effect: Allow
+                  Action: [sagemaker:DescribeModelPackageGroup, sagemaker:CreateModelPackageGroup, sagemaker:AddTags]
+                  Resource: !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package-group/${Project}-*"
+                - Sid: ListAndRegisterVersionsInProjectGroups
+                  Effect: Allow
+                  Action: [sagemaker:ListModelPackages, sagemaker:CreateModelPackage, sagemaker:DescribeModelPackage]
+                  Resource:
+                    - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package-group/${Project}-*"
+                    - !Sub "arn:${AWS::Partition}:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package/${Project}-*"
+                - Sid: ReadModelArchiveForRegistration
+                  Effect: Allow
+                  Action: s3:GetObject
+                  Resource: !Sub "${DataBucketArn}/campaigns/*/runs/*/attempts/*/model/model.tar.gz"
+                  Condition: {StringEquals: {aws:CalledViaFirst: sagemaker.amazonaws.com}}
+                - Sid: ReadInferenceImageForRegistration
+                  Effect: Allow
+                  Action: [ecr:BatchGetImage, ecr:DescribeImages]
+                  Resource: !Ref MlRepositoryArn
+          - !Ref AWS::NoValue
+
+  WorkerProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${Project}-${WorkerResourceSuffix}-worker"
+      Path: !Sub "/${Project}/"
+      Roles: [!Ref WorkerRole]
+
+  WorkerTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${Project}-${WorkerResourceSuffix}-worker"
+      LaunchTemplateData:
+        ImageId: !Ref WorkerAmi
+        InstanceType: c6a.large
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            SpotInstanceType: one-time
+            InstanceInterruptionBehavior: terminate
+        InstanceInitiatedShutdownBehavior: terminate
+        IamInstanceProfile:
+          Arn: !GetAtt WorkerProfile.Arn
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpTokens: required
+          HttpPutResponseHopLimit: 2
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: !Ref WorkerDiskGiB
+              Encrypted: true
+              DeleteOnTermination: true
+      TagSpecifications:
+        - ResourceType: launch-template
+          Tags: [{Key: cb-stack, Value: !Ref Project}, {Key: cb-component, Value: benchmark-spot}]
+
+Outputs:
+  LaunchTemplateId:
+    Value: !Ref WorkerTemplate
+  LaunchTemplateVersion:
+    Value: !GetAtt WorkerTemplate.LatestVersionNumber
+  WorkerRoleArn:
+    Value: !GetAtt WorkerRole.Arn
+  LogGroupName:
+    Value: !If [CreateWorkerLogs, !Ref WorkerLogs, !Sub "/${Project}/${WorkerResourceSuffix}"]
+  AmiId:
+    Value: !Ref WorkerAmi

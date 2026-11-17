@@ -15,6 +15,8 @@ if aws cloudformation describe-stacks --stack-name "$PROJECT-runtime" >/dev/null
   for execution in $(aws stepfunctions list-executions --state-machine-arn "$SM" --status-filter RUNNING --query 'executions[].name' --output text); do
     bash scripts/aws/cancel_campaign.sh "${execution%%--*}" "$execution" || true
   done
+  # Keep the cleanup Lambda and the VPC alive until the interface stack drains.
+  aws cloudformation wait stack-delete-complete --stack-name "$PROJECT-interface-endpoints"
   aws cloudformation delete-stack --stack-name "$PROJECT-runtime"
   aws cloudformation wait stack-delete-complete --stack-name "$PROJECT-runtime"
 fi
