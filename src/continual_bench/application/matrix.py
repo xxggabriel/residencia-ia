@@ -35,7 +35,7 @@ class Strategy(Strict):
 
 class MatrixDataset(Strict):
     name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
-    samples: int | None = Field(default=None, ge=10, le=100_000)
+    samples: int | None = Field(default=None, ge=10, le=100_000_000)
     label_delay: int | None = Field(default=None, ge=0, le=10_000)
     params: dict = Field(default_factory=dict)
 

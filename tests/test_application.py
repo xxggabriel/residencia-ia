@@ -160,7 +160,7 @@ def test_online_rejects_budget_that_would_skip_available_labels():
         {"mode": "offiline"},
         {"warmup": 10000},
         {"mode": "offline"},
-        {"dataset": {"samples": 1_000_000}},
+        {"dataset": {"samples": 100_000_001}},
         {"policy": {"min_window": 10000}},
         {"plugins": ["os.system"]},
         {"mode": "offline", "policy": {"name": "none"}, "dataset": {"label_delay": 10000}},
