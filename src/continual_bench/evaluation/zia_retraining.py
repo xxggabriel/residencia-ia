@@ -69,18 +69,22 @@ class ZiaLearner:
         fit["checkpoint"] = {"file": None, "sha256": sha256(payload).hexdigest(), "bytes": len(payload)}
         self.history.save_partial(fit)
         self.history.check_interrupted()
-        return {"path": path, "fit": fit, "rows": len(fit_y)}
+        return {"file": path.name, "fit": fit, "rows": len(fit_y)}
 
     def losses(self, state, x, y):
         self.history.check_interrupted()
-        self.model.load(state["path"].read_bytes())
-        return (decide(self.model.predict(x), self.threshold) != y).astype(np.float64)
+        self.model.load((self.scratch / state["file"]).read_bytes())
+        return decide(self.model.predict(x), self.threshold) != y
 
 
 def stream_matrix(
     blocks, model, threshold, config, replay, options, *, history, scratch, tracker=None, progress=None,
+    resume=None, checkpoint=None,
 ) -> tuple[PerformanceMatrix, list[dict]]:
     learner = ZiaLearner(model, threshold, config, replay, history, scratch, tracker)
+    state = None
+    if resume is not None:
+        state, learner.rows, learner.window = resume
 
     def report_block(blocks_completed, rows_processed, candidates):
         progress(rows_processed, {
@@ -93,6 +97,11 @@ def stream_matrix(
     return build_matrix(
         blocks, learner, offline=options["offline_blocks"], seed=options["seed"],
         on_block_complete=report_block if progress is not None else None,
+        state=state, checkpoint=(
+            (lambda state: checkpoint((state, learner.rows, learner.window)))
+            if checkpoint is not None else None
+        ),
+        loss_dtype=np.bool_,
     )
 
 

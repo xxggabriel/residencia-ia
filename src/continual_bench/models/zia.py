@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 from river import optim
 from scipy.optimize import minimize
-from scipy.special import expit, logsumexp, softmax
+from scipy.special import expit, softmax
 
 from continual_bench.config.iterative import IterativeTrainingConfig
 from continual_bench.core.observability import peak_rss_bytes as process_peak_rss_bytes
@@ -530,6 +530,13 @@ class MultinomialLogistic:
             self.continued_rounds = cfg.max_epochs
         self.last_training_result: TrainingResult | None = None
 
+    @property
+    def online_iterations(self) -> int:
+        return self._online_optimizer.n_iterations
+
+    def restore_online_iterations(self, iterations: int) -> None:
+        self._online_optimizer.n_iterations = iterations
+
     def fit_online(
         self,
         x: np.ndarray,
@@ -582,16 +589,20 @@ class MultinomialLogistic:
     ) -> tuple[float, np.ndarray]:
         weights = flat_weights.reshape(shape)
         logits = (x @ weights[:-1]).astype(np.float64, copy=False) + weights[-1]
-        logits = logits - logsumexp(logits, axis=1, keepdims=True)
+        logits -= logits.max(axis=1, keepdims=True)
         index = np.arange(len(y))
+        observed_logits = logits[index, y]
+        np.exp(logits, out=logits)
+        normalizer = logits.sum(axis=1, keepdims=True)
         loss = float(
-            -logits[index, y].mean() + (regularization / 2.0) * np.square(weights[:-1]).sum()
+            (np.log(normalizer[:, 0]) - observed_logits).mean()
+            + (regularization / 2.0) * np.square(weights[:-1]).sum()
         )
-        residuals = np.exp(logits)
-        residuals[index, y] -= 1.0
+        logits /= normalizer
+        logits[index, y] -= 1.0
         gradient = np.empty(shape, dtype=np.float64)
-        gradient[:-1] = (x.T @ residuals) / len(y) + regularization * weights[:-1]
-        gradient[-1] = residuals.mean(axis=0)
+        gradient[:-1] = (x.T @ logits) / len(y) + regularization * weights[:-1]
+        gradient[-1] = logits.mean(axis=0)
         return loss, gradient.ravel()
 
     def train_epoch(self, train_data: Any) -> dict[str, float | None]:

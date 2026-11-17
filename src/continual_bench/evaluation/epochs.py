@@ -8,7 +8,7 @@ import hashlib
 import json
 import math
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from itertools import islice
 from pathlib import Path
 
@@ -79,7 +79,7 @@ def split_records(records, manifest):
 
 
 def run_epochs(config, root, cache, *, download=False, real_directory=None, source=None, model_factory=None,
-               models=MODELS, progress=None):
+               models=MODELS, progress=None, checkpoint=None):
     started = time.monotonic()
     source = source or load_dataset(config.dataset, cache, examples=config.examples, seed=config.seed,
                                     download=download, real_directory=real_directory)
@@ -115,6 +115,9 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
                                    "environment": env, "split": split}))
     key = hashlib.sha256(encoded(contract)).hexdigest()[:24]
     directory = Path(root) / key
+    snapshot = checkpoint.load() if checkpoint is not None else None
+    if snapshot is not None and snapshot["contract"] != contract:
+        raise ValueError("epoch checkpoint contract changed")
     with run_lock(root, key):
         report_path = directory / "epoch-report.json"
         if report_path.exists():
@@ -130,15 +133,27 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
                 training_checkpoint_paths(directory, report)
             return report
         costs = config.costs.model_dump()
-        model = model_factory()
+        state = snapshot["state"] if snapshot is not None else EpochState(model_factory())
+        previous_duration = state.elapsed_seconds
+
+        def save(*, force=False):
+            if checkpoint is None or not (force or checkpoint.due()):
+                return
+            requested = checkpoint.requested()
+            state.elapsed_seconds = previous_duration + time.monotonic() - started
+            checkpoint.save({"contract": contract, "state": state}, force=force or requested)
+            if requested:
+                raise InterruptedError("benchmark interrupted at an epoch checkpoint")
+
         with SystemMetricsSampler(root) as sampler:
             epochs, totals = _train_epochs(
-                config, model, task, train, test, costs, started, progress=progress,
+                config, state, task, train, test, costs, started, progress=progress, save=save,
                 classes=classes, positive_class="1" if binary_adapter else None,
                 target_unit=manifest.get("target_unit", "target_unit") if task == REGRESSION else None,
             )
-        state = pickle_state(model, optional=custom_factory)
-        checkpoint = write_state(directory, "model.pkl", state, format="pickle") if state else None
+        blob = pickle_state(state.model, optional=custom_factory)
+        model_checkpoint = write_state(directory, "model.pkl", blob, format="pickle") if blob else None
+        duration = previous_duration + time.monotonic() - started
         effort = {
             "examples_observed": len(records), "evaluated_examples": len(test) * len(epochs),
             "unique_evaluated_examples": len(test),
@@ -147,10 +162,10 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
             "updates": 0, "initial_training_presentations": totals["presentations"],
             "initial_unique_training_examples": len(train), "initial_steps": len(totals["steps"]),
             "initial_epochs": len(epochs), "update_training_presentations": 0, "update_steps": 0,
-            "update_epochs": 0, "promoted_versions": int(checkpoint is not None),
+            "update_epochs": 0, "promoted_versions": int(model_checkpoint is not None),
         }
         resources = {
-            "duration_seconds": time.monotonic() - started,
+            "duration_seconds": duration,
             "training_seconds": totals["learner_seconds"],
             "inference_seconds": totals["predict_seconds"],
             "predictions_per_second": effort["evaluated_examples"] / totals["predict_seconds"]
@@ -168,12 +183,13 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
         }
         history = [epoch_fit(
             holdout_epoch_rows(epochs), action="initial", train_samples=len(train), validation_samples=0,
-            train_seconds=totals["train_seconds"], checkpoint=checkpoint,
-            deployed_version=0 if checkpoint else None,
+            train_seconds=totals["train_seconds"], checkpoint=model_checkpoint,
+            deployed_version=0 if model_checkpoint else None,
             summary={"holdout_examples": len(test), "last_epoch": len(epochs),
-                     "checkpoint_epoch": len(epochs) if checkpoint else None},
+                     "checkpoint_epoch": len(epochs) if model_checkpoint else None},
             observation_steps=totals["steps"], observation_epochs=totals["observation_epochs"],
-            observed_step_kind="learn_one", promotion_status="promoted" if checkpoint else "unavailable",
+            observed_step_kind="learn_one",
+            promotion_status="promoted" if model_checkpoint else "unavailable",
             observation_effort=effort, observation_resources=resources,
             observation_scopes=scopes,
             data_scope={
@@ -184,14 +200,14 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
                   "dataset": config.dataset, "unique_examples": len(records), "epochs": epochs,
                   "train_ids": [r.sample_id for r in train], "test_ids": [r.sample_id for r in test],
                   "training_history": history,
-                  "contract": contract, "seconds": time.monotonic() - started,
+                  "contract": contract, "seconds": duration,
                   "peak_rss_bytes_process": peak_rss_bytes(),
                   "scope": "train-only passes; frozen holdout after each epoch, no prequential claim"}
         report["costs"] = account(costs, errors=totals["errors"],
                                   presentations=len(train) * config.epochs, updates=config.epochs,
                                   train_seconds=totals["train_seconds"],
                                   predict_seconds=totals["predict_seconds"],
-                                  model_storage_bytes=checkpoint["bytes"] if checkpoint else 0)
+                                  model_storage_bytes=model_checkpoint["bytes"] if model_checkpoint else 0)
         cost_total = report["costs"]["metrics"]["cost_total"]
         resources.update({
             "cost_total": cost_total,
@@ -212,7 +228,8 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
                 "dataset_version": manifest.get("version") or contract["samples_sha256"],
                 "model": model_identity["family"], "model_identity": model_identity,
                 "policy": "initial_only", "seed": config.seed, "environment": env,
-                "checkpoint": checkpoint, "code_revision": env["code_sha256"], "protocol": split["kind"],
+                "checkpoint": model_checkpoint, "code_revision": env["code_sha256"],
+                "protocol": split["kind"],
             },
         )
         report["artifacts"] = write_artifacts(
@@ -225,80 +242,106 @@ def run_epochs(config, root, cache, *, download=False, real_directory=None, sour
         return report
 
 
-def _train_epochs(config, model, task, train, test, costs, started, *, progress=None,
+@dataclass
+class EpochPass:
+    first_step: int
+    scores: dict
+    training_offset: int = 0
+    frozen: object | None = None
+    learner_seconds: float = 0.0
+    training_seconds: float = 0.0
+    prediction_seconds: float = 0.0
+    errors: float = 0.0
+    predictions: list = field(default_factory=list)
+
+
+@dataclass
+class EpochState:
+    model: object
+    epochs: list = field(default_factory=list)
+    totals: dict = field(default_factory=lambda: {
+        "errors": 0.0, "train_seconds": 0.0, "predict_seconds": 0.0, "learner_seconds": 0.0,
+        "overhead_seconds": 0.0, "presentations": 0, "steps": [], "observation_epochs": [],
+    })
+    current: EpochPass | None = None
+    elapsed_seconds: float = 0.0
+
+
+def _train_epochs(config, state, task, train, test, costs, started, *, save, progress=None,
                   classes=None, positive_class=None, target_unit=None):
     """Train-only passes, each followed by scoring a frozen copy on the holdout."""
     kind = task_kind(task)
-    epochs = []
-    totals = {"errors": 0.0, "train_seconds": 0.0, "predict_seconds": 0.0, "learner_seconds": 0.0,
-              "overhead_seconds": 0.0, "presentations": 0, "steps": [], "observation_epochs": []}
-    for epoch in range(config.epochs):
-        first_step = len(totals["steps"]) + 1
-        learner_seconds = 0.0
-        before = time.perf_counter()
-        for row in train:
+    model, epochs, totals = state.model, state.epochs, state.totals
+    for epoch in range(len(epochs), config.epochs):
+        if state.current is None:
+            state.current = EpochPass(len(totals["steps"]) + 1, metric_set(task))
+        current = state.current
+        for row in islice(train, current.training_offset, None):
             if time.monotonic() - started > config.max_seconds:
                 raise TimeoutError("epoch benchmark deadline exceeded")
             step_started = time.perf_counter()
-            model.learn_one(copy.deepcopy(row.x), row.y)
+            model.learn_one(dict(row.x), row.y)
             step_finished = time.perf_counter()
             duration = step_finished - step_started
-            learner_seconds += duration
+            current.learner_seconds += duration
             totals["presentations"] += 1
             totals["steps"].append(training_step(
                 len(totals["steps"]) + 1, examples=1, cumulative=totals["presentations"],
                 duration_seconds=duration,
             ))
             totals["overhead_seconds"] += time.perf_counter() - step_finished
-        training_seconds = time.perf_counter() - before
-        frozen = copy.deepcopy(model)
-        scores = metric_set(task)
-        predictions = []
-        prediction_seconds = errors = 0.0
-        for row in test:
+            current.training_seconds += time.perf_counter() - step_started
+            current.training_offset += 1
+            save()
+        if current.frozen is None:
+            current.frozen = copy.deepcopy(model)
+        for row in islice(test, len(current.predictions), None):
             if time.monotonic() - started > config.max_seconds:
                 raise TimeoutError("epoch evaluation deadline exceeded")
             before_prediction = time.perf_counter()
-            prediction = frozen.predict_one(copy.deepcopy(row.x))
-            prediction_seconds += time.perf_counter() - before_prediction
+            prediction = current.frozen.predict_one(dict(row.x))
+            current.prediction_seconds += time.perf_counter() - before_prediction
             prediction = kind.normalize_prediction(prediction)
-            errors += kind.error_units(row.y, prediction, costs)
-            for metric in scores.values():
+            current.errors += kind.error_units(row.y, prediction, costs)
+            for metric in current.scores.values():
                 metric.update(row.y, prediction)
-            predictions.append({"sample_id": row.sample_id, "prediction": prediction})
+            current.predictions.append({"sample_id": row.sample_id, "prediction": prediction})
+            save()
         tracking_started = time.perf_counter()
         ranking_scores = _ranking_scores(model, test, positive_class)
         quality = batch_quality(
-            [row.y for row in test], [item["prediction"] for item in predictions],
+            [row.y for row in test], [item["prediction"] for item in current.predictions],
             classes=classes, positive_class=positive_class, scores=ranking_scores, target_unit=target_unit,
         )
         quality = quality_scope(BINARY if positive_class is not None else task, quality)
         totals["observation_epochs"].append({
             "epoch": epoch + 1,
-            "first_step": first_step,
+            "first_step": current.first_step,
             "last_step": len(totals["steps"]),
             "metrics": {
                 "training/examples_processed": len(train),
-                "training/duration_seconds": learner_seconds,
-                "holdout/duration_seconds": prediction_seconds,
+                "training/duration_seconds": current.learner_seconds,
+                "holdout/duration_seconds": current.prediction_seconds,
             },
             "scopes": {"holdout": quality},
         })
-        totals["learner_seconds"] += learner_seconds
+        totals["learner_seconds"] += current.learner_seconds
         totals["overhead_seconds"] += time.perf_counter() - tracking_started
-        totals["errors"] += errors
-        totals["train_seconds"] += training_seconds
-        totals["predict_seconds"] += prediction_seconds
+        totals["errors"] += current.errors
+        totals["train_seconds"] += current.training_seconds
+        totals["predict_seconds"] += current.prediction_seconds
         epochs.append({"epoch": epoch + 1, "train_presentations": len(train), "test_examples": len(test),
-                       "training_seconds": training_seconds,
-                       "prediction_seconds": prediction_seconds,
-                       "costs": account(costs, errors=errors, presentations=len(train), updates=1,
-                                        train_seconds=training_seconds,
-                                        predict_seconds=prediction_seconds, include_aws=False),
-                       "metrics": {name: metric.get() for name, metric in scores.items()},
-                       "prediction_digest": hashlib.sha256(encoded(predictions)).hexdigest()})
+                       "training_seconds": current.training_seconds,
+                       "prediction_seconds": current.prediction_seconds,
+                       "costs": account(costs, errors=current.errors, presentations=len(train), updates=1,
+                                        train_seconds=current.training_seconds,
+                                        predict_seconds=current.prediction_seconds, include_aws=False),
+                       "metrics": {name: metric.get() for name, metric in current.scores.items()},
+                       "prediction_digest": hashlib.sha256(encoded(current.predictions)).hexdigest()})
+        state.current = None
         if progress is not None:
             progress(epoch + 1, epochs[-1]["metrics"])
+        save(force=len(epochs) == config.epochs)
     return epochs, totals
 
 
@@ -310,7 +353,7 @@ def _ranking_scores(model, test, positive_class):
     scores = []
     for row in test:
         try:
-            distribution = predict(copy.deepcopy(row.x))
+            distribution = predict(dict(row.x))
             if not distribution:
                 return None
             score = float(distribution.get(positive_class, 0.0))

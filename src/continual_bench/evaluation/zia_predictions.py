@@ -1,6 +1,7 @@
 """Write individual Zia predictions in bounded, checksummed Parquet parts."""
 
 import json
+import os
 import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -20,7 +21,10 @@ BLOCKS_PER_PART = 16
 
 
 class PredictionArchive:
-    def __init__(self, directory, classes, dataset_sha256, origin, fading_factor=0.99, threshold=0.5):
+    def __init__(
+        self, directory, classes, dataset_sha256, origin, fading_factor=0.99, threshold=0.5,
+        *, staging=None, resume=None,
+    ):
         self.directory = Path(directory)
         self.classes = classes
         self.threshold = 0.5 if threshold is None else threshold
@@ -36,8 +40,18 @@ class PredictionArchive:
         self.fading_state = [0.0]
         self.fading_weight = 0.0
         self.fading = []
-        self.temp = TemporaryDirectory(dir=self.directory, prefix=".predictions-")
-        self.staging = Path(self.temp.name)
+        self.temp = (
+            TemporaryDirectory(dir=self.directory, prefix=".predictions-") if staging is None else None
+        )
+        self.staging = Path(self.temp.name) if self.temp is not None else Path(staging)
+        self.staging.mkdir(parents=True, exist_ok=True)
+        if resume is not None:
+            self.parts = resume["parts"]
+            self.blocks = resume["blocks"]
+            self.rows = resume["rows"]
+            self.fading_state = resume["fading_state"]
+            self.fading_weight = resume["fading_weight"]
+            self.fading = resume["fading"]
         self.manifest = {"version": "zia-predictions-v1", "origin": origin, "classes": classes,
                          "dataset_sha256": dataset_sha256, "fading_factor": fading_factor}
         if len(classes) == 2:
@@ -56,6 +70,7 @@ class PredictionArchive:
     def add(self, start, times, labels, probabilities, holdout, model_end):
         if self.blocks % BLOCKS_PER_PART == 0:
             self._close_part()
+        if self.writer is None:
             self.path = self.staging / f"part-{len(self.parts):04d}.parquet"
             self.writer = pq.ParquetWriter(self.path, self.schema, compression="zstd")
             self.part_rows = 0
@@ -76,6 +91,14 @@ class PredictionArchive:
             self.fading.append({"step": start + n, "value": float(values[-1] / self.fading_weight)})
         return int(np.count_nonzero(predicted != labels))
 
+    def snapshot(self):
+        """Seal the active part so checkpoint files are complete and immutable."""
+        self._close_part()
+        return {
+            "parts": self.parts, "blocks": self.blocks, "rows": self.rows,
+            "fading_state": self.fading_state, "fading_weight": self.fading_weight, "fading": self.fading,
+        }
+
     def __exit__(self, exc_type, _error, _traceback):
         try:
             self._close_part()
@@ -83,12 +106,18 @@ class PredictionArchive:
                 target = self.directory / "predictions"
                 if target.exists():
                     shutil.rmtree(target)
-                self.staging.replace(target)
+                if self.temp is None:
+                    target.mkdir()
+                    for part in self.parts:
+                        os.link(self.staging / part["file"], target / part["file"])
+                else:
+                    self.staging.replace(target)
                 atomic_write(self.directory / INDEX, encoded({
                     **self.manifest, "rows": self.rows, "parts": self.parts, "fading_accuracy": self.fading,
                 }))
         finally:
-            self.temp.cleanup()
+            if self.temp is not None:
+                self.temp.cleanup()
 
 
 def prediction_manifest(directory, report):

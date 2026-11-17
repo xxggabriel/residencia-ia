@@ -157,11 +157,14 @@ def describe(config) -> dict:
             "policy": None}
 
 
-def _execute_case(config, root: Path, cache: str, real_directory: str | None, *, source=None, progress=None):
+def _execute_case(
+    config, root: Path, cache: str, real_directory: str | None, *, source=None, progress=None,
+    checkpoint=None,
+):
     if isinstance(config, Config):
         from .runner import run
 
-        return run(config, str(root / "binary"), source=source, progress=progress)
+        return run(config, str(root / "binary"), source=source, progress=progress, checkpoint=checkpoint)
     if isinstance(config, TypedConfig):
         from continual_bench.evaluation.typed import run_typed
 
@@ -170,12 +173,13 @@ def _execute_case(config, root: Path, cache: str, real_directory: str | None, *,
         if source is None:
             source = make_source(default_registry(), config.dataset)
         return run_typed(
-            source, str(root / "typed"), progress=progress, **config.model_dump(exclude={"dataset"})
+            source, str(root / "typed"), progress=progress, checkpoint=checkpoint,
+            **config.model_dump(exclude={"dataset"}),
         )
     from continual_bench.evaluation.epochs import run_epochs
 
     return run_epochs(config, str(root / "epochs"), cache, real_directory=real_directory, source=source,
-                      progress=progress)
+                      progress=progress, checkpoint=checkpoint)
 
 
 def _headline(report) -> dict:

@@ -74,7 +74,8 @@ def resume_contract(config: Config, manifest: dict, env: dict, transport) -> dic
 
 
 def evaluate(
-    config: Config, manifest: dict, root: str, transport=None, *, stop_after=None, progress=None
+    config: Config, manifest: dict, root: str, transport=None, *, stop_after=None, progress=None,
+    checkpoint=None,
 ) -> dict:
     """Returns complete report or bounded progress; service I/O is injected."""
     registry = default_registry(config.plugins)
@@ -82,18 +83,34 @@ def evaluate(
     identity = config.identity()
     directory = Path(root) / identity
     checkpoints = LocalCheckpoints(root)
+    # Restore before acquiring the lock or reading files that belong to the checkpoint.
+    snapshot = checkpoint.load() if checkpoint is not None else None
     env = environment()
     contract = resume_contract(config, manifest, env, transport)
     events_path = Path(manifest["path"])
     if hashlib.sha256(events_path.read_bytes()).hexdigest() != manifest["sha256"]:
         raise ValueError("dataset manifest checksum mismatch")
     with run_lock(root, identity):
-        snapshot = checkpoints.load(identity)
+        if checkpoint is None:
+            snapshot = checkpoints.load(identity)
         if snapshot and snapshot["contract"] != contract:
             raise ValueError("resume environment/config/dataset/transport/plugin mismatch")
         report_path = directory / "report.json"
         if snapshot and snapshot.get("complete"):
             return json.loads(report_path.read_text())
+        if snapshot and checkpoint is not None:
+            atomic_write(directory / "manifest.json", json.dumps(manifest, indent=2).encode())
+
+        def save(state, *, force=False):
+            snapshot = {"contract": contract, "state": state, "complete": False}
+            if checkpoint is None:
+                checkpoints.save(identity, snapshot)
+                return
+            requested = checkpoint.requested()
+            checkpoint.save(snapshot, force=force or requested)
+            if requested:
+                raise InterruptedError("benchmark interrupted at a binary checkpoint")
+
         started = time.monotonic()
         settings = config.tracking_settings().model_dump(mode="json")
         protocol = protocol_for(config.mode, config.batch_size)
@@ -108,13 +125,13 @@ def evaluate(
             versions=ModelVersions(directory, manifest["sha256"], env["code_sha256"]),
             settings=settings,
             started=started,
-            checkpoint=lambda state: checkpoints.save(
-                identity, {"contract": contract, "state": state, "complete": False}),
+            checkpoint=save,
             snapshot=snapshot,
             transport=transport,
             manifest=manifest,
             stop_after=stop_after,
             progress=progress,
+            checkpoint_due=checkpoint.due if checkpoint is not None else None,
         )
         with SystemMetricsSampler(root) as system:
             outcome = protocol.execute(run)
@@ -126,7 +143,8 @@ def evaluate(
         report["artifacts"] = write_training_artifacts(directory, report)
         # Report first, then complete checkpoint: either crash point is safe to recompute/reuse.
         atomic_write(report_path, json.dumps(report, indent=2).encode())
-        checkpoints.save(identity, {"contract": contract, "state": outcome.state, "complete": True})
+        if checkpoint is None:
+            checkpoints.save(identity, {"contract": contract, "state": outcome.state, "complete": True})
         return report
 
 
@@ -187,18 +205,20 @@ def write_binary_artifacts(directory, report) -> dict:
     })
 
 
-def run(config: Config, root="state", *, services=False, source=None, progress=None):
+def run(config: Config, root="state", *, services=False, source=None, progress=None, checkpoint=None):
     if services:
         from .readiness import ensure_tracking_ready
 
         ensure_tracking_ready()
+    if checkpoint is not None:
+        checkpoint.load()
     manifest = prepare(config, root, source=source)
     transport = None
     if services and config.mode == "streaming":
         from continual_bench.infrastructure.services import KafkaTransport
 
         transport = KafkaTransport()
-    report = evaluate(config, manifest, root, transport, progress=progress)
+    report = evaluate(config, manifest, root, transport, progress=progress, checkpoint=checkpoint)
     if services:
         from continual_bench.infrastructure.services import publish
 

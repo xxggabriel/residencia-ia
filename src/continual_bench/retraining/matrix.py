@@ -184,6 +184,23 @@ class MatrixView:
                 for i in sorted(self.models) for j in range(self._first_evaluation(i), self.upto + 1)]
 
 
+@dataclass
+class MatrixBuildState:
+    """The completed columns of a streaming build and its sampling position."""
+
+    states: list[object] = field(default_factory=list)
+    errs: list[list[float]] = field(default_factory=list)
+    points: list[np.ndarray] = field(default_factory=list)
+    queries: list[np.ndarray] = field(default_factory=list)
+    means: list[np.ndarray] = field(default_factory=list)
+    seconds: list[float] = field(default_factory=list)
+    rows: list[int] = field(default_factory=list)
+    sub_loss: dict[tuple[int, int], np.ndarray] = field(default_factory=dict)
+    feature_fill: np.ndarray | None = None
+    rng_state: dict | None = None
+    processed_rows: int = 0
+
+
 def build_matrix(
     stream: Iterable[tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]],
     learner: Learner,
@@ -195,6 +212,9 @@ def build_matrix(
     query_stream: Iterable[tuple[np.ndarray, np.ndarray]] | None = None,
     workers: int = 1,
     on_block_complete: Callable[[int, int, int], None] | None = None,
+    state: MatrixBuildState | None = None,
+    checkpoint: Callable[[MatrixBuildState], None] | None = None,
+    loss_dtype: type = np.float64,
 ) -> tuple[PerformanceMatrix, list[object]]:
     """Single pass over ordered batches; returns the matrix and every trained model state.
 
@@ -205,6 +225,9 @@ def build_matrix(
     batch (such as timestamps) is forwarded to the learner's fit only.
     The optional callback receives the number of completed blocks, processed rows
     and candidate models after each block, including the last scoring-only block.
+    When restoring ``state``, both input streams and the learner must start at the
+    first unprocessed block. A checkpoint callback consumes the mutable state
+    synchronously after each completed column.
 
     The RBF samples and feature means used by the policies fill missing values with
     the observed column mean in the warm-up batch, or zero when that column has no
@@ -212,16 +235,18 @@ def build_matrix(
     The learner consumes the unchanged features, including missing values.
     """
     rng = np.random.default_rng(seed)
-    states: list[object] = []
-    errs: list[list[float]] = []
-    points, queries, means, seconds, rows = [], [], [], [], []
-    sub_loss: dict[tuple[int, int], np.ndarray] = {}
+    state = MatrixBuildState() if state is None else state
+    if state.rng_state is not None:
+        rng.bit_generator.state = state.rng_state
+    states, errs = state.states, state.errs
+    points, queries, means = state.points, state.queries, state.means
+    seconds, rows = state.seconds, state.rows
+    sub_loss = state.sub_loss
     iterator = iter(stream)
     query_iterator = None if query_stream is None else iter(query_stream)
     pending = next(iterator, None)
-    j = 0
-    processed_rows = 0
-    feature_fill = None
+    j = len(rows)
+    feature_fill = state.feature_fill
     while pending is not None:
         x, y, *fit_context = pending
         pending = next(iterator, None)
@@ -243,9 +268,9 @@ def build_matrix(
         means.append((sums + (len(x) - observed) * feature_fill) / len(x))
         rows.append(len(y))
         def score(state, x=x, y=y, query_x=query_x, query_y=query_y):
-            loss = np.asarray(learner.losses(state, x, y), dtype=np.float64)
+            loss = np.asarray(learner.losses(state, x, y), dtype=loss_dtype)
             on_queries = loss if query_x is None else np.asarray(
-                learner.losses(state, query_x, query_y), dtype=np.float64)
+                learner.losses(state, query_x, query_y), dtype=loss_dtype)
             return loss[point_index], float(on_queries.mean())
 
         if workers > 1 and len(states) > 1:
@@ -258,18 +283,22 @@ def build_matrix(
             sub_loss[i, j] = sampled_loss
         if pending is not None:
             started = time.perf_counter()
-            state = learner.fit(j, x, y, *fit_context)
+            candidate = learner.fit(j, x, y, *fit_context)
             seconds.append(time.perf_counter() - started)
-            states.append(state)
+            states.append(candidate)
             errs.append([])
             sub_loss[j, j] = np.asarray(
-                learner.losses(state, x[point_index], y[point_index]), dtype=np.float64)
+                learner.losses(candidate, x[point_index], y[point_index]), dtype=loss_dtype)
         else:
             seconds.append(float("nan"))
         j += 1
+        state.processed_rows += len(y)
+        if checkpoint is not None:
+            state.feature_fill = feature_fill
+            state.rng_state = rng.bit_generator.state
+            checkpoint(state)
         if on_block_complete is not None:
-            processed_rows += len(y)
-            on_block_complete(j, processed_rows, len(states))
+            on_block_complete(j, state.processed_rows, len(states))
     size = j
     err = np.full((size, size), np.nan)
     for i, row in enumerate(errs):
