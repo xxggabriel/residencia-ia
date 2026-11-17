@@ -151,9 +151,9 @@ class BenchmarkWorkload(Strict):
     evaluator: Literal["binary", "typed", "epochs"] = "binary"
     datasets: tuple[str, ...] = Field(min_length=1)
     models: tuple[str, ...] = Field(default=("logistic",), min_length=1)
-    policies: tuple[str, ...] = Field(default=("drift",), min_length=1)
+    policies: tuple[str, ...] = Field(default=("cara", "upf", "oracle", "drift"), min_length=1)
     detectors: tuple[str, ...] = Field(default=("adwin",), min_length=1)
-    modes: tuple[Literal["streaming", "incremental", "offline"], ...] = ("streaming",)
+    modes: tuple[Literal["streaming", "incremental", "offline"], ...] = ("streaming", "incremental")
     metrics: tuple[str, ...] = Field(default_factory=tuple)
     seeds: tuple[int, ...] = Field(default=(42,), min_length=1)
     samples: int | None = Field(default=None, ge=10, le=100_000_000)

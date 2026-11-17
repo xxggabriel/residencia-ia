@@ -462,7 +462,8 @@ class SageMakerMlflowTracker:
     def experiment_name(self) -> str:
         short = self.short_sha
         prefix = f"{short}-" if short else ""
-        raw = f"{prefix}{self.project}-zia-experiments" if self.project else f"{prefix}zia-experiments"
+        policy = self.policy or "none"
+        raw = f"{prefix}{self.project}-zia-{policy}" if self.project else f"{prefix}zia-{policy}"
         return sanitize_mlflow_name(raw)
 
     @property

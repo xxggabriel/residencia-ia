@@ -46,10 +46,16 @@ class PolicyConfig(Strict):
     @model_validator(mode="after")
     def validate_builtin_policy(self):
         if self.name in BATCH_POLICY_KINDS:
-            raise ValueError(
-                f"policy {self.name} decides per batch from a performance matrix; "
-                "run it through the batch-prequential Zia pipeline"
+            PolicyStrategy(
+                kind=self.name,
+                params=self.params,
+                every=self.every,
+                cooldown=self.cooldown,
+                min_samples=self.min_samples,
+                min_window=self.min_window,
+                action=self.action,
             )
+            return self
         if self.name in POLICIES and self.params:
             PolicyStrategy(kind=self.name, **self.model_dump(exclude={"name"}))
         return self
@@ -219,6 +225,8 @@ class Config(Strict):
             raise ValueError("min_window exceeds replay_window")
         if self.mode == "offline" and self.policy.name != "none":
             raise ValueError("offline is a frozen temporal holdout: policy must be none")
+        if self.policy.name in BATCH_POLICY_KINDS and self.mode != "incremental":
+            raise ValueError(f"batch policy {self.policy.name} requires incremental mode")
         self.validate_components()
         if (
             self.mode == "offline"
