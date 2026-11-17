@@ -352,21 +352,33 @@ def test_matrix_mlflow_run_uses_short_sha_experiment_and_strategy_run_name():
         labels={
             "dataset": "electricity",
             "model": "logistic",
+            "mode": "streaming",
             "policy": "drift",
             "detector": "adwin",
         },
     )
     run = matrix_tracking.MatrixMlflowRun(unit, "job-1", "job", "http://fake", log=Mock())
     assert run.experiment_name == "075a88c-continual-bench-matrix"
-    assert run.run_name == "energy-airlines-1117-0912-1424bfc8ed2c-drift-adwin-job-1"
+    assert (
+        run.run_name == "energy-airlines-1117-0912-1424bfc8-electricity-logistic-streaming-drift-adwin-job-1"
+    )
 
     unit_online = unit.model_copy(
         update={
-            "labels": {"dataset": "electricity", "model": "logistic", "policy": "online", "detector": "none"}
+            "labels": {
+                "dataset": "electricity",
+                "model": "hoeffding_tree",
+                "mode": "incremental",
+                "policy": "online",
+                "detector": "none",
+            }
         }
     )
     run_online = matrix_tracking.MatrixMlflowRun(unit_online, "job-1", "job", "http://fake", log=Mock())
-    assert run_online.run_name == "energy-airlines-1117-0912-1424bfc8ed2c-online-job-1"
+    assert (
+        run_online.run_name
+        == "energy-airlines-1117-0912-1424bfc8-electricity-hoeffding_tree-incremental-online-job-1"
+    )
     assert run.timeout_seconds == 15
 
 
@@ -414,3 +426,47 @@ def test_pooled_http_opener_wraps_timeout_and_tracker_retries_transient_url_erro
     res = tracker._request("GET", "/api/2.0/mlflow/experiments/get-by-name")
     assert attempts["count"] == 2
     assert res["experiment"]["experiment_id"] == "1"
+
+    rate_limit_attempts = {"count": 0}
+
+    def rate_limited_opener(http_req, timeout=None):
+        rate_limit_attempts["count"] += 1
+        if rate_limit_attempts["count"] <= 4:
+            raise urllib.error.HTTPError(
+                http_req.full_url, 429, "Too Many Requests", {"Retry-After": "1"}, None
+            )
+        return _Resp()
+
+    tracker._http_opener = rate_limited_opener
+    res_429 = tracker._request("GET", "/api/2.0/mlflow/experiments/get-by-name")
+    assert rate_limit_attempts["count"] == 5
+    assert res_429["experiment"]["experiment_id"] == "1"
+
+
+def test_ensure_run_selects_canonical_run_when_duplicates_exist(monkeypatch):
+    from continual_bench.infrastructure.aws.mlflow_tracking import SageMakerMlflowTracker
+
+    tracker = SageMakerMlflowTracker(
+        tracking_uri="http://fake",
+        dataset="electricity",
+        policy="drift",
+        model_name="logistic",
+        run_id="run-1",
+    )
+    tracker.experiment_id = "exp-1"
+
+    def fake_request(method, path, *, payload=None, params=None):
+        assert path == "/api/2.0/mlflow/runs/search"
+        return {
+            "runs": [
+                {"info": {"run_id": "incomplete-older", "start_time": 100}, "data": {"tags": []}},
+                {
+                    "info": {"run_id": "complete-run", "start_time": 200, "artifact_uri": "s3://art/2"},
+                    "data": {"tags": [{"key": "benchmark_complete", "value": "true"}]},
+                },
+            ]
+        }
+
+    monkeypatch.setattr(tracker, "_request", fake_request)
+    assert tracker.ensure_run() == "complete-run"
+    assert tracker.artifact_uri == "s3://art/2"

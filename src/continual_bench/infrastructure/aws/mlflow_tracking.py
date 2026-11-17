@@ -672,8 +672,10 @@ class SageMakerMlflowTracker:
         body_hash = sha256(body_bytes).hexdigest() if body_bytes else EMPTY_SHA256_HASH
 
         last_error: Exception | None = None
-        max_attempts = 3
+        retry_after_seconds = 0.0
+        max_attempts = 6
         for attempt in range(max_attempts):
+            retry_after_seconds = 0.0
             endpoints = [self._rest_endpoint] if self.spot and self._rest_endpoint else meta["endpoints"]
             for endpoint in endpoints:
                 url = f"{endpoint}{path}{query}"
@@ -732,6 +734,16 @@ class SageMakerMlflowTracker:
                         self._rest_endpoint = endpoint
                     if http_err.code in (429, 502, 503, 504) and attempt + 1 < max_attempts:
                         last_error = err
+                        header_retry = (
+                            http_err.headers.get("Retry-After")
+                            if getattr(http_err, "headers", None)
+                            else None
+                        )
+                        if header_retry:
+                            try:
+                                retry_after_seconds = max(retry_after_seconds, min(30.0, float(header_retry)))
+                            except ValueError:
+                                pass
                         continue
                     raise err from http_err
                 except urllib.error.URLError as url_err:
@@ -743,7 +755,7 @@ class SageMakerMlflowTracker:
             if attempt + 1 < max_attempts:
                 if self.spot:
                     self._rest_endpoint = None
-                time.sleep(0.25 * (2**attempt))
+                time.sleep(max(retry_after_seconds, min(16.0, 0.5 * (2**attempt))))
 
         raise last_error or RuntimeError("All SageMaker MLflow endpoints failed")
 
@@ -833,12 +845,27 @@ class SageMakerMlflowTracker:
                 payload={
                     "experiment_ids": [exp_id],
                     "filter": f"tags.{self.run_key_tag} = '{self.run_key}'",
-                    "max_results": 2,
+                    "max_results": 10,
                 },
             )
             runs = search_resp.get("runs") or []
             if len(runs) > 1:
-                raise ValueError(f"duplicate MLflow parent runs for {self.run_key}")
+                self.logger.warning(
+                    "Multiple MLflow parent runs (%d) found for %s; selecting canonical run",
+                    len(runs),
+                    self.run_key,
+                )
+
+                def _run_priority(candidate: dict[str, Any]) -> tuple[int, int, int]:
+                    tags = {
+                        t.get("key"): t.get("value") for t in (candidate.get("data") or {}).get("tags") or []
+                    }
+                    complete = 1 if tags.get("benchmark_complete") == "true" else 0
+                    evidence = 1 if tags.get("cb-evidence-status") == "complete" else 0
+                    start_time = int((candidate.get("info") or {}).get("start_time") or 0)
+                    return (-complete, -evidence, start_time)
+
+                runs = sorted(runs, key=_run_priority)
             if runs:
                 info = runs[0].get("info") or {}
                 self.mlflow_run_id = info.get("run_id")

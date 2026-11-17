@@ -50,7 +50,16 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
     def run_name(self):
         detector = self.unit.labels.get("detector")
         strategy = f"{self.policy}-{detector}" if detector and detector != "none" else self.policy
-        base = f"{self.campaign_id}-{self.unit.run_id[:12]}-{strategy}"
+        mode = self.unit.labels.get("mode")
+        parts = [
+            self.campaign_id,
+            self.unit.run_id[:8],
+            self.dataset,
+            self.model_name,
+            *([mode] if mode else []),
+            strategy,
+        ]
+        base = "-".join(str(part) for part in parts if part)
         return sanitize_mlflow_name(base if self.spot else f"{base}-{self.attempt_key}")
 
     @property
