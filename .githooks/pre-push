@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${SKIP_PRE_PUSH:-0}" == "1" ]]; then
+  echo "[pre-push] SKIP_PRE_PUSH=1 set; skipping format, lint, and tests."
+  exit 0
+fi
+
+echo "[pre-push] Running make format..."
+make format
+
+if ! git diff --quiet; then
+  echo "[pre-push] ERROR: 'make format' modified files. Stage and commit the formatted changes before pushing." >&2
+  git status --short >&2
+  exit 1
+fi
+
+echo "[pre-push] Running make lint..."
+make lint
+
+echo "[pre-push] Running make test..."
+make test
+
+echo "[pre-push] All checks passed!"
