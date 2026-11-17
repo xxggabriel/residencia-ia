@@ -117,7 +117,7 @@ def test_stop_idle_services_tears_down_flink_and_ephemeral_endpoints(monkeypatch
     control = lifecycle(monkeypatch)
     control.auto_stop_idle = True
     control.project = "continual-bench"
-    control.flink_application = "continual-bench-windows"
+    control.flink_application = "continual-bench-event-time-windows"
 
     ka = Mock()
     ka.describe_application.return_value = {"ApplicationDetail": {"ApplicationStatus": "RUNNING"}}
@@ -148,8 +148,10 @@ def test_stop_idle_services_tears_down_flink_and_ephemeral_endpoints(monkeypatch
     )
     stopped = control.stop_idle_services()
     assert stopped == {
-        "flink": ["continual-bench-windows"],
+        "flink": ["continual-bench-event-time-windows"],
         "sagemaker_endpoints": ["cb-ephemeral"],
     }
-    ka.stop_application.assert_called_once_with(ApplicationName="continual-bench-windows", Force=False)
+    ka.stop_application.assert_called_once_with(
+        ApplicationName="continual-bench-event-time-windows", Force=False
+    )
     sm.delete_endpoint.assert_called_once_with(EndpointName="cb-ephemeral")

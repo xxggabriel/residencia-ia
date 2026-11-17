@@ -40,7 +40,7 @@ class EndpointLifecycle:
         self.project = env.get("BENCH_STACK")
         self.auto_stop_idle = env.get("AUTO_STOP_IDLE_SERVICES", "false").lower() == "true"
         self.flink_application = env.get("ENDPOINT_FLINK_APPLICATION") or (
-            f"{self.project}-windows" if self.project else None
+            f"{self.project}-event-time-windows" if self.project else None
         )
 
     def stack(self):

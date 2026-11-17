@@ -147,7 +147,7 @@ def pipeline_definition(*, bucket, role, runtime_image, ml_image, git_sha, key_a
         },
         "Parameters": [
             {"Name": "DatasetName", "Type": "String", "DefaultValue": "sem-nome"},
-            {"Name": "ModelName", "Type": "String", "DefaultValue": "multinomial-logistic"},
+            {"Name": "ModelName", "Type": "String", "DefaultValue": "multinomial_logistic"},
             {"Name": "PolicyName", "Type": "String", "DefaultValue": "frozen"},
             {"Name": "Evaluator", "Type": "String", "DefaultValue": "native"},
             {"Name": "ExperimentName", "Type": "String", "DefaultValue": "continual-bench-experiments"},
