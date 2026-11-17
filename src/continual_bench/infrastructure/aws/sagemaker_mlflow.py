@@ -300,14 +300,16 @@ def publish_with_library(
         client = MlflowClient()
         experiment = mlflow.set_experiment(tracker.experiment_name)
         tags = {t["key"]: t["value"] for t in tracker.mlflow_tags}
-        found = client.search_runs(
-            [experiment.experiment_id],
-            f"tags.zia_run_key = '{tracker.run_key}'",
-            max_results=2,
-        )
-        if len(found) > 1:
-            raise ValueError(f"duplicate MLflow parent runs for {tracker.run_key}")
-        resumed = found[0].info.run_id if found else None
+        resumed = tracker.mlflow_run_id
+        if resumed is None:
+            found = client.search_runs(
+                [experiment.experiment_id],
+                f"tags.zia_run_key = '{tracker.run_key}'",
+                max_results=2,
+            )
+            if len(found) > 1:
+                raise ValueError(f"duplicate MLflow parent runs for {tracker.run_key}")
+            resumed = found[0].info.run_id if found else None
         summary, holdout = report.get("metrics") or {}, report.get("holdout") or {}
         note = (
             f"### Continual-Bench run `{tracker.dataset}` | `{tracker.policy}` | `{tracker.scope}`\n"
@@ -319,10 +321,15 @@ def publish_with_library(
             run_id=resumed,
             run_name=None if resumed else tracker.run_name,
             experiment_id=None if resumed else experiment.experiment_id,
+            tags=tags,
         ) as run:
             run_id = run.info.run_id
+            # REST fallback must retain this identity even if SDK publication fails below.
+            tracker.experiment_id = str(experiment.experiment_id)
+            tracker.mlflow_run_id = run_id
+            tracker.artifact_uri = run.info.artifact_uri
             mlflow.set_tags({
-                **tags, "mlflow.note.content": note, "tracking_library": "sagemaker-mlflow",
+                "mlflow.note.content": note, "tracking_library": "sagemaker-mlflow",
                 "benchmark_complete": "false", "zia_artifacts_status": "publishing",
             })
             params = report_params(tracker, report)
@@ -363,9 +370,6 @@ def publish_with_library(
         client.log_batch(run_id, tags=tags_done, synchronous=True)
     except Exception as error:
         raise LibraryPublishError(f"{type(error).__name__}: {error}") from error
-    tracker.experiment_id = str(experiment.experiment_id)
-    tracker.mlflow_run_id = run_id
-    tracker.artifact_uri = run.info.artifact_uri
     return {
         "published": True,
         "publisher": "sagemaker-mlflow",

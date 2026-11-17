@@ -78,10 +78,22 @@ class ZiaLearner:
 
 
 def stream_matrix(
-    blocks, model, threshold, config, replay, options, *, history, scratch, tracker=None,
+    blocks, model, threshold, config, replay, options, *, history, scratch, tracker=None, progress=None,
 ) -> tuple[PerformanceMatrix, list[dict]]:
     learner = ZiaLearner(model, threshold, config, replay, history, scratch, tracker)
-    return build_matrix(blocks, learner, offline=options["offline_blocks"], seed=options["seed"])
+
+    def report_block(blocks_completed, rows_processed, candidates):
+        progress(rows_processed, {
+            "matrix/blocks_completed": blocks_completed,
+            "matrix/rows_processed": rows_processed,
+            "matrix/candidate_models": candidates,
+            "matrix/model_block_pairs": blocks_completed * (blocks_completed - 1) // 2,
+        })
+
+    return build_matrix(
+        blocks, learner, offline=options["offline_blocks"], seed=options["seed"],
+        on_block_complete=report_block if progress is not None else None,
+    )
 
 
 def verify_realised(matrix: PerformanceMatrix, windows: list[dict], policy) -> None:

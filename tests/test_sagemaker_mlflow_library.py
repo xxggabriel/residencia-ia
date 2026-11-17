@@ -125,6 +125,21 @@ def test_tracker_falls_back_to_rest_when_the_library_path_fails(tracker, monkeyp
     assert any("boom" in error for error in tracker.api_errors)
 
 
+def test_library_exposes_new_parent_to_rest_fallback_if_initial_tags_fail(tracker, monkeypatch):
+    def fail_tags(_tags):
+        raise OSError("metadata unavailable")
+
+    monkeypatch.setattr(mlflow, "set_tags", fail_tags)
+    assert tracker._publish_with_library(
+        report(), output_dir=None, outputs_uri=None, model_package_arn=None,
+    ) is None
+    assert tracker.mlflow_run_id
+    client = MlflowClient()
+    runs = client.search_runs([tracker.experiment_id], f"tags.zia_run_key = '{tracker.run_key}'")
+    assert [run.info.run_id for run in runs] == [tracker.mlflow_run_id]
+    assert tracker.ensure_run() == tracker.mlflow_run_id
+
+
 def test_non_arn_uri_is_rejected_so_http_servers_keep_the_rest_path(monkeypatch):
     monkeypatch.setattr(mlflow, "set_tracking_uri", lambda uri: pytest.fail("must not configure MLflow"))
     tracker = SageMakerMlflowTracker(
