@@ -288,7 +288,7 @@ atualizações, retreinamentos e métricas acumuladas com prefixos `prequential/
 `holdout/`. As políticas por custo também publicam `progress/matrix/*` durante a
 construção da matriz. Nelas, a coordenada de step inclui as linhas lidas nessa fase.
 Use `progress/rows_processed` e `progress/rows_total` para acompanhar a cobertura da
-avaliação. O worker agrupa os pontos de cada série em intervalos de cinco segundos
+avaliação. O worker agrupa os pontos de cada série em intervalos de 30 segundos
 quando há blocos concluídos e publica os pontos pendentes antes do relatório final.
 A publicação final usa a mesma run pai e registra as runs filhas, os checkpoints
 e os artefatos. Uma retomada só de publicação reutiliza a tentativa arquivada.
