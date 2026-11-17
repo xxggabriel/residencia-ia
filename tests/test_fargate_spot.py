@@ -39,7 +39,7 @@ def test_spot_plan_submits_every_unit_in_parallel(tmp_path):
         },
     )
     plan = planning.build_plan(request, release)
-    assert plan["concurrency"] == len(plan["units"]) > 4
+    assert plan["concurrency"] == min(32, len(plan["units"]))
     assert all(unit["contract"]["release"]["compute"] == SPOT_BACKEND for unit in plan["units"])
     limited = planning.build_plan(request.model_copy(update={"max_parallel": 3}), release)
     assert limited["concurrency"] == 3

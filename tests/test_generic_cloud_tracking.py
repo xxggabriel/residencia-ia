@@ -334,3 +334,36 @@ def test_direct_native_requests_use_configured_tracking_and_bucket_key(kind, nam
     assert env["BENCH_KMS_KEY_ID"] == "data-key"
     assert env["BENCH_NATIVE_EXECUTION_ID"] == request[name]
     assert env["BENCH_NATIVE_STAGE"] == kind
+
+
+def test_matrix_mlflow_run_uses_short_sha_experiment_and_strategy_run_name():
+    from continual_bench.application.cloud.contracts import RunUnit
+
+    git_sha = "075a88cd957f3ab64ee930b88b3753798d9889a6"
+    unit = RunUnit(
+        run_id="1424bfc8ed2cbd966ae1",
+        campaign_id="energy-airlines-1117-0912",
+        kind="matrix_case",
+        params={"evaluator": "binary"},
+        contract={"release": {"git_sha": git_sha, "compute": "batch-fargate-spot"}},
+        contract_sha256="a" * 64,
+        job_name="cb-energy-airlines-1117-0912-1424bfc8ed2cbd966ae1",
+        unit_key="campaigns/energy-airlines-1117-0912/units/1424bfc8ed2cbd966ae1.json",
+        labels={
+            "dataset": "electricity",
+            "model": "logistic",
+            "policy": "drift",
+            "detector": "adwin",
+        },
+    )
+    run = matrix_tracking.MatrixMlflowRun(unit, "job-1", "job", "http://fake", log=Mock())
+    assert run.experiment_name == "075a88c-continual-bench-matrix"
+    assert run.run_name == "energy-airlines-1117-0912-1424bfc8ed2c-drift-adwin-job-1"
+
+    unit_online = unit.model_copy(
+        update={
+            "labels": {"dataset": "electricity", "model": "logistic", "policy": "online", "detector": "none"}
+        }
+    )
+    run_online = matrix_tracking.MatrixMlflowRun(unit_online, "job-1", "job", "http://fake", log=Mock())
+    assert run_online.run_name == "energy-airlines-1117-0912-1424bfc8ed2c-online-job-1"
