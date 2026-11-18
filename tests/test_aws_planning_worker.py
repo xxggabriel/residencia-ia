@@ -293,6 +293,127 @@ def test_openml_is_materialized_from_pinned_arff_without_changing_the_run_config
     assert source.path == tmp_path / "private" / "electricity.arff"
 
 
+def test_usp_stream_is_published_verified_and_materialized_from_pinned_csv(tmp_path, monkeypatch):
+    from continual_bench.application.cloud import matrix_sources
+    from continual_bench.config import Config
+    from continual_bench.datasets import real_streams
+    from continual_bench.infrastructure.object_store import sha256_path
+
+    assert matrix_sources.MAX_BYTES >= 256 * 1024**2
+    csv_dir = tmp_path / "raw"
+    csv_dir.mkdir()
+    raw = csv_dir / "abrupt_imbalanced.csv"
+    labels = ["2", "3", "4", "5", "11", "12"]
+    row_features = ",".join("0.5" for _ in range(33))
+    raw.write_text("".join(f"{row_features},{labels[i % len(labels)]}\n" for i in range(120)))
+    raw_sha = sha256_path(raw)
+    monkeypatch.setitem(
+        real_streams.SPECS,
+        "insects_abrupt_imbalanced",
+        {
+            **real_streams.SPECS["insects_abrupt_imbalanced"],
+            "expected_sha256": raw_sha,
+            "expected_bytes": raw.stat().st_size,
+            "expected_rows": 120,
+            "changepoints": (60,),
+        },
+    )
+    store = LocalObjectStore(tmp_path / "store")
+    result = matrix_sources.publish_source(
+        store,
+        "insects_abrupt_imbalanced",
+        cache=tmp_path,
+        workdir=tmp_path,
+        real_directory=csv_dir,
+        examples=100,
+        seed=42,
+    )
+    assert result["sha256"] == raw_sha
+    head = matrix_sources.verify_source(store, "insects_abrupt_imbalanced", raw_sha)
+    assert head.metadata["format"] == "usp-csv-v1"
+
+    unit = {
+        "labels": {"dataset": "insects_abrupt_imbalanced"},
+        "params": {
+            "evaluator": "binary",
+            "source_sha256": raw_sha,
+            "config": {"dataset": {"name": "insects_abrupt_imbalanced", "samples": 120}},
+        },
+    }
+    matrix_sources.verify_plan_sources(store, [unit])
+    unit["params"]["config"]["dataset"]["samples"] = 121
+    with pytest.raises(ValueError, match="more rows"):
+        matrix_sources.verify_plan_sources(store, [unit])
+
+    config = Config(
+        dataset={"name": "insects_abrupt_imbalanced", "samples": 100, "label_delay": 3}, warmup=20
+    )
+    source = matrix_sources.materialize_source(
+        store, "insects_abrupt_imbalanced", raw_sha, tmp_path / "private", config, "binary"
+    )
+    assert config.dataset.params == {}
+    events = list(source.events())
+    assert len(events) == 100
+    assert source.path == tmp_path / "private" / "abrupt_imbalanced.csv"
+
+
+def test_build_plan_supports_usp_stream_binary_matrices(tmp_path):
+    from continual_bench.datasets.real_streams import SPECS
+
+    store = LocalObjectStore(tmp_path / "store")
+    release = publish_fixture_release(store)
+    (tmp_path / "configs" / "base").mkdir(parents=True)
+    (tmp_path / "configs" / "base" / "tracking.yaml").write_text("{}")
+    (tmp_path / "configs" / "matrices").mkdir()
+    (tmp_path / "configs" / "matrices" / "usp.yaml").write_text(
+        "name: usp-smoke\n"
+        "evaluator: binary\n"
+        "seeds: [42]\n"
+        "datasets:\n"
+        "  - {name: insects_abrupt_imbalanced, samples: 1000, label_delay: 3}\n"
+        "  - {name: insects_incremental_abrupt_reoccurring_imbalanced, samples: 1000, label_delay: 3}\n"
+        "models:\n"
+        "  - {name: logistic}\n"
+        "strategies:\n"
+        "  - {detector: {name: none}, policy: {name: online, action: learn_one}}\n"
+        "modes: [incremental]\n"
+    )
+    digests = {
+        "insects_abrupt_imbalanced": SPECS["insects_abrupt_imbalanced"]["expected_sha256"],
+        "insects_incremental_abrupt_reoccurring_imbalanced": SPECS[
+            "insects_incremental_abrupt_reoccurring_imbalanced"
+        ]["expected_sha256"],
+    }
+    request = CampaignRequest(
+        campaign_id="usp-smoke",
+        matrix={"kind": "experiment_matrix", "path": "configs/matrices/usp.yaml"},
+        source_digests=digests,
+    )
+    plan = planning.build_plan(request, release, project_root=tmp_path)
+    assert len(plan["units"]) == 2
+    assert {u["params"]["source_sha256"] for u in plan["units"]} == set(digests.values())
+
+    (tmp_path / "configs" / "matrices" / "usp-bad.yaml").write_text(
+        "name: usp-bad\n"
+        "evaluator: binary\n"
+        "seeds: [42]\n"
+        "datasets:\n"
+        "  - {name: insects_abrupt_imbalanced, samples: 1000, params: {extra: 1}}\n"
+        "models:\n"
+        "  - {name: logistic}\n"
+        "strategies:\n"
+        "  - {detector: {name: none}, policy: {name: online, action: learn_one}}\n"
+        "modes: [incremental]\n"
+    )
+    bad_request = CampaignRequest(
+        campaign_id="usp-bad",
+        matrix={"kind": "experiment_matrix", "path": "configs/matrices/usp-bad.yaml"},
+        source_digests={"insects_abrupt_imbalanced": digests["insects_abrupt_imbalanced"]},
+    )
+    with pytest.raises(ValueError, match="resolved exclusively by their published digest"):
+        planning.build_plan(bad_request, release, project_root=tmp_path)
+
+
 def _env(index=0, digest=None):
     return {
         "AWS_BATCH_JOB_ID": f"job-{index}",
