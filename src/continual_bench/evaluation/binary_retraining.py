@@ -27,6 +27,7 @@ from continual_bench.retraining.analysis import (
     DEFAULT_RULES,
     analyze,
     deployed_metrics,
+    json_parameters,
     retraining_reference_metrics,
 )
 from continual_bench.retraining.rules import Oracle
@@ -169,8 +170,11 @@ def compute_binary_retraining(
     n_alphas: int = 10,
     mc_samples: int = 100,
     delta: float = 0.95,
+    exclude_seqs: frozenset[int] | set[int] = (),
 ) -> tuple[list[list[Event]], PerformanceMatrix, list[Any], dict[str, Any], dict[str, Any]] | None:
     """Build the binary performance matrix and run CARA/UPF/Oracle analysis."""
+    if exclude_seqs:
+        events = [event for event in events if event.seq not in exclude_seqs]
     blocks = partition_blocks(events, batch_size)
     if not blocks:
         return None
@@ -194,6 +198,28 @@ def compute_binary_retraining(
         samples=mc_samples,
         seed=seed,
     )
+    focus_alpha = analysis["setup"]["focus_alpha"]
+    cara_curve = (analysis["rules"].get("cara") or {}).get("curve") or []
+    focus_pt = (
+        min(cara_curve, key=lambda c: abs(c["alpha"] - focus_alpha))
+        if cara_curve and focus_alpha is not None
+        else (cara_curve[0] if cara_curve else {})
+    )
+    retrains_set = set(focus_pt.get("retrain_points") or [])
+    deployed_idx, served_list = matrix.initial, []
+    for j in range(matrix.offline, matrix.batches):
+        served_list.append(deployed_idx)
+        if j in retrains_set:
+            deployed_idx = j
+    analysis["deployed"] = {
+        "policy": "cara",
+        "alpha": focus_pt.get("alpha", focus_alpha),
+        "retrain_points": list(focus_pt.get("retrain_points") or []),
+        "served_by": served_list,
+        "parameters": focus_pt.get("parameters") or {},
+        "oracle_retrain_points": list(analysis.get("oracle_schedule_at_focus") or []),
+        "model_rows": [int(r) for r in matrix.rows],
+    }
     ref_metrics = retraining_reference_metrics(analysis, matrix, focus_alpha=upf_alpha)
     return blocks, matrix, states, analysis, ref_metrics
 
@@ -239,6 +265,15 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
     if len(events) < 4:
         raise ValueError("batch policies require at least 4 events")
 
+    continual = continual_evaluation(
+        run.source,
+        run.model_factory,
+        settings,
+        events=events,
+        warmup=config.warmup,
+    )
+    reserved = getattr(continual, "reserved_seqs", frozenset())
+
     upf_alpha = float((config.policy.params or {}).get("alpha", settings.get("upf_alpha", 1.0)))
     computed = compute_binary_retraining(
         events,
@@ -247,6 +282,7 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
         replay_window=config.replay_window,
         seed=config.dataset.seed,
         upf_alpha=upf_alpha,
+        exclude_seqs=reserved,
     )
     if computed is None:
         raise ValueError("dataset too small to build a batch retraining performance matrix")
@@ -257,7 +293,7 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
 
     observer = OnlineObservability(
         settings,
-        continual_evaluation(run.source, run.model_factory, settings, events=events),
+        continual,
         current_rss_bytes,
         warmup=sum(len(b) for b in blocks[: matrix.offline]),
     )
@@ -306,9 +342,23 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
     predict_seconds = 0.0
     train_seconds = float(np.nansum(matrix.fit_seconds))
 
+    ev_idx = 0
+
+    def _advance_reserved(limit_seq: int) -> None:
+        nonlocal ev_idx
+        while ev_idx < len(events) and events[ev_idx].seq <= limit_seq:
+            ev = events[ev_idx]
+            ev_idx += 1
+            if ev.seq in reserved:
+                r_trace = observer.before_prediction(ev, deployed_model, labeled, 0.0)
+                observer.after_label(ev, 0.5, r_trace, ev.available_at, deployed_model, False)
+
     for t, block in enumerate(blocks):
         current = Metrics()
         for event in block:
+            _advance_reserved(event.seq - 1)
+            if ev_idx < len(events) and events[ev_idx].seq == event.seq:
+                ev_idx += 1
             p_start = time.perf_counter()
             prob = float(deployed_model.predict(dict(event.x)))
             p_sec = time.perf_counter() - p_start
@@ -390,11 +440,22 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
             observer.recorded_model_version(ver)
         _record_probes(end_seq)
 
+    if events:
+        _advance_reserved(events[-1].seq)
     observer.sample_memory()
     sim_result = _simulation_of(policy, matrix)
     oracle_sim = simulate(Oracle(), matrix, policy.alpha)
     rule_key = policy.kind if policy.kind in analysis["rules"] else "oracle"
     dep_metrics = deployed_metrics(analysis, rule_key, sim_result, oracle_sim)
+    analysis["deployed"] = {
+        "policy": policy.kind,
+        "alpha": policy.alpha,
+        "retrain_points": list(policy.retrains),
+        "served_by": list(sim_result.deployed),
+        "parameters": json_parameters(sim_result.parameters),
+        "oracle_retrain_points": list(oracle_sim.retrains),
+        "model_rows": [int(r) for r in matrix.rows],
+    }
 
     summary = total.values()
     summary["train_seconds"] = train_seconds

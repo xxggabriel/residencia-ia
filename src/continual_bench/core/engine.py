@@ -129,8 +129,13 @@ class Engine:
 
     def release(self, now: int) -> None:
         # Dataset adapters require monotonically increasing available_at.
+        reserved = getattr(getattr(self.observer, "continual", None), "reserved_seqs", frozenset())
         while self.pending and self.pending[0][0].available_at <= now:
             event, p, trace = self.pending.popleft()
+            if event.seq in reserved:
+                if self.observer is not None:
+                    self.observer.after_label(event, p, trace, now, self.model, False)
+                continue
             self.labeled += 1
             self.replay.append((dict(event.x), event.y))
             if event.seq < self.warmup:

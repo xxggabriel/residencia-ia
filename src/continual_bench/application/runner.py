@@ -190,6 +190,7 @@ def finalize(outcome, run, protocol, contract, env, started) -> dict:
             replay_window=config.replay_window,
             seed=config.dataset.seed,
             upf_alpha=float(settings.get("upf_alpha", 1.0)),
+            exclude_seqs=getattr(getattr(outcome.observer, "continual", None), "reserved_seqs", frozenset()),
         )
         if computed is not None:
             _, _, _, analysis, ref_metrics = computed

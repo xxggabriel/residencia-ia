@@ -34,7 +34,13 @@ class Prequential(BinaryProtocol):
             versions=run.versions,
             observer=OnlineObservability(
                 settings,
-                continual_evaluation(run.source, run.model_factory, settings, events_path=run.events_path),
+                continual_evaluation(
+                    run.source,
+                    run.model_factory,
+                    settings,
+                    events_path=run.events_path,
+                    warmup=config.warmup,
+                ),
                 current_rss_bytes,
                 warmup=config.warmup,
             ),

@@ -22,8 +22,12 @@ def read_events(path, start=0):
             yield Event(**json.loads(line))
 
 
-def continual_evaluation(source, factory, settings, *, events=None, events_path=None):
-    """Build episode-level continual evaluation using independent synthetic probes."""
+def continual_evaluation(source, factory, settings, *, events=None, events_path=None, warmup=0):
+    """Build episode-level continual evaluation using independent probes.
+
+    Synthetic sources generate independent probes; real streams reserve a small
+    evenly-spaced holdout per episode (excluded from training and prequential scoring).
+    """
     if hasattr(source, "generator") and hasattr(source, "boundaries"):
         probes = {}
         for task, function in enumerate(source.functions):
@@ -54,7 +58,45 @@ def continual_evaluation(source, factory, settings, *, events=None, events_path=
             references_enabled=settings["continual_references"],
         )
 
-    return None
+    if events is not None:
+        event_list = list(events)
+    elif events_path is not None:
+        event_list = list(read_events(events_path))
+    elif hasattr(source, "events"):
+        event_list = list(source.events())
+    else:
+        return None
+
+    total = len(event_list)
+    if total - warmup < 6 and total < 6:
+        return None
+    episodes = 3 if total - warmup >= 6 else 2
+    span = total - warmup
+    if span < episodes * 2:
+        return None
+    task_ends = [warmup + span * i // episodes for i in range(1, episodes)] + [total]
+    probes = {}
+    reserved_seqs: set[int] = set()
+    requested = max(1, int(settings.get("probe_samples", 32)))
+    for task, end in enumerate(task_ends):
+        start = max(warmup, task_ends[task - 1] if task else warmup)
+        segment = event_list[start:end]
+        probe_count = min(requested, max(1, len(segment) // 10))
+        if len(segment) <= probe_count:
+            chosen = segment
+        else:
+            step = len(segment) / probe_count
+            chosen = [segment[int(i * step)] for i in range(probe_count)]
+        reserved_seqs.update(e.seq for e in chosen)
+        probes[task] = [(dict(e.x), bool(e.y)) for e in chosen]
+    return ContinualEvaluation(
+        factory,
+        probes,
+        task_ends,
+        reference_budget=settings["reference_budget"],
+        references_enabled=settings["continual_references"],
+        reserved_seqs=reserved_seqs,
+    )
 
 
 @dataclass

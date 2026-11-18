@@ -23,7 +23,15 @@ class ContinualEvaluation:
     References use the same learner in one pass, rather than an optimized joint oracle.
     """
 
-    def __init__(self, model_factory, probes, task_ends, reference_budget=None, references_enabled=True):
+    def __init__(
+        self,
+        model_factory,
+        probes,
+        task_ends,
+        reference_budget=None,
+        references_enabled=True,
+        reserved_seqs=(),
+    ):
         if not task_ends or any(type(end) is not int or end <= 0 for end in task_ends):
             raise ValueError("task_ends must contain positive integer exclusive offsets")
         if any(left >= right for left, right in zip(task_ends, task_ends[1:])):
@@ -37,6 +45,7 @@ class ContinualEvaluation:
         self.task_ends = list(task_ends)
         self.reference_budget = reference_budget
         self.references_enabled = references_enabled
+        self.reserved_seqs = frozenset(reserved_seqs)
         self.examples = []
         self.next_seq = 0
         self.matrix = []
@@ -59,7 +68,8 @@ class ContinualEvaluation:
             self.probe_seconds += time.perf_counter() - started
 
     def _reference(self, name, task, start, end):
-        required = end - start
+        train_items = [item for item in self.examples[start:end] if item is not None]
+        required = len(train_items)
         metadata = {
             "name": name,
             "task": task,
@@ -81,7 +91,7 @@ class ContinualEvaluation:
             return None, metadata
         started = time.perf_counter()
         reference = self.model_factory()
-        for x, y in self.examples[start:end]:
+        for x, y in train_items:
             reference.learn(copy.deepcopy(x), y)
         seconds = time.perf_counter() - started
         self.reference_train_seconds += seconds
@@ -108,7 +118,7 @@ class ContinualEvaluation:
             raise ValueError(f"expected released label seq {self.next_seq}, got {seq}")
         if seq >= self.task_ends[-1]:
             raise ValueError("released label is outside the declared episodes")
-        self.examples.append((copy.deepcopy(x), bool(y)))
+        self.examples.append(None if seq in self.reserved_seqs else (copy.deepcopy(x), bool(y)))
         self.next_seq += 1
         task = len(self.matrix)
         if self.next_seq != self.task_ends[task]:

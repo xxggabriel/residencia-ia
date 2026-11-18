@@ -164,3 +164,56 @@ def test_typed_records_retention_even_when_training_budget_blocks_updates(tmp_pa
     assert retention["absolute_retention"] is not None
     assert retention["gem_bwt"] is not None
     assert retention["post_learning_fm"] is not None
+
+
+@pytest.mark.parametrize("mode,policy", [("streaming", {"name": "drift"}), ("incremental", {"name": "cara"})])
+def test_real_binary_source_reserves_independent_probes_and_records_retraining_curves(mode, policy, tmp_path):
+    from continual_bench.core.contracts import Event
+    from continual_bench.infrastructure.dashboard_page import build_dashboard_payload
+
+    class _RealLikeSource:
+        samples = 240
+
+        def events(self):
+            for seq in range(self.samples):
+                x = {"a": float((seq % 17) / 17.0), "b": float(((seq * 3) % 11) / 11.0)}
+                y = (seq // 80) % 2 == 0 and x["a"] > 0.4 or (seq // 80) % 2 == 1 and x["b"] > 0.5
+                yield Event(f"ev-{seq}", seq, seq, seq + 1, x, bool(y))
+
+        def manifest(self):
+            return {"name": "real-like", "samples": self.samples, "seed": 42}
+
+    config = Config.model_validate(
+        {
+            "name": f"real-like-{mode}",
+            "mode": mode,
+            "dataset": {"name": "sea", "samples": 240, "label_delay": 1},
+            "warmup": 40,
+            "metric_window": 40,
+            "batch_size": 40,
+            "policy": policy,
+            "tracking": {"probe_samples": 10},
+        }
+    )
+    src = _RealLikeSource()
+    manifest = prepare(config, str(tmp_path), source=src)
+    report = evaluate(config, manifest, str(tmp_path), source=src)
+
+    tracking_metrics = report["tracking"]["metrics"]
+    assert tracking_metrics["cl_forgetting"] is not None
+    assert tracking_metrics["cl_backward_transfer"] is not None
+    assert tracking_metrics["retention_final_mean_accuracy"] is not None
+    retention = report["tracking_observations"]["retention"]
+    assert retention["absolute_retention"] is not None
+    assert retention["gem_bwt"] is not None
+    assert retention["post_learning_fm"] is not None
+
+    # Reserved probes must be excluded from prequential/training evaluation.
+    evaluated = report["tracking_observations"]["scopes"]["prequential"]["evaluated_examples"]
+    assert evaluated < 200
+
+    payload = build_dashboard_payload(report)
+    assert payload["retraining"] is not None
+    cara = payload["retraining"]["rules"]["cara"]
+    assert len(cara["alphas"]) > 0
+    assert len(cara["costs"]) == len(cara["alphas"])
