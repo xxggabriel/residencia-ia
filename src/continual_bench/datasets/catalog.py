@@ -110,11 +110,10 @@ for _name in ("insects_abrupt_imbalanced", "insects_incremental_abrupt_reoccurri
         DatasetSpec(
             _name,
             BINARY,
-            "real_stream",
+            "usp_stream",
             "continual_bench.datasets.real_streams:InsectsBinarySource",
             {"name": _name},
-            "continual_bench.datasets.real_streams:prepare_real_stream",
-            "cache",
+            prepare_kind="none",
             metadata={"changepoints": "annotated", "positive_label": "2"},
         )
     )
