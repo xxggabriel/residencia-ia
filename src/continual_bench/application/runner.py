@@ -27,7 +27,7 @@ from .components import default_registry, make_source
 from .plugin_identity import package_identity
 
 __all__ = ["environment", "evaluate", "prepare", "read_events", "run"]
-MATERIALIZATION_BUDGET = 256 * 1024**2
+MATERIALIZATION_BUDGET = 512 * 1024**2
 
 
 def prepare(config: Config, root: str, *, source=None) -> dict:
@@ -40,7 +40,7 @@ def prepare(config: Config, root: str, *, source=None) -> dict:
     # Deterministic materialization is bounded by validated samples <= 100k.
     payload = "".join(event_json(e) + "\n" for e in source.events()).encode()
     if len(payload) > MATERIALIZATION_BUDGET:
-        raise ValueError("dataset exceeds 256 MiB materialization budget")
+        raise ValueError("dataset exceeds 512 MiB materialization budget")
     digest = hashlib.sha256(payload).hexdigest()
     if data_path.exists() and hashlib.sha256(data_path.read_bytes()).hexdigest() != digest:
         raise ValueError("source changed for an existing run; choose a new config/name")
