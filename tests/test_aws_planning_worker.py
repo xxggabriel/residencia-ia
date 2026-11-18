@@ -295,7 +295,7 @@ def test_openml_is_materialized_from_pinned_arff_without_changing_the_run_config
 
 def test_usp_stream_is_published_verified_and_materialized_from_pinned_csv(tmp_path, monkeypatch):
     from continual_bench.application.cloud import matrix_sources
-    from continual_bench.config import Config
+    from continual_bench.config import Config, EpochConfig, TypedConfig
     from continual_bench.datasets import real_streams
     from continual_bench.infrastructure.object_store import sha256_path
 
@@ -354,7 +354,32 @@ def test_usp_stream_is_published_verified_and_materialized_from_pinned_csv(tmp_p
     assert config.dataset.params == {}
     events = list(source.events())
     assert len(events) == 100
+    assert source.manifest()["task"] == "binary"
     assert source.path == tmp_path / "private" / "abrupt_imbalanced.csv"
+
+    typed_cfg = TypedConfig(
+        dataset={"name": "insects_abrupt_imbalanced", "samples": 100, "label_delay": 3},
+        model={"name": "hoeffding_tree"},
+        warmup=20,
+    )
+    typed_source = matrix_sources.materialize_source(
+        store, "insects_abrupt_imbalanced", raw_sha, tmp_path / "private_typed", typed_cfg, "typed"
+    )
+    assert typed_source.manifest()["task"] == "multiclass"
+    assert "target_conversion" in typed_source.manifest()
+    assert len(list(typed_source.samples_iter())) == 100
+
+    epoch_cfg = EpochConfig(
+        dataset="insects_abrupt_imbalanced",
+        examples=50,
+        model={"name": "hoeffding_tree"},
+    )
+    epoch_source = matrix_sources.materialize_source(
+        store, "insects_abrupt_imbalanced", raw_sha, tmp_path / "private_epochs", epoch_cfg, "epochs"
+    )
+    assert epoch_source.manifest()["task"] == "multiclass"
+    assert "target_conversion" in epoch_source.manifest()
+    assert len(list(epoch_source.samples_iter())) == 50
 
 
 def test_build_plan_supports_usp_stream_binary_matrices(tmp_path):

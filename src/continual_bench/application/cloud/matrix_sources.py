@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from continual_bench.core.contracts import TaskSample
-from continual_bench.datasets.base import as_sample_source
+from continual_bench.datasets.base import EventSamples
 from continual_bench.datasets.catalog import DATASETS, EPOCH, PREPARED_LABEL_DELAY, dataset_spec, load_dataset
 from continual_bench.datasets.images import PreparedImageSource
 from continual_bench.datasets.openml import REAL_SOURCES, validate_source
@@ -142,7 +142,7 @@ def materialize_source(store, dataset, sha256, workdir, config, evaluator):
     if dataset in INSECTS_BINARY_VARIANTS:
         spec = dataset_spec(dataset)
         if evaluator == "epochs":
-            return as_sample_source(
+            return EventSamples(
                 spec.open_stream(
                     samples=config.examples,
                     seed=config.seed,
@@ -152,7 +152,8 @@ def materialize_source(store, dataset, sha256, workdir, config, evaluator):
                 )
             )
         fields = config.dataset.model_dump(exclude={"name", "params"})
-        return spec.open_stream(**fields, directory=workdir)
+        source = spec.open_stream(**fields, directory=workdir)
+        return EventSamples(source) if evaluator == "typed" else source
     if (head.metadata.get("examples"), head.metadata.get("seed")) != (str(config.examples), str(config.seed)):
         raise ValueError(f"{dataset} sample bundle does not match the requested count and seed")
     value = json.loads(target.read_bytes())
