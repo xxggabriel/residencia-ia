@@ -7,7 +7,14 @@ A campanha reuniu 66 de 72 execuções completas. As tabelas e figuras comparam 
 - [Consolidação dos benchmarks](consolidacao.md)
 - [Análise da adaptação aos drifts](adaptacao-aos-drifts.md)
 - [Documento de resultados e metodologia](resultados.md)
-- [PDF com os sete gráficos finais](figuras-finais-insects.pdf)
+- [PDF com os nove gráficos finais](figuras-finais-insects.pdf)
+
+## Acurácia, F1 macro e recall por classe
+
+- [Acurácia e F1 macro nos mesmos eventos](figuras/08-acuracia-f1-pareados.png) compara as 22 combinações concluídas. Cada linha liga as duas métricas e indica a diferença em pontos percentuais. A linha tracejada é a acurácia de sempre prever a classe majoritária.
+- [Recall por classe com UPF](figuras/09-desempenho-por-classe.png) compara a proporção de acertos entre positivos e entre negativos para os dois modelos e fluxos. As métricas usam os mesmos eventos da figura anterior.
+
+No Abrupto, o UPF com Hoeffding obteve 69,83% de acurácia e 42,42% de F1 macro, uma diferença de 27,41 pontos percentuais. O modelo identificou 1,53% dos positivos e 95,54% dos negativos. Se eu previsse sempre a classe negativa, a acurácia nesse recorte seria 72,65%. No Recorrente, a mesma política com Hoeffding atingiu 73,69% de acurácia, superou a referência de 72,28% e identificou 40,55% dos positivos. Para obter o recall negativo, usei a identidade que expressa a acurácia como a média dos recalls das duas classes ponderada pelas respectivas proporções. Como essas proporções são iguais entre as seeds de cada fluxo, o cálculo também vale para as médias.
 
 ## Métricas e auditoria
 
@@ -29,6 +36,6 @@ A campanha reuniu 66 de 72 execuções completas. As tabelas e figuras comparam 
 
 ## Reprodução
 
-O [notebook da Semana 10](../../../../notebooks/figuras_benchmarks_semana_10.ipynb) lê os dados arquivados por seed, calcula as médias e gera os sete gráficos sem autenticação AWS. Também mantive a consulta individual por seed no MLflow para inspeção. Os arquivos históricos da seed 42 e o CSV de medianas continuam no diretório de dados para auditoria.
+O [notebook da Semana 10](../../../../notebooks/figuras_benchmarks_semana_10.ipynb) lê os dados arquivados por seed, calcula as médias e gera os nove gráficos sem autenticação AWS. Também mantive a consulta individual por seed no MLflow para inspeção. Os arquivos históricos da seed 42 e o CSV de medianas continuam no diretório de dados para auditoria.
 
 A documentação dos fluxos e das anotações está em [Souza et al., 2020](https://doi.org/10.1007/s10618-020-00698-5).

@@ -184,6 +184,9 @@ def _pair_dataset(group, ledgers, manifest):
         elif not ids.equals(reference[0]) or not np.array_equal(y, reference[1]):
             raise ValueError(f"IDs ou rótulos divergentes nas mesmas posições em {row.run}.")
         identity = dict(run=row.run, dataset=row.dataset, modelo=row.modelo, politica=row.politica)
+        positive = int(y.sum())
+        predicted_positive = pred >= 0.5
+        true_positive = np.count_nonzero(y & predicted_positive)
         paired.append(
             {
                 **identity,
@@ -191,6 +194,9 @@ def _pair_dataset(group, ledgers, manifest):
                 "passo_inicial": int(common[0]),
                 "passo_final": int(common[-1]),
                 "f1": _f1(y, pred),
+                "acuracia": np.mean(y == predicted_positive),
+                "positivos": positive,
+                "recall": true_positive / positive if positive else np.nan,
             }
         )
         for regime, (start, stop) in enumerate(zip(cuts[:-1], cuts[1:], strict=True), 1):

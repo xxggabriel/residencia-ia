@@ -1,4 +1,4 @@
-"""Render the seven final INSECTS figures from validated benchmark evidence."""
+"""Render the INSECTS figures from validated benchmark evidence."""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -620,6 +620,123 @@ def quality_retention(evidence):
         frameon=False,
         fontsize=9,
     )
+    return fig
+
+
+def paired_accuracy_f1(evidence):
+    fig = framed(
+        "Acurácia e F1 macro nos mesmos eventos",
+        f"INSECTS  /  {seed_label(evidence)}  /  Uma linha por combinação de política e modelo",
+        "Fonte: métricas das predições pareadas do MLflow. As diferenças são dadas em pontos percentuais.\n"
+        "A linha tracejada indica a acurácia de prever sempre a classe majoritária de cada fluxo.",
+        height=7.6,
+    )
+    axes = fig.subplots(1, 2)
+    fig.subplots_adjust(left=0.19, right=0.957, top=0.739, bottom=0.145, wspace=0.53)
+    fig.legend(
+        handles=[
+            Line2D([], [], marker="o", color=BLUE, ls="none", label="Acurácia", markersize=7),
+            Line2D([], [], marker="s", color=ORANGE, ls="none", label="F1 macro", markersize=6),
+        ],
+        ncols=2,
+        loc="upper left",
+        bbox_to_anchor=(0.059, 0.852),
+        frameon=False,
+    )
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        rows = evidence.paired.loc[evidence.paired.dataset.eq(dataset)].copy()
+        if rows.empty:
+            absent_panel(ax, dataset, "Sem eventos pareados")
+            continue
+
+        rows["gap"] = rows.acuracia - rows.f1
+        rows = rows.sort_values(["gap", "modelo", "politica"], ascending=[False, True, True])
+        positions = np.arange(len(rows))
+        f1, accuracy = rows.f1 * 100, rows.acuracia * 100
+        positive = rows.positivos.iloc[0] / rows.avaliados.iloc[0]
+        majority = max(positive, 1 - positive)
+        ax.set_title(
+            f"{dataset}\n{number(rows.avaliados.iloc[0])} eventos / maioria {number(100 * majority, 2)}%",
+            loc="left",
+            fontsize=11,
+            fontweight="bold",
+            pad=12,
+            linespacing=1.5,
+        )
+        ax.axvline(100 * majority, color=MUTED, linestyle="--", linewidth=1.1)
+        ax.hlines(positions, f1, accuracy, color="#AEBBC6", linewidth=2.3, zorder=2)
+        ax.scatter(f1, positions, marker="s", color=ORANGE, s=34, zorder=3)
+        ax.scatter(accuracy, positions, color=BLUE, s=42, zorder=4)
+        for position, gap in zip(positions, rows.gap, strict=True):
+            ax.text(107, position, signed(gap * 100, 2), ha="right", va="center", fontsize=9, color=INK)
+        ax.text(107, -0.64, "Dif. (p.p.)", ha="right", va="bottom", fontsize=8, color=MUTED)
+        ax.set(
+            xlim=(0, 100),
+            ylim=(len(rows) - 0.45, -0.72),
+            xticks=[0, 25, 50, 75, 100],
+            xlabel="Resultado (%)",
+        )
+        ax.set_yticks(positions, [f"{r.modelo} / {r.politica}" for r in rows.itertuples()], fontsize=9)
+        ax.xaxis.grid(color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        flat_axis(ax)
+    return fig
+
+
+def upf_class_recall(evidence):
+    fig = framed(
+        "Com UPF, o recall variou entre as duas classes",
+        f"INSECTS  /  {seed_label(evidence)}  /  Eventos pareados",
+        "Fonte: métricas das predições pareadas do MLflow. O recall de cada classe é a proporção de acertos\n"
+        "entre os eventos daquela classe. Calculei o recall negativo pela acurácia, pelo recall positivo e\n"
+        "pela proporção de positivos no recorte comum.",
+        height=5.7,
+    )
+    axes = fig.subplots(1, 2)
+    fig.subplots_adjust(left=0.16, right=0.91, top=0.69, bottom=0.23, wspace=0.47)
+    fig.legend(
+        handles=[
+            Patch(facecolor=ORANGE, label="Classe positiva"),
+            Patch(facecolor=TEAL, label="Classe negativa"),
+        ],
+        ncols=2,
+        loc="upper left",
+        bbox_to_anchor=(0.059, 0.836),
+        frameon=False,
+    )
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        rows = (
+            evidence.paired.loc[evidence.paired.dataset.eq(dataset) & evidence.paired.politica.eq("UPF")]
+            .set_index("modelo")
+            .reindex(MODELS)
+            .dropna(subset=["acuracia"])
+        )
+        if rows.empty:
+            absent_panel(ax, dataset, "Sem resultados pareados de UPF")
+            continue
+        positive = rows.positivos.iloc[0] / rows.avaliados.iloc[0]
+        if not 0 < positive < 1:
+            absent_panel(ax, dataset, "O recorte pareado tem uma única classe")
+            continue
+        negative_recall = (rows.acuracia - positive * rows.recall) / (1 - positive)
+        positions = np.arange(len(rows))
+        for offset, values, color in ((-0.16, rows.recall, ORANGE), (0.16, negative_recall, TEAL)):
+            bars = ax.barh(positions + offset, values * 100, height=0.24, color=color)
+            ax.bar_label(bars, labels=[number(v * 100, 2) + "%" for v in values], padding=4, fontsize=10)
+        ax.set_title(
+            f"{dataset}\n{number(positive * 100, 2)}% dos eventos são positivos",
+            loc="left",
+            fontsize=11,
+            fontweight="bold",
+            pad=12,
+            linespacing=1.5,
+        )
+        ax.set(xlim=(0, 100), ylim=(len(rows) - 0.53, -0.52), xlabel="Recall (%)")
+        ax.set_xticks([0, 25, 50, 75, 100])
+        ax.set_yticks(positions, rows.index)
+        ax.xaxis.grid(color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        flat_axis(ax)
     return fig
 
 
