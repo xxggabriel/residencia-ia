@@ -130,6 +130,12 @@ liberar capacidade. O preflight registra `running_in_parallel` e `queued` em
 `campaigns/<id>/preflight/`. A preparação de datasets usa uma fila separada em Fargate
 on-demand, porque não é retomável.
 
+Para campanhas `online` (`learn_one`) de maior porte, como as execuções completas de INSECTS,
+o dimensionamento operacional em `config/runtime-parameters.json` usa `BenchmarkVcpus=4` e
+`BenchmarkMemoryMiB=16384` (`4 vCPU / 16384 MiB` por tarefa) mantendo `MaxVcpus=64` (até 16
+tarefas simultâneas), enquanto a configuração de referência de precificação Fargate permanece
+em `2 vCPU / 4 GiB`.
+
 Quando o Fargate recupera a capacidade Spot, a tarefa recebe SIGTERM e, 30 segundos depois,
 SIGKILL (o Batch não expõe `stopTimeout`). O worker então:
 
