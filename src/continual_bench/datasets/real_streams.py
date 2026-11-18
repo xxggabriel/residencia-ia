@@ -500,6 +500,7 @@ class InsectsBinarySource:
         self.name, self.samples, self.seed = name, samples, seed
         self.label_delay, self.epoch = label_delay, epoch
         self.spec = spec
+        self.changepoints = tuple(p for p in spec["changepoints"] if p < samples)
         root = Path(directory or cache or os.environ.get("BENCH_DATASETS", "/state/datasets")).resolve()
         self.path, self.receipt = self._resolve(root, download=download)
         self.version = _digest(

@@ -118,8 +118,10 @@ def test_insects_binary_source_streams_headerless_csv_projects_label_2_and_preve
     assert sum(r["positive"] for r in manifest["binary_distribution_per_regime"]) == 3
 
     # Prefix slicing filters active changepoints without mutating source_changepoints.
+    assert source.changepoints == tuple(manifest["changepoints"])
     prefix_source = InsectsBinarySource(name, changepoints[0], 42, 0, 0, directory=tmp_path)
     prefix_manifest = prefix_source.manifest()
+    assert prefix_source.changepoints == ()
     assert prefix_manifest["changepoints"] == []
     assert prefix_manifest["source_changepoints"] == list(changepoints)
 

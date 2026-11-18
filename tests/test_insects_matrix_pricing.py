@@ -183,3 +183,54 @@ def test_end_to_end_run_observations_pricing_regimes_and_paired_comparison(tmp_p
     }
     with pytest.raises(ValueError, match="label mismatch"):
         compare_paired_ledgers(bad_ledgers)
+
+
+def test_paired_ledgers_normalize_y_and_prediction_without_probability():
+    ledgers = {
+        "ref": [
+            {"event_id": "e1", "seq": 0, "y": True, "prediction": True},
+            {"event_id": "e2", "seq": 1, "y": False, "prediction": True},
+        ],
+        "cand": [
+            {"event_id": "e1", "seq": 0, "label": True, "probability": 0.9, "prediction": False},
+            {"event_id": "e2", "seq": 1, "label": False, "probability": 0.2, "prediction": True},
+        ],
+    }
+    paired = compare_paired_ledgers(ledgers, reference="ref")
+    assert paired["runs"]["ref"]["accuracy"] == pytest.approx(0.5)
+    assert paired["runs"]["cand"]["accuracy"] == pytest.approx(1.0)
+    assert paired["pairwise"]["cand"]["contingency"] == {
+        "both_correct": 1,
+        "reference_only_correct": 0,
+        "candidate_only_correct": 1,
+        "both_wrong": 0,
+    }
+
+
+def test_continual_evaluation_uses_manifest_changepoints():
+    from types import SimpleNamespace
+
+    from continual_bench.core.contracts import Event
+    from continual_bench.evaluation.binary import continual_evaluation
+
+    events = [
+        Event(event_id=f"e{i}", seq=i, timestamp=i, available_at=i, x={"f1": float(i)}, y=bool(i % 2))
+        for i in range(100)
+    ]
+    manifest_only_source = SimpleNamespace(
+        manifest=lambda: {"changepoints": [60]},
+    )
+    ev = continual_evaluation(
+        manifest_only_source,
+        None,
+        {
+            "continual_evaluation": True,
+            "continual_references": False,
+            "probe_samples": 4,
+            "reference_budget": 10,
+        },
+        events=events,
+        warmup=10,
+    )
+    assert ev is not None
+    assert ev.task_ends == [60, 100]

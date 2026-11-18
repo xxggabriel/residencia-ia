@@ -19,11 +19,23 @@ def _row_label(row: dict[str, Any]) -> bool:
 
 
 def _row_predicted_label(row: dict[str, Any]) -> bool:
-    if "prediction" in row and row["prediction"] is not None:
-        return bool(row["prediction"])
     if "probability" in row and row["probability"] is not None:
         return float(row["probability"]) >= 0.5
+    if "prediction" in row and row["prediction"] is not None:
+        return bool(row["prediction"])
     raise ValueError(f"prediction row missing prediction/probability for event_id={row.get('event_id')!r}")
+
+
+def _normalize_ledger_row(row: dict[str, Any]) -> dict[str, Any]:
+    label = _row_label(row)
+    if "probability" in row and row["probability"] is not None:
+        probability = float(row["probability"])
+    else:
+        probability = 1.0 if _row_predicted_label(row) else 0.0
+    normalized = dict(row)
+    normalized["label"] = label
+    normalized["probability"] = probability
+    return normalized
 
 
 def load_prediction_ledger(path: str | Path) -> list[dict[str, Any]]:
@@ -108,15 +120,16 @@ def compare_paired_ledgers(
     if ref_name not in aligned:
         raise ValueError(f"unknown reference run {ref_name!r}")
 
-    metrics_by_run = {name: BINARY_QUALITY.collect(rows) for name, rows in aligned.items()}
-    ref_rows = aligned[ref_name]
+    normalized = {name: [_normalize_ledger_row(row) for row in rows] for name, rows in aligned.items()}
+    metrics_by_run = {name: BINARY_QUALITY.collect(rows) for name, rows in normalized.items()}
+    ref_rows = normalized[ref_name]
     ref_acc = metrics_by_run[ref_name]["accuracy"]
 
     pairwise: dict[str, Any] = {}
     for name in names:
         if name == ref_name:
             continue
-        cand_rows = aligned[name]
+        cand_rows = normalized[name]
         both_correct = ref_only = cand_only = both_wrong = 0
         for r_row, c_row in zip(ref_rows, cand_rows, strict=True):
             y = _row_label(r_row)
