@@ -274,7 +274,14 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
     )
     reserved = getattr(continual, "reserved_seqs", frozenset())
 
-    upf_alpha = float((config.policy.params or {}).get("alpha", settings.get("upf_alpha", 1.0)))
+    from continual_bench.retraining.pricing import resolve_retrain_alpha
+
+    alpha_info = resolve_retrain_alpha(
+        config.policy.params,
+        default_alpha=float(settings.get("upf_alpha", 1.0)),
+        tracking=settings,
+    )
+    upf_alpha = float(alpha_info["alpha"])
     computed = compute_binary_retraining(
         events,
         run.model_factory,
@@ -463,6 +470,14 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
         "parameters": json_parameters(sim_result.parameters),
         "oracle_retrain_points": list(oracle_sim.retrains),
         "model_rows": [int(r) for r in matrix.rows],
+        "is_retrospective_reference": bool(getattr(policy, "is_retrospective_reference", False)),
+        "future_information_used": getattr(policy, "future_information_used", None),
+    }
+    analysis["fargate_pricing"] = alpha_info
+    analysis["oracle_reference"] = {
+        "is_retrospective_reference": bool(getattr(policy, "is_retrospective_reference", False)),
+        "deployable_online": not bool(getattr(policy, "is_retrospective_reference", False)),
+        "future_information_used": getattr(policy, "future_information_used", None),
     }
 
     summary = total.values()

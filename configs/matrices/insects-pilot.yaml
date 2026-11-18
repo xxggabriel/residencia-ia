@@ -1,0 +1,26 @@
+# INSECTS pilot matrix: covers both event-by-event `streaming` and block-by-block `incremental`
+# modes across the first annotated drift (seq 83859) of insects_abrupt_imbalanced.
+name: insects-pilot
+evaluator: binary
+seeds: [42]
+on_incompatible: skip
+datasets:
+  - {name: insects_abrupt_imbalanced, samples: 100000, label_delay: 3}
+models:
+  - {name: logistic, params: {learning_rate: 0.05}}
+strategies:
+  - {detector: {name: none}, policy: {name: none}}
+  - {detector: {name: none}, policy: {name: online, action: learn_one}}
+  - {detector: {name: adwin}, policy: {name: drift}}
+  - {detector: {name: none}, policy: {name: cara, params: {lambda: 100.0}}}
+  - {detector: {name: none}, policy: {name: upf, params: {lambda: 100.0, delta: 0.95, samples: 100, seed: 0}}}
+  - {detector: {name: none}, policy: {name: oracle, params: {lambda: 100.0}}}
+modes: [streaming, incremental]
+base:
+  warmup: 1000
+  batch_size: 500
+  replay_window: 2048
+  metric_window: 1000
+  checkpoint_every: 5000
+  tracking:
+    extends: ../base/tracking-fargate.yaml

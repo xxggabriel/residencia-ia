@@ -143,7 +143,10 @@ def detector_metrics(report, settings, change_timestamps=None):
         considered = len(alarms) - len(excluded)
         tp, fp, fn = len(used), considered - len(used), complete - len(used)
         stable_exposure = n - sum(end - start for start, end in intervals)
-        stable_alarms = sum(not any(start <= a["seq"] < end for start, end in intervals) for a in alarms)
+        outside_alarms = [
+            a["seq"] for a in alarms if not any(start <= a["seq"] < end for start, end in intervals)
+        ]
+        stable_alarms = len(outside_alarms)
         unmatched_rate = 1000 * fp / n if n else None
         metrics.update(
             drift_tp=tp,
@@ -168,6 +171,8 @@ def detector_metrics(report, settings, change_timestamps=None):
             censored_alarm_count=len(excluded),
             stable_exposure_samples=stable_exposure,
             stable_false_alarms=stable_alarms,
+            alarms_outside_annotated_windows=outside_alarms,
+            alarms_outside_annotated_windows_count=stable_alarms,
             unmatched_rate_denominator="all evaluated examples; censored-window alarms excluded",
         )
         details["unavailable_reasons"] = {
@@ -183,13 +188,20 @@ def detector_metrics(report, settings, change_timestamps=None):
 
 
 def recovery_metrics(report, settings):
+    from continual_bench.core.policies import BATCH_POLICY_KINDS
+
     points = report["dataset"].get("changepoints") or []
     rows = []
     windows = report["windows"]
+    policy_name = (report.get("config") or {}).get("policy", {}).get("name")
+    is_batch_policy = policy_name in BATCH_POLICY_KINDS
+    metric_window = report["config"]["metric_window"]
+
+    def _window_eligible(w):
+        return w["n"] > 0 if is_batch_policy else w["n"] == metric_window
+
     for index, point in enumerate(points):
-        previous = [
-            w for w in windows if w["end_seq"] < point and w["n"] == report["config"]["metric_window"]
-        ]
+        previous = [w for w in windows if w["end_seq"] < point and _window_eligible(w)]
         if not previous:
             rows.append(
                 {
@@ -206,7 +218,7 @@ def recovery_metrics(report, settings):
         consecutive = 0
         recovered = None
         for window in windows:
-            if window["n"] != report["config"]["metric_window"]:
+            if not _window_eligible(window):
                 continue
             if window["end_seq"] - window["n"] + 1 < point or window["end_seq"] >= end:
                 continue
@@ -227,7 +239,7 @@ def recovery_metrics(report, settings):
                     (
                         w["accuracy"]
                         for w in windows
-                        if w["n"] == report["config"]["metric_window"]
+                        if _window_eligible(w)
                         and w["end_seq"] - w["n"] + 1 >= point
                         and w["end_seq"] < end
                     ),
@@ -242,6 +254,47 @@ def recovery_metrics(report, settings):
         "recovery_censored_changes": sum(r["censored"] for r in rows) if points else None,
         "recovery_unavailable_changes": sum(not r["available"] for r in rows) if points else None,
     }, rows
+
+
+def regime_metrics(predictions, changepoints, observed):
+    """Per-regime quality metrics over 0-based half-open intervals [start, end)."""
+    if changepoints is None:
+        return {"available": False, "reason": "no_ground_truth_changepoints", "regimes": []}
+    if predictions is None:
+        return {"available": False, "reason": "predictions_not_captured", "regimes": []}
+    from continual_bench.evaluation.stream_observations import BINARY_QUALITY
+
+    boundaries = [0, *sorted(int(cp) for cp in changepoints if 0 <= int(cp) < observed), int(observed)]
+    regimes = []
+    for index, (start, end) in enumerate(zip(boundaries, boundaries[1:])):
+        rows = [row for row in predictions if start <= row["seq"] < end]
+        if not rows:
+            regimes.append(
+                {
+                    "regime": index,
+                    "start_seq": start,
+                    "end_seq": end,
+                    "n": 0,
+                    "available": False,
+                    "reason": "no_evaluated_examples_in_regime",
+                }
+            )
+            continue
+        collected = BINARY_QUALITY.collect(rows)
+        unavailable = {}
+        if collected.get("roc_auc") is None:
+            unavailable["roc_auc"] = "single_class_or_undefined_in_regime"
+        regimes.append(
+            {
+                "regime": index,
+                "start_seq": start,
+                "end_seq": end,
+                "available": True,
+                "unavailable_reasons": unavailable,
+                **collected,
+            }
+        )
+    return {"available": True, "reason": None, "regimes": regimes}
 
 
 def validate_learning_curve(curve):
@@ -481,6 +534,74 @@ def build_tracking(
         available(key, value, "required_timer_missing", costs["unit"])
     for key, value in cost_report.get("aws", {}).get("metrics", {}).items():
         available("aws_" + key, value, "required_resource_consumption_missing", "USD")
+
+    from continual_bench.retraining.pricing import (
+        resolve_retrain_alpha,
+        summarize_fargate_retraining_cost,
+    )
+
+    retrain_durations = [
+        float(u["seconds"])
+        for u in updates
+        if u.get("action") == "reset_retrain" and u.get("seconds") is not None
+    ]
+    alpha_resolution = resolve_retrain_alpha(
+        (config.get("policy") or {}).get("params"),
+        default_alpha=float(settings.get("upf_alpha", 1.0)),
+        tracking=settings,
+    )
+    op_mode = report.get("transport") or (
+        "batch-fargate-spot"
+        if (report.get("environment") or {}).get("aws_batch_job_id")
+        else "local"
+    )
+    op_aws_usd = cost_report.get("aws", {}).get("metrics", {}).get("cost_total_usd")
+    fargate_retraining = summarize_fargate_retraining_cost(
+        alpha_resolution,
+        retrain_count=retrains,
+        retrain_durations=retrain_durations if len(retrain_durations) == retrains else None,
+        operational_execution_mode=op_mode,
+        operational_aws_cost_usd=op_aws_usd,
+        operational_aws_cost_reason="required_resource_consumption_missing" if op_aws_usd is None else None,
+    )
+    available("fargate_retrain_alpha", fargate_retraining["alpha"], scope="on_demand_fargate_alpha")
+    available(
+        "fargate_retrain_lambda",
+        fargate_retraining["lambda"],
+        "lambda_not_configured",
+        "error_rate_units_per_usd",
+    )
+    available(
+        "fargate_retrain_reference_cost_usd",
+        fargate_retraining["reference_cost_per_action_usd"],
+        scope=f"USD:{fargate_retraining['billing_mode']}",
+    )
+    available("fargate_retrain_count", float(retrains), scope="retrains")
+    available(
+        "fargate_retrain_estimated_cost_usd",
+        fargate_retraining["estimated_retraining_cost_usd"],
+        scope=f"USD:{fargate_retraining['billing_mode']}",
+    )
+    available("fargate_retrain_duration_seconds", fargate_retraining["duration_seconds"], scope="seconds")
+    available("fargate_retrain_billed_seconds", fargate_retraining["billed_seconds"], scope="seconds")
+    available("fargate_retrain_hourly_rate_usd", fargate_retraining["hourly_rate_usd"], scope="USD/hour")
+
+    policy_name = (config.get("policy") or {}).get("name")
+    is_oracle = policy_name == "oracle"
+    oracle_reference = {
+        "is_retrospective_reference": is_oracle,
+        "deployable_online": not is_oracle,
+        "future_information_used": (
+            "full_future_performance_matrix_err[i,j]_and_future_batch_labels_for_dynamic_programming_optimal_schedule"
+            if is_oracle
+            else None
+        ),
+    }
+    regimes_report = regime_metrics(
+        predictions,
+        report["dataset"].get("changepoints"),
+        report["observed"],
+    )
 
     def adaptation_cost(update):
         if costs is None or costs["predict_second"]:
@@ -733,6 +854,9 @@ def build_tracking(
             },
         },
         "costs": cost_report,
+        "fargate_retraining": fargate_retraining,
+        "oracle_reference": oracle_reference,
+        "regimes": regimes_report,
         "adaptation": gain_rows,
         "adaptation_coverage": {
             "updates": len(updates),
@@ -784,6 +908,7 @@ def save_tracking_files(directory, report, settings, observer=None, events=None)
             "sha256": hashlib.sha256(raw).hexdigest(),
             "rows": len(predictions),
             "selection": "postwarmup_or_temporal_holdout_released_labels",
+            "event_id_tagged": all(bool(row.get("event_id")) for row in predictions),
         }
     if observer is not None and observer.continual is not None:
         from continual_bench.infrastructure.versioning import ModelVersions
