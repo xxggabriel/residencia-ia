@@ -255,9 +255,16 @@ def _matrix_units(request, release, project_root):
     for config in configs:
         coordinates = describe(config)
         family = CATALOG.get(coordinates["dataset"]).family
-        if family == "openml" and not isinstance(config, EpochConfig) and config.dataset.params:
-            raise ValueError("OpenML matrix inputs are resolved exclusively by their published digest")
-        if family not in (*OFFLINE_MATRIX_FAMILIES, "openml") and not isinstance(config, EpochConfig):
+        if (
+            family in ("openml", "usp_stream")
+            and not isinstance(config, EpochConfig)
+            and config.dataset.params
+        ):
+            label = "OpenML" if family == "openml" else "USP stream"
+            raise ValueError(f"{label} matrix inputs are resolved exclusively by their published digest")
+        if family not in (*OFFLINE_MATRIX_FAMILIES, "openml", "usp_stream") and not isinstance(
+            config, EpochConfig
+        ):
             raise ValueError(f"prepared source {coordinates['dataset']} requires the epochs evaluator")
         evaluator = {Config: "binary", TypedConfig: "typed", EpochConfig: "epochs"}[type(config)]
         params = {
