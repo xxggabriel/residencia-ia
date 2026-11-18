@@ -144,6 +144,8 @@ def test_end_to_end_run_observations_pricing_regimes_and_paired_comparison(tmp_p
     assert none_fargate["retrain_count"] == 0
     assert none_fargate["estimated_retraining_cost_usd"] == 0.0
     assert none_fargate["reference_cost_per_action_usd"] == pytest.approx(0.10207 * 60.0 / 3600.0)
+    assert none_fargate["operational_execution_mode"] == none_report["environment"]["execution"]
+    assert none_fargate["operational_execution_mode"] != "local_jsonl"
     assert none_report["tracking"]["oracle_reference"]["is_retrospective_reference"] is False
 
     # Oracle explicitly marked as retrospective reference with future info documented

@@ -550,9 +550,7 @@ def build_tracking(
         default_alpha=float(settings.get("upf_alpha", 1.0)),
         tracking=settings,
     )
-    op_mode = report.get("transport") or (
-        "batch-fargate-spot" if (report.get("environment") or {}).get("aws_batch_job_id") else "local"
-    )
+    op_mode = (report.get("environment") or {}).get("execution") or "local"
     op_aws_usd = cost_report.get("aws", {}).get("metrics", {}).get("cost_total_usd")
     fargate_retraining = summarize_fargate_retraining_cost(
         alpha_resolution,
