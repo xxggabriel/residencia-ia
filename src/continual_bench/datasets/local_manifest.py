@@ -37,13 +37,14 @@ class LocalDatasetManifest(_Strict):
     license: str = Field(min_length=1)
     license_reference: str = Field(pattern=r"^https://")
     access_approved: bool
-    format: Literal["csv", "arff", "libsvm", "jsonl"]
+    format: Literal["csv", "csv_headerless", "arff", "libsvm", "jsonl"]
     files: tuple[DataFile, ...] = Field(min_length=1)
     features: dict[str, Literal["numeric", "categorical"]] = Field(min_length=1)
     target: str
     labels: tuple[str, ...] = ()
     task: Literal["binary", "multiclass", "regression"]
     positive_label: str | None = None
+    target_projection: Literal["one_vs_rest"] | None = None
     order: Literal["published", "batch", "timestamp", "artificial"]
     order_description: str = Field(min_length=1)
     timestamp_column: str | None = None
@@ -56,8 +57,17 @@ class LocalDatasetManifest(_Strict):
     def valid_contract(self):
         if not self.access_approved:
             raise ValueError("dataset license/access approval is required")
-        if self.task == "binary" and (len(set(self.labels)) != 2 or self.positive_label not in self.labels):
-            raise ValueError("binary source requires exactly two labels and an explicit positive label")
+        if self.task == "binary":
+            min_labels = 2 if self.target_projection == "one_vs_rest" else 2
+            if self.target_projection == "one_vs_rest":
+                if len(set(self.labels)) < min_labels or self.positive_label not in self.labels:
+                    raise ValueError(
+                        "one-vs-rest binary source requires >=2 labels and an explicit positive label"
+                    )
+            elif len(set(self.labels)) != 2 or self.positive_label not in self.labels:
+                raise ValueError("binary source requires exactly two labels and an explicit positive label")
+        elif self.target_projection is not None:
+            raise ValueError("target_projection is only supported for binary tasks")
         if self.task == "multiclass" and len(set(self.labels)) < 2:
             raise ValueError("multiclass source requires declared labels")
         if self.task == "regression" and (self.labels or self.positive_label):
@@ -128,6 +138,12 @@ class LocalManifestSource:
                 if reader.fieldnames is None or len(reader.fieldnames) != len(set(reader.fieldnames)):
                     raise ValueError("CSV requires unique column names")
                 yield from reader
+            elif self.spec.format == "csv_headerless":
+                columns = [*self.spec.features, self.spec.target]
+                for fields in csv.reader(stream):
+                    if len(fields) != len(columns):
+                        raise ValueError("headerless CSV row does not match declared column count")
+                    yield dict(zip(columns, fields))
             elif self.spec.format == "jsonl":
                 for line in stream:
                     row = json.loads(line)
@@ -187,6 +203,8 @@ class LocalManifestSource:
                         raise ValueError("non-finite target")
                 elif y not in self.spec.labels:
                     raise ValueError("undeclared target label")
+                elif self.spec.task == "binary" and self.spec.target_projection == "one_vs_rest":
+                    y = "1" if y == self.spec.positive_label else "0"
                 stamp = str(raw[self.spec.timestamp_column]) if self.spec.timestamp_column else None
                 if stamp is not None and not stamp.isdecimal():
                     raise ValueError("source timestamp must be a nonnegative integer")
@@ -232,13 +250,14 @@ class LocalManifestSource:
             if sample.split != "train":
                 raise ValueError("binary prequential stream must not mix held-out splits")
             previous = sample.timestamp
+            positive = "1" if self.spec.target_projection == "one_vs_rest" else self.spec.positive_label
             yield Event(
                 sample.sample_id,
                 sample.seq,
                 sample.timestamp,
                 sample.available_at,
                 sample.x,
-                sample.y == self.spec.positive_label,
+                sample.y == positive,
                 None,
             )
 
