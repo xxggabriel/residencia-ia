@@ -135,9 +135,7 @@ def test_end_to_end_run_observations_pricing_regimes_and_paired_comparison(tmp_p
         },
     }
     none_cfg = Config.model_validate({**base_cfg, "policy": {"name": "none"}})
-    oracle_cfg = Config.model_validate(
-        {**base_cfg, "policy": {"name": "oracle", "params": {"lambda": 10.0}}}
-    )
+    oracle_cfg = Config.model_validate({**base_cfg, "policy": {"name": "oracle", "params": {"lambda": 10.0}}})
     none_report = run(none_cfg, tmp_path / "none")
     oracle_report = run(oracle_cfg, tmp_path / "oracle")
 

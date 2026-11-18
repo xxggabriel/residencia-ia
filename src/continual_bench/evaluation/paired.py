@@ -90,14 +90,9 @@ def verify_and_align_ledgers(
         for name in names[1:]:
             cand_label = _row_label(by_name_index[name][event_id][1])
             if cand_label != ref_label:
-                raise ValueError(
-                    f"label mismatch on event_id={event_id!r} between {ref_name!r} and {name!r}"
-                )
+                raise ValueError(f"label mismatch on event_id={event_id!r} between {ref_name!r} and {name!r}")
 
-    aligned = {
-        name: [by_name_index[name][event_id][1] for event_id in common_event_ids]
-        for name in names
-    }
+    aligned = {name: [by_name_index[name][event_id][1] for event_id in common_event_ids] for name in names}
     return common_event_ids, aligned
 
 
@@ -136,9 +131,7 @@ def compare_paired_ledgers(
             else:
                 both_wrong += 1
         discordant = ref_only + cand_only
-        mcnemar_chi2 = (
-            ((abs(ref_only - cand_only) - 1) ** 2) / discordant if discordant > 0 else None
-        )
+        mcnemar_chi2 = ((abs(ref_only - cand_only) - 1) ** 2) / discordant if discordant > 0 else None
         cand_acc = metrics_by_run[name]["accuracy"]
         pairwise[name] = {
             "reference": ref_name,

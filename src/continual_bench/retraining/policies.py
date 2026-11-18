@@ -123,7 +123,8 @@ class RetrospectiveOracle(BatchPolicy):
     kind = "oracle"
     is_retrospective_reference = True
     future_information_used = (
-        "full_future_performance_matrix_err[i,j]_and_future_batch_labels_for_dynamic_programming_optimal_schedule"
+        "full_future_performance_matrix_err[i,j]_and_future_batch_labels_"
+        "for_dynamic_programming_optimal_schedule"
     )
 
     def make_rule(self):

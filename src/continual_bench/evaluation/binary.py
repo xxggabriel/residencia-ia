@@ -70,9 +70,7 @@ def continual_evaluation(source, factory, settings, *, events=None, events_path=
     total = len(event_list)
     if total - warmup < 6 and total < 6:
         return None
-    changepoints = tuple(
-        cp for cp in (getattr(source, "changepoints", None) or ()) if warmup < cp < total
-    )
+    changepoints = tuple(cp for cp in (getattr(source, "changepoints", None) or ()) if warmup < cp < total)
     if changepoints:
         task_ends = list(changepoints) + [total]
     else:

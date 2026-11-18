@@ -239,9 +239,7 @@ def recovery_metrics(report, settings):
                     (
                         w["accuracy"]
                         for w in windows
-                        if _window_eligible(w)
-                        and w["end_seq"] - w["n"] + 1 >= point
-                        and w["end_seq"] < end
+                        if _window_eligible(w) and w["end_seq"] - w["n"] + 1 >= point and w["end_seq"] < end
                     ),
                     None,
                 ),
@@ -553,9 +551,7 @@ def build_tracking(
         tracking=settings,
     )
     op_mode = report.get("transport") or (
-        "batch-fargate-spot"
-        if (report.get("environment") or {}).get("aws_batch_job_id")
-        else "local"
+        "batch-fargate-spot" if (report.get("environment") or {}).get("aws_batch_job_id") else "local"
     )
     op_aws_usd = cost_report.get("aws", {}).get("metrics", {}).get("cost_total_usd")
     fargate_retraining = summarize_fargate_retraining_cost(
