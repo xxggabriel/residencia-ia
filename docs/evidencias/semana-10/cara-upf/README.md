@@ -1,4 +1,4 @@
-# Auditoria dos benchmarks CARA e UPF
+# Evidências dos benchmarks de Electricity e Airlines
 
 Registrei aqui os resultados de Electricity e Airlines usados no relatório da Semana 10. Os arquivos JSON comprimidos preservam as métricas e os registros completos produzidos pelos benchmarks em 17 de novembro de 2026, incluindo resumos, grades de custo, resultados por ensaio quando exportados, histórico de treino, candidatos e observações. Os arquivos de entrada são identificados pelos hashes e pelos nomes registrados nos resultados.
 
@@ -19,7 +19,7 @@ Registrei aqui os resultados de Electricity e Airlines usados no relatório da S
 - [Métricas do protocolo CARA](figuras/metricas-protocolo-cara.png)
 - [Excesso de custo em relação ao Oracle de erro](figuras/sensibilidade-oracle.png)
 
-Nas trajetórias, cada linha colorida mostra a acurácia de um modelo candidato nos lotes seguintes. A linha preta mostra quais modelos serviram o fluxo sob a política indicada, com α de 0,1 e implantação no próprio lote. As bandas de Wilson de 95% correspondem aos 400 exemplos do teste de cada lote. A trajetória usa uma única seed. Comparei os hashes dos 15 modelos por dataset e recalculei a acurácia média e o custo para conferir a reconstrução.
+Nas trajetórias do benchmark pareado, usei lotes de 2.000 registros em Electricity e Airlines, com 400 no teste. Cada linha colorida mostra a acurácia de um modelo candidato nos lotes avaliados. A linha preta mostra o modelo em uso, com α de 0,1 e implantação no próprio lote. As bandas de Wilson de 95% estimam a incerteza da acurácia no teste de cada lote da seed 0. Comparei os hashes dos 15 modelos por conjunto e recalculei a acurácia média e o custo para conferir a reconstrução.
 
 ## Reprodução
 
@@ -39,7 +39,9 @@ uv run --extra plots --extra large-datasets python scripts/plot_week10_cara_upf.
   --airlines /caminho/airlines.arff
 ```
 
-A tabela de AUC compara os números usando o protocolo UPF. A sensibilidade ao custo usa as duas variantes do protocolo pareado. Os valores de α e κ são parâmetros dos respectivos objetivos, em unidades de custo do cenário.
+A AUC do protocolo UPF integra o custo combinado com α de 0 a 1 em Electricity e de 0 a 0,7 em Airlines. Comparei o resultado local com o artigo dentro de cada conjunto. As curvas mostram médias de dez seeds no protocolo UPF e cinco no CARA. O SCPE fica indefinido em κ igual a zero porque o custo do Oracle é zero.
+
+No mapa de sensibilidade, subtraí o custo combinado do Oracle de erro do custo combinado de cada política, com implantação no mesmo lote ou no lote seguinte. Esse custo soma o erro de teste e a penalidade de retreinamento. α e κ estão nas unidades de cada objetivo.
 
 - [Mahadevan e Mathioudakis, CARA, 2024](https://doi.org/10.1016/j.knosys.2024.111610)
 - [Regol et al., UPF, 2025](https://arxiv.org/abs/2505.14903v1)
