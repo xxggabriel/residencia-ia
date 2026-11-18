@@ -351,7 +351,15 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
             ev_idx += 1
             if ev.seq in reserved:
                 r_trace = observer.before_prediction(ev, deployed_model, labeled, 0.0)
-                observer.after_label(ev, 0.5, r_trace, ev.available_at, deployed_model, False)
+                observer.after_label(
+                    ev,
+                    0.5,
+                    r_trace,
+                    ev.available_at,
+                    deployed_model,
+                    False,
+                    near_future_evaluated=True,
+                )
 
     for t, block in enumerate(blocks):
         current = Metrics()

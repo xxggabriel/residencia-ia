@@ -217,3 +217,61 @@ def test_real_binary_source_reserves_independent_probes_and_records_retraining_c
     cara = payload["retraining"]["rules"]["cara"]
     assert len(cara["alphas"]) > 0
     assert len(cara["costs"]) == len(cara["alphas"])
+
+
+def test_reserved_probes_complete_near_future_horizons_and_preserve_replay_seqs(tmp_path):
+    from continual_bench.core.contracts import Event
+
+    class _RealLikeSource:
+        samples = 240
+
+        def events(self):
+            for seq in range(self.samples):
+                x = {"a": float((seq % 17) / 17.0), "b": float(((seq * 3) % 11) / 11.0)}
+                y = (seq // 80) % 2 == 0 and x["a"] > 0.4 or (seq // 80) % 2 == 1 and x["b"] > 0.5
+                yield Event(f"ev-{seq}", seq, seq, seq + 1, x, bool(y))
+
+        def manifest(self):
+            return {"name": "real-like", "samples": self.samples, "seed": 42}
+
+    config = Config.model_validate(
+        {
+            "name": "reserved-nf-replay",
+            "mode": "streaming",
+            "dataset": {"name": "sea", "samples": 240, "label_delay": 1},
+            "warmup": 40,
+            "metric_window": 40,
+            "policy": {"name": "periodic", "every": 40},
+            "promotion": {"validation_samples": 10, "min_improvement": 0.0},
+            "tracking": {"probe_samples": 10, "task_evaluation": {"horizon": 20, "gap": 0}},
+        }
+    )
+    src = _RealLikeSource()
+    manifest = prepare(config, str(tmp_path), source=src)
+    report = evaluate(config, manifest, str(tmp_path), source=src)
+
+    near_future = report["task_evaluation"]["near_future"]
+    assert near_future["scheduled_windows"] > 0
+    assert near_future["completed_windows"] == near_future["scheduled_windows"]
+    assert all(w["complete"] for w in near_future["windows"])
+
+    evaluated = report["tracking_observations"]["scopes"]["prequential"]["evaluated_examples"]
+    reserved_count = 200 - evaluated
+    assert reserved_count > 0
+
+    candidates = report.get("candidates", report["updates"])
+    assert candidates
+    assert any(c["train_seq_range"][1] - c["train_seq_range"][0] > c["train_samples"] for c in candidates)
+    for c in candidates:
+        assert "train_seqs" in c
+        assert len(c["train_seqs"]) == c["train_samples"]
+        assert c["train_seqs"] == sorted(c["train_seqs"])
+        assert c["train_seq_range"] == [c["train_seqs"][0], c["train_seqs"][-1] + 1]
+        if "validation_seqs" in c:
+            assert len(c["validation_seqs"]) == c["validation_samples"]
+            assert c["validation_seqs"] == sorted(c["validation_seqs"])
+            assert not (set(c["train_seqs"]) & set(c["validation_seqs"]))
+            assert c["validation_seq_range"] == [c["validation_seqs"][0], c["validation_seqs"][-1] + 1]
+
+    unique_examples = report["tracking"]["metrics"]["training_unique_examples"]
+    assert unique_examples <= 240 - reserved_count

@@ -288,9 +288,12 @@ def _add_fit_observations(fit, action, actual, last, trained, quality):
         if "repeated_presentations" in row:
             repeated += row["repeated_presentations"]
         else:
-            # Binary replay uses the contiguous suffix recorded by the engine and gate.
-            end = last["train_seq_range"][1] if action == "reset_retrain" else row["seq"] + 1
-            source = range(end - size, end)
+            if action == "reset_retrain" and "train_seqs" in last:
+                source = last["train_seqs"]
+            else:
+                # Binary replay uses the contiguous suffix recorded by the engine and gate.
+                end = last["train_seq_range"][1] if action == "reset_retrain" else row["seq"] + 1
+                source = range(end - size, end)
             repeated += sum(seq in trained for seq in source)
             trained.update(source)
         presentations += size

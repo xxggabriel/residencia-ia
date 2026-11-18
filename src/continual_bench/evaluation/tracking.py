@@ -332,8 +332,11 @@ def build_tracking(
     initial = report["split"]["train"][1] if "split" in report else config["warmup"]
     trained = set(range(initial))
     for u in candidates:
-        start, end = u.get("train_seq_range", [u["seq"] - u["train_samples"] + 1, u["seq"] + 1])
-        trained.update(range(start, end))
+        if "train_seqs" in u:
+            trained.update(u["train_seqs"])
+        else:
+            start, end = u.get("train_seq_range", [u["seq"] - u["train_samples"] + 1, u["seq"] + 1])
+            trained.update(range(start, end))
     available("training_presentations", initial + used, scope="includes_initial_fit_and_replays")
     available("training_used_post_warmup", used)
     available("training_unique_examples", len(trained))

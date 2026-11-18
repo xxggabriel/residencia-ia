@@ -40,6 +40,7 @@ class Engine:
         self.policy = policy
         self.warmup = warmup
         self.replay = deque(maxlen=window)
+        self.replay_seqs = deque(maxlen=window)
         self.metric_window = metric_window
         self.reset_detector = reset_detector
         self.training_budget = training_budget
@@ -89,6 +90,8 @@ class Engine:
             self.recent_error_sum = sum(self.recent_errors)
         if "candidates" not in state:
             self.candidates = [{**update, "promoted": True} for update in self.updates]
+        if "replay_seqs" not in state:
+            self.replay_seqs = deque(maxlen=self.replay.maxlen)
 
     def observe_batch(self, batch: list[Event]) -> None:
         start = time.perf_counter()
@@ -134,10 +137,19 @@ class Engine:
             event, p, trace = self.pending.popleft()
             if event.seq in reserved:
                 if self.observer is not None:
-                    self.observer.after_label(event, p, trace, now, self.model, False)
+                    self.observer.after_label(
+                        event,
+                        p,
+                        trace,
+                        now,
+                        self.model,
+                        False,
+                        near_future_evaluated=True,
+                    )
                 continue
             self.labeled += 1
             self.replay.append((dict(event.x), event.y))
+            self.replay_seqs.append(event.seq)
             if event.seq < self.warmup:
                 self._learn_warmup(event, p, trace, now)
                 continue
@@ -255,7 +267,7 @@ class Engine:
         promoted = True
         validation, evaluation, checkpoint = {}, None, None
         if decision.action == "reset_retrain":
-            promoted, validation, training_seconds, evaluation, checkpoint = self._retrain(
+            promoted, validation, training_seconds, evaluation, checkpoint, train_seqs = self._retrain(
                 event,
                 train_samples,
                 started,
@@ -263,6 +275,7 @@ class Engine:
         elif decision.action == "learn_one":
             self.model.learn(dict(event.x), event.y)
             training_seconds = time.perf_counter() - started
+            train_seqs = [event.seq]
         else:
             raise ValueError(f"unknown update action: {decision.action}")
         # Every completed candidate consumes budget and starts cooldown, including rejection.
@@ -276,11 +289,16 @@ class Engine:
             "train_samples": train_samples,
             "seconds": training_seconds,
         }
-        training_end = event.seq + 1 - validation_count
-        training_start = training_end - train_samples if decision.action == "reset_retrain" else event.seq
-        self.candidates.append(
-            {**record, "promoted": promoted, "train_seq_range": [training_start, training_end], **validation}
-        )
+        if train_seqs:
+            train_seq_range = [train_seqs[0], train_seqs[-1] + 1]
+        else:
+            training_end = event.seq + 1 - validation_count
+            training_start = training_end - train_samples if decision.action == "reset_retrain" else event.seq
+            train_seq_range = [training_start, training_end]
+        candidate_record = {**record, "promoted": promoted, "train_seq_range": train_seq_range, **validation}
+        if train_seqs:
+            candidate_record["train_seqs"] = train_seqs
+        self.candidates.append(candidate_record)
         if observer := getattr(self.observer, "record_learning", None):
             recorded = (
                 self._learning_prediction(event, *prediction)
@@ -300,27 +318,40 @@ class Engine:
             if self.observer is not None:
                 self.observer.after_update(previous, record)
             if self.versions is not None:
-                self._record_model(
-                    {
-                        "action": decision.action,
-                        "seq_range": [training_start, training_end],
-                        "label_available_at": event.available_at,
-                        "released_at": now,
-                    }
-                )
+                version_training = {
+                    "action": decision.action,
+                    "seq_range": train_seq_range,
+                    "label_available_at": event.available_at,
+                    "released_at": now,
+                }
+                if train_seqs:
+                    version_training["seqs"] = train_seqs
+                self._record_model(version_training)
 
     def _retrain(self, event: Event, train_samples: int, started: float):
         """Fit a fresh candidate on the bounded replay; optionally gate it on a past-label holdout."""
         validation_count = self._validation_count
         candidate = self.model_factory()
         replay = list(self.replay)
+        replay_seqs = list(self.replay_seqs) if hasattr(self, "replay_seqs") else []
         training = (replay[:-validation_count] if validation_count else replay)[-train_samples:]
+        train_seqs = (
+            (replay_seqs[:-validation_count] if validation_count else replay_seqs)[-train_samples:]
+            if len(replay_seqs) == len(replay)
+            else []
+        )
         for x, y in training:
             candidate.learn(dict(x), y)
         training_seconds = time.perf_counter() - started
         promoted, validation, evaluation, checkpoint = True, {}, None, None
         if validation_count:
             holdout = replay[-validation_count:]
+            holdout_seqs = replay_seqs[-validation_count:] if len(replay_seqs) == len(replay) else []
+            val_range = (
+                [holdout_seqs[0], holdout_seqs[-1] + 1]
+                if holdout_seqs
+                else [event.seq - validation_count + 1, event.seq + 1]
+            )
             incumbent = copy.deepcopy(self.model)
             capture = getattr(self.observer, "record_learning", None) is not None
             candidate_metrics = Metrics() if capture else None
@@ -331,7 +362,8 @@ class Engine:
             promoted = gain > self.promotion.get("min_improvement", 0)
             validation = {
                 "validation_samples": validation_count,
-                "validation_seq_range": [event.seq - validation_count + 1, event.seq + 1],
+                "validation_seq_range": val_range,
+                **({"validation_seqs": holdout_seqs} if holdout_seqs else {}),
                 "candidate_accuracy": candidate_accuracy,
                 "incumbent_accuracy": incumbent_accuracy,
                 "accuracy_gain": gain,
@@ -350,7 +382,7 @@ class Engine:
             self.model = candidate
             if self.reset_detector:
                 self.detector = self.detector_factory()
-        return promoted, validation, training_seconds, evaluation, checkpoint
+        return promoted, validation, training_seconds, evaluation, checkpoint, train_seqs
 
     @staticmethod
     def holdout_accuracy(model, holdout, *, scorer=None):
