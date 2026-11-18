@@ -107,10 +107,13 @@ class OnlineObservability:
                 }
             )
 
-    def after_label(self, event, probability, trace, released_at, model, evaluated):
+    def after_label(
+        self, event, probability, trace, released_at, model, evaluated, *, near_future_evaluated=None
+    ):
         started = time.perf_counter()
         if self.near_future is not None:
-            self.near_future.after_label(event, probability, trace, released_at, model, evaluated)
+            nf_eval = evaluated if near_future_evaluated is None else near_future_evaluated
+            self.near_future.after_label(event, probability, trace, released_at, model, nf_eval)
         if evaluated:
             row = {
                 "event_id": event.event_id,
