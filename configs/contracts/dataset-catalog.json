@@ -13,7 +13,35 @@
     {"name": "friedman_drift", "task": "regression", "adapter": "FriedmanDriftSource", "params": {"drift_type": "gra", "position": [100, 200], "transition_window": 0}, "binary_runner": "rejected"}
   ],
   "local_candidates": [
-    {"name": "insects", "adapter": "LocalManifestSource", "formats": ["arff", "csv"], "variant": null, "source": "https://sites.google.com/view/uspdsrepository", "status": "exact_variant_license_hashes_and_annotations_required"},
+    {"name": "insects", "adapter": "LocalManifestSource", "formats": ["arff", "csv"], "variant": "abrupt_balanced", "source": "https://sites.google.com/view/uspdsrepository", "status": "existing_multiclass_abrupt_balanced_no_drift_annotations"},
+    {
+      "name": "insects_abrupt_imbalanced",
+      "adapter": "InsectsBinarySource",
+      "formats": ["csv_headerless"],
+      "task": "binary",
+      "variant": "abrupt_imbalanced",
+      "source": "https://sites.google.com/view/uspdsrepository",
+      "license": "CC BY 4.0",
+      "expected_sha256": "985a5b46c2cb0e42e48a78d5001b57a79ed64fa69f9e5b0362a34cfb552dbc22",
+      "expected_rows": 355275,
+      "changepoints": [83859, 128651, 182320, 242883, 268380],
+      "target_transformation": "label == '2' -> 1, else 0",
+      "status": "admitted_pinned_binary_with_drift_annotations"
+    },
+    {
+      "name": "insects_incremental_abrupt_reoccurring_imbalanced",
+      "adapter": "InsectsBinarySource",
+      "formats": ["csv_headerless"],
+      "task": "binary",
+      "variant": "incremental_abrupt_reoccurring_imbalanced",
+      "source": "https://sites.google.com/view/uspdsrepository",
+      "license": "CC BY 4.0",
+      "expected_sha256": "d07e22c0521755f2452d96bb1c7068b26a281be2a627e32f21a4c0c6cfbfd9bc",
+      "expected_rows": 452044,
+      "changepoints": [150683, 301365],
+      "target_transformation": "label == '2' -> 1, else 0",
+      "status": "admitted_pinned_binary_with_drift_annotations"
+    },
     {"name": "electricity", "adapter": "RealSource", "source": "https://www.openml.org/d/151", "status": "existing_pinned_OpenML_v1_no_ground_truth_changepoints"},
     {"name": "gas", "adapter": "LocalManifestSource", "formats": ["libsvm"], "source": "https://archive.ics.uci.edu/dataset/224/gas+sensor+array+drift+dataset", "status": "six_class_batch_manifests_required_binary_runner_rejected"},
     {"name": "split_mnist", "adapter": "LocalManifestSource + split_class_tasks", "source": "https://yann.lecun.com/exdb/mnist/", "status": "prepared_pixels_official_train_test_and_license_required"},

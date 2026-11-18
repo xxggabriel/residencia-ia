@@ -70,11 +70,18 @@ def continual_evaluation(source, factory, settings, *, events=None, events_path=
     total = len(event_list)
     if total - warmup < 6 and total < 6:
         return None
-    episodes = 3 if total - warmup >= 6 else 2
-    span = total - warmup
-    if span < episodes * 2:
-        return None
-    task_ends = [warmup + span * i // episodes for i in range(1, episodes)] + [total]
+    raw_changepoints = getattr(source, "changepoints", None)
+    if raw_changepoints is None and hasattr(source, "manifest"):
+        raw_changepoints = source.manifest().get("changepoints")
+    changepoints = tuple(cp for cp in (raw_changepoints or ()) if warmup < cp < total)
+    if changepoints:
+        task_ends = list(changepoints) + [total]
+    else:
+        episodes = 3 if total - warmup >= 6 else 2
+        span = total - warmup
+        if span < episodes * 2:
+            return None
+        task_ends = [warmup + span * i // episodes for i in range(1, episodes)] + [total]
     probes = {}
     reserved_seqs: set[int] = set()
     requested = max(1, int(settings.get("probe_samples", 32)))

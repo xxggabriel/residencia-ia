@@ -105,6 +105,18 @@ for _name in ("insects", "gas"):
             "cache",
         )
     )
+for _name in ("insects_abrupt_imbalanced", "insects_incremental_abrupt_reoccurring_imbalanced"):
+    CATALOG.add(
+        DatasetSpec(
+            _name,
+            BINARY,
+            "usp_stream",
+            "continual_bench.datasets.real_streams:InsectsBinarySource",
+            {"name": _name},
+            prepare_kind="none",
+            metadata={"changepoints": "annotated", "positive_label": "2"},
+        )
+    )
 for _name in ("split_mnist", "permuted_mnist"):
     CATALOG.add(
         DatasetSpec(

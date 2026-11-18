@@ -1,0 +1,30 @@
+# 72-unit INSECTS benchmark matrix:
+# 2 datasets × 2 models × 6 policies × 3 seeds (42, 43, 44) in incremental mode = 72 units.
+# Note: `oracle` is a retrospective lower-bound reference (reads future performance matrix entries),
+# not a deployable online policy.
+# CARA, UPF, and Oracle share `alpha = lambda * custo_retreino_usd` using AWS Fargate On-Demand pricing.
+extends: base.yaml
+name: insects-72
+evaluator: binary
+datasets:
+  - {name: insects_abrupt_imbalanced, samples: 355275, label_delay: 3}
+  - {name: insects_incremental_abrupt_reoccurring_imbalanced, samples: 452044, label_delay: 3}
+models:
+  - {name: logistic, params: {learning_rate: 0.05}}
+  - {name: hoeffding_tree, params: {grace_period: 50, max_depth: 8}}
+strategies:
+  - {detector: {name: none}, policy: {name: none}}
+  - {detector: {name: none}, policy: {name: online, action: learn_one}}
+  - {detector: {name: adwin}, policy: {name: drift}}
+  - {detector: {name: none}, policy: {name: cara, params: {lambda: 100.0}}}
+  - {detector: {name: none}, policy: {name: upf, params: {lambda: 100.0, delta: 0.95, samples: 100, seed: 0}}}
+  - {detector: {name: none}, policy: {name: oracle, params: {lambda: 100.0}}}
+modes: [incremental]
+base:
+  warmup: 1000
+  batch_size: 500
+  replay_window: 2048
+  metric_window: 1000
+  checkpoint_every: 5000
+  tracking:
+    extends: ../base/tracking-fargate.yaml

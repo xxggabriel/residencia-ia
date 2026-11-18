@@ -14,23 +14,33 @@ from continual_bench.core.contracts import Decision, DecisionContext
 from continual_bench.core.policies import RetrainingPolicy, validate_batch_policy_params
 
 from .matrix import PerformanceMatrix
+from .pricing import resolve_retrain_alpha
 from .rules import UPF, CaraCT, CaraP, CaraT, Oracle, Rule
 
 
 class BatchPolicy(RetrainingPolicy):
     requires_batches: ClassVar[bool] = True
-    permitted: ClassVar[frozenset[str]] = frozenset({"alpha"})
+    is_retrospective_reference: ClassVar[bool] = False
+    future_information_used: ClassVar[str | None] = None
+    permitted: ClassVar[frozenset[str]] = frozenset(
+        {"alpha", "lambda", "custo_retreino_usd", "retrain_duration_seconds", "fargate_billing_mode"}
+    )
 
     def __init__(
         self,
         params: dict | None = None,
         objective: str = "error",
         action: str = "reset_retrain",
+        tracking: dict | None = None,
         **guards,
     ):
         self.objective = objective
+        self.tracking = tracking
         super().__init__(params=params, action=action, **guards)
-        self.alpha = float(self.params.get("alpha", 1.0))
+        self.pricing_resolution = resolve_retrain_alpha(self.params, tracking=self.tracking)
+        self.alpha = float(self.pricing_resolution["alpha"])
+        self.cost_lambda = self.pricing_resolution["lambda"]
+        self.custo_retreino_usd = float(self.pricing_resolution["custo_retreino_usd"])
         self.rule: Rule | None = None
         self.matrix: PerformanceMatrix | None = None
         self.deployed = -1
@@ -108,7 +118,14 @@ class UncertaintyPerformanceForecaster(BatchPolicy):
 
 
 class RetrospectiveOracle(BatchPolicy):
+    """Retrospective lower-bound reference; not deployable online because it reads future batches."""
+
     kind = "oracle"
+    is_retrospective_reference = True
+    future_information_used = (
+        "full_future_performance_matrix_err[i,j]_and_future_batch_labels_"
+        "for_dynamic_programming_optimal_schedule"
+    )
 
     def make_rule(self):
         return Oracle(self.objective)

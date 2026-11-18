@@ -14,7 +14,14 @@ from continual_bench.datasets.catalog import DATASETS, dataset_spec
 TABULAR_LIMIT = 100_000
 IMAGE_LIMIT = 10_000
 IMAGE_FAMILIES = {"image", "temporal_vision"}
-NATIVE_ROWS = {"electricity": 45_312, "airlines": 539_383, "insects": 52_848, "gas": 13_910}
+NATIVE_ROWS = {
+    "electricity": 45_312,
+    "airlines": 539_383,
+    "insects": 52_848,
+    "insects_abrupt_imbalanced": 355_275,
+    "insects_incremental_abrupt_reoccurring_imbalanced": 452_044,
+    "gas": 13_910,
+}
 NOMINAL = {"agrawal": ["elevel", "car", "zipcode"], "stagger": ["size", "color", "shape"]}
 
 
