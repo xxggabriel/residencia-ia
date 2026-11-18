@@ -71,15 +71,30 @@ class AwsCostConfig(Strict):
     region: str = Field(default="us-east-1", min_length=1)
     price_date: str = Field(default="2026-11-08", min_length=1)
     compute_service: Literal["fargate-linux-x86"] = "fargate-linux-x86"
+    os_family: Literal["LINUX"] = Field(default="LINUX", exclude_if=lambda value: value == "LINUX")
+    cpu_architecture: Literal["X86_64"] = Field(default="X86_64", exclude_if=lambda value: value == "X86_64")
     storage_class: Literal["s3-standard"] = "s3-standard"
-    vcpus: float = Field(default=1, gt=0, allow_inf_nan=False)
-    memory_gb: float = Field(default=2, gt=0, allow_inf_nan=False)
+    vcpus: float = Field(default=2, gt=0, allow_inf_nan=False)
+    memory_gb: float = Field(default=4, gt=0, allow_inf_nan=False)
+    ephemeral_storage_gb: float = Field(
+        default=50, ge=0, allow_inf_nan=False, exclude_if=lambda value: value == 50
+    )
+    ephemeral_free_gb: float = Field(
+        default=20, ge=0, allow_inf_nan=False, exclude_if=lambda value: value == 20
+    )
     vcpu_hour_usd: float = Field(default=0.04048, ge=0, allow_inf_nan=False)
     memory_gb_hour_usd: float = Field(default=0.004445, ge=0, allow_inf_nan=False)
+    ephemeral_gb_hour_usd: float = Field(
+        default=0.000111, ge=0, allow_inf_nan=False, exclude_if=lambda value: value == 0.000111
+    )
     storage_gb_month_usd: float = Field(default=0.023, ge=0, allow_inf_nan=False)
     retention_days: float = Field(default=30, ge=0, allow_inf_nan=False)
     billing_month_days: float = Field(default=30, gt=0, allow_inf_nan=False)
     minimum_compute_seconds: int = Field(default=60, ge=60)
+    pricing_source: str = Field(
+        default="https://aws.amazon.com/fargate/pricing/",
+        exclude_if=lambda value: value == "https://aws.amazon.com/fargate/pricing/",
+    )
     compute_source: str = (
         "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECS/current/us-east-1/index.json"
     )
@@ -154,6 +169,15 @@ class TrackingConfig(Strict):
     costs: CostConfig = Field(default_factory=lambda: CostConfig(train_sample=0.001, update=0.05))
     upf_alpha: float = Field(default=1, ge=0, allow_inf_nan=False)
     upf_alphas: tuple[float, ...] = (0, 0.1, 1, 10)
+    upf_lambda: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False, exclude_if=lambda value: value is None
+    )
+    fargate_billing_mode: Literal["marginal_in_task", "dedicated_task"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    fargate_retrain_duration_seconds: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False, exclude_if=lambda value: value is None
+    )
     reference: dict | None = None
     task_evaluation: FutureEvaluationConfig | None = Field(
         default=None, exclude_if=lambda value: value is None

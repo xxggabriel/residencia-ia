@@ -11,6 +11,7 @@ from pathlib import Path
 
 from continual_bench.config import Config
 from continual_bench.core.contracts import event_json
+from continual_bench.core.policies import BATCH_POLICY_KINDS
 from continual_bench.evaluation.artifacts import binary_figures, system_figures, write_artifacts
 from continual_bench.evaluation.binary import BinaryRun, Progress, protocol_for, read_events
 from continual_bench.evaluation.environment import environment, peak_rss_bytes
@@ -122,15 +123,16 @@ def evaluate(
         started = time.monotonic()
         settings = config.tracking_settings().model_dump(mode="json")
         protocol = protocol_for(config.mode, config.batch_size)
+        policy_kwargs = config.policy.model_dump(exclude={"name"})
+        if config.policy.name in BATCH_POLICY_KINDS:
+            policy_kwargs["tracking"] = settings
         run = BinaryRun(
             config=config,
             source=source,
             events_path=events_path,
             model_factory=registry.factory("model", config.model.name, **config.model.params),
             detector_factory=registry.factory("detector", config.detector.name, **config.detector.params),
-            policy_factory=registry.factory(
-                "policy", config.policy.name, **config.policy.model_dump(exclude={"name"})
-            ),
+            policy_factory=registry.factory("policy", config.policy.name, **policy_kwargs),
             versions=ModelVersions(directory, manifest["sha256"], env["code_sha256"]),
             settings=settings,
             started=started,
@@ -179,17 +181,23 @@ def finalize(outcome, run, protocol, contract, env, started) -> dict:
     tick = time.perf_counter()
     if "retraining" not in report and config.mode != "offline":
         from continual_bench.evaluation.binary_retraining import compute_binary_retraining
+        from continual_bench.retraining.pricing import resolve_retrain_alpha
 
         events_for_matrix = list(read_events(run.events_path))
         if run.stop_after is not None:
             events_for_matrix = events_for_matrix[: run.stop_after]
+        alpha_info = resolve_retrain_alpha(
+            config.policy.params,
+            default_alpha=float(settings.get("upf_alpha", 1.0)),
+            tracking=settings,
+        )
         computed = compute_binary_retraining(
             events_for_matrix,
             run.model_factory,
             batch_size=config.batch_size,
             replay_window=config.replay_window,
             seed=config.dataset.seed,
-            upf_alpha=float(settings.get("upf_alpha", 1.0)),
+            upf_alpha=float(alpha_info["alpha"]),
             exclude_seqs=getattr(getattr(outcome.observer, "continual", None), "reserved_seqs", frozenset()),
         )
         if computed is not None:

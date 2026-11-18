@@ -333,6 +333,14 @@ def binary_observations(report, observer, *, duration_seconds, tracking_seconds=
         "delays": [match["delay"] for match in matches if "delay" in match] if matches else None,
         "delay_unit": "examples" if matches else None,
         "matching": matches if changes is not None else None,
+        "alarms_outside_annotated_windows": detection.get("alarms_outside_annotated_windows")
+        if enabled and changes is not None
+        else None,
+        "alarms_outside_annotated_windows_count": detection.get("alarms_outside_annotated_windows_count")
+        if enabled and changes is not None
+        else None,
+        "recovery": tracking.get("recovery") if changes is not None else None,
+        "regimes": tracking.get("regimes"),
     }
     release_delays = [
         match["release_delay_source_clock"] for match in matches if "release_delay_source_clock" in match
@@ -346,6 +354,8 @@ def binary_observations(report, observer, *, duration_seconds, tracking_seconds=
         if release_delays
         else None,
     )
+    fargate_retraining = tracking.get("fargate_retraining") or {}
+    oracle_reference = tracking.get("oracle_reference") or {}
     prediction_seconds = observer.inference_seconds
     result = observations(
         BINARY,
@@ -367,6 +377,15 @@ def binary_observations(report, observer, *, duration_seconds, tracking_seconds=
                 for fit in report["training_history"]
                 if fit.get("promotion_status") == "rejected"
             ),
+            "fargate_retrain_alpha": fargate_retraining.get("alpha"),
+            "fargate_retrain_lambda": fargate_retraining.get("lambda"),
+            "fargate_retrain_reference_cost_usd": fargate_retraining.get("reference_cost_per_action_usd"),
+            "fargate_retrain_estimated_cost_usd": fargate_retraining.get("estimated_retraining_cost_usd"),
+            "fargate_retrain_count": fargate_retraining.get("retrain_count"),
+            "fargate_retrain_duration_seconds": fargate_retraining.get("duration_seconds"),
+            "fargate_retrain_billed_seconds": fargate_retraining.get("billed_seconds"),
+            "fargate_retrain_hourly_rate_usd": fargate_retraining.get("hourly_rate_usd"),
+            "fargate_retraining": fargate_retraining,
             **cost_resources(tracking["costs"], count),
         },
         retention=_binary_retention(tracking, observer.continual_versions),
@@ -382,6 +401,7 @@ def binary_observations(report, observer, *, duration_seconds, tracking_seconds=
             "protocol": report["protocol"],
             "final_version": final_id,
             "promoted_model_versions_artifact": "model-versions.json",
+            "oracle_reference": oracle_reference,
         },
     )
     result["resources"]["tracking_overhead_seconds"] = (

@@ -16,12 +16,15 @@ PERMITTED_PARAMS = SCENARIO_PARAMS | {"monitor_window"}
 # Cost-aware model-update policies (CARA, UPF) and the retrospective Oracle decide per *batch* from a
 # performance matrix; the per-sample Engine cannot host them. They live in `continual_bench.retraining`.
 BATCH_POLICY_KINDS = ("cara", "cara_cumulative", "cara_periodic", "upf", "oracle")
+PRICING_PARAMS = frozenset(
+    {"lambda", "custo_retreino_usd", "retrain_duration_seconds", "fargate_billing_mode"}
+)
 BATCH_POLICY_PARAMS: dict[str, frozenset[str]] = {
-    "cara": frozenset({"alpha", "tau"}),
-    "cara_cumulative": frozenset({"alpha", "tau_cum"}),
-    "cara_periodic": frozenset({"alpha", "period"}),
-    "upf": frozenset({"alpha", "delta", "samples", "seed"}),
-    "oracle": frozenset({"alpha"}),
+    "cara": frozenset({"alpha", "tau"}) | PRICING_PARAMS,
+    "cara_cumulative": frozenset({"alpha", "tau_cum"}) | PRICING_PARAMS,
+    "cara_periodic": frozenset({"alpha", "period"}) | PRICING_PARAMS,
+    "upf": frozenset({"alpha", "delta", "samples", "seed"}) | PRICING_PARAMS,
+    "oracle": frozenset({"alpha"}) | PRICING_PARAMS,
 }
 
 
@@ -29,10 +32,14 @@ def validate_batch_policy_params(kind: str, action: str, params: dict) -> None:
     """Validate batch policy parameters without importing numpy-backed retraining modules."""
     if action != "reset_retrain":
         raise ValueError("batch policies only retrain from scratch")
-    permitted = BATCH_POLICY_PARAMS.get(kind, frozenset({"alpha"}))
+    permitted = BATCH_POLICY_PARAMS.get(kind, frozenset({"alpha"}) | PRICING_PARAMS)
     if params.keys() - permitted:
         raise ValueError("unknown policy params")
     for key, value in params.items():
+        if key == "fargate_billing_mode":
+            if value not in {"marginal_in_task", "dedicated_task"}:
+                raise ValueError("policy fargate_billing_mode must be marginal_in_task or dedicated_task")
+            continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"policy {key} must be numeric")
         may_be_infinite = key in {"tau", "tau_cum", "period"}
