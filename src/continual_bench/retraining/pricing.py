@@ -235,6 +235,9 @@ def summarize_fargate_retraining_cost(
 
     return {
         **resolution,
+        "lambda_unavailable_reason": (
+            None if resolution.get("lambda") is not None else "lambda_not_configured"
+        ),
         "retrain_count": int(retrain_count),
         "estimated_retraining_cost_usd": float(estimated_cost_usd),
         "reference_total_retraining_cost_usd": float(retrain_count) * ref_cost,

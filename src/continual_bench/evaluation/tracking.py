@@ -262,6 +262,8 @@ def regime_metrics(predictions, changepoints, observed):
         return {"available": False, "reason": "no_ground_truth_changepoints", "regimes": []}
     if predictions is None:
         return {"available": False, "reason": "predictions_not_captured", "regimes": []}
+    if any("seq" not in row for row in predictions):
+        return {"available": False, "reason": "prediction_rows_missing_seq", "regimes": []}
     from continual_bench.evaluation.stream_observations import BINARY_QUALITY
 
     boundaries = [0, *sorted(int(cp) for cp in changepoints if 0 <= int(cp) < observed), int(observed)]
@@ -564,27 +566,6 @@ def build_tracking(
         operational_aws_cost_usd=op_aws_usd,
         operational_aws_cost_reason="required_resource_consumption_missing" if op_aws_usd is None else None,
     )
-    available("fargate_retrain_alpha", fargate_retraining["alpha"], scope="on_demand_fargate_alpha")
-    available(
-        "fargate_retrain_lambda",
-        fargate_retraining["lambda"],
-        "lambda_not_configured",
-        "error_rate_units_per_usd",
-    )
-    available(
-        "fargate_retrain_reference_cost_usd",
-        fargate_retraining["reference_cost_per_action_usd"],
-        scope=f"USD:{fargate_retraining['billing_mode']}",
-    )
-    available("fargate_retrain_count", float(retrains), scope="retrains")
-    available(
-        "fargate_retrain_estimated_cost_usd",
-        fargate_retraining["estimated_retraining_cost_usd"],
-        scope=f"USD:{fargate_retraining['billing_mode']}",
-    )
-    available("fargate_retrain_duration_seconds", fargate_retraining["duration_seconds"], scope="seconds")
-    available("fargate_retrain_billed_seconds", fargate_retraining["billed_seconds"], scope="seconds")
-    available("fargate_retrain_hourly_rate_usd", fargate_retraining["hourly_rate_usd"], scope="USD/hour")
 
     policy_name = (config.get("policy") or {}).get("name")
     is_oracle = policy_name == "oracle"

@@ -162,9 +162,10 @@ def test_end_to_end_run_observations_pricing_regimes_and_paired_comparison(tmp_p
     assert obs["resources"]["fargate_retrain_lambda"] == pytest.approx(10.0)
     assert obs["resources"]["fargate_retrain_alpha"] == pytest.approx(10.0 * 0.10207 * 60.0 / 3600.0)
     # Without lambda on `none`, availability records explicit reason instead of fabricating 0
-    assert none_report["tracking"]["metrics"]["fargate_retrain_lambda"] is None
-    reason = none_report["tracking"]["availability"]["fargate_retrain_lambda"]["reason"]
-    assert reason == "lambda_not_configured"
+    assert none_fargate["lambda"] is None
+    assert none_fargate["lambda_unavailable_reason"] == "lambda_not_configured"
+    assert none_report["tracking_observations"]["resources"]["fargate_retrain_lambda"] is None
+    assert "fargate_retrain_lambda" in none_report["tracking_observations"]["resources"]["availability"]
 
     mlflow_points = dict((name, value) for name, _step, value in parent_observation_points(oracle_report))
     assert "observations_v1/resources/fargate_retrain_alpha" in mlflow_points
