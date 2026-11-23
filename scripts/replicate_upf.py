@@ -2,13 +2,13 @@
 
 import argparse
 import json
-from hashlib import file_digest
 from pathlib import Path
 
 from continual_bench.evaluation.retraining_replication import (
     ALPHA_MAX,
     COMPARISON_DATASETS,
     DEFAULT_CACHE,
+    repetition_seeds,
     replicate,
 )
 
@@ -16,7 +16,14 @@ from continual_bench.evaluation.retraining_replication import (
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("datasets", nargs="+", choices=sorted(ALPHA_MAX))
-    parser.add_argument("--trials", type=int, default=10)
+    repetitions = parser.add_mutually_exclusive_group()
+    repetitions.add_argument("--trials", type=int, help="legacy repetition count; default 10 seeds from zero")
+    repetitions.add_argument("--seeds", type=int, nargs="+", help="explicit distinct repetition seeds")
+    parser.add_argument(
+        "--full-source",
+        action="store_true",
+        help="use every real source row in 15 contiguous batches, preserving the remainder",
+    )
     parser.add_argument("--electricity")
     parser.add_argument(
         "--airlines",
@@ -42,47 +49,54 @@ def main():
         parser.error("--compare-oracles supports electricity and airlines")
     if args.decision_timing and not args.compare_oracles:
         parser.error("--decision-timing requires --compare-oracles")
+    if args.full_source and args.trials is not None:
+        parser.error("--trials belongs to legacy windows; use --seeds with --full-source (default 42 43 44)")
     if "electricity" in args.datasets and not args.electricity:
         parser.error("electricity requires --electricity PATH")
-    if args.trials < 1 or args.samples < 2:
+    if (args.trials is not None and args.trials < 1) or args.samples < 2:
         parser.error("use at least one trial and two Monte Carlo samples")
+    try:
+        repetition_seeds(args.seeds if args.seeds is not None else args.trials or 10)
+    except ValueError as error:
+        parser.error(str(error))
     if args.electricity:
         args.electricity = Path(args.electricity).expanduser()
     args.airlines = args.airlines.expanduser()
-    if args.compare_oracles:
-        paths = {"electricity": args.electricity, "airlines": args.airlines}
-        for name in args.datasets:
-            if not paths[name].is_file():
-                parser.error(f"{name} input file does not exist: {paths[name]}")
+    paths = {"electricity": args.electricity, "airlines": args.airlines}
+    for name in args.datasets:
+        if name in paths and (paths[name] is None or not paths[name].is_file()):
+            parser.error(f"{name} input file does not exist: {paths[name]}")
     results = []
     for name in args.datasets:
         result = replicate(
             name,
             args.trials,
+            seeds=args.seeds,
             electricity_path=args.electricity,
             airlines_path=args.airlines,
             samples=args.samples,
             compare_oracles=args.compare_oracles,
             decision_timing=args.decision_timing or "same-batch",
             metrics_only=args.metrics_only,
+            full_source=args.full_source,
         )
-        if args.compare_oracles:
-            import xgboost
+        import xgboost
 
-            path = paths[name]
-            with path.open("rb") as source:
-                digest = file_digest(source, "sha256").hexdigest()
-            result["comparison"]["source"] = {"file": path.name, "sha256": digest}
-            result["comparison"]["learner"] = {
-                "name": "XGBoost",
-                "version": xgboost.__version__,
-                "rounds": 100,
-                "eta": 0.3,
-                "max_depth": 6,
-                "threshold": 0.5,
-            }
+        result["learner"] = {
+            "name": "XGBoost",
+            "version": xgboost.__version__,
+            "rounds": 100,
+            "eta": 0.3,
+            "max_depth": 6,
+            "threshold": 0.5,
+            "nthread": 2,
+        }
+        if args.compare_oracles:
+            result["comparison"]["learner"] = result["learner"]
         results.append(result)
         print(f"\n{result['dataset']} ({result['trials']} trials, alpha_max={result['alpha_max']})")
+        if args.full_source:
+            print("Full-source evaluation; published paper values belong to a different protocol.")
         for rule, row in result["summary"].items():
             paper = "n/a" if row["paper_auc"] is None else f"{row['paper_auc']:.4f}"
             if args.compare_oracles:
@@ -107,7 +121,7 @@ def main():
                     print(f"    {rule:6s} {metrics}")
     if args.output:
         with open(args.output, "w") as handle:
-            json.dump(results, handle, indent=2)
+            json.dump(results, handle, indent=2, allow_nan=False)
 
 
 if __name__ == "__main__":

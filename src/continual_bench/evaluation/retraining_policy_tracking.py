@@ -14,6 +14,24 @@ from continual_bench.infrastructure.storage import atomic_write, run_lock
 from .environment import encoded
 
 
+def repetition_seeds(values):
+    """Keep integer repetition counts compatible while accepting explicit unique seed identities."""
+    if type(values) is int:
+        values = list(range(values))
+    else:
+        try:
+            values = list(values)
+        except TypeError:
+            raise ValueError("seeds must be a repetition count or a sequence of integer seeds") from None
+    if (
+        not values
+        or any(type(seed) is not int or not 0 <= seed < 2**31 for seed in values)
+        or len(values) != len(set(values))
+    ):
+        raise ValueError("seeds must be unique integers in [0, 2**31), with at least one repetition")
+    return values
+
+
 def _scalar_items(values, prefix=""):
     for key, value in values.items():
         name = f"{prefix}/{key}" if prefix else key

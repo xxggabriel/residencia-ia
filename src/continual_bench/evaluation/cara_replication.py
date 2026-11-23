@@ -24,7 +24,7 @@ from continual_bench.retraining.schedule import alpha_max_same_batch
 
 from .epoch_history import pickle_state
 from .retraining_observations import candidate_report, sample_identity
-from .retraining_policy_tracking import policy_report
+from .retraining_policy_tracking import policy_report, repetition_seeds
 
 BATCHES, OFFLINE, GRID = 100, 25, 100
 REFERENCE = "ac2a600a3bbc5729087318087c9def96104c9023"
@@ -403,7 +403,8 @@ def replicate(
     **options,
 ):
     """Evaluate the CARA variants against a retrospective phase-local Oracle."""
-    if seeds < 1 or kappa_points < 2 or workers < 1:
+    seed_values = repetition_seeds(seeds)
+    if kappa_points < 2 or workers < 1:
         raise ValueError("CARA needs at least one seed and worker, and at least two kappa points")
     if kappa_max is not None and (not math.isfinite(kappa_max) or kappa_max <= 0):
         raise ValueError("kappa_max must be positive and finite")
@@ -416,7 +417,7 @@ def replicate(
     offline_queries = None if queries is None else queries[:OFFLINE]
     online_queries = None if queries is None else queries[OFFLINE:]
     matrices = []
-    for seed in range(seeds):
+    for seed in seed_values:
         learner = ForestLearner(seed)
         offline = build_phase(
             batches[:OFFLINE],
@@ -456,7 +457,7 @@ def replicate(
     kappas = np.linspace(0.0, top, kappa_points).tolist()
     emit({"event": "grid", "dataset": name, "kappa_max": top, "points": kappa_points})
     runs = []
-    for seed, (offline, online) in enumerate(matrices):
+    for seed, (offline, online) in zip(seed_values, matrices, strict=True):
         baselines = online.drift_updates or {}
         runs.append([evaluate_kappa(offline, online, kappa, seed, baselines) for kappa in kappas])
         emit({"event": "analysis", "dataset": name, "seed": seed})
@@ -478,7 +479,7 @@ def replicate(
     }
     details = []
     protocol = "CARA-authors-historical-v1"
-    for seed, run in enumerate(runs):
+    for index, (seed, run) in enumerate(zip(seed_values, runs, strict=True)):
         by_policy = {
             rule: [{"kappa": kappa, **row[rule]} for kappa, row in zip(kappas, run, strict=True)]
             for rule in curves
@@ -497,13 +498,13 @@ def replicate(
             "curves_by_policy": by_policy,
             "summary": seed_summary,
             "offline_batches": OFFLINE,
-            "online_batches": len(matrices[seed][1].stale),
+            "online_batches": len(matrices[index][1].stale),
             "matrices": {
                 phase_name: {
                     "staleness": _matrix_values(phase.stale),
                     "accuracy": _matrix_values(phase.accuracy),
                 }
-                for phase_name, phase in zip(("offline", "online"), matrices[seed], strict=True)
+                for phase_name, phase in zip(("offline", "online"), matrices[index], strict=True)
             },
         }
         detail["policy_tracking"] = policy_report(
@@ -511,7 +512,7 @@ def replicate(
             seed,
             protocol=protocol,
             analysis=detail,
-            candidate_reports=[matrices[seed][0].tracking, matrices[seed][1].tracking],
+            candidate_reports=[matrices[index][0].tracking, matrices[index][1].tracking],
             settings={
                 "kappa_grid": kappas,
                 "drift_backend": drift_backend,
@@ -524,7 +525,8 @@ def replicate(
         details.append(detail)
     return {
         "dataset": name,
-        "seeds": seeds,
+        "seeds": len(seed_values),
+        "seed_values": seed_values,
         "reference": REFERENCE,
         "kappa_max": top,
         "summary": summary,
@@ -537,7 +539,12 @@ def replicate(
         "candidate_tracking": [{"offline": a.tracking, "online": b.tracking} for a, b in matrices],
         "trials_detail": details,
         "protocol": protocol,
-        "dispersion": {"n": seeds, "ddof": 0, "divisor": seeds, "kind": "population_std"},
+        "dispersion": {
+            "n": len(seed_values),
+            "ddof": 0,
+            "divisor": len(seed_values),
+            "kind": "population_std",
+        },
         "evaluation": {
             "cost_timing": "same_batch_with_initial_fit_charged",
             "accuracy_timing": "reference_prequential_shift_with_final_batch_clipping",
@@ -551,13 +558,14 @@ def schedule_showcase(
     name="covcon-d", seeds=5, *, batches=11, offline=4, fraction=0.25, metrics_only=False, **options
 ):
     """Illustrate a CARA-T schedule on a short prefix of the reference data stream."""
-    if not 2 <= offline <= batches - 2 or seeds < 1 or fraction < 0:
+    seed_values = repetition_seeds(seeds)
+    if not 2 <= offline <= batches - 2 or fraction < 0:
         raise ValueError("invalid CARA showcase horizon, seeds or cost fraction")
     stream, queries, gamma = batches_for(name, **options)
     if batches > len(stream):
         raise ValueError("showcase horizon exceeds the available batches")
     accuracy, deployed, changes, kappas, tracking = [], [], [], [], []
-    for seed in range(seeds):
+    for seed in seed_values:
         phase = build_phase(
             stream[:batches],
             ForestLearner(seed),
@@ -581,11 +589,12 @@ def schedule_showcase(
         changes.append({offline + t for t in retrains[1:]})
         kappas.append(kappa)
     stack, scores = np.asarray(accuracy), np.asarray(deployed)
-    marked = [t for t in range(offline, batches) if sum(t in run for run in changes) * 2 >= seeds]
+    marked = [t for t in range(offline, batches) if sum(t in run for run in changes) * 2 >= len(seed_values)]
     return {
         "dataset": name,
         "rule": "cara",
-        "seeds": seeds,
+        "seeds": len(seed_values),
+        "seed_values": seed_values,
         "batches": batches,
         "offline": offline,
         "alpha": float(np.mean(kappas)),

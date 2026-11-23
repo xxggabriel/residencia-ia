@@ -17,7 +17,11 @@ from continual_bench.evaluation.cara_replication import DATASETS, GRID, PAPER, r
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("datasets", nargs="+", choices=DATASETS)
-    parser.add_argument("--seeds", type=int, default=5)
+    repetitions = parser.add_mutually_exclusive_group()
+    repetitions.add_argument("--seeds", type=int, default=5, help="legacy repetition count")
+    repetitions.add_argument(
+        "--seed-values", type=int, nargs="+", help="explicit distinct learner/policy seeds"
+    )
     parser.add_argument("--kappa-points", type=int, default=GRID)
     parser.add_argument("--kappa-max", type=float, help="override the offline Oracle's grid endpoint")
     parser.add_argument("--electricity", help="original elec.csv")
@@ -36,7 +40,9 @@ def main():
     parser.add_argument("--log", help="JSON-lines file with every progress event")
     args = parser.parse_args()
     started = time.time()
-    total_steps = len(args.datasets) * (2 * args.seeds + 1)
+    selected_seeds = args.seed_values if args.seed_values is not None else args.seeds
+    seed_count = len(args.seed_values) if args.seed_values is not None else args.seeds
+    total_steps = len(args.datasets) * (2 * seed_count + 1)
     done = [0]
     log = open(args.log, "a") if args.log else None
 
@@ -63,7 +69,7 @@ def main():
     for name in args.datasets:
         result = replicate(
             name,
-            args.seeds,
+            selected_seeds,
             kappa_points=args.kappa_points,
             electricity_path=args.electricity,
             airlines_path=args.airlines,
