@@ -31,13 +31,13 @@ gh variable set RUNTIME_CONFIG_KEY --body config/runtime-parameters.json
 O workflow [Build and deploy](../../.github/workflows/deploy.yml) inicia com push ou merge em
 `main` e também aceita execução manual. O grupo `deploy-main` serializa as execuções com
 `cancel-in-progress: false`. O workflow [CI](../../.github/workflows/ci.yml) verifica pull
-requests e pushes fora de `main`.
+requests direcionados à `main` e é reutilizado pelo deploy. Pushes fora de `main` não têm gatilho próprio nesse workflow.
 
 ## 2. CI/CD
 
 | Job | O que faz |
 |---|---|
-| `verify` | Executa o workflow CI reutilizável com dependências fixadas por hash, Ruff, pytest, CloudFormation, ASL offline e smoke local de Social, Fraud e E-commerce. |
+| `verify` | Executa o workflow CI reutilizável com dependências fixadas por hash, Ruff, validação offline de CloudFormation e ASL e pytest em quatro partições. |
 | `build` | Valida o ASL na AWS e publica imagens `linux/amd64` com `build_images.sh`. O script reaproveita a tag imutável `git-<sha>` existente e resolve o digest no ECR. Valida imagens novas com selftest e contrato SageMaker antes do push. Também empacota os templates, o zip do Lambda e o código de Glue e Flink. |
 | `deploy` | Aplica o change set do runtime com `deploy_change_set.sh` e lê os parâmetros operacionais do objeto S3 indicado por `RUNTIME_CONFIG_KEY`. Um change set vazio é removido sem falhar. |
 | `release` | `write_release.py` confere as saídas da stack contra o build e os digests no ECR. Grava `releases/<sha>/release.json` uma vez e move `releases/latest.json`. |
@@ -59,7 +59,7 @@ scripts/aws/outputs.sh BenchmarkComputeBackend
 ```
 
 O digest do ECR, `images.runtime.digest` da release e o sufixo `@sha256:` da saída
-`RuntimeImage` devem coincidir. O backend esperado é `batch-fargate-spot`.
+`RuntimeImage` devem coincidir. O backend padrão é `batch-fargate-spot`; verifique o valor da release publicada.
 
 ### Recriar o runtime com os logs preservados
 
@@ -120,15 +120,18 @@ scripts/aws/start_campaign.sh infra/examples/campaign-social-smoke.json
 scripts/aws/start_campaign.sh infra/examples/campaign-binary-matrix.json    # matriz existente, Distributed Map
 ```
 
-O planejador valida os dados e fixa a release e o digest da imagem. A execução é 100%
-serverless: cada unidade vira um job do AWS Batch no compute environment `FARGATE_SPOT`
-(2 vCPU e 4 GiB por tarefa; o Fargate não aceita 2 GiB com 2 vCPU). Nenhuma instância EC2
-é criada. O Map submete **todas as unidades ao mesmo tempo**: o Batch inicia quantas tarefas
-couberem no limite de vCPU (`MaxVcpus`, padrão 64, igual à quota de Fargate Spot
-`L-36FBB829`; com 2 vCPU são 32 tarefas simultâneas) e mantém as demais em `RUNNABLE` até
-liberar capacidade. O preflight registra `running_in_parallel` e `queued` em
-`campaigns/<id>/preflight/`. A preparação de datasets usa uma fila separada em Fargate
-on-demand, porque não é retomável.
+O planejador valida os dados e fixa a release e o digest da imagem. Cada unidade vira um
+job do AWS Batch. O template seleciona `FARGATE_SPOT` por padrão e permite `FARGATE`
+(On-Demand). O Map limita as unidades simultâneas pelo `max_parallel` do pedido ou pelo
+padrão do planejador (32 no Spot, 4 no On-Demand). O Batch ainda aplica a capacidade
+disponível, o teto `MaxVcpus` e a quota da conta. Jobs submetidos podem aguardar em
+`RUNNABLE`. O preflight Spot registra a capacidade estimada em `campaigns/<id>/preflight/`.
+
+Os padrões do [template base](../../infra/cloudformation/root.yaml) são 2 vCPU, 4096 MiB
+por job e teto de 64 vCPUs, ou até 32 jobs de 2 vCPU se houver capacidade. O
+[override de exemplo](../../infra/params/runtime-overrides.example.json) usa 1 vCPU e
+2048 MiB. Confira os parâmetros e a definição da release antes de dimensionar. A
+preparação de datasets usa uma fila separada em Fargate On-Demand.
 
 Para campanhas `online` (`learn_one`) de maior porte, como as execuções completas de INSECTS,
 o dimensionamento operacional em `config/runtime-parameters.json` usa `BenchmarkVcpus=4` e
@@ -136,8 +139,8 @@ o dimensionamento operacional em `config/runtime-parameters.json` usa `Benchmark
 tarefas simultâneas), enquanto a configuração de referência de precificação Fargate permanece
 em `2 vCPU / 4 GiB`.
 
-Quando o Fargate recupera a capacidade Spot, a tarefa recebe SIGTERM e, 30 segundos depois,
-SIGKILL (o Batch não expõe `stopTimeout`). O worker então:
+Quando o Fargate interrompe uma tarefa Spot, a tarefa recebe SIGTERM antes do
+encerramento forçado. Nos avaliadores com checkpoints durante a avaliação, o worker:
 
 1. para no próximo ponto seguro do avaliador e confirma um checkpoint no S3
    (`runs/<run_id>/spot/checkpoints/`), além do checkpoint periódico a cada
@@ -150,7 +153,9 @@ SIGKILL (o Batch não expõe `stopTimeout`). O worker então:
 A tentativa seguinte é numerada por um claim write-once (`runs/<run_id>/spot/attempt-NNN/claim.json`),
 valida as entradas, restaura o checkpoint confirmado mais recente e continua a mesma run no
 MLflow. O trabalho feito depois do último checkpoint é refeito. Ao concluir, o worker confirma
-a publicação no S3 e no MLflow.
+a publicação no S3 e no MLflow. O caminho binário de CARA, UPF e Oracle confirma
+o estado de avaliação somente ao terminar; se houver interrupção durante a construção
+da matriz ou antes desse checkpoint, a avaliação pode ter de recomeçar.
 
 Cada tentativa escreve em `attempts/<job_id>-<n>/`. O relatório continua usando
 `final.json`, `analytics.json`, `report.json`, `training-history.json` e o manifesto de
@@ -174,10 +179,10 @@ de eventos, respectivamente. Aguarde os três marcadores `_SUCCESS.json` no esco
 e confira as contagens no manifesto antes de iniciar as campanhas.
 
 Os exemplos `campaign-{fraud,social,ecommerce}-full.json` definem 12 políticas por dataset
-com `max_parallel=12`. As três campanhas juntas submetem 36 jobs (72 vCPUs). Com a quota de
-64 vCPUs de Fargate Spot, 32 começam juntos e os outros 4 esperam em `RUNNABLE`. Sem capacidade
-Spot disponível, os jobs aguardam até `queue_timeout_seconds`. O prazo para rodar cada tentativa é de uma hora no smoke e 48 horas
-no full. Use o mesmo `RELEASE_SHA` publicado nas três submissões e um novo `CAMPAIGN_ID`
+com `max_parallel=12`. As três campanhas podem submeter 36 jobs. Com 2 vCPU por job e
+teto de 64 vCPUs, cabem no máximo 32 simultaneamente. A disponibilidade de Spot pode
+reduzir esse número. Os jobs aguardam até `queue_timeout_seconds`; o prazo por tentativa é de
+uma hora nos exemplos smoke e 48 horas nos full. Use o mesmo `RELEASE_SHA` publicado nas três submissões e um novo `CAMPAIGN_ID`
 para qualquer plano alterado.
 
 ```bash
@@ -231,6 +236,27 @@ do conteúdo ao baixar pelo gateway do S3. O Distributed Map lê o plano do buck
 e exporta o resultado da orquestração para `map-results/<campanha>/` no bucket de
 artefatos com SSE-KMS por padrão. Manifestos e métricas das unidades continuam no bucket
 de dados.
+
+### Matriz binária INSECTS
+
+As variantes desbalanceadas usam os CSVs integrais com SHA-256 fixado, mesmo quando o
+benchmark usa só um prefixo. Publique cada fonte a partir de um cache verificado ou aponte
+`--real-directory` para os CSVs originais com os nomes do lock. Use `--download` para
+autorizar a aquisição na máquina publicadora. Exemplo para a variante abrupta:
+
+```bash
+uv run --frozen --extra aws continual-bench aws publish-matrix-source \
+  --dataset insects_abrupt_imbalanced --cache state/datasets --bucket "$BUCKET"
+```
+
+Repita para `insects_incremental_abrupt_reoccurring_imbalanced`. Copie
+[este pedido de matriz](../../infra/examples/campaign-binary-matrix.json), atribua um
+`request.campaign_id` novo, fixe `request.release` no SHA publicado e ajuste
+`request.matrix.path` para `configs/matrices/insects-72.yaml`. Em
+`request.source_digests`, associe cada nome ao SHA-256 devolvido na publicação. Execute
+`scripts/aws/start_campaign.sh <pedido.json>`. Para um teste reduzido, use
+`configs/matrices/insects-pilot.yaml` e publique apenas a fonte abrupta. Consulte
+[protocolo e resultados da Semana 10](../real-streams.md#benchmark-binário-da-semana-10).
 
 ### Aceitação com duas políticas
 
@@ -302,8 +328,12 @@ nova execução com o mesmo pedido e o sufixo de tentativa do projeto para passa
 provisionamento novamente.
 
 As execuções compartilham a stack. A limpeza roda a cada cinco minutos e aguarda todas
-as execuções admitidas encerrarem, um intervalo de dois minutos para propagar as
-transições e as filas de benchmark e de preparação ficarem sem jobs ativos. Isso abrange falhas e cancelamentos.
+as execuções admitidas encerrarem, o intervalo de propagação (dois minutos no fluxo
+normal, três em campanhas de benchmark encerradas sem sucesso no runtime do projeto)
+e as filas de benchmark e de preparação ficarem sem jobs ativos. Em caso de falha ou
+cancelamento, também verifica Maps distribuídos remanescentes. Ao remover a stack, a
+rotina pode parar o Flink do projeto e remover endpoints SageMaker do mesmo projeto
+marcados com `cb-ephemeral=true`.
 O deploy da `main` atualiza o runtime e mantém o MLflow App, os workflows do Studio,
 a VPC e o gateway do S3. Os workflows de benchmark e de preparação de datasets provisionam a stack de endpoints.
 
@@ -359,10 +389,11 @@ Tracking Server**. Neste ambiente ela exibe `No tracking server`, pois os jobs
 publicam no **MLflow App** serverless. O app contém os experimentos e o histórico
 dos runs da matriz, dos jobs nativos e das campanhas Zia.
 
-No app MLflow, filtre o experimento `continual-bench-matrix` por `cb-campaign-id`.
-Cada tentativa do Batch registra um run com o ID do job, a revisão e o contrato da
-unidade. As métricas `progress/*` usam a janela ou época do avaliador, e `final/*`
-registra as métricas finais. O manifesto final da unidade aponta para o run MLflow.
+No app MLflow, procure `<sha-curto>-continual-bench-matrix-<política>` e filtre por
+`cb-campaign-id` ou `cb-unit-id`. A unidade Spot preserva a identidade do run entre
+tentativas; no On-Demand, cada tentativa tem seu próprio run. As métricas
+`progress/*` usam o eixo do avaliador, e `final/*` registra as métricas finais.
+O manifesto final da unidade aponta para o run no MLflow.
 
 Para Zia, use o experimento `<sha-curto>-continual-bench-zia-experiments` e filtre por
 `cb-campaign-id`. Ao iniciar uma tentativa de avaliação, o worker abre a run pai
@@ -390,8 +421,8 @@ bucket de dados. Cada manifesto fica em `datasets/<dataset>/<revisão>/manifests
 O marcador `_SUCCESS.json` indica que o snapshot foi publicado, e `snapshot.json`
 referencia o Parquet preparado. Para as avaliações, abra **Applications → MLflow →
 continual-bench-mlflow → Open MLflow → default → Experiments**. Use
-`continual-bench-native` para os jobs nativos ou `continual-bench-matrix` para as
-matrizes. As tabelas `runs` e `metrics` do Athena também permitem consultar os
+`continual-bench-native` para os jobs nativos ou o
+[experimento por política e revisão](../mlflow-tracking.md#mlflow-no-sagemaker-studio) para as matrizes. As tabelas `runs` e `metrics` do Athena também permitem consultar os
 resultados do benchmark.
 
 No [catálogo do SageMaker Unified Studio](https://dzd-6vrgrvxbeefk2v.sagemaker.us-east-1.on.aws/projects/dtpvnbwwrsq6xz/search?searchText=Continual%20Bench),
