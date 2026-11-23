@@ -8,6 +8,8 @@ batches ``t + 1`` onward. ``cost[i, j]`` is the cost of serving batch ``j`` with
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 
 
@@ -25,23 +27,37 @@ def schedule_cost(
 
 
 def optimal_schedule(
-    cost: np.ndarray, initial: int, first: int, last: int, alpha: float
+    cost: np.ndarray,
+    initial: int,
+    first: int,
+    last: int,
+    alpha: float,
+    *,
+    allowed_retrains: Iterable[int] | None = None,
 ) -> tuple[list[int], float]:
-    """Minimum-cost retraining points in ``[first, last - 1]`` for batches ``first..last``."""
+    """Minimum-cost retraining points in ``[first, last - 1]`` for batches ``first..last``.
+
+    ``allowed_retrains`` restricts candidate transitions; the initial model remains
+    the baseline even when it has not yet received a training label.
+    """
     if not first <= last or alpha < 0:
         raise ValueError("invalid phase or retraining cost")
+    allowed = set(range(first, last)) if allowed_retrains is None else set(allowed_retrains)
+    candidates = sorted(allowed.intersection(range(first, last)))
+    models = sorted({initial, *candidates})
     prefix = np.zeros((last + 2, last + 2))  # prefix[m, c] = sum of cost[m, first..c-1] (c > first)
-    for m in range(min(initial, first - 1), last):
+    for m in models:
         start = max(first, m + 1)
         for c in range(start, last + 1):
             prefix[m, c + 1] = prefix[m, c] + cost[m, c]
-    models = sorted({initial, *range(first, last)})
     best: dict[int, tuple[float, int | None]] = {}
     for m in reversed(models):
         start = max(first, m + 1)
         stay = prefix[m, last + 1] - prefix[m, start]
         choice, value = None, stay
-        for nxt in range(start, last):
+        for nxt in candidates:
+            if nxt < start:
+                continue
             candidate = prefix[m, nxt + 1] - prefix[m, start] + alpha + best[nxt][0]
             if candidate < value - 1e-12:
                 choice, value = nxt, candidate
@@ -54,10 +70,18 @@ def optimal_schedule(
 
 
 def min_error_by_retrains(
-    cost: np.ndarray, initial: int, first: int, last: int, max_retrains: int
+    cost: np.ndarray,
+    initial: int,
+    first: int,
+    last: int,
+    max_retrains: int,
+    *,
+    allowed_retrains: Iterable[int] | None = None,
 ) -> list[float]:
-    """``E_r``: minimum summed cost with exactly ``r`` retrains, ``r = 0..max_retrains`` (inf: impossible)."""
-    models = sorted({initial, *range(first, last)})
+    """``E_r``: minimum error with exactly ``r`` allowed retrains (inf: impossible)."""
+    allowed = set(range(first, last)) if allowed_retrains is None else set(allowed_retrains)
+    candidates = sorted(allowed.intersection(range(first, last)))
+    models = sorted({initial, *candidates})
     prefix = {}
     for m in models:
         start = max(first, m + 1)
@@ -74,15 +98,22 @@ def min_error_by_retrains(
         table[m][0] = segment(m, last)
         for r in range(1, max_retrains + 1):
             start = max(first, m + 1)
-            options = [segment(m, nxt) + table[nxt][r - 1] for nxt in range(start, last)]
+            options = [segment(m, nxt) + table[nxt][r - 1] for nxt in candidates if nxt >= start]
             table[m][r] = min(options, default=inf)
     return table[initial]
 
 
-def alpha_max(cost: np.ndarray, initial: int, first: int, last: int) -> float:
+def alpha_max(
+    cost: np.ndarray,
+    initial: int,
+    first: int,
+    last: int,
+    *,
+    allowed_retrains: Iterable[int] | None = None,
+) -> float:
     """Smallest ``alpha`` at which the Oracle no longer retrains: ``max_r (E_0 - E_r) / r``."""
     horizon = last - first
-    errors = min_error_by_retrains(cost, initial, first, last, horizon)
+    errors = min_error_by_retrains(cost, initial, first, last, horizon, allowed_retrains=allowed_retrains)
     gains = [(errors[0] - errors[r]) / r for r in range(1, horizon + 1) if np.isfinite(errors[r])]
     return max(0.0, max(gains, default=0.0))
 
@@ -118,23 +149,27 @@ def optimal_schedule_same_batch(
     alpha: float,
     *,
     retrain_errors: np.ndarray | None = None,
+    allowed_retrains: Iterable[int] | None = None,
 ) -> tuple[list[int], float]:
     """CARA's accounting (Eq. 4-6, 13-14): a retrain at ``t`` costs ``alpha`` *instead of* the staleness of
     batch ``t`` (the new model is trained on it and serves it with staleness 0) and is allowed at ``last``.
 
     Pass held-out diagonal errors as ``retrain_errors`` for the UPF error objective.
+    ``allowed_retrains`` restricts which candidate indices may replace the model.
     Returns ``(retrain batches, cost)``.
     """
     if not first <= last or alpha < 0:
         raise ValueError("invalid phase or retraining cost")
+    allowed = set(range(first, last + 1)) if allowed_retrains is None else set(allowed_retrains)
     value = {initial: 0.0}
     parent: list[dict[int, int | None]] = []  # parent[t - first][m] = model deployed before batch t
     for t in range(first, last + 1):
         step = {m: c + float(stale[t, m]) for m, c in value.items()}
         origin: dict[int, int | None] = {m: m for m in value}
-        cheapest = min(value, key=value.get)
-        fresh = 0.0 if retrain_errors is None else float(retrain_errors[t])
-        step[t], origin[t] = value[cheapest] + alpha + fresh, cheapest
+        if t in allowed:
+            cheapest = min(value, key=value.get)
+            fresh = 0.0 if retrain_errors is None else float(retrain_errors[t])
+            step[t], origin[t] = value[cheapest] + alpha + fresh, cheapest
         value = step
         parent.append(origin)
     node = min(value, key=value.get)
@@ -148,13 +183,26 @@ def optimal_schedule_same_batch(
 
 
 def alpha_max_same_batch(
-    stale: np.ndarray, initial: int, first: int, last: int, *, retrain_errors: np.ndarray | None = None
+    stale: np.ndarray,
+    initial: int,
+    first: int,
+    last: int,
+    *,
+    retrain_errors: np.ndarray | None = None,
+    allowed_retrains: Iterable[int] | None = None,
 ) -> float:
     """Smallest ``alpha`` at which :func:`optimal_schedule_same_batch` stops retraining (bisection)."""
+    allowed_retrains = None if allowed_retrains is None else tuple(allowed_retrains)
 
     def switches(alpha):
         schedule, _ = optimal_schedule_same_batch(
-            stale, initial, first, last, alpha, retrain_errors=retrain_errors
+            stale,
+            initial,
+            first,
+            last,
+            alpha,
+            retrain_errors=retrain_errors,
+            allowed_retrains=allowed_retrains,
         )
         return schedule
 

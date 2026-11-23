@@ -64,6 +64,7 @@ class _CaraRule(Rule):
         self.kappa = 0.0
         self._cumulative = 0.0
         self.same_batch = same_batch  # CARA's accounting: a retrain replaces the staleness of its batch
+        self.calibration_available = True
 
     def _offline_matrix(self, view: MatrixView) -> dict[tuple[int, int], float]:
         return {(t, m): view.staleness(t, m) for t in range(1, view.upto + 1) for m in range(t)}
@@ -89,6 +90,15 @@ class _CaraRule(Rule):
     def fit_offline(self, view, alpha):
         self.kappa = alpha
         psi = self._offline_matrix(view)
+        self.calibration_available = all(math.isfinite(value) for value in psi.values())
+        if not self.calibration_available:
+            # Missing labels are not zero loss. Keep a user-specified rule, otherwise
+            # do not calibrate a trigger from an incomplete offline reference grid.
+            if not self._fixed:
+                for parameter in ("tau", "tau_cum", "period"):
+                    if hasattr(self, parameter):
+                        setattr(self, parameter, math.inf)
+            return
         self._optimise(psi, view.upto)
 
     def begin_online(self):
@@ -117,10 +127,15 @@ class CaraT(_CaraRule):
         self.tau = best[1]
 
     def decide(self, t, deployed, view):
-        return view.staleness(t, deployed) >= self.tau
+        value = view.staleness(t, deployed)
+        return math.isfinite(value) and value >= self.tau
 
     def parameters(self):
-        return {"tau": self.tau, "kappa": self.kappa}
+        return {
+            "tau": self.tau,
+            "kappa": self.kappa,
+            "offline_calibration_available": self.calibration_available,
+        }
 
 
 class Markov(Rule):
@@ -135,7 +150,8 @@ class Markov(Rule):
         self.tau = alpha
 
     def decide(self, t, deployed, view):
-        return view.staleness(t, deployed) >= self.tau
+        value = view.staleness(t, deployed)
+        return math.isfinite(value) and value >= self.tau
 
     def parameters(self):
         return {"tau": self.tau}
@@ -169,14 +185,21 @@ class CaraCT(_CaraRule):
         self.tau_cum = best[1]
 
     def decide(self, t, deployed, view):
-        self._cumulative += view.staleness(t, deployed)
+        value = view.staleness(t, deployed)
+        if not math.isfinite(value):
+            return False
+        self._cumulative += value
         if self._cumulative >= self.tau_cum:
             self._cumulative = 0.0
             return True
         return False
 
     def parameters(self):
-        return {"tau_cum": self.tau_cum, "kappa": self.kappa}
+        return {
+            "tau_cum": self.tau_cum,
+            "kappa": self.kappa,
+            "offline_calibration_available": self.calibration_available,
+        }
 
 
 class CaraP(_CaraRule):
@@ -208,7 +231,12 @@ class CaraP(_CaraRule):
         return self._due(t, self.period, self.offset)
 
     def parameters(self):
-        return {"period": self.period, "offset": self.offset, "kappa": self.kappa}
+        return {
+            "period": self.period,
+            "offset": self.offset,
+            "kappa": self.kappa,
+            "offline_calibration_available": self.calibration_available,
+        }
 
 
 class Oracle(Rule):
@@ -225,6 +253,7 @@ class Oracle(Rule):
         self.objective, self.schedule, self.cost, self.same_batch = objective, [], 0.0, same_batch
 
     def fit_future(self, matrix, alpha):
+        allowed = matrix.admissible_retrains
         if self.same_batch or (matrix.paper_timing and self.objective == "staleness"):
             self.schedule, self.cost = optimal_schedule_same_batch(
                 np.nan_to_num(matrix.staleness_matrix(), nan=0.0),
@@ -232,6 +261,7 @@ class Oracle(Rule):
                 matrix.offline,
                 matrix.batches - 1,
                 alpha,
+                allowed_retrains=allowed,
             )
             return
         if self.objective == "error" and matrix.paper_timing:
@@ -242,6 +272,7 @@ class Oracle(Rule):
                 matrix.batches - 1,
                 alpha,
                 retrain_errors=matrix.err.diagonal(),
+                allowed_retrains=allowed,
             )
             return
         if self.objective == "error":
@@ -249,7 +280,12 @@ class Oracle(Rule):
         else:
             cost = matrix.staleness_matrix().T  # cost[model, batch]
         self.schedule, self.cost = optimal_schedule(
-            np.nan_to_num(cost, nan=0.0), matrix.initial, matrix.offline, matrix.batches - 1, alpha
+            np.nan_to_num(cost, nan=0.0),
+            matrix.initial,
+            matrix.offline,
+            matrix.batches - 1,
+            alpha,
+            allowed_retrains=allowed,
         )
 
     def decide(self, t, deployed, view):
@@ -310,6 +346,9 @@ class UPF(Rule):
         first = t if self.paper_timing else t + 1
         future = size - first
         if future < 1:
+            return False
+        if not view.observations():
+            self.last_fit = {"available": False, "reason": "no_released_label_observations"}
             return False
         model, std = self._regressor(view)
         shift = view.shift(view.upto)

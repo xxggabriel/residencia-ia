@@ -70,6 +70,8 @@ class BatchPolicy(RetrainingPolicy):
         t = context.labeled if context.batch is None else context.batch
         if not self.matrix.offline <= t <= self.matrix.batches - 2:
             return Decision("none", "outside_decision_horizon")
+        if not self.matrix.candidate_available(t):
+            return Decision("none", "no_released_training_labels")
         if self.rule.decide(t, self.deployed, self.matrix.view(t, self.models)):
             self.retrains.append(t)
             self.models.add(t)

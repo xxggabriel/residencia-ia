@@ -117,20 +117,47 @@ class BinaryLearner:
         self.model_factory = model_factory
         self.codec = codec
         self.replay_window = replay_window
-        self.window: deque[tuple[list[dict[str, Any]], np.ndarray]] = deque()
-        self.window_rows = 0
+        self.pending: deque[tuple[int, int, dict[str, Any], bool]] = deque()
+        self.released: deque[tuple[int, int, dict[str, Any], bool]] = deque(maxlen=replay_window)
+        self.training_records: list[dict[str, Any]] = []
 
     def fit(self, index: int, x: np.ndarray, y: np.ndarray, *context: np.ndarray) -> Any:
         rows = self.codec.decode(x)
-        self.window.append((rows, y))
-        self.window_rows += len(y)
-        while len(self.window) > 1 and self.window_rows > self.replay_window:
-            removed_rows, _ = self.window.popleft()
-            self.window_rows -= len(removed_rows)
+        if len(context) != 3:
+            raise ValueError("binary retraining requires availability, sequence and decision cutoff")
+        available_at, sequences, cutoff_array = context
+        cutoff = int(cutoff_array[0])
+        self.pending.extend(
+            (int(seq), int(available), feat, bool(target))
+            for seq, available, feat, target in zip(sequences, available_at, rows, y, strict=True)
+        )
+        newly_released = 0
+        while self.pending and self.pending[0][1] <= cutoff:
+            self.released.append(self.pending.popleft())
+            newly_released += 1
         model = self.model_factory()
-        for batch_rows, batch_y in self.window:
-            for feat, target in zip(batch_rows, batch_y, strict=True):
-                model.learn(feat, bool(target))
+        for _, _, feat, target in self.released:
+            model.learn(feat, target)
+        seqs = [seq for seq, _, _, _ in self.released]
+        released_at = [available for _, available, _, _ in self.released]
+        self.training_records.append(
+            {
+                "batch": index,
+                "cutoff_timestamp": cutoff,
+                "train_samples": len(self.released),
+                "newly_released_samples": newly_released,
+                "pending_samples": len(self.pending),
+                "train_seq_range": [min(seqs), max(seqs) + 1] if seqs else None,
+                "train_available_at_range": [min(released_at), max(released_at)] if released_at else None,
+                "train_sequences_sha256": hashlib.sha256(
+                    ",".join(str(seq) for seq in seqs).encode()
+                ).hexdigest(),
+                "replay_window": self.replay_window,
+                "replay_selection": "last released rows of the observed prefix, each row admitted once",
+                "available": bool(self.released),
+                "reason": None if self.released else "no_released_training_labels",
+            }
+        )
         return model
 
     def losses(self, state: Any, x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -175,12 +202,27 @@ def compute_binary_retraining(
     """Build the binary performance matrix and run CARA/UPF/Oracle analysis."""
     if exclude_seqs:
         events = [event for event in events if event.seq not in exclude_seqs]
+    for previous, event in zip(events, events[1:]):
+        if event.timestamp <= previous.timestamp or event.available_at < previous.available_at:
+            raise ValueError("binary retraining requires ordered timestamps and label availability")
+    if any(event.available_at < event.timestamp for event in events):
+        raise ValueError("a label cannot be available before its event timestamp")
     blocks = partition_blocks(events, batch_size)
     if not blocks:
         return None
     codec = FeatureCodec(events)
     learner = BinaryLearner(model_factory, codec, replay_window)
-    encoded = [codec.encode(block) for block in blocks]
+    available_at = [np.asarray([event.available_at for event in block], dtype=np.int64) for block in blocks]
+    cutoffs = [block[-1].timestamp for block in blocks]
+    encoded = [
+        (
+            *codec.encode(block),
+            available_at[index],
+            np.asarray([e.seq for e in block]),
+            np.asarray([cutoffs[index]]),
+        )
+        for index, block in enumerate(blocks)
+    ]
     offline = max(2, min(len(blocks) - 2, len(blocks) // 3))
     matrix, states = build_matrix(
         encoded,
@@ -188,6 +230,8 @@ def compute_binary_retraining(
         offline=offline,
         seed=seed,
         loss_dtype=np.bool_,
+        label_available_at=available_at,
+        decision_cutoffs=cutoffs,
     )
     analysis = analyze(
         matrix,
@@ -197,6 +241,25 @@ def compute_binary_retraining(
         delta=delta,
         samples=mc_samples,
         seed=seed,
+    )
+    analysis["temporal_contract"] = matrix.to_dict()["temporal_contract"]
+    analysis["temporal_contract"].update(
+        {
+            "clock": "source Event.timestamp and available_at, in the source manifest clock units",
+            "eligibility": "available_at <= end-of-block timestamp",
+            "deployment": (
+                "after the decision block; predictions in the next block use its selected candidate"
+            ),
+            "replay": "at most replay_window most recently released non-reserved rows",
+            "staleness_reference": (
+                "sampled original model-index block, restricted to labels available at the decision cutoff; "
+                "this reference population is distinct from the candidate replay training window"
+            ),
+            "empty_label_information": "unavailable, never substituted by zero error",
+            "oracle": (
+                "future scoring losses may choose the schedule; candidate fits retain the same causal cuts"
+            ),
+        }
     )
     focus_alpha = analysis["setup"]["focus_alpha"]
     cara_curve = (analysis["rules"].get("cara") or {}).get("curve") or []
@@ -218,7 +281,8 @@ def compute_binary_retraining(
         "served_by": served_list,
         "parameters": focus_pt.get("parameters") or {},
         "oracle_retrain_points": list(analysis.get("oracle_schedule_at_focus") or []),
-        "model_rows": [int(r) for r in matrix.rows],
+        "model_rows": [record["train_samples"] for record in matrix.training_records],
+        "source_block_rows": [int(r) for r in matrix.rows],
     }
     ref_metrics = retraining_reference_metrics(analysis, matrix, focus_alpha=upf_alpha)
     return blocks, matrix, states, analysis, ref_metrics
@@ -344,12 +408,29 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
     candidates: list[dict[str, Any]] = []
     audit = hashlib.sha256(b"continual-bench-v1").hexdigest()
 
-    deployed_model = copy.deepcopy(states[0])
+    # No model fitted on the first block may serve predictions inside that block.
+    deployed_model = run.model_factory()
     labeled = 0
     predict_seconds = 0.0
     train_seconds = float(np.nansum(matrix.fit_seconds))
 
     ev_idx = 0
+    pending_labels = deque()
+
+    def _release_labels(cutoff: int) -> None:
+        nonlocal labeled
+        while pending_labels and pending_labels[0][0].available_at <= cutoff:
+            event, probability, trace, evaluated, reserved_event = pending_labels.popleft()
+            labeled += 1
+            observer.after_label(
+                event,
+                probability,
+                trace,
+                cutoff,
+                deployed_model,
+                evaluated,
+                near_future_evaluated=True if reserved_event else None,
+            )
 
     def _advance_reserved(limit_seq: int) -> None:
         nonlocal ev_idx
@@ -358,15 +439,7 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
             ev_idx += 1
             if ev.seq in reserved:
                 r_trace = observer.before_prediction(ev, deployed_model, labeled, 0.0)
-                observer.after_label(
-                    ev,
-                    0.5,
-                    r_trace,
-                    ev.available_at,
-                    deployed_model,
-                    False,
-                    near_future_evaluated=True,
-                )
+                pending_labels.append((ev, 0.5, r_trace, False, True))
 
     for t, block in enumerate(blocks):
         current = Metrics()
@@ -384,12 +457,12 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
             if is_online:
                 total.add(event.y, prob)
                 current.add(event.y, prob)
-            labeled += 1
+            pending_labels.append((event, prob, trace, is_online, False))
             if event.concept is not None:
                 seen_concepts.add(event.concept)
-            observer.after_label(event, prob, trace, event.available_at, deployed_model, is_online)
 
         end_seq = block[-1].seq
+        _release_labels(block[-1].timestamp)
         if t < matrix.offline:
             # During offline phase, advance to the latest offline block model so at t == offline-1
             # we hold matrix.initial.
@@ -398,7 +471,11 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
             if t == matrix.offline - 1:
                 version = run.versions.record(
                     deployed_model,
-                    {"action": "initial_fit", "seq_range": [0, end_seq], "batch": t},
+                    {
+                        "action": "initial_fit",
+                        "seq_range": [0, end_seq],
+                        **matrix.training_records[t],
+                    },
                 )
                 observer.recorded_model_version(version)
             if current.n:
@@ -418,14 +495,14 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
             previous = observer.before_update(deployed_model)
             deployed_model = copy.deepcopy(states[t])
             fit_sec = float(matrix.fit_seconds[t]) if math.isfinite(matrix.fit_seconds[t]) else 0.0
+            training = matrix.training_records[t]
             update_record = {
                 "seq": end_seq,
                 "batch": t,
                 "action": "reset_retrain",
                 "reason": decision.reason,
-                "samples": int(matrix.rows[t]),
-                "train_samples": int(matrix.rows[t]),
-                "train_seq_range": [int(block[0].seq), int(end_seq) + 1],
+                "samples": training["train_samples"],
+                **training,
                 "seconds": fit_sec,
                 "promoted": True,
             }
@@ -435,13 +512,8 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
             observer.record_learning(
                 end_seq,
                 fit_sec,
-                int(matrix.rows[t]),
+                training["train_samples"],
                 initial=False,
-                prediction={
-                    "probability": float(deployed_model.predict(dict(block[-1].x))),
-                    "label": bool(block[-1].y),
-                    "model_version": len(run.versions.entries),
-                },
             )
             ver = run.versions.record(
                 deployed_model,
@@ -450,6 +522,7 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
                     "seq_range": [int(block[0].seq), int(end_seq)],
                     "batch": t,
                     "seq": end_seq,
+                    **training,
                 },
             )
             observer.recorded_model_version(ver)
@@ -457,6 +530,7 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
 
     if events:
         _advance_reserved(events[-1].seq)
+        _release_labels(max(event.available_at for event in events))
     observer.sample_memory()
     sim_result = _simulation_of(policy, matrix)
     oracle_sim = simulate(Oracle(), matrix, policy.alpha)
@@ -469,7 +543,8 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
         "served_by": list(sim_result.deployed),
         "parameters": json_parameters(sim_result.parameters),
         "oracle_retrain_points": list(oracle_sim.retrains),
-        "model_rows": [int(r) for r in matrix.rows],
+        "model_rows": [record["train_samples"] for record in matrix.training_records],
+        "source_block_rows": [int(r) for r in matrix.rows],
         "is_retrospective_reference": bool(getattr(policy, "is_retrospective_reference", False)),
         "future_information_used": getattr(policy, "future_information_used", None),
     }
@@ -485,6 +560,8 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
     summary["prediction_seconds"] = predict_seconds
     summary["update_count"] = len(updates)
     summary["retrain_count"] = len(updates)
+    summary["candidate_training_samples"] = sum(record["train_samples"] for record in matrix.training_records)
+    summary["selected_retrain_samples"] = sum(update["train_samples"] for update in updates)
     summary.update(dep_metrics)
     summary.update(ref_metrics)
 
@@ -511,6 +588,10 @@ def run_batch_retraining(run: BinaryRun) -> Outcome | Progress:
             "used": sum(u["samples"] for u in updates),
             "blocked_decisions": 0,
             "excludes_warmup": True,
+            "candidate_build_training_samples": summary["candidate_training_samples"],
+            "candidate_build_training_seconds": train_seconds,
+            "selected_retrain_samples": summary["selected_retrain_samples"],
+            "candidate_training": matrix.training_records,
         },
         "retention_probes": retention_probes,
         "prediction_digest": audit,
