@@ -191,7 +191,12 @@ def publish_local_benchmark(directory, report, *, experiment_name, client=None):
             # publish_sdk_observations commits observation tags in one batch.
             client.log_artifact(run_id, str(path))
             artifacts = publish_run_artifacts(
-                client, run_id, directory, report, include_checkpoints=retain_models
+                client,
+                run_id,
+                directory,
+                report,
+                include_checkpoints=retain_models,
+                observations_already_logged=not retain_models,
             )
             client.set_tag(run_id, "benchmark_complete", "true")
             client.set_terminated(run_id, "FINISHED")

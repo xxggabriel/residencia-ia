@@ -28,7 +28,9 @@ def system_metric_points(system) -> tuple[list[tuple[str, int, float]], dict]:
     return points, stamps
 
 
-def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoints=True) -> dict:
+def publish_run_artifacts(
+    client, run_id, directory, report, *, include_checkpoints=True, observations_already_logged=False
+) -> dict:
     from .tracking import MetricPoint, as_backend
 
     backend = as_backend(client)
@@ -46,7 +48,7 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
     )
     root = Path(directory) / "artifacts"
     uploaded = 0
-    for folder in ("plots", "data"):
+    for folder in (() if complete_series else ("plots", "data")):
         if (root / folder).is_dir():
             client.log_artifacts(run_id, str(root / folder), artifact_path=folder)
             uploaded += sum(1 for path in (root / folder).rglob("*") if path.is_file())
@@ -81,9 +83,30 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
         report,
         result.get("training_rounds", []),
         **({"max_points_per_key": None} if complete_series else {}),
+        metrics_already_logged=observations_already_logged,
+        upload_artifacts=not complete_series,
     )
     if manifest:
-        result["observation_plots"] = manifest
+        result["observation_evidence_path"] = manifest
+        if not complete_series:
+            result["observation_plots"] = manifest
+    if complete_series:
+        from .metric_evidence_bundle import build_metric_evidence_bundle
+
+        bundle = build_metric_evidence_bundle(directory)
+        client.log_artifact(run_id, str(Path(directory) / bundle["artifact_path"]))
+        result["metric_evidence_bundle"] = bundle
+        result["artifact_files"] = 1
+        backend.log_batch(
+            run_id,
+            tags={
+                "run_artifacts": (
+                    f"one metric-evidence.zip archive; {bundle['evidence_file_count']} evidence files"
+                ),
+                "metric_evidence_sha256": bundle["sha256"],
+                "dashboard_access": "extract metric-evidence.zip and open dashboard.html",
+            },
+        )
     return result
 
 

@@ -188,6 +188,8 @@ def publish_sdk_observations(
     children,
     *,
     max_points_per_key: int | None = 250,
+    metrics_already_logged=False,
+    upload_artifacts=True,
 ):
     from mlflow.entities import RunTag
 
@@ -196,11 +198,14 @@ def publish_sdk_observations(
     root = write_observation_evidence(directory, report, run_id, children)
     if root is None:
         return None
-    sampled = downsample_points(parent_observation_points(report), max_points_per_key=max_points_per_key)
-    log_metric_points(client, run_id, sampled, max_points_per_key=max_points_per_key)
+    if not metrics_already_logged:
+        sampled = downsample_points(parent_observation_points(report), max_points_per_key=max_points_per_key)
+        log_metric_points(client, run_id, sampled, max_points_per_key=max_points_per_key)
     client.log_batch(
         run_id, tags=[RunTag(key, value) for key, value in observation_tags(report).items()], synchronous=True
     )
+    if not upload_artifacts:
+        return f"{ARTIFACT_ROOT}/plots-manifest.json"
     dashboard_path = Path(directory) / "dashboard.html"
     if dashboard_path.is_file():
         client.log_artifact(run_id, str(dashboard_path))

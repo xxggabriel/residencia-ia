@@ -76,6 +76,12 @@ Os dados completos, as séries no MLflow, o HTML e a linhagem permanecem dispon�
 Os gráficos comparativos são gerados na consolidação, reduzindo trabalho repetido
 de visualização durante a campanha.
 
+A evidência numérica e o HTML são agrupados em `metric-evidence.zip`, com um
+manifesto de membros e hashes. O relatório principal permanece acessível
+individualmente. As séries completas continuam como métricas nativas no MLflow;
+o agrupamento reduz chamadas de upload, sem reduzir os pontos registrados. Extraia
+o pacote para abrir o HTML com seus arquivos relativos.
+
 O ledger de previsões conserva IDs, sequência, rótulo e probabilidade, sem atributos
 de entrada. O exportador calcula a interseção dos eventos por dataset e modelo entre
 as configurações concluídas. F1 macro sempre usa as duas classes; AP é calculada por
