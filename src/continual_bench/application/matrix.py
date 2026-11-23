@@ -51,6 +51,7 @@ class ExperimentMatrix(Strict):
     modes: tuple[Literal["streaming", "incremental", "offline"], ...] = ("streaming",)
     typed_policies: tuple[Literal["none", "online", "periodic"], ...] = ("online",)
     seeds: tuple[int, ...] = Field(default=(42,), min_length=1)
+    policy_seed_from_dataset: bool = Field(default=False, exclude_if=lambda value: not value)
     # Shared fields merged into every case (e.g. warmup, metric_window, tracking, epochs).
     base: dict = Field(default_factory=dict)
     on_incompatible: Literal["skip", "error"] = "skip"
@@ -107,6 +108,9 @@ class ExperimentMatrix(Strict):
                 continue  # Offline is a frozen holdout; adaptive strategies do not apply.
             if mode == "streaming" and strategy.policy.name in BATCH_POLICY_KINDS:
                 continue  # Batch policies decide per batch in incremental mode.
+            policy = strategy.policy.model_dump()
+            if self.policy_seed_from_dataset and strategy.policy.name == "upf":
+                policy["params"] = {**policy.get("params", {}), "seed": seed}
             yield (
                 {
                     **deepcopy(self.base),
@@ -115,7 +119,7 @@ class ExperimentMatrix(Strict):
                     "model": model.model_dump(),
                     "dataset": self._dataset(entry, seed),
                     "detector": strategy.detector.model_dump(),
-                    "policy": strategy.policy.model_dump(),
+                    "policy": policy,
                 },
                 Config,
             )

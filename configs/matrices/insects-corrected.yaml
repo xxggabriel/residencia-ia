@@ -1,0 +1,15 @@
+# A new campaign, preserving the historical insects-72 matrix and its evidence.
+extends: insects-72.yaml
+name: insects-causal-metrics
+policy_seed_from_dataset: true
+strategies:
+  - {detector: {name: none}, policy: {name: none}}
+  - {detector: {name: adwin}, policy: {name: drift}}
+  - {detector: {name: none}, policy: {name: cara, params: {lambda: 10.0}}}
+  - {detector: {name: none}, policy: {name: upf, params: {lambda: 10.0, delta: 0.95, samples: 100}}}
+  - {detector: {name: none}, policy: {name: oracle, params: {lambda: 10.0}}}
+base:
+  artifact_mode: metrics_only
+  max_seconds: 86400
+  tracking:
+    extends: ../base/tracking-corrective.yaml
