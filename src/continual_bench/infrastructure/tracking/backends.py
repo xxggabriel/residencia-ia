@@ -1,5 +1,6 @@
 """Adapters from the tracking port to the MLflow client and to the SigV4 REST API."""
 
+import os
 import time
 from typing import Any
 
@@ -10,11 +11,24 @@ REMOTE_SCHEMES = ("http://", "https://", "arn:", "databricks")
 DEFAULT_CONCURRENCY = 4
 
 
+def configured_concurrency() -> int:
+    """Validate the remote publisher's per-job request concurrency."""
+    raw = os.environ.get("BENCH_MLFLOW_PUBLISH_CONCURRENCY", str(DEFAULT_CONCURRENCY))
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError("BENCH_MLFLOW_PUBLISH_CONCURRENCY must be a positive integer") from None
+    if value <= 0:
+        raise ValueError("BENCH_MLFLOW_PUBLISH_CONCURRENCY must be a positive integer")
+    return value
+
+
 def client_concurrency(client: Any) -> int:
     """Parallelize only remote stores; local file/SQLite stores stay serialized."""
+    configured = configured_concurrency()
     tracking = getattr(client, "_tracking_client", None)
     uri = str(getattr(tracking, "tracking_uri", "") or "")
-    return DEFAULT_CONCURRENCY if uri.startswith(REMOTE_SCHEMES) else 1
+    return configured if uri.startswith(REMOTE_SCHEMES) else 1
 
 
 def _point(point: MetricPoint | dict | tuple) -> MetricPoint:

@@ -107,6 +107,12 @@ recortes sem depender de um identificador opaco.
 Use Python 3.12 com as dependências fixadas e credenciais de tracking fornecidas pelo
 ambiente. O entrypoint não contém endereço de servidor nem credenciais.
 
+O paralelismo de cálculo é separado do orçamento de publicação. Em serviços de
+tracking com poucas conexões, defina `BENCH_MLFLOW_PUBLISH_CONCURRENCY=1`; o cliente
+mantém todos os pontos e publica os ajustes de cada processo sequencialmente.
+`--parallel-cases` continua controlando os casos em execução. O plano registra os
+dois limites para que a concorrência das chamadas não sobrecarregue o serviço.
+
 ```bash
 uv sync --frozen --extra services --extra large-datasets --extra plots --extra dev
 uv run --frozen python scripts/prepare_real_sources.py \

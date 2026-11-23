@@ -56,6 +56,12 @@ def test_smoke_plan_exercises_all_policies_and_both_models(tmp_path):
     }
 
 
+def test_plan_records_configured_tracking_publication_budget(tmp_path, monkeypatch):
+    monkeypatch.setenv("BENCH_MLFLOW_PUBLISH_CONCURRENCY", "1")
+    plan = make_plan(arguments(tmp_path))
+    assert plan["resource_contract"]["tracking_publish_concurrency"] == 1
+
+
 def test_campaign_rejects_unrestricted_model_retention(tmp_path):
     with pytest.raises(ValueError, match="artifact_mode"):
         make_plan(arguments(tmp_path, matrix="configs/matrices/insects-72.yaml"))

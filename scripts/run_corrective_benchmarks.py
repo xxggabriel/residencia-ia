@@ -24,6 +24,7 @@ from continual_bench.config.loader import load_model
 from continual_bench.evaluation.environment import environment
 from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
 from continual_bench.infrastructure.storage import atomic_write, run_lock
+from continual_bench.infrastructure.tracking.backends import configured_concurrency
 
 PROJECT = Path(__file__).resolve().parents[1]
 SCHEMA = "corrective-benchmarks-v1"
@@ -115,6 +116,7 @@ def make_plan(args):
         ],
         "resource_contract": {
             "parallel_cases": args.parallel_cases,
+            "tracking_publish_concurrency": configured_concurrency(),
             "thread_environment": env["resources"]["thread_environment"],
             "container_or_host_metrics": "shared_with_concurrent_work; process_metrics_are_per_unit",
         },

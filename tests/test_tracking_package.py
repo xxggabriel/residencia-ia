@@ -2,8 +2,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,12 +13,131 @@ from continual_bench.infrastructure.tracking import (
     AsyncMetricWriter,
     MlflowClientBackend,
     RestBackend,
+    as_backend,
     batch_payloads,
     missing_metric_points,
 )
 from continual_bench.infrastructure.tracking.artifacts import artifact_plan, upload_concurrently
+from continual_bench.infrastructure.tracking.backends import client_concurrency, configured_concurrency
 from continual_bench.infrastructure.tracking.http import PooledHttpOpener
 from continual_bench.infrastructure.tracking.rounds import publish_training_rounds
+
+
+@pytest.mark.parametrize(
+    "uri", ["http://tracking", "https://tracking", "arn:aws:sagemaker:test", "databricks"]
+)
+def test_sdk_remote_publication_concurrency_uses_validated_configuration(uri, monkeypatch):
+    client = SimpleNamespace(_tracking_client=SimpleNamespace(tracking_uri=uri))
+    monkeypatch.delenv("BENCH_MLFLOW_PUBLISH_CONCURRENCY", raising=False)
+    assert configured_concurrency() == client_concurrency(client) == 4
+    for value in [1, 2, 7]:
+        monkeypatch.setenv("BENCH_MLFLOW_PUBLISH_CONCURRENCY", str(value))
+        assert configured_concurrency() == client_concurrency(client) == value
+        assert MlflowClientBackend(client).concurrency == value
+
+
+@pytest.mark.parametrize("uri", ["file:///tmp/mlruns", "sqlite:///mlflow.db", "", None])
+def test_sdk_local_publication_stays_serialized_with_larger_configured_limit(uri, monkeypatch):
+    monkeypatch.setenv("BENCH_MLFLOW_PUBLISH_CONCURRENCY", "8")
+    client = SimpleNamespace(_tracking_client=SimpleNamespace(tracking_uri=uri))
+    assert configured_concurrency() == 8
+    assert client_concurrency(client) == MlflowClientBackend(client).concurrency == 1
+
+
+@pytest.mark.parametrize("value", ["", "0", "-1", "1.5", "many"])
+def test_sdk_publication_rejects_invalid_concurrency(value, monkeypatch):
+    monkeypatch.setenv("BENCH_MLFLOW_PUBLISH_CONCURRENCY", value)
+    client = SimpleNamespace(_tracking_client=SimpleNamespace(tracking_uri="https://tracking"))
+    for action in [
+        configured_concurrency,
+        lambda: client_concurrency(client),
+        lambda: MlflowClientBackend(client),
+    ]:
+        with pytest.raises(ValueError, match="BENCH_MLFLOW_PUBLISH_CONCURRENCY must be a positive integer"):
+            action()
+
+
+def test_explicit_backends_keep_their_concurrency(monkeypatch):
+    monkeypatch.setenv("BENCH_MLFLOW_PUBLISH_CONCURRENCY", "1")
+    client = SimpleNamespace(_tracking_client=SimpleNamespace(tracking_uri="https://tracking"))
+    sdk = MlflowClientBackend(client, concurrency=3)
+    rest = RestBackend(lambda *args, **kwargs: None, concurrency=2)
+    assert as_backend(sdk) is sdk and sdk.concurrency == 3
+    assert as_backend(rest) is rest and rest.concurrency == 2
+
+
+def test_four_jobs_can_serialize_each_publisher_without_losing_metric_points(monkeypatch):
+    monkeypatch.setenv("BENCH_MLFLOW_PUBLISH_CONCURRENCY", "1")
+
+    class Client:
+        def __init__(self, job):
+            self.job = job
+            self._tracking_client = SimpleNamespace(tracking_uri="https://tracking")
+            self.points = {}
+            self.statuses = {}
+            self.lock = threading.Lock()
+            self.active = self.peak = 0
+
+        def search_runs(self, *args, **kwargs):
+            return []
+
+        def create_run(self, experiment, tags):
+            identity = f"job-{self.job}-{tags['cb-fit-id']}"
+            self.points[identity] = []
+            self.statuses[identity] = "RUNNING"
+            return SimpleNamespace(
+                info=SimpleNamespace(run_id=identity, status="RUNNING", artifact_uri=None),
+                data=SimpleNamespace(tags=tags, metrics={}),
+            )
+
+        def log_batch(self, run_id, *, metrics=(), **kwargs):
+            with self.lock:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+            try:
+                time.sleep(0.001)
+                self.points[run_id].extend((m.key, m.step, m.value) for m in metrics)
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+        def set_terminated(self, run_id, status):
+            self.statuses[run_id] = status
+
+    step_count = 1_201
+    report = _report()
+    for position, fit in enumerate(report["training_history"]):
+        fit["steps"] = [
+            {
+                "step": step,
+                "global_step": position * step_count + step,
+                "kind": "epoch",
+                "metrics": {"loss": 1 / step, "accuracy": 0.75},
+            }
+            for step in range(1, step_count + 1)
+        ]
+    clients = [Client(job) for job in range(4)]
+    backends = [MlflowClientBackend(client) for client in clients]
+    assert all(backend.concurrency == 1 for backend in backends)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        receipts = list(
+            pool.map(
+                lambda backend: publish_training_rounds(backend, "experiment", "parent", report), backends
+            )
+        )
+    for client, receipt in zip(clients, receipts, strict=True):
+        assert client.peak == 1
+        assert len(receipt) == len(client.points) == 3
+        assert all(value == "FINISHED" for value in client.statuses.values())
+        for position, fit in enumerate(receipt):
+            points = client.points[fit["run_id"]]
+            assert len(points) == fit["metric_points"] == 3 * step_count
+            assert sorted((step, value) for key, step, value in points if key == "loss") == [
+                (step, 1 / step) for step in range(1, step_count + 1)
+            ]
+            assert sorted((step, value) for key, step, value in points if key == "global_step") == [
+                (step, position * step_count + step) for step in range(1, step_count + 1)
+            ]
 
 
 def test_batches_share_requests_and_respect_mlflow_limits():
