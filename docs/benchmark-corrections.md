@@ -87,6 +87,12 @@ não representam consumo exclusivo de uma política.
 
 ## Execução portátil
 
+No MLflow, os runs identificam dataset, modelo, política, detector, modo, protocolo
+e seed por tags `cb-*` quando essas coordenadas são aplicáveis. A tag `cb-run-role`
+separa os casos da matriz, o diagnóstico dos candidatos e a comparação de políticas.
+Os nomes legíveis e os artefatos completos permitem filtrar e comparar os mesmos
+recortes sem depender de um identificador opaco.
+
 Use Python 3.12 com as dependências fixadas e credenciais de tracking fornecidas pelo
 ambiente. O entrypoint não contém endereço de servidor nem credenciais.
 

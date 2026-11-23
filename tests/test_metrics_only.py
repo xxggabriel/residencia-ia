@@ -53,9 +53,7 @@ def test_metrics_only_samples_state_without_skipping_update_lineage(tmp_path, mo
     import pickle
 
     model = RiverModel()
-    versions = ModelVersions(
-        tmp_path, "d" * 64, "c" * 64, artifact_mode="metrics_only", state_sample_every=4
-    )
+    versions = ModelVersions(tmp_path, "d" * 64, "c" * 64, artifact_mode="metrics_only", state_sample_every=4)
     serialize = pickle.dumps
     calls = []
 
@@ -159,8 +157,15 @@ def test_candidate_tracking_retains_metrics_without_write_state(tmp_path, monkey
     x = np.array([[0.0], [1.0]])
     y = np.array([0, 1])
     report = candidate_report(
-        "fixture", 1, [(x, y, x, y)] * 2, [1, 2], Learner(), [0.1, 0.2],
-        protocol="fixture", initial=0, artifact_mode="metrics_only",
+        "fixture",
+        1,
+        [(x, y, x, y)] * 2,
+        [1, 2],
+        Learner(),
+        [0.1, 0.2],
+        protocol="fixture",
+        initial=0,
+        artifact_mode="metrics_only",
     )
     assert report["contract"]["artifact_mode"] == "metrics_only"
     assert len(report["training_history"]) == 2
@@ -195,20 +200,22 @@ def test_metrics_only_mlflow_keeps_complete_quality_and_system_series(tmp_path, 
         "run_key": "complete-metric-series",
         "artifact_mode": "metrics_only",
         "dataset": "fixture",
+        "config": {
+            "model": {"name": "hoeffding_tree"},
+            "policy": {"name": "none"},
+            "detector": {"name": "none"},
+            "mode": "incremental",
+        },
         "contract": {"seed": 7, "protocol": "fixture-causal"},
         "windows": [{"end_seq": i, "accuracy": i / 600} for i in range(600)],
         "system_metrics": {
-            "samples": [
-                {"timestamp_ms": 1000 + i, "values": {"cpu": float(i)}} for i in range(600)
-            ]
+            "samples": [{"timestamp_ms": 1000 + i, "values": {"cpu": float(i)}} for i in range(600)]
         },
     }
     report["tracking_observations"] = observations(
-        "binary", {},
-        windows=[
-            {"step": i, "scope": "fixture", "quality": {"accuracy": i / 600}}
-            for i in range(600)
-        ],
+        "binary",
+        {},
+        windows=[{"step": i, "scope": "fixture", "quality": {"accuracy": i / 600}} for i in range(600)],
     )
     plot_root = directory / "observation-fixture"
     plot_root.mkdir()
@@ -232,6 +239,11 @@ def test_metrics_only_mlflow_keeps_complete_quality_and_system_series(tmp_path, 
     assert len(client.get_metric_history(run_id, "system/cpu")) == 600
     assert len(client.get_metric_history(run_id, "observations_v1/windows/fixture/accuracy")) == 600
     assert client.get_run(run_id).data.tags["cb-artifact-mode"] == "metrics_only"
+    tags = client.get_run(run_id).data.tags
+    assert tags["cb-model"] == "hoeffding_tree" and tags["cb-policy"] == "none"
+    assert tags["cb-mode"] == "incremental" and tags["cb-detector"] == "none"
+    assert tags["cb-run-role"] == "matrix_case"
+    assert "hoeffding_tree-none" in tags["mlflow.runName"]
     again = publish_local_benchmark(directory, report, experiment_name="metrics-only-series", client=client)
     assert again["mlflow_run_id"] == run_id
     assert len(client.get_metric_history(run_id, "system/cpu")) == 600

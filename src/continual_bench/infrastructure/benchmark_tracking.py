@@ -110,17 +110,37 @@ def publish_local_benchmark(directory, report, *, experiment_name, client=None):
     dataset = dataset.get("name") if isinstance(dataset, dict) else dataset
     seed = report.get("seed", contract.get("seed", (config.get("dataset") or {}).get("seed")))
     protocol = report.get("protocol") or contract.get("protocol") or config.get("mode")
+
+    def component_name(value):
+        return value.get("name") or value.get("family") if isinstance(value, dict) else value
+
+    model = component_name(config.get("model") or contract.get("model"))
+    policy = component_name(config.get("policy"))
+    role = (
+        "matrix_case"
+        if config
+        else "policy_comparison"
+        if report.get("analysis")
+        else "candidate_diagnostics"
+    )
     coordinates = {
         "cb-dataset": dataset,
         "cb-seed": seed,
         "cb-protocol": protocol,
         "cb-artifact-mode": "full" if retain_models else "metrics_only",
+        "cb-model": model,
+        "cb-policy": policy,
+        "cb-detector": component_name(config.get("detector")),
+        "cb-mode": config.get("mode"),
+        "cb-run-role": role,
     }
     tags = {name: str(value) for name, value in coordinates.items() if value is not None}
     run_name = key
     if not retain_models:
         run_name = sanitize_mlflow_name(
-            "-".join(str(v) for v in (dataset, protocol, f"seed-{seed}", key[:8]) if v is not None)
+            "-".join(
+                str(v) for v in (dataset, model, policy, protocol, f"seed-{seed}", key[:8]) if v is not None
+            )
         )
     with publication_lock(directory.parent, f"benchmark-{key}"):
         experiment = client.get_experiment_by_name(experiment_name)

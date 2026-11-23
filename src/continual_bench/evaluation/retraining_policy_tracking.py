@@ -107,6 +107,8 @@ def policy_report(name, seed, *, protocol, analysis, candidate_reports, settings
         "settings": settings,
         "artifact_mode": artifact_mode,
     }
+    if candidate_model := candidate_reports[0]["contract"].get("model"):
+        contract["model"] = candidate_model
     run_key = hashlib.sha256(encoded(contract)).hexdigest()[:24]
     report = {
         "run_key": run_key,
