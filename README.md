@@ -267,6 +267,11 @@ make lint    # ruff
 
 ## Documentação
 
+O [protocolo corretivo e a campanha de avaliação](docs/benchmark-corrections.md)
+descrevem disponibilidade de rótulos, separação treino/teste, retenção exclusiva de
+métricas e execução com o mesmo código em ambiente local ou AWS. Os resultados
+históricos da Semana 10 permanecem preservados.
+
 | Para | Consulte |
 |---|---|
 | Entender e estender o código | [Arquitetura](docs/architecture.md), [configurações](configs/README.md), [diagrama do ciclo de vida](docs/diagrams/ciclo-de-vida-sistema.drawio.pdf) |

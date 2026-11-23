@@ -17,7 +17,7 @@ Os fluxos são divididos em `B` lotes (blocos do Zia). `err[i, j]` é a taxa de 
 3. **Fase online**: do lote `w` ao fim. O modelo do lote `w-1` (o último offline) é implantado, como o `f_0` do UPF. Após observar o lote `t`, a política decide; um retreino passa a valer no lote `t+1`.
 4. **Execução**: ao decidir *retrain*, o runner carrega o modelo já treinado para a matriz (mesma janela, mesmo seed), sem ajuste duplicado. O stream avaliado reproduz a matriz exatamente, e `verify_realised` falha o run se divergir.
 
-**Desvio deliberado dos papers.** Os artigos avaliam o modelo retreinado em `t` no próprio lote `t` (UPF) ou cobram o retreino e obsolescência zero no mesmo lote (CARA). Isso exigiria avaliar num pedaço de `D_t` que também treinou o modelo. Aqui o retreino vale do lote seguinte (test-then-train), para todas as políticas e para o Oracle. Os números não são comparáveis célula a célula com as tabelas dos artigos.
+**Temporização e objetivo.** No protocolo UPF com holdout, o modelo novo pode servir a partição de teste do próprio lote sem ter sido treinado nesses exemplos. O CARA separa a contabilização do custo, com obsolescência zero no lote do retreino, da acurácia prequential deslocada em um lote (§7.5). Essas duas convenções não equivalem a avaliar nos mesmos exemplos usados no fit. No fluxo operacional daqui, o modelo passa a servir no lote seguinte, para todas as políticas e para o Oracle. Os números não são comparáveis célula a célula com as tabelas dos artigos.
 
 **Sem vazamento do futuro.** A política só recebe uma `MatrixView` com os erros de modelos *treinados* em lotes `≤ t`. Um teste altera tudo o que seria observado depois de um lote e confere que as decisões anteriores não mudam. Só o Oracle lê entradas futuras.
 
@@ -30,6 +30,16 @@ inicializa as políticas; a comparação online aplica os modelos escolhidos a p
 lote seguinte. Os probes reservados no fluxo não entram na matriz de decisão. O relatório
 separa a construção dos candidatos do custo das atualizações escolhidas. O protocolo por
 evento e o holdout offline não aceitam essas políticas.
+
+Na revisão corretiva, cada candidato usa somente rótulos liberados até o corte do fim
+do bloco. O replay contém no máximo as últimas `replay_window` linhas elegíveis, na
+ordem dos eventos; a cauda pendente pode entrar em cortes posteriores. A vista usada
+pela política também filtra as perdas e a obsolescência por `available_at`. A matriz
+retrospectiva continua disponível para pontuação e para a agenda do Oracle, cujos
+candidatos obedecem às mesmas restrições de treino. O relatório distingue linhas
+pontuadas, linhas treinadas, cortes e observações realmente disponíveis. Esse contrato
+e o limite exato do replay diferem dos arquivos históricos da Semana 10.
+Veja [protocolo corretivo e execução](benchmark-corrections.md).
 
 Nos baselines binários prequential, o relatório também pode construir essa matriz
 depois da avaliação para publicar referências CARA, UPF e Oracle, desde que haja
@@ -152,6 +162,23 @@ são escolhas locais. A fórmula de Gauss tem um parêntese ausente no artigo e 
 baselines locais, além do Oracle. Os números do pipeline prequential usam a temporização
 operacional descrita acima.
 
+O caminho de janela usa a família `UPF-train-reference-v2-window`, com sufixos de
+comparação e temporização: o CARA local calcula sua referência
+com rótulos de treino e usa apenas os atributos das consultas de teste. Alterar os
+rótulos do teste não altera esse sinal nem os parâmetros ou a agenda CARA. Os rótulos
+continuam necessários para pontuar os candidatos e os resultados. A formulação local
+de obsolescência é relativa; a baseline da seção A.12 do UPF usa uma adaptação absoluta.
+O identificador distingue essa variante dos números publicados e dos resultados
+individuais históricos. O JSON agora conserva cada ensaio e ponto da grade, além dos
+agregados com `n` e `ddof=0`.
+
+A [campanha integral corretiva](benchmark-corrections.md) acrescenta o protocolo
+`UPF-train-reference-v3-full-source`, com todos os exemplos distribuídos em 15 blocos
+contíguos. Usa as seeds 42, 43 e 44, sem selecionar uma janela parcial. A grade de
+custo permanece identificada, mas a AUC publicada no artigo não é tratada como
+comparação equivalente desse protocolo integral. A política Online ficou adiada
+para a rodada seguinte.
+
 ## Comparação pareada de CARA, UPF e os dois Oracles em Electricity e Airlines
 
 ```bash
@@ -188,7 +215,7 @@ as curvas, os desvios nos pontos 0,1 e 0,9 e os cronogramas por semente. A grade
 preços é comum, com resolução maior perto de zero. A escala de α difere da escala de κ, e o
 gráfico por frequência mostra o erro e a obsolescência sem a parcela do preço do retreino. A AUC
 dessa grade de 0 a 1 descreve a comparação local. Compare cada política com o Oracle do mesmo
-objetivo, dataset e temporização. A reprodução da Tabela 1 do UPF usa o comando da seção anterior,
+objetivo, dataset e temporização. O benchmark referenciado na Tabela 1 do UPF usa o comando da seção anterior,
 com lotes de 3.000 linhas e grade de 0 a 0,7 em Airlines.
 
 ## Benchmark do CARA com o protocolo dos autores
