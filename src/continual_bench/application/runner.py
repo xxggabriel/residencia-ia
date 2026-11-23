@@ -12,7 +12,6 @@ from pathlib import Path
 from continual_bench.config import Config
 from continual_bench.core.contracts import event_json
 from continual_bench.core.policies import BATCH_POLICY_KINDS
-from continual_bench.evaluation.artifact_policy import verify_metrics_only_files
 from continual_bench.evaluation.artifacts import binary_figures, system_figures, write_artifacts
 from continual_bench.evaluation.binary import BinaryRun, Progress, protocol_for, read_events
 from continual_bench.evaluation.environment import environment, peak_rss_bytes
@@ -21,6 +20,7 @@ from continual_bench.evaluation.stream_training_history import stream_training_h
 from continual_bench.evaluation.system_metrics import SystemMetricsSampler
 from continual_bench.evaluation.tracking import metric_catalog, save_tracking_files
 from continual_bench.evaluation.training_evidence import write_training_artifacts
+from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
 from continual_bench.infrastructure.storage import LocalCheckpoints, atomic_write, run_lock
 from continual_bench.infrastructure.versioning import ModelVersions
 

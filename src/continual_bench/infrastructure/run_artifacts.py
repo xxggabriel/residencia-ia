@@ -8,7 +8,7 @@ Republishing is idempotent: existing metric points are checked, not duplicated.
 
 from pathlib import Path
 
-from continual_bench.evaluation.artifact_policy import metrics_only, verify_metrics_only_files
+from continual_bench.infrastructure.artifact_policy import metrics_only, verify_metrics_only_files
 
 from .metric_tracking import downsample_points, missing_metric_points
 from .observation_tracking import publish_sdk_observations

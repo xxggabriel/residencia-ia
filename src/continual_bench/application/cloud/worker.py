@@ -871,7 +871,7 @@ def run_unit(
             report = outcome["report"]
             report_path = outcome["report_path"]
             if metrics_only:
-                from continual_bench.evaluation.artifact_policy import verify_metrics_only_files
+                from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
 
                 verify_metrics_only_files(outcome["output"])
             directory = report_path.parent

@@ -332,7 +332,7 @@ def publish(config, report, root):
 
 def _publish_metrics_only(config, report, directory):
     """Publish metrics and provenance through the existing tracker without a model registry."""
-    from continual_bench.evaluation.artifact_policy import verify_metrics_only_files
+    from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
 
     from .benchmark_tracking import publish_local_benchmark
     from .storage import atomic_write, run_lock

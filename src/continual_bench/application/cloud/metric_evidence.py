@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from continual_bench.evaluation.artifact_policy import verify_metrics_only_files
+from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
 from continual_bench.infrastructure.object_store import ObjectExists, clean_key, sha256_path
 
 from . import layout

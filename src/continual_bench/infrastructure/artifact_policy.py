@@ -1,4 +1,4 @@
-"""Explicit retention policy shared by evaluators and evidence publishers."""
+"""Filesystem retention contract shared by evaluators and evidence publishers."""
 
 from pathlib import Path
 

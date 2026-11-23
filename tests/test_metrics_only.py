@@ -9,9 +9,9 @@ import pytest
 
 from continual_bench.application.runner import run
 from continual_bench.config import Config
-from continual_bench.evaluation.artifact_policy import verify_metrics_only_files
 from continual_bench.evaluation.retraining_observations import candidate_report
 from continual_bench.evaluation.system_metrics import SystemMetricsSampler
+from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
 from continual_bench.infrastructure.storage import LocalCheckpoints
 from continual_bench.infrastructure.versioning import ModelVersions, load_version
 from continual_bench.models.linear import RiverModel

@@ -5,7 +5,7 @@ import json
 import math
 from pathlib import Path
 
-from continual_bench.evaluation.artifact_policy import metrics_only, verify_metrics_only_files
+from continual_bench.infrastructure.artifact_policy import metrics_only, verify_metrics_only_files
 
 from .metric_tracking import log_metric_points, metric_points
 from .observation_tracking import observation_tags, parent_observation_points
