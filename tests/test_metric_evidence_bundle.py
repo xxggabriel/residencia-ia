@@ -24,7 +24,7 @@ def test_bundle_keeps_complete_text_evidence_and_rejects_raw_inputs_and_images(t
         "artifacts/data/series.json": b'{"points":[1,null,3]}',
         "tracking-observations/mlflow-lineage.json": b'{"parent":"id"}',
         "tracking-observations/observations.json": b'{"all_metrics":true}',
-        "dashboard.html": b'<html>Complete local dashboard</html>',
+        "dashboard.html": b"<html>Complete local dashboard</html>",
     }
     for name, payload in retained.items():
         path = tmp_path / name
@@ -84,7 +84,8 @@ def test_sdk_observations_can_skip_only_the_points_already_logged_by_its_caller(
     report = {
         "artifact_mode": "metrics_only",
         "tracking_observations": observations(
-            "binary", {},
+            "binary",
+            {},
             windows=[{"step": i, "scope": "fixture", "quality": {"accuracy": i / 600}} for i in range(600)],
         ),
     }
@@ -103,8 +104,14 @@ def test_sdk_observations_can_skip_only_the_points_already_logged_by_its_caller(
     assert len(calls) == 1 and len(calls[0]) == 600
     assert client.uploads == []
     publish_sdk_observations(
-        client, "run", tmp_path, report, [], max_points_per_key=None,
-        metrics_already_logged=True, upload_artifacts=False,
+        client,
+        "run",
+        tmp_path,
+        report,
+        [],
+        max_points_per_key=None,
+        metrics_already_logged=True,
+        upload_artifacts=False,
     )
     assert len(calls) == 1  # No duplicate history reads or writes for the same observation points.
     publish_sdk_observations(client, "run", tmp_path, report, [])
@@ -147,7 +154,8 @@ def test_metrics_only_run_artifacts_uploads_one_bundle_without_repeating_observa
         "artifact_mode": "metrics_only",
         "complete": True,
         "tracking_observations": observations(
-            "binary", {},
+            "binary",
+            {},
             windows=[{"step": i, "scope": "fixture", "quality": {"accuracy": i / 600}} for i in range(600)],
         ),
         "system_metrics": {
@@ -157,9 +165,7 @@ def test_metrics_only_run_artifacts_uploads_one_bundle_without_repeating_observa
     directory = tmp_path / "evidence"
     directory.mkdir()
     (directory / "report.json").write_text(json.dumps(report))
-    result = publish_run_artifacts(
-        client, run_id, directory, report, observations_already_logged=True
-    )
+    result = publish_run_artifacts(client, run_id, directory, report, observations_already_logged=True)
     assert [os.path.basename(path) for path in uploaded] == [ARCHIVE_NAME]
     assert result["artifact_files"] == 1
     assert result["metric_evidence_bundle"]["artifact_path"] == ARCHIVE_NAME

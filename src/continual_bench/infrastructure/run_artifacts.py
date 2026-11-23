@@ -48,7 +48,7 @@ def publish_run_artifacts(
     )
     root = Path(directory) / "artifacts"
     uploaded = 0
-    for folder in (() if complete_series else ("plots", "data")):
+    for folder in () if complete_series else ("plots", "data"):
         if (root / folder).is_dir():
             client.log_artifacts(run_id, str(root / folder), artifact_path=folder)
             uploaded += sum(1 for path in (root / folder).rglob("*") if path.is_file())

@@ -387,8 +387,10 @@ def test_metrics_only_spot_restarts_training_but_recovers_completed_metric_publi
         report_path.write_text(json.dumps(report))
         (directory / "metrics.json").write_text(json.dumps({"points": [0, 1, 2, 3]}))
         return {
-            "report": report, "report_path": report_path,
-            "output": workdir / "run", "headline": {"accuracy": 0.5},
+            "report": report,
+            "report_path": report_path,
+            "output": workdir / "run",
+            "headline": {"accuracy": 0.5},
         }
 
     put_file = store.put_file

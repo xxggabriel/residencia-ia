@@ -20,7 +20,6 @@ def verify_metrics_only_files(directory) -> None:
     forbidden = {".pkl", ".pickle", ".ubj", ".npy", ".npz", ".pt", ".pth", ".ckpt", ".bin"}
     for path in Path(directory).rglob("*"):
         if path.is_file() and (
-            path.suffix.lower() in forbidden
-            or path.name in {"model.tar.gz", "checkpoint.tar.gz"}
+            path.suffix.lower() in forbidden or path.name in {"model.tar.gz", "checkpoint.tar.gz"}
         ):
             raise ValueError(f"metrics_only evidence contains model or checkpoint state: {path.name}")

@@ -387,6 +387,7 @@ def execute_matrix_case(
                 raise InterruptedError("metrics-only evaluation interrupted; next attempt restarts the unit")
             if callback is not None:
                 callback(step, values)
+
     output = workdir / "run"
     source = None
     if "source_sha256" in unit.params:

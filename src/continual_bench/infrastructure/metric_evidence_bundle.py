@@ -93,7 +93,9 @@ def build_metric_evidence_bundle(directory) -> dict:
             "evidence_file_count": len(members),
             "evidence_bytes": sum(member["bytes"] for member in members),
             "manifest": {
-                "path": MANIFEST_NAME, "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()
+                "path": MANIFEST_NAME,
+                "bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
             },
             "dashboard": "extract metric-evidence.zip and open dashboard.html",
         }
