@@ -29,4 +29,10 @@ unidade. As tentativas gravam evidência em prefixos separados no S3. A criaçã
 condicional de `final.json` e o marcador `analytics.json` controlam a publicação
 da tentativa vencedora. O cancelamento do SageMaker Studio usa a reconciliação
 do mesmo workflow quando a campanha é iniciada pelo pipeline de Studio.
+No Fargate Spot, os avaliadores com suporte a checkpoint retomam do estado confirmado
+mais recente no S3, mantendo o mesmo run lógico no MLflow. Trabalho ainda não
+confirmado pode ser refeito. O custo de materializar fontes e construir matrizes
+também precisa entrar no dimensionamento. A rede de interface é reservada antes do
+Batch e removida após a drenagem dos workflows e das filas.
+
 Veja [cancelamento e reconciliação](aws/operations.md#5-cancelamento-e-reconciliação).

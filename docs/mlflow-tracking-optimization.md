@@ -1,5 +1,8 @@
 # Auditoria e plano de otimização do tracking MLflow
 
+Este documento registra a auditoria, o plano e as medições daquela revisão. Para os
+nomes de experimentos e os artefatos da revisão atual, consulte o [guia MLflow](mlflow-tracking.md).
+
 Sintoma: a execução do benchmark termina rápido, mas a run no MLflow continua
 `RUNNING` por muito tempo depois. A auditoria abaixo mede o caminho entre o fim
 da avaliação e o `runs/update status=FINISHED`.
@@ -124,10 +127,9 @@ Datasets do catálogo que exigem aquisição explícita (`insects`, `gas`,
 imagens) continuam exigindo o cache local, exatamente como nos outros
 avaliadores.
 
-Fora do escopo desta mudança (próximo passo): os contratos da nuvem
-(`application/cloud/contracts.py` e `snapshots.py`) ainda validam snapshots
-brutos Zia vindos do Hugging Face. Para levar datasets do catálogo à AWS, é
-preciso um tipo de snapshot "catalog".
+Na revisão desta auditoria, os contratos de snapshot cobriam Zia. O fluxo atual
+admite matrizes do catálogo com [publicação de fontes separada](aws/operations.md#suíte-de-todos-os-datasets):
+o pedido fixa o SHA-256 dos inputs externos, que o worker valida antes de materializar.
 
 ## 5. Status da implementação e medições
 

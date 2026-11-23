@@ -6,9 +6,9 @@ Substituem a antiga `cost_heuristic`, removida do código, dos campaigns e dos t
 - **UPF** (Regol et al., *When to retrain a machine learning model*, ICML 2025, arXiv 2505.14903): `upf`.
 - **Oracle**: `oracle`, o escalonamento retrospectivamente ótimo por programação dinâmica (CARA, Algoritmos 2 e 3; UPF, seção 5). Usa lotes futuros, logo é um **limite inferior**, não uma política implantável.
 
-Código em `src/continual_bench/retraining/`; as políticas se registram em `PolicyStrategy` (`retraining/policies.py`). Rodam no pipeline **batch-prequential Zia** (`evaluation/zia.py`). O motor por amostra (`core/engine.py`) as recusa com erro explícito, pois decidem por lote e dependem de uma matriz de desempenho.
+Código em `src/continual_bench/retraining/`; as políticas se registram em `PolicyStrategy` (`retraining/policies.py`). Rodam no pipeline **batch-prequential Zia** (`evaluation/zia.py`) e no [binário incremental](#binário-incremental) (`evaluation/binary_retraining.py`). O motor por amostra (`core/engine.py`) as recusa com erro explícito, pois decidem por lote e dependem de uma matriz de desempenho.
 
-## Protocolo
+## Protocolo Zia
 
 Os fluxos são divididos em `B` lotes (blocos do Zia). `err[i, j]` é a taxa de erro 0-1 do modelo treinado ao fim do lote `i` no lote `j > i`. O modelo de `i` usa a mesma janela de reposição do `periodic` (últimos `REPLAY_BLOCKS` blocos).
 
@@ -21,9 +21,33 @@ Os fluxos são divididos em `B` lotes (blocos do Zia). `err[i, j]` é a taxa de 
 
 **Sem vazamento do futuro.** A política só recebe uma `MatrixView` com os erros de modelos *treinados* em lotes `≤ t`. Um teste altera tudo o que seria observado depois de um lote e confere que as decisões anteriores não mudam. Só o Oracle lê entradas futuras.
 
+## Binário incremental
+
+A configuração usa `mode: incremental` e uma das políticas `cara`, `cara_cumulative`,
+`cara_periodic`, `upf` ou `oracle`. O avaliador materializa o fluxo limitado e constrói
+a matriz com `batch_size` e `replay_window` da execução. A fase offline ajusta ou
+inicializa as políticas; a comparação online aplica os modelos escolhidos a partir do
+lote seguinte. Os probes reservados no fluxo não entram na matriz de decisão. O relatório
+separa a construção dos candidatos do custo das atualizações escolhidas. O protocolo por
+evento e o holdout offline não aceitam essas políticas.
+
+Nos baselines binários prequential, o relatório também pode construir essa matriz
+depois da avaliação para publicar referências CARA, UPF e Oracle, desde que haja
+lotes suficientes. As curvas desse diagnóstico representam cronogramas simulados;
+as atualizações realmente aplicadas no benchmark ficam em `report.updates`.
+
+O binário admite `policy.params.alpha` ou `policy.params.lambda`. Quando há λ, o avaliador
+calcula `α = λ × custo_retreino_usd` e rejeita um α explícito conflitante. O custo por ação
+pode vir de `policy.params.custo_retreino_usd` ou do cenário Fargate On-Demand. O
+[perfil INSECTS](../configs/base/tracking-fargate.yaml) fixa a referência em 2 vCPU,
+4 GiB e 50 GiB de disco efêmero, com modo `dedicated_task` e mínimo de 60 s. A
+[matriz completa](../configs/matrices/insects-72.yaml) configura λ = 10 para CARA, UPF e
+Oracle. O perfil normaliza a comparação e fica separado dos recursos Spot da execução
+e da fatura. Consulte [contabilidade de custos](cost-accounting.md).
+
 ## Algoritmos
 
-**Custo** (UPF, eq. 3 e 24, com `eN = 1`): `Ĉα(θ) = α‖θ‖₁ + Σₜ err[modelo implantado em t, t]`. `α` é o custo de retreinar relativo ao de errar um lote inteiro; é o `κ` do CARA por query. Vem de `tracking.upf_alpha` (padrão 1.0).
+**Custo** (UPF, eq. 3 e 24, com `eN = 1`): `Ĉα(θ) = α‖θ‖₁ + Σₜ err[modelo implantado em t, t]`. `α` é o custo de retreinar relativo ao de errar um lote inteiro; é o `κ` do CARA por query. No Zia, vem de `tracking.upf_alpha` (padrão 1,0). No binário, segue a resolução descrita acima.
 
 **CARA** (`retraining/rules.py`, `matrix.staleness`). Obsolescência relativa `Ψ̄(t, t') = Ψ(Q_t, D_t, M_t') − Ψ(Q_t, D_t', M_t')`, com `Ψ(q, D, M) = 1/|D| Σ sim(q,x)·ℓ(M,x,y)`, kernel RBF com `γ = 1/(d · Var(X_offline))`, atributos brutos e média sobre as queries no pipeline.
 - `cara`: retreina se `Ψ̄ ≥ τ`.
@@ -44,7 +68,7 @@ manter. O UPF retreina quando o quantil `δ` (0,95) do primeiro ramo é estritam
 
 ## Métricas rastreadas
 
-No `report.json`/MLflow (`tracking_v1/summary/<nome>`), só para estas políticas; as demais ficam `unavailable`:
+No `report.json`/MLflow (`tracking_v1/summary/<nome>`), para os protocolos e escopos que calculam essas métricas:
 
 | Métrica | Artigo | Significado |
 |---|---|---|
@@ -95,11 +119,13 @@ Configuração opcional (ausente por padrão) em `tracking.retraining`: `offline
 
 ## Limites
 
-- Cada job repete a passada da matriz, que custa `B` ajustes e `O(B²)` predições; em `full` é a parte mais cara do run. Os campaigns principais (`campaign-*-full.json`) não incluem estas políticas; use `campaign-social-full-cost-aware.json`.
+- Cada job repete a passada da matriz, que custa `B` ajustes e `O(B²)` predições; em `full` é a parte mais cara do run. Os pedidos integrais Zia incluem essas políticas. Use `campaign-social-full-cost-aware.json` para executar somente as cinco políticas por custo em Social.
 - Um dataset com menos de quatro blocos de fluxo falha com erro explícito. Em dados que o modelo já separa perfeitamente o Oracle custa 0, e `cost_scpe` fica indefinido.
 - Resultados de smoke validam algoritmo e integração, não desempenho (veja [reliability.md](reliability.md)).
 
 ## Benchmark das Tabelas 1 e 2 do UPF
+
+Instale o extra `large-datasets` para o XGBoost.
 
 ```bash
 python scripts/replicate_upf.py gauss circles electricity airlines \
@@ -129,7 +155,7 @@ operacional descrita acima.
 ## Comparação pareada de CARA, UPF e os dois Oracles em Electricity e Airlines
 
 ```bash
-uv sync --locked --inexact --extra replication
+uv sync --locked --inexact --extra large-datasets --extra plots
 out=state/cara-upf-pareado
 mkdir -p "$out"
 uv run --no-sync python scripts/prepare_real_sources.py --directory "$out/inputs"
@@ -181,7 +207,7 @@ commit `80f86c2`. Para gerar resultados do código atual, execute os comandos de
 | `find_max_retraining_cost.py`, `analyse.py` | Grade de 100 custos sobre o menor limite do Oracle **offline** entre as seeds, elevado ao próximo inteiro. A busca local delimita a fronteira por bisseção, pois a função usada com `fsolve` no original tem um platô. |
 | `utils.py`, `plotting.py` | Custo inclui o treino inicial de cada fase. A contagem dos algoritmos CARA exclui esse treino. A acurácia usa a avaliação prequential do repositório, incluindo o recorte do deslocamento no último lote. O SCPE usa referência com sinal, exclui referência zero e preserva resultados iguais a zero. O resumo sobre a grade exclui `κ=0`. |
 
-Execute com o extra `replication` do projeto e informe os arquivos de dados originais quando necessário.
+Informe os arquivos de dados originais quando necessário. Para os gráficos, instale o extra `plots`.
 
 ```sh
 python scripts/replicate_cara.py covcon-d circle-s electricity --seeds 5 \
@@ -202,3 +228,8 @@ da Tabela 2 quando o JSON de Electricity inclui os pontos de custo baixo e alto.
 ```sh
 python scripts/plot_replication.py /path/to/cara.json /path/to/upf.json --output /path/to/plots
 ```
+
+Os resultados e as limitações das rodadas da Semana 10 estão nos arquivos
+[Electricity e Airlines](evidencias/semana-10/cara-upf/README.md) e
+[INSECTS](evidencias/semana-10/insects/README.md). Cada conjunto de arquivos preserva o
+protocolo que gerou seus números.

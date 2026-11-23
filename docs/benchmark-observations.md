@@ -93,11 +93,28 @@ ficam no documento, e o MLflow recebe apenas os valores escalares finitos.
   estimativa USD como indisponível. O caminho anterior não concluía nessas
   condições, pois tentava ler os preços do perfil nulo.
 
+## Retenção por episódio
+
+No binário prequential, fontes sintéticas com gerador produzem probes com semente
+separada. Fontes que expõem `episode_probes` fornecem seu próprio holdout. No caminho
+com reserva dentro do fluxo, o avaliador escolhe exemplos de cada período depois do
+aquecimento. Usa fronteiras anotadas quando disponíveis, ou cortes cronológicos para
+diagnóstico. Os exemplos reservados ficam fora dos rótulos de treino, do detector,
+da matriz de decisão e do placar prequential desse caminho. Corte cronológico por si
+só não é anotação de drift.
+
+Cada checkpoint admitido avalia os mesmos probes. Retenção e forgetting são medidas
+desse conjunto; o placar prequential mede uma população diferente. Compare runs
+somente quando a seleção dos eventos, a fase de avaliação e o denominador forem
+compatíveis. Em INSECTS, a [análise pareada](evidencias/semana-10/insects/README.md)
+registra a interseção efetivamente avaliada.
+
 ## Runtime e plots
 
 Os workers usam as versões fixadas de River e scikit-learn. O Matplotlib gera
 os PNGs com backend Agg. O HTML interativo autocontido usa os dados dos painéis
-e funciona sem CDN. O catálogo, os PNGs, o HTML e os dados de origem têm
+e funciona sem CDN. O painel principal `dashboard.html` é gravado na raiz dos
+artefatos quando há observações. O catálogo, os PNGs, o HTML de detalhamento e os dados de origem têm
 caminhos próprios sob `tracking-observations/`. `plots-manifest.json` registra
 ausências, escopos, duração da renderização e redução de pontos desenhados. Os dados completos
 observados continuam disponíveis nas respectivas fontes. Os gráficos legados

@@ -116,6 +116,12 @@ Os gráficos são gerados sem dependências externas (`evaluation/artifacts/svg.
 vetorial para relatórios e são determinísticos para os mesmos dados. Para outra visualização,
 basta ler o JSON correspondente em `data/`.
 
+Quando o relatório tem `observations_v1`, procure também `dashboard.html` na raiz dos
+artefatos do run. Ele reúne visão geral, janelas, drift, retenção e análises de custo ou
+retreinamento quando há dados. Baixe o HTML para abrir localmente se a interface só
+mostrar o arquivo. As fontes para auditoria são o relatório e os artefatos JSON sob
+`tracking-observations/`. Veja [escopos e limites](benchmark-observations.md#runtime-e-plots).
+
 ## Republicação e limites
 
 A publicação é idempotente: pontos `system/*` já existentes são conferidos e não duplicados, e os
@@ -161,7 +167,7 @@ do menu principal do Studio depende de um MLflow Tracking Server. O runtime publ
 | Execução | Experimento | Filtro e conteúdo |
 |---|---|---|
 | Campanhas Zia no Batch | `<sha-curto>-continual-bench-zia-experiments` | `cb-campaign-id`. Relatório final, janelas, holdout e métricas de sistema. |
-| Matriz no Batch | `continual-bench-matrix` | `cb-campaign-id`. Uma run por tentativa, com `cb-unit-id`, `cb-batch-job-id`, séries `progress/*` e resumo `final/*`. |
+| Matriz no Batch | `<sha-curto>-continual-bench-matrix-<política>` | `cb-campaign-id` e `cb-unit-id`. Nome do run inclui dataset, modelo, modo quando disponível e estratégia. No Spot, as tentativas compartilham o run lógico; no On-Demand, cada tentativa tem seu run e as tags `cb-batch-job-id` e `cb-attempt`. |
 | Processing, Training e trials de Tuning | `continual-bench-native` | `cb-pipeline-execution-id`. Uma run por job ou trial, com progresso da preparação ou métricas de validação por época. |
 
 Os pipelines mostram etapas e estado da execução no Studio. Os detalhes de orquestração e

@@ -2,7 +2,7 @@
 
 | Pasta | Conteúdo | Editar? |
 |---|---|---|
-| `base/` | Bases compartilhadas: `run.yaml` (padrões do motor binário), `smoke.yaml` (caso curto de validação) e `tracking.yaml` (perfil de métricas da residência) | Sim; afeta todos os arquivos que herdam delas |
+| `base/` | Bases compartilhadas: `run.yaml` (padrões do motor binário), `smoke.yaml` (caso curto de validação), `tracking.yaml` (métricas da residência) e `tracking-fargate.yaml` (cenário de preço On-Demand) | Sim; afeta todos os arquivos que herdam delas |
 | `runs/` | Execuções binárias (`continual-bench run`) | Sim |
 | `typed/` | Avaliações typed prequential (`continual-bench typed`) | Sim |
 | `campaigns/` | Campanhas declarativas (`continual-bench campaign`) | Sim |
@@ -14,6 +14,10 @@ Para enviar a matriz de smoke ao SageMaker Studio, copie a solicitação de
 [campaign-binary-matrix.json](../infra/examples/campaign-binary-matrix.json), defina um
 novo `campaign_id` e ajuste `request.matrix.path` para `configs/matrices/studio-smoke.yaml`.
 Os exemplos de solicitação ficam em `infra/examples/`. [Runbook do Studio](../docs/aws/operations.md#campanhas-no-sagemaker-studio).
+
+A [matriz INSECTS completa](matrices/insects-72.yaml) planeja 72 unidades binárias incrementais.
+A [matriz piloto](matrices/insects-pilot.yaml) inclui streaming e incremental; o planejador aplica
+CARA, UPF e Oracle apenas no incremental (9 casos no total). Veja [aquisição e interpretação](../docs/real-streams.md#benchmark-binário-da-semana-10).
 
 ## Herança com `extends`
 

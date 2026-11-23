@@ -16,8 +16,8 @@ A política `performance` aciona uma decisão quando a taxa de erro da janela at
 | Mahadevan e Mathioudakis, CARA, Knowledge Based Systems 293, 111610, 2024; [paper original](https://ananthmahadevan.com/publication/cost-aware-retraining/cost-aware-retraining.pdf) | `cara`, `cara_cumulative`, `cara_periodic` e `oracle` (DP dos Algoritmos 2 e 3) | Retreino vale do lote seguinte; busca em grade no lugar de *dual annealing*; queries amostradas do próprio fluxo (CARA-D). |
 | Regol et al., ICML 2025, PMLR 267, 51369 a 51404; [publicação original](https://proceedings.mlr.press/v267/regol25a.html), arXiv 2505.14903 | `upf` (ElasticNetCV, Beta, quantil Monte Carlo) e `oracle` | Retreino vale a partir do lote seguinte no fluxo operacional. A recorrência compara quantis e escolhe uma continuação por estado. |
 
-As políticas por custo usam a matriz de desempenho do avaliador Zia por lotes.
-O motor binário por amostra continua usando `performance` e os demais gatilhos
+As políticas por custo usam matriz de desempenho no Zia e no avaliador binário em modo
+`incremental`. O motor binário por evento oferece `performance` e os demais gatilhos
 descritos nesta página. Os Oracles usam dados futuros para servir de referência;
 CARA e UPF decidem a partir da informação disponível em `MatrixView`. Os protocolos
 de referência dos artigos e a comparação em Electricity têm comandos próprios.

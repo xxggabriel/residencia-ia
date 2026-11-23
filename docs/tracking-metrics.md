@@ -258,6 +258,10 @@ própria de cada avaliador. O catálogo no SageMaker Unified Studio associa o sn
 ao run Zia cujo manifesto final comprova o vínculo. Veja
 [rastreamento no MLflow](mlflow-tracking.md) e [publicação do catálogo](aws/operations.md#publicação-automática-no-catálogo).
 
+A leitura do dashboard e do relatório deve preservar os escopos. Por exemplo, o
+F1 macro prequential e a retenção em probes independentes respondem a perguntas
+diferentes. Veja o [contrato de retenção por episódio](benchmark-observations.md#retenção-por-episódio).
+
 ## Observações por ajuste
 
 O [contrato de observações por run e ajuste](benchmark-observations.md) detalha

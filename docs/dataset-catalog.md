@@ -1,6 +1,6 @@
 # Datasets e protocolos de avaliação
 
-O [registro executável de datasets](../src/continual_bench/datasets/catalog.py) define as 17 fontes e variantes com preparação por épocas e orienta o gate de admissão da DAG `benchmark_task_suite`. Cada entrada indica o tipo de alvo, o adaptador prequential e o loader de preparação. `split_cifar` e `clear` também estão disponíveis como aliases para manifestos locais.
+O [registro executável de datasets](../src/continual_bench/datasets/catalog.py) define as 17 entradas com preparação por épocas para o gate da DAG `benchmark_task_suite` e também registra fontes adicionais. Cada entrada declara o tipo de alvo e os adaptadores disponíveis. As duas variantes binárias desbalanceadas de INSECTS pertencem às matrizes explícitas e não ampliam o gate de 17 entradas. `split_cifar` e `clear` também estão disponíveis como aliases para manifestos locais.
 
 O [contrato de candidatos da Semana 09](../configs/contracts/dataset-catalog.json) preserva o recorte da pesquisa original. O [relatório de preparação e execução](task-dataset-execution.md) registra os testes com dados reais e a remoção do Stream51 em 08/11/2026 devido à indisponibilidade da origem oficial.
 
@@ -19,6 +19,7 @@ O [contrato de candidatos da Semana 09](../configs/contracts/dataset-catalog.jso
 | Random RBF Drift | [River RandomRBFDrift 0.26.1](https://github.com/online-ml/river/blob/0.26.1/river/datasets/synth/random_rbf.py) | Nativa, velocidade e centroides móveis positivos obrigatórios, duas classes | Replay, seeds, parâmetros e alvos | Movimento contínuo; sem F1 de detector por pontos inventados |
 | Friedman Drift | [River FriedmanDrift 0.26.1](https://github.com/online-ml/river/blob/0.26.1/river/datasets/synth/friedman.py), Ikonomovska et al. 2011 | Nativa, modos `gra`, `lea`, `gsg`, posições dentro do recorte; avaliador LinearRegression | Replay, alvo contínuo, posições, transições, treino/avaliação e rejeição binária | Baselines tipadas; sem políticas de custo/drift de regressão |
 | INSECTS | Variante `abrupt_balanced`, Souza et al. 2020 | Loader CSV com ordem e classes originais e aquisição explícita | Fixtures de schema, hashes e ordem. Smoke com dados reais | Prefixo da variante selecionada. [Contrato e proveniência](real-streams.md) |
+| INSECTS binário desbalanceado | Abrupto e incremental abrupto recorrente, com hashes fixados | Classe de origem 2 contra as demais; fronteiras anotadas para auditoria | Matriz incremental da Semana 10: 66 de 72 unidades concluídas | Consulte [aquisição, projeção e evidências](real-streams.md#benchmark-binário-da-semana-10) |
 | Elec2 e Airlines | OpenML, versões do [lock](../configs/contracts/real-sources.lock.json) | `RealSource`, prefixo de cache verificado com relógio simulado | Suíte de fontes e smoke | Ordem publicada sem pontos de drift anotados |
 | Gas Sensor Array Drift | UCI 224, atualização batch10 de 14/10/2013 | Loader ZIP/LIBSVM com lotes em ordem e classes originais | Fixtures do parser e smoke com dados reais | O recorte pode abranger só parte do primeiro lote. [Contrato e proveniência](real-streams.md) |
 | Split MNIST, Split CIFAR10 e Split CIFAR100 | MNIST IDX e revisões Parquet CIFAR fixadas | Agrupamento por classe sobre imagens dos splits oficiais | Fixtures e smoke com dados reais | Prefixos dos splits, com cobertura parcial de classes. [Loaders de imagens](image-datasets.md) |
@@ -26,7 +27,7 @@ O [contrato de candidatos da Semana 09](../configs/contracts/dataset-catalog.jso
 | CORe50 | Arquivo original 128×128 | Loader ZIP parcial com sessões oficiais e ordem interna | Fixtures e smoke com dados reais | Recorte diagnóstico NI. [Loaders temporais](temporal-vision.md) |
 | CLEAR10 e CLEAR100 | Release de julho de 2022 | Loader ZIP parcial com buckets e splits oficiais | Fixtures e smoke com dados reais | Splits da release e direitos por imagem. [Loaders temporais](temporal-vision.md) |
 
-Os resultados da validação inicial estão no [relatório de execução](task-dataset-execution.md). As evidências com dados reais referem-se ao recorte de 100 exemplos e duas épocas.
+O [relatório da Semana 09](task-dataset-execution.md) registra o smoke inicial de 100 exemplos e duas épocas. A [Semana 10](evidencias/semana-10/insects/README.md) documenta outra campanha, com as variantes binárias de INSECTS.
 
 ## Admissão local
 
