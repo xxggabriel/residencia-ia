@@ -8,7 +8,7 @@ from pathlib import Path
 from continual_bench.infrastructure.artifact_policy import metrics_only, verify_metrics_only_files
 
 from .metric_tracking import log_metric_points, metric_points
-from .observation_tracking import observation_tags, parent_observation_points
+from .observation_tracking import parent_observation_points
 from .run_artifacts import publish_run_artifacts
 from .storage import atomic_write, publication_lock
 from .training_tracking import sanitize_mlflow_name
@@ -172,8 +172,11 @@ def publish_local_benchmark(directory, report, *, experiment_name, client=None):
         if run.data.tags.get("cb-report-sha256") != digest:
             raise ValueError("local benchmark report changed for the existing MLflow run")
         run_id = run.info.run_id
-        for tag_key, tag_value in tags.items():
-            client.set_tag(run_id, tag_key, tag_value)
+        changed_tags = {name: value for name, value in tags.items() if run.data.tags.get(name) != value}
+        if changed_tags:
+            from .tracking import as_backend
+
+            as_backend(client).log_batch(run_id, tags=changed_tags)
         client.set_tag(run_id, "benchmark_complete", "false")
         try:
             points = benchmark_metric_points(report)
@@ -185,8 +188,7 @@ def publish_local_benchmark(directory, report, *, experiment_name, client=None):
             log_metric_points(
                 client, run_id, points, **({"max_points_per_key": None} if not retain_models else {})
             )
-            for tag_key, tag_value in observation_tags(report).items():
-                client.set_tag(run_id, tag_key, tag_value)
+            # publish_sdk_observations commits observation tags in one batch.
             client.log_artifact(run_id, str(path))
             artifacts = publish_run_artifacts(
                 client, run_id, directory, report, include_checkpoints=retain_models

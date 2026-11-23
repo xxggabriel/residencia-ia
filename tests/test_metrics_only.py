@@ -193,6 +193,14 @@ def test_metrics_only_mlflow_keeps_complete_quality_and_system_series(tmp_path, 
     monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
     monkeypatch.setattr("continual_bench.infrastructure.run_artifacts.log_detailed_figures", no_checkpoint)
     client = MlflowClient(uri)
+    individual_tag_calls = []
+    original_set_tag = client.set_tag
+
+    def observed_set_tag(run_id, key, value, **kwargs):
+        individual_tag_calls.append(key)
+        return original_set_tag(run_id, key, value, **kwargs)
+
+    monkeypatch.setattr(client, "set_tag", observed_set_tag)
     directory = tmp_path / "evidence"
     directory.mkdir()
     report = {
@@ -244,8 +252,13 @@ def test_metrics_only_mlflow_keeps_complete_quality_and_system_series(tmp_path, 
     assert tags["cb-mode"] == "incremental" and tags["cb-detector"] == "none"
     assert tags["cb-run-role"] == "matrix_case"
     assert "hoeffding_tree-none" in tags["mlflow.runName"]
+    assert not any(
+        key.startswith(("cb-model", "cb-policy", "cb-observation")) for key in individual_tag_calls
+    )
+    client.delete_tag(run_id, "cb-model")
     again = publish_local_benchmark(directory, report, experiment_name="metrics-only-series", client=client)
     assert again["mlflow_run_id"] == run_id
+    assert client.get_run(run_id).data.tags["cb-model"] == "hoeffding_tree"
     assert len(client.get_metric_history(run_id, "system/cpu")) == 600
 
 
@@ -259,7 +272,8 @@ def test_metrics_only_defers_static_rendering_preserving_json_html_and_cache_mod
     report = {
         "training_history": [],
         "tracking_observations": observations(
-            "binary", {"prequential": quality},
+            "binary",
+            {"prequential": quality},
             windows=[{"step": 2, "scope": "prequential", "quality": quality}],
         ),
     }
@@ -293,10 +307,7 @@ def test_metrics_only_defers_static_rendering_preserving_json_html_and_cache_mod
     assert manifest["static_rendering"] == {"enabled": False, "reason": "rendering_deferred"}
     assert not list(root.rglob("*.png"))
     assert any(entry["availability"]["reason"] == "rendering_deferred" for entry in manifest["figures"])
-    assert all(
-        entry["availability"]["reason"] != "Matplotlib indisponível"
-        for entry in manifest["figures"]
-    )
+    assert all(entry["availability"]["reason"] != "Matplotlib indisponível" for entry in manifest["figures"])
     assert (root / "observations.json").read_bytes() == original
     current_html = (root / "retraining-explorer.html").read_text()
     current_data = json.loads(re.search(r'id="page-data">(.*?)</script>', current_html, re.S).group(1))
