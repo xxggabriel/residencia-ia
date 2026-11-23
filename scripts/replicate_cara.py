@@ -25,6 +25,9 @@ def main():
     parser.add_argument("--covertype", help="original scaled LibSVM Covertype file")
     parser.add_argument("--workers", type=int, default=1, help="parallel matrix columns")
     parser.add_argument(
+        "--metrics-only", action="store_true", help="retain metrics and provenance, no models"
+    )
+    parser.add_argument(
         "--drift-backend",
         choices=("skmultiflow", "river"),
         help="optionally include ADWIN and DDM; River is an alternative backend",
@@ -69,6 +72,7 @@ def main():
             workers=args.workers,
             drift_backend=args.drift_backend,
             progress=progress,
+            metrics_only=args.metrics_only,
         )
         results.append(result)
         print(f"\n{name} ({result['seeds']} seeds, kappa_max={result['kappa_max']:.2f})")

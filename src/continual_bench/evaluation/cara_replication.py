@@ -24,6 +24,7 @@ from continual_bench.retraining.schedule import alpha_max_same_batch
 
 from .epoch_history import pickle_state
 from .retraining_observations import candidate_report, sample_identity
+from .retraining_policy_tracking import policy_report
 
 BATCHES, OFFLINE, GRID = 100, 25, 100
 REFERENCE = "ac2a600a3bbc5729087318087c9def96104c9023"
@@ -213,6 +214,7 @@ def build_phase(
     phase_name=None,
     initial=None,
     drift_backend=None,
+    metrics_only=False,
 ):
     """Train and score each candidate inside a single phase, using the reference's 90/10 split."""
     from sklearn.metrics.pairwise import rbf_kernel
@@ -286,6 +288,7 @@ def build_phase(
                 "policy_query_scope": "static_queries" if queries is not None else "batch_holdout",
                 "static_queries_sha256": sample_identity(queries) if queries is not None else None,
             },
+            artifact_mode="metrics_only" if metrics_only else "full",
         )
     return phase
 
@@ -351,17 +354,29 @@ def evaluate_kappa(offline, online, kappa, seed, baseline_schedules=None):
     }
     optimum = strategy_cost(stale, schedules["oracle_staleness"], kappa)
     report = {}
+    parameters = {
+        "cara": {"threshold": tau},
+        "cara_cumulative": {"threshold": tau_cum},
+        "cara_periodic": {"period": period, "offset": offset},
+        "markov": {"threshold": kappa},
+    }
     for rule, schedule in schedules.items():
         cost = strategy_cost(stale, schedule, kappa)
         # The reference backtracks Oracle in reverse order. If two deployments collide
         # at the final batch after clipping, the assignment order affects accuracy.
         accuracy_schedule = schedule[::-1] if rule == "oracle_staleness" else schedule
         retrain_count = len(schedule) if rule in DRIFT_RULES else len(schedule) - 1
+        deployed = np.zeros(len(stale), dtype=int)
+        for retrain in accuracy_schedule:
+            deployed[min(retrain + 1, len(stale) - 1)] = retrain
         report[rule] = {
             "strategy_cost": cost,
             "strategy_scpe": strategy_scpe(cost, optimum),
             "average_accuracy": prequential_accuracy(online.accuracy, accuracy_schedule),
             "retrains": retrain_count,
+            "retrain_points": list(schedule),
+            "served_by": np.maximum.accumulate(deployed).tolist(),
+            "parameters": parameters.get(rule, {}),
         }
     return report
 
@@ -369,6 +384,10 @@ def evaluate_kappa(offline, online, kappa, seed, baseline_schedules=None):
 def _mean(values):
     available = [value for value in values if value is not None]
     return float(np.mean(available)) if available else None
+
+
+def _matrix_values(matrix):
+    return [[float(value) if math.isfinite(value) else None for value in row] for row in matrix]
 
 
 def replicate(
@@ -380,6 +399,7 @@ def replicate(
     progress=None,
     workers=1,
     drift_backend=None,
+    metrics_only=False,
     **options,
 ):
     """Evaluate the CARA variants against a retrospective phase-local Oracle."""
@@ -406,6 +426,7 @@ def replicate(
             workers=workers,
             tracking_dataset=name,
             phase_name="offline",
+            metrics_only=metrics_only,
         )
         online = build_phase(
             batches[OFFLINE:],
@@ -417,6 +438,7 @@ def replicate(
             tracking_dataset=name,
             phase_name="online",
             initial=0,
+            metrics_only=metrics_only,
         )
         matrices.append((offline, online))
         emit({"event": "matrix", "dataset": name, "seed": seed})
@@ -442,7 +464,7 @@ def replicate(
     curves = {
         rule: {
             metric: [_mean(run[i][rule][metric] for run in runs) for i in range(len(kappas))]
-            for metric in runs[0][0][rule]
+            for metric in ("strategy_cost", "strategy_scpe", "average_accuracy", "retrains")
         }
         for rule in (*RULES, *(DRIFT_RULES if drift_backend else ()))
     }
@@ -454,6 +476,52 @@ def replicate(
         }
         for rule, metrics in curves.items()
     }
+    details = []
+    protocol = "CARA-authors-historical-v1"
+    for seed, run in enumerate(runs):
+        by_policy = {
+            rule: [{"kappa": kappa, **row[rule]} for kappa, row in zip(kappas, run, strict=True)]
+            for rule in curves
+        }
+        seed_summary = {
+            rule: {
+                "strategy_scpe": _mean(row[rule]["strategy_scpe"] for row in run[1:]),
+                "accuracy": _mean(row[rule]["average_accuracy"] for row in run[1:]),
+                "retrains": _mean(row[rule]["retrains"] for row in run[1:]),
+            }
+            for rule in curves
+        }
+        detail = {
+            "seed": seed,
+            "kappa": kappas,
+            "curves_by_policy": by_policy,
+            "summary": seed_summary,
+            "offline_batches": OFFLINE,
+            "online_batches": len(matrices[seed][1].stale),
+            "matrices": {
+                phase_name: {
+                    "staleness": _matrix_values(phase.stale),
+                    "accuracy": _matrix_values(phase.accuracy),
+                }
+                for phase_name, phase in zip(("offline", "online"), matrices[seed], strict=True)
+            },
+        }
+        detail["policy_tracking"] = policy_report(
+            name,
+            seed,
+            protocol=protocol,
+            analysis=detail,
+            candidate_reports=[matrices[seed][0].tracking, matrices[seed][1].tracking],
+            settings={
+                "kappa_grid": kappas,
+                "drift_backend": drift_backend,
+                "cost_timing": "same_batch_with_initial_fit_charged",
+                "accuracy_timing": "reference_prequential_shift_with_final_batch_clipping",
+                "preprocessing": "historical_full_stream_attributes_for_real_datasets",
+            },
+            artifact_mode="metrics_only" if metrics_only else "full",
+        )
+        details.append(detail)
     return {
         "dataset": name,
         "seeds": seeds,
@@ -467,10 +535,21 @@ def replicate(
         "kernel_gamma": gamma if gamma is not None else "1/n_features",
         "oracle_retrains": summary["oracle_staleness"]["retrains"],
         "candidate_tracking": [{"offline": a.tracking, "online": b.tracking} for a, b in matrices],
+        "trials_detail": details,
+        "protocol": protocol,
+        "dispersion": {"n": seeds, "ddof": 0, "divisor": seeds, "kind": "population_std"},
+        "evaluation": {
+            "cost_timing": "same_batch_with_initial_fit_charged",
+            "accuracy_timing": "reference_prequential_shift_with_final_batch_clipping",
+            "preprocessing": "historical_full_stream_attributes_for_real_datasets",
+            "causal_preprocessing_variant": False,
+        },
     }
 
 
-def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fraction=0.25, **options):
+def schedule_showcase(
+    name="covcon-d", seeds=5, *, batches=11, offline=4, fraction=0.25, metrics_only=False, **options
+):
     """Illustrate a CARA-T schedule on a short prefix of the reference data stream."""
     if not 2 <= offline <= batches - 2 or seeds < 1 or fraction < 0:
         raise ValueError("invalid CARA showcase horizon, seeds or cost fraction")
@@ -487,6 +566,7 @@ def schedule_showcase(name="covcon-d", seeds=5, *, batches=11, offline=4, fracti
             tracking_dataset=name,
             phase_name="showcase",
             initial=offline,
+            metrics_only=metrics_only,
         )
         tracking.append(phase.tracking)
         history, online = phase.stale[:offline, :offline], phase.stale[offline:, offline:]

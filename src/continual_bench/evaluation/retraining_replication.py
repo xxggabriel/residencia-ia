@@ -18,6 +18,7 @@ from continual_bench.retraining import build_paper_matrix
 from continual_bench.retraining.analysis import DEFAULT_RULES, analyze, trapezoid
 
 from .retraining_observations import candidate_report
+from .retraining_policy_tracking import policy_report
 
 OFFLINE, ONLINE, ALPHAS = 7, 8, 10
 COMPARISON_DATASETS = ("electricity", "airlines")
@@ -180,6 +181,7 @@ def run_trial(
     rules=None,
     compare_oracles=False,
     decision_timing="same-batch",
+    metrics_only=False,
 ):
     started = time.perf_counter()
     if compare_oracles:
@@ -190,19 +192,21 @@ def run_trial(
         raise ValueError("unknown decision timing")
     if decision_timing == "next-batch" and not compare_oracles:
         raise ValueError("next-batch timing requires the shared benchmark")
-    # In paired runs, the reported source hash must identify the parsed rows.
+    # A stale NPZ sidecar must not replace the explicitly supplied source in a corrective run.
     batches = trial_batches(
         name,
         trial,
         electricity_path,
         size,
         airlines_path=airlines_path,
-        airlines_disk_cache=not compare_oracles,
+        airlines_disk_cache=False,
     )
     learner = XGBoostLearner(trial)
-    matrix, states = build_paper_matrix(
-        batches, learner, OFFLINE, seed=trial, separate_query_split=compare_oracles
-    )
+    # Held-out labels score candidates but never define the CARA decision signal.
+    # This also applies to the individual UPF harness, not only the paired benchmark.
+    matrix, states = build_paper_matrix(batches, learner, OFFLINE, seed=trial, separate_query_split=True)
+    protocol = f"UPF-train-reference-v2-{'paired' if compare_oracles else 'individual'}-{decision_timing}"
+    artifact_mode = "metrics_only" if metrics_only else "full"
     tracking = candidate_report(
         name,
         trial,
@@ -210,10 +214,11 @@ def run_trial(
         states,
         learner,
         matrix.fit_seconds.tolist(),
-        protocol="UPF-paper-candidates",
+        protocol=f"{protocol}-candidates",
         initial=matrix.initial,
         duration_before_tracking=time.perf_counter() - started,
-        evaluation={"separate_query_split": compare_oracles, "decision_timing": decision_timing},
+        evaluation={"separate_query_split": True, "decision_timing": decision_timing},
+        artifact_mode=artifact_mode,
     )
     selected_rules = tuple(rules) if rules else DEFAULT_RULES
     if compare_oracles:
@@ -232,10 +237,29 @@ def run_trial(
         alpha_grid=COMPARISON_GRID if compare_oracles else None,
     )
     result["candidate_tracking"] = tracking
+    result["protocol"] = protocol
+    result["policy_tracking"] = policy_report(
+        name,
+        trial,
+        protocol=protocol,
+        analysis=result,
+        candidate_reports=[tracking],
+        settings={
+            "separate_query_split": True,
+            "decision_timing": decision_timing,
+            "paired": compare_oracles,
+            "alpha_grid": result["alphas"],
+            "samples": samples,
+            "rules": list(result["rules"]),
+        },
+        artifact_mode=artifact_mode,
+    )
     return result
 
 
 def replicate(name, trials=10, *, compare_oracles=False, **options):
+    if trials < 1:
+        raise ValueError("UPF needs at least one trial")
     runs = [run_trial(name, trial, compare_oracles=compare_oracles, **options) for trial in range(trials)]
     metrics = ("cost", "retrains", "average_accuracy")
     if compare_oracles:
@@ -280,6 +304,36 @@ def replicate(name, trials=10, *, compare_oracles=False, **options):
         "table": table,
         "oracle_alpha_max_per_trial": [run["setup"]["oracle_alpha_max"] for run in runs],
         "candidate_tracking": [run["candidate_tracking"] for run in runs],
+        "protocol": runs[0]["protocol"],
+        "dispersion": {"n": trials, "ddof": 0, "divisor": trials, "kind": "population_std"},
+        "evaluation": {
+            "separate_query_split": True,
+            "policy_reference": "labeled_training_partition",
+            "policy_queries": "unlabeled_heldout_attributes",
+            "heldout_labels": "retrospective_scoring_only",
+            "paper_values": "published_reference_values_not_a_claim_of_identical_reproduction",
+        },
+        "trials_detail": [
+            {
+                "seed": seed,
+                "setup": run["setup"],
+                "table": run["table"],
+                "curves": {rule: info["curve"] for rule, info in run["rules"].items()},
+                "summary": {
+                    rule: {key: value for key, value in info.items() if key != "curve"}
+                    for rule, info in run["rules"].items()
+                },
+                "performance_matrix": run["performance_matrix"],
+                "staleness_matrix": run["staleness_matrix"],
+                "forecast": run["forecast"],
+                "wrong_alpha": run["wrong_alpha"],
+                "cumulative_strategy_cost": run["cumulative_strategy_cost"],
+                "oracle_schedule_at_focus": run["oracle_schedule_at_focus"],
+                "candidate_run_key": run["candidate_tracking"]["run_key"],
+                "policy_tracking": run["policy_tracking"],
+            }
+            for seed, run in enumerate(runs)
+        ],
     }
     if compare_oracles:
         result["comparison"] = {
@@ -295,12 +349,4 @@ def replicate(name, trials=10, *, compare_oracles=False, **options):
             "staleness": "RBF-weighted losses from labeled train rows; queries from unlabeled test features",
             "cost_input": "Common numeric grid, in the units of each objective",
         }
-        result["trials_detail"] = [
-            {
-                "seed": seed,
-                "table": run["table"],
-                "curves": {rule: info["curve"] for rule, info in run["rules"].items()},
-            }
-            for seed, run in enumerate(runs)
-        ]
     return result

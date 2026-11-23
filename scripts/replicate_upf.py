@@ -26,6 +26,9 @@ def main():
     )
     parser.add_argument("--samples", type=int, default=100)
     parser.add_argument(
+        "--metrics-only", action="store_true", help="retain metrics and provenance, no models"
+    )
+    parser.add_argument(
         "--compare-oracles",
         action="store_true",
         help="score CARA/UPF and both Oracles on shared Electricity or Airlines windows",
@@ -61,6 +64,7 @@ def main():
             samples=args.samples,
             compare_oracles=args.compare_oracles,
             decision_timing=args.decision_timing or "same-batch",
+            metrics_only=args.metrics_only,
         )
         if args.compare_oracles:
             import xgboost
