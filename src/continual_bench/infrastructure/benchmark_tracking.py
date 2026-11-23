@@ -5,6 +5,8 @@ import json
 import math
 from pathlib import Path
 
+from continual_bench.evaluation.artifact_policy import metrics_only, verify_metrics_only_files
+
 from .metric_tracking import log_metric_points, metric_points
 from .observation_tracking import observation_tags, parent_observation_points
 from .run_artifacts import publish_run_artifacts
@@ -70,6 +72,15 @@ def benchmark_metric_points(report):
     costs = report.get("costs") or {}
     add("costs/total", costs.get("metrics", {}), 0)
     add("costs/aws", (costs.get("aws") or {}).get("metrics", {}), 0)
+    model_metadata = report.get("model_versions")
+    if isinstance(model_metadata, dict) and model_metadata.get("artifact_mode") == "metrics_only":
+        add(
+            "model_state/summary",
+            {key: model_metadata.get(key) for key in ("serialized_state_bytes", "storage_bytes", "count")},
+            0,
+        )
+        for point in model_metadata.get("state_measurements", []):
+            add("model_state/sampled", {"serialized_bytes": point["serialized_bytes"]}, point["ordinal"])
     return points
 
 
@@ -79,6 +90,9 @@ def publish_local_benchmark(directory, report, *, experiment_name, client=None):
     from mlflow.tracking import MlflowClient
 
     directory = Path(directory)
+    retain_models = not metrics_only(report)
+    if not retain_models:
+        verify_metrics_only_files(directory)
     client = client or MlflowClient()
     path = next(
         path
@@ -90,6 +104,24 @@ def publish_local_benchmark(directory, report, *, experiment_name, client=None):
         raise ValueError("completed benchmark report differs from the retained artifact")
     digest = hashlib.sha256(data).hexdigest()
     key = report["run_key"]
+    contract = report.get("contract") or {}
+    config = report.get("config") or {}
+    dataset = report.get("dataset") or contract.get("dataset") or config.get("dataset") or {}
+    dataset = dataset.get("name") if isinstance(dataset, dict) else dataset
+    seed = report.get("seed", contract.get("seed", (config.get("dataset") or {}).get("seed")))
+    protocol = report.get("protocol") or contract.get("protocol") or config.get("mode")
+    coordinates = {
+        "cb-dataset": dataset,
+        "cb-seed": seed,
+        "cb-protocol": protocol,
+        "cb-artifact-mode": "full" if retain_models else "metrics_only",
+    }
+    tags = {name: str(value) for name, value in coordinates.items() if value is not None}
+    run_name = key
+    if not retain_models:
+        run_name = sanitize_mlflow_name(
+            "-".join(str(v) for v in (dataset, protocol, f"seed-{seed}", key[:8]) if v is not None)
+        )
     with publication_lock(directory.parent, f"benchmark-{key}"):
         experiment = client.get_experiment_by_name(experiment_name)
         if experiment is None:
@@ -111,14 +143,17 @@ def publish_local_benchmark(directory, report, *, experiment_name, client=None):
                 experiment_id,
                 tags={
                     "cb-local-run-key": key,
-                    "mlflow.runName": key,
+                    "mlflow.runName": run_name,
                     "cb-report-sha256": digest,
+                    **tags,
                 },
             )
         )
         if run.data.tags.get("cb-report-sha256") != digest:
             raise ValueError("local benchmark report changed for the existing MLflow run")
         run_id = run.info.run_id
+        for tag_key, tag_value in tags.items():
+            client.set_tag(run_id, tag_key, tag_value)
         client.set_tag(run_id, "benchmark_complete", "false")
         try:
             points = benchmark_metric_points(report)
@@ -127,11 +162,15 @@ def publish_local_benchmark(directory, report, *, experiment_name, client=None):
                 points.extend(
                     (key, step, value) for key, step, value in metric_points(tracking) if value is not None
                 )
-            log_metric_points(client, run_id, points)
+            log_metric_points(
+                client, run_id, points, **({"max_points_per_key": None} if not retain_models else {})
+            )
             for tag_key, tag_value in observation_tags(report).items():
                 client.set_tag(run_id, tag_key, tag_value)
             client.log_artifact(run_id, str(path))
-            artifacts = publish_run_artifacts(client, run_id, directory, report)
+            artifacts = publish_run_artifacts(
+                client, run_id, directory, report, include_checkpoints=retain_models
+            )
             client.set_tag(run_id, "benchmark_complete", "true")
             client.set_terminated(run_id, "FINISHED")
         except Exception:

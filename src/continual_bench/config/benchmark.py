@@ -215,6 +215,10 @@ class Config(Strict):
     metric_window: int = Field(default=100, ge=1, le=10_000)
     batch_size: int = Field(default=32, ge=1, le=1000)
     checkpoint_every: int = Field(default=100, ge=1, le=10_000)
+    # Full retention stays byte-compatible with historical configuration identities.
+    artifact_mode: Literal["full", "metrics_only"] = Field(
+        default="full", exclude_if=lambda value: value == "full"
+    )
     offline_train_fraction: float = Field(default=0.6, gt=0, lt=1)
     reset_detector_on_retrain: bool = True
     max_seconds: int = Field(default=600, ge=10, le=86_400)

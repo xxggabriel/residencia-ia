@@ -370,13 +370,23 @@ def complete_zia_tracking(tracker, store, final, output, report, adapted):
     }
 
 
-def execute_matrix_case(store, unit: RunUnit, workdir: Path, *, progress=None, checkpoint=None) -> dict:
+def execute_matrix_case(
+    store, unit: RunUnit, workdir: Path, *, progress=None, checkpoint=None, stop_requested=None
+) -> dict:
     from continual_bench.application.matrix import _execute_case, _headline
     from continual_bench.config import Config, EpochConfig, TypedConfig
 
     evaluator = unit.params["evaluator"]
     schema = {"binary": Config, "typed": TypedConfig, "epochs": EpochConfig}[evaluator]
     config = schema.model_validate(unit.params["config"])
+    if getattr(config, "artifact_mode", "full") == "metrics_only" and stop_requested is not None:
+        callback = progress
+
+        def progress(step, values):
+            if stop_requested():
+                raise InterruptedError("metrics-only evaluation interrupted; next attempt restarts the unit")
+            if callback is not None:
+                callback(step, values)
     output = workdir / "run"
     source = None
     if "source_sha256" in unit.params:
@@ -533,6 +543,10 @@ def run_unit(
     workdir = Path(workdir)
     key = split_uri(unit_ref)[1] if "://" in unit_ref else unit_ref
     unit = RunUnit(**get_json(store, key))
+    artifact_mode = unit.params.get("artifact_mode") or (unit.params.get("config") or {}).get(
+        "artifact_mode", "full"
+    )
+    metrics_only = artifact_mode == "metrics_only"
     job_id, attempt = env.get("AWS_BATCH_JOB_ID"), env.get("AWS_BATCH_JOB_ATTEMPT")
     attempt_key = layout.attempt_key_for(job_id, attempt)
     # Fargate Spot attempts are resumable: checkpoints in S3, one logical MLflow run.
@@ -576,6 +590,7 @@ def run_unit(
     live_attempt = None
     spot = None
     checkpoint = None
+    publication_archive = None
     publishing = False
 
     def on_terminate(_signal):
@@ -619,6 +634,16 @@ def run_unit(
         return True
 
     try:
+        if artifact_mode not in {"full", "metrics_only"}:
+            raise ContractError("artifact_mode must be full or metrics_only")
+        if unit.kind == "matrix_case" and artifact_mode != (unit.params.get("config") or {}).get(
+            "artifact_mode", "full"
+        ):
+            raise ContractError("artifact_mode differs between the unit and evaluator configuration")
+        if metrics_only and (unit.kind != "matrix_case" or unit.params.get("evaluator") != "binary"):
+            raise ContractError(
+                "metrics_only is supported by binary matrix units; other evaluators retain models"
+            )
         if resumable or unit.kind == "zia":
             zia_signal_scope.enter_context(sigterm_handler)
         with nullcontext() if resumable or unit.kind == "zia" else sigterm_handler:
@@ -648,20 +673,30 @@ def run_unit(
                 if store.head(final_key) is not None:
                     check_stop()
                     return reuse_final(store, final_key, status_key, status, log, clock)
-                checkpoint = SpotCheckpoint(
-                    store,
-                    unit,
-                    workdir / "run",
-                    spot.attempt,
-                    requested=stop_requested,
-                    logger=log,
-                    interval=float(env.get("BENCH_CHECKPOINT_INTERVAL_SECONDS", "30")),
-                )
-                if store.head(pending_key) is not None:
-                    status["resumed_checkpoint"] = store.uri(pending_key)
+                if metrics_only:
+                    from .metric_evidence import MetricEvidenceArchive
+
+                    publication_archive = MetricEvidenceArchive(store, unit, workdir / "run")
+                    status["artifact_mode"] = "metrics_only"
+                    status["evaluation_recovery"] = "restart_unit_without_training_checkpoint"
+                    if store.head(pending_key) is not None:
+                        status["resumed_publication"] = store.uri(pending_key)
                 else:
-                    checkpoint.prepare_restore()
-                    status["resumed_checkpoint"] = checkpoint.resumed
+                    checkpoint = SpotCheckpoint(
+                        store,
+                        unit,
+                        workdir / "run",
+                        spot.attempt,
+                        requested=stop_requested,
+                        logger=log,
+                        interval=float(env.get("BENCH_CHECKPOINT_INTERVAL_SECONDS", "30")),
+                    )
+                    publication_archive = checkpoint
+                    if store.head(pending_key) is not None:
+                        status["resumed_checkpoint"] = store.uri(pending_key)
+                    else:
+                        checkpoint.prepare_restore()
+                        status["resumed_checkpoint"] = checkpoint.resumed
             put_json(store, status_key, {**status, "state": "RUNNING"})
             expected_image = unit.contract["release"]["runtime_image"]
             if env.get("BENCH_IMAGE_DIGEST") and env["BENCH_IMAGE_DIGEST"] != expected_image:
@@ -701,7 +736,9 @@ def run_unit(
                     check_stop()
             else:
                 resuming = publication_required and store.head(pending_key) is not None
-                options = {"checkpoint": checkpoint} if spot else {}
+                options = {"checkpoint": checkpoint} if checkpoint is not None else {}
+                if metrics_only:
+                    options["stop_requested"] = stop_requested
                 if tracking_required and not resuming:
                     from continual_bench.infrastructure.aws.matrix_tracking import MatrixMlflowRun
 
@@ -753,7 +790,9 @@ def run_unit(
                     )
                 }
             )
-            final["attempt"]["checkpoint"] = checkpoint.receipt
+            final["attempt"]["checkpoint"] = checkpoint.receipt if checkpoint is not None else None
+        if metrics_only:
+            final["artifact_mode"] = "metrics_only"
         if unit.kind == "zia" and not resuming:
             report, output = outcome["report"], outcome["output"]
             metadata, links, documents = outcome["documents"](report, outcome["adapted"], outputs_uri)
@@ -831,6 +870,10 @@ def run_unit(
 
             report = outcome["report"]
             report_path = outcome["report_path"]
+            if metrics_only:
+                from continual_bench.evaluation.artifact_policy import verify_metrics_only_files
+
+                verify_metrics_only_files(outcome["output"])
             directory = report_path.parent
             relative_report = report_path.relative_to(outcome["output"]).as_posix()
             relative_evidence = directory.relative_to(outcome["output"]).as_posix()
@@ -864,7 +907,7 @@ def run_unit(
                     store,
                     outcome["output"],
                     prefix,
-                    checkpoint,
+                    publication_archive,
                     check_stop=check_stop if spot else None,
                 )
             )
@@ -890,7 +933,7 @@ def run_unit(
                     raise ContractError("Archived evidence does not match the unit contract")
                 publication_root = workdir / "publication"
                 publication_root.mkdir(parents=True, exist_ok=True)
-                checkpoint.restore_files(
+                publication_archive.restore_files(
                     final["publication_files"],
                     publication_root,
                     check_stop=check_stop,

@@ -8,7 +8,7 @@ import pytest
 
 from continual_bench.application.cloud import layout, planning, worker
 from continual_bench.application.cloud.checkpoints import SpotCheckpoint
-from continual_bench.application.cloud.contracts import CampaignRequest, RunUnit
+from continual_bench.application.cloud.contracts import CampaignRequest, RunUnit, run_identity
 from continual_bench.application.cloud.fixtures import publish_fixture_release, publish_fixture_snapshot
 from continual_bench.application.cloud.snapshots import verify_snapshot
 from continual_bench.infrastructure.object_store import LocalObjectStore, get_json, put_json, split_uri
@@ -338,3 +338,108 @@ def test_spot_notice_flushes_mlflow_async_queue_before_the_task_stops(spot_case,
         ),
     )
     assert status["state"] == "INTERRUPTED" and status["checkpoint"].endswith("/000001/00000001.json")
+
+
+@pytest.mark.parametrize("fault", ["interruption", "publication"])
+def test_metrics_only_spot_restarts_training_but_recovers_completed_metric_publication(
+    spot_case, tmp_path, monkeypatch, fault
+):
+    store, original, release = spot_case
+    params = {**original.params, "config": {**original.params["config"], "artifact_mode": "metrics_only"}}
+    contract = {**original.contract, "params": params}
+    run_id, contract_sha256 = run_identity(original.campaign_id, contract)
+    unit = original.model_copy(
+        update={
+            "params": params,
+            "contract": contract,
+            "run_id": run_id,
+            "contract_sha256": contract_sha256,
+            "unit_key": layout.unit_key(original.campaign_id, run_id),
+        }
+    )
+    put_json(store, unit.unit_key, unit.model_dump(mode="json"))
+    calls = 0
+    visits = []
+
+    def forbidden_checkpoint(*args, **kwargs):
+        pytest.fail("metrics-only Spot must never construct a training checkpoint")
+
+    def evaluate(_store, _unit, workdir, *, stop_requested, checkpoint=None):
+        nonlocal calls
+        calls += 1
+        assert checkpoint is None
+        for index in range(4):
+            visits.append(index)
+            if fault == "interruption" and calls == 1 and index == 1:
+                spot_notice()
+                assert stop_requested()
+                raise InterruptedError("no model state retained")
+        directory = workdir / "run" / "binary" / "metrics-only-test"
+        directory.mkdir(parents=True)
+        report = {
+            "complete": True,
+            "run_key": "metrics-only-test",
+            "config": {"artifact_mode": "metrics_only"},
+            "metrics": {"accuracy": 0.5},
+            "windows": [],
+        }
+        report_path = directory / "report.json"
+        report_path.write_text(json.dumps(report))
+        (directory / "metrics.json").write_text(json.dumps({"points": [0, 1, 2, 3]}))
+        return {
+            "report": report, "report_path": report_path,
+            "output": workdir / "run", "headline": {"accuracy": 0.5},
+        }
+
+    put_file = store.put_file
+    canonical_writes = 0
+
+    def fail_publication(key, path, **kwargs):
+        nonlocal canonical_writes
+        if "/attempts/" in key:
+            canonical_writes += 1
+            if fault == "publication" and canonical_writes == 2:
+                raise OSError("metric publication interrupted")
+        return put_file(key, path, **kwargs)
+
+    monkeypatch.setattr(worker, "SpotCheckpoint", forbidden_checkpoint)
+    monkeypatch.setattr(worker, "execute_matrix_case", evaluate)
+    monkeypatch.setattr(store, "put_file", fail_publication)
+    first = fargate_env(release, "metrics-only-job")
+    expected = worker.EXIT_INTERRUPTED if fault == "interruption" else worker.EXIT_FAILED
+    assert worker.run_unit(store, unit.unit_key, tmp_path / "first", env=first) == expected
+    second = fargate_env(release, "metrics-only-job", 2)
+    assert worker.run_unit(store, unit.unit_key, tmp_path / "second", env=second) == worker.EXIT_OK
+    final = get_json(store, layout.final_key(unit.campaign_id, unit.run_id))
+    assert final["artifact_mode"] == "metrics_only"
+    assert final["attempt"]["checkpoint"] is None
+    assert final["publication_attempt"]["attempt"] == 2
+    keys = list(store.list(layout.run_prefix(unit.campaign_id, unit.run_id)))
+    assert all("/spot/checkpoints/" not in key for key in keys)
+    assert all(not key.endswith((".pkl", ".pickle", ".bin", ".ubj")) for key in keys)
+    assert calls == (2 if fault == "interruption" else 1)
+    assert visits == ([0, 1, 0, 1, 2, 3] if fault == "interruption" else [0, 1, 2, 3])
+    if fault == "publication":
+        first_attempt = layout.attempt_key_for("metrics-only-job", "1")
+        assert final["published"]["prefix"] == layout.attempt_prefix(
+            unit.campaign_id, unit.run_id, first_attempt
+        )
+
+
+def test_metrics_only_spot_live_series_are_independent_between_restarted_attempts(spot_case, monkeypatch):
+    from continual_bench.infrastructure.aws.matrix_tracking import MatrixMlflowRun
+
+    _, original, _ = spot_case
+    params = {**original.params, "config": {**original.params["config"], "artifact_mode": "metrics_only"}}
+    unit = original.model_copy(update={"params": params})
+    monkeypatch.setattr(MatrixMlflowRun, "native_logger", property(lambda self: object()))
+    points = []
+    for number in (1, 2):
+        tracker = MatrixMlflowRun(unit, f"attempt-{number}", "job", "http://example", None)
+        tracker.mlflow_run_id = "logical-run"
+        monkeypatch.setattr(tracker, "log_progress_metrics", lambda items: points.extend(items))
+        tracker.metrics(1, {"training_seconds": float(number)})
+    assert [(point["key"], point["step"], point["value"]) for point in points] == [
+        ("attempts/attempt-1/progress/training_seconds", 1, 1.0),
+        ("attempts/attempt-2/progress/training_seconds", 1, 2.0),
+    ]

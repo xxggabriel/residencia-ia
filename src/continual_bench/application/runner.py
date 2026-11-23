@@ -12,6 +12,7 @@ from pathlib import Path
 from continual_bench.config import Config
 from continual_bench.core.contracts import event_json
 from continual_bench.core.policies import BATCH_POLICY_KINDS
+from continual_bench.evaluation.artifact_policy import verify_metrics_only_files
 from continual_bench.evaluation.artifacts import binary_figures, system_figures, write_artifacts
 from continual_bench.evaluation.binary import BinaryRun, Progress, protocol_for, read_events
 from continual_bench.evaluation.environment import environment, peak_rss_bytes
@@ -91,26 +92,39 @@ def evaluate(
         source = make_source(registry, config.dataset)
     identity = config.identity()
     directory = Path(root) / identity
-    checkpoints = LocalCheckpoints(root)
+    metrics_only = config.artifact_mode == "metrics_only"
+    if metrics_only and checkpoint is not None:
+        raise ValueError("metrics_only runs cannot restore or save training checkpoints")
+    checkpoints = None if metrics_only else LocalCheckpoints(root)
     # Restore before acquiring the lock or reading files that belong to the checkpoint.
     snapshot = checkpoint.load() if checkpoint is not None else None
     env = environment()
     contract = resume_contract(config, manifest, env, transport)
+    contract_sha = hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest()
     events_path = Path(manifest["path"])
     if hashlib.sha256(events_path.read_bytes()).hexdigest() != manifest["sha256"]:
         raise ValueError("dataset manifest checksum mismatch")
     with run_lock(root, identity):
-        if checkpoint is None:
+        if checkpoints is not None and checkpoint is None:
             snapshot = checkpoints.load(identity)
         if snapshot and snapshot["contract"] != contract:
             raise ValueError("resume environment/config/dataset/transport/plugin mismatch")
         report_path = directory / "report.json"
+        if metrics_only and report_path.exists():
+            cached = json.loads(report_path.read_text())
+            if cached.get("complete"):
+                if cached.get("evaluation_contract_sha256") != contract_sha:
+                    raise ValueError("completed metrics-only report has a different evaluation contract")
+                verify_metrics_only_files(directory)
+                return cached
         if snapshot and snapshot.get("complete"):
             return json.loads(report_path.read_text())
         if snapshot and checkpoint is not None:
             atomic_write(directory / "manifest.json", json.dumps(manifest, indent=2).encode())
 
         def save(state, *, force=False):
+            if metrics_only:
+                return
             snapshot = {"contract": contract, "state": state, "complete": False}
             if checkpoint is None:
                 checkpoints.save(identity, snapshot)
@@ -133,7 +147,13 @@ def evaluate(
             model_factory=registry.factory("model", config.model.name, **config.model.params),
             detector_factory=registry.factory("detector", config.detector.name, **config.detector.params),
             policy_factory=registry.factory("policy", config.policy.name, **policy_kwargs),
-            versions=ModelVersions(directory, manifest["sha256"], env["code_sha256"]),
+            versions=ModelVersions(
+                directory,
+                manifest["sha256"],
+                env["code_sha256"],
+                artifact_mode=config.artifact_mode,
+                state_sample_every=config.metric_window if metrics_only else 1,
+            ),
             settings=settings,
             started=started,
             checkpoint=save,
@@ -144,17 +164,22 @@ def evaluate(
             progress=progress,
             checkpoint_due=checkpoint.due if checkpoint is not None else None,
         )
-        with SystemMetricsSampler(root) as system:
+        sampler_options = {"max_samples": None} if metrics_only else {}
+        with SystemMetricsSampler(root, **sampler_options) as system:
             outcome = protocol.execute(run)
             if isinstance(outcome, Progress):
                 return {"complete": False, "observed": outcome.observed, "run_key": identity}
             report = finalize(outcome, run, protocol, contract, env, started)
         report["system_metrics"] = system.report()
+        if metrics_only:
+            report["evaluation_contract_sha256"] = contract_sha
         report["artifacts"] = write_binary_artifacts(directory, report)
         report["artifacts"] = write_training_artifacts(directory, report)
         # Report first, then complete checkpoint: either crash point is safe to recompute/reuse.
         atomic_write(report_path, json.dumps(report, indent=2).encode())
-        if checkpoint is None:
+        if metrics_only:
+            verify_metrics_only_files(directory)
+        elif checkpoint is None:
             checkpoints.save(identity, {"contract": contract, "state": outcome.state, "complete": True})
         return report
 
@@ -260,6 +285,8 @@ def run(config: Config, root="state", *, services=False, source=None, progress=N
         from .readiness import ensure_tracking_ready
 
         ensure_tracking_ready()
+    if config.artifact_mode == "metrics_only" and checkpoint is not None:
+        raise ValueError("metrics_only runs cannot restore or save training checkpoints")
     if checkpoint is not None:
         checkpoint.load()
     manifest = prepare(config, root, source=source)

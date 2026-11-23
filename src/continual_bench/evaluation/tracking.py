@@ -913,7 +913,12 @@ def save_tracking_files(directory, report, settings, observer=None, events=None)
         references = []
         for item in observer.continual.reference_models:
             path = directory / "references" / f"{item['name']}-{item['task']}"
-            versions = ModelVersions(path, report["dataset"]["sha256"], report["environment"]["code_sha256"])
+            versions = ModelVersions(
+                path,
+                report["dataset"]["sha256"],
+                report["environment"]["code_sha256"],
+                artifact_mode=(report.get("config") or {}).get("artifact_mode", "full"),
+            )
             versions.record(
                 item["model"], {"action": "reference_initial_fit", "seq_range": item["seq_range"]}
             )

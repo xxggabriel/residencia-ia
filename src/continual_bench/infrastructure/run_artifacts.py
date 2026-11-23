@@ -8,6 +8,8 @@ Republishing is idempotent: existing metric points are checked, not duplicated.
 
 from pathlib import Path
 
+from continual_bench.evaluation.artifact_policy import metrics_only, verify_metrics_only_files
+
 from .metric_tracking import downsample_points, missing_metric_points
 from .observation_tracking import publish_sdk_observations
 from .training_tracking import publish_training_history
@@ -30,8 +32,14 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
     from .tracking import MetricPoint, as_backend
 
     backend = as_backend(client)
+    complete_series = metrics_only(report)
+    if complete_series:
+        verify_metrics_only_files(directory)
+        include_checkpoints = False
     points, stamps = system_metric_points(report.get("system_metrics"))
-    sampled = downsample_points(points, max_points_per_key=DEFAULT_MAX_SYSTEM_POINTS)
+    sampled = downsample_points(
+        points, max_points_per_key=None if complete_series else DEFAULT_MAX_SYSTEM_POINTS
+    )
     missing = missing_metric_points(client, run_id, sampled)
     backend.log_batch(
         run_id, metrics=[MetricPoint(key, value, step, stamps[key, step]) for key, step, value in missing]
@@ -65,7 +73,14 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
             report,
             include_checkpoints=include_checkpoints,
         )
-    manifest = publish_sdk_observations(client, run_id, directory, report, result.get("training_rounds", []))
+    manifest = publish_sdk_observations(
+        client,
+        run_id,
+        directory,
+        report,
+        result.get("training_rounds", []),
+        **({"max_points_per_key": None} if complete_series else {}),
+    )
     if manifest:
         result["observation_plots"] = manifest
     return result
