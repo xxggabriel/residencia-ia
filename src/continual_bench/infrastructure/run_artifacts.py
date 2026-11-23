@@ -50,12 +50,13 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
         if (root / folder).is_dir():
             client.log_artifacts(run_id, str(root / folder), artifact_path=folder)
             uploaded += sum(1 for path in (root / folder).rglob("*") if path.is_file())
-    figures = log_detailed_figures(report, run_id)
+    figures = [] if complete_series else log_detailed_figures(report, run_id)
     system = report.get("system_metrics") or {}
     backend.log_batch(
         run_id,
         tags={
             "detailed_figures": str(len(figures)),
+            "detailed_figures_status": "rendering_deferred" if complete_series else "enabled",
             "system_metrics_collector": system.get("collector", "absent"),
             "run_artifacts": f"{uploaded} files; plots/ and data/",
         },

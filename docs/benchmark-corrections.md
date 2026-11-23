@@ -71,6 +71,11 @@ anotação, suporte de classes ou população elegível preserva o motivo de
 indisponibilidade. As séries publicadas não recebem os limites históricos de 250
 pontos por chave ou 200 amostras de sistema.
 
+Nesse perfil, a renderização dos PNGs detalhados de cada run e ajuste fica adiada.
+Os dados completos, as séries no MLflow, o HTML e a linhagem permanecem disponíveis.
+Os gráficos comparativos são gerados na consolidação, reduzindo trabalho repetido
+de visualização durante a campanha.
+
 O ledger de previsões conserva IDs, sequência, rótulo e probabilidade, sem atributos
 de entrada. O exportador calcula a interseção dos eventos por dataset e modelo entre
 as configurações concluídas. F1 macro sempre usa as duas classes; AP é calculada por

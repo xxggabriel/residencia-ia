@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 
+from .artifact_policy import metrics_only
 from .dashboard_page import write_dashboard_html
 from .retraining_pages import HTML_REVISION, PAGE_PATHS
 from .storage import atomic_write
@@ -124,11 +125,12 @@ def write_observation_evidence(directory, report, parent_run_id=None, children=(
         "observations_sha256": hashlib.sha256(payload).hexdigest(),
         "training_history_sha256": _fit_source_checksum(directory),
         "html_revision": HTML_REVISION,
+        "render_mode": "deferred_static" if metrics_only(report) else "static_and_interactive",
     }
     manifest = json.loads(manifest_path.read_bytes()) if manifest_path.is_file() else {}
     if manifest.get("source_checksums") != signature or not (root / "observations.json").is_file():
         # The signature is committed after the plots and canonical data.
-        manifest = write_observation_figures(root, report)
+        manifest = write_observation_figures(root, report, render_static=not metrics_only(report))
         atomic_write(root / "observations.json", payload)
         manifest["source_checksums"] = signature
         for fit in report.get("training_history", ()):

@@ -1240,9 +1240,10 @@ def _selector(value):
 class _Publication:
     """Accumulate artifact paths and connect each figure to its complete data."""
 
-    def __init__(self, root, observations, parent_run_id, child_run_ids, allow_html):
+    def __init__(self, root, observations, parent_run_id, child_run_ids, allow_html, render_static=True):
         self.root = root
-        self.plt = _pyplot() if matplotlib_available() else None
+        self.render_static = render_static
+        self.plt = _pyplot() if render_static and matplotlib_available() else None
         self.allow_html = allow_html
         self.version = observations.get("version") or observations.get("schema_version")
         self.parent_run_id = parent_run_id
@@ -1278,6 +1279,8 @@ class _Publication:
             availability = reason
         elif html and not self.allow_html:
             availability = "HTML indisponível neste publicador"
+        elif not html and not self.render_static:
+            availability = "rendering_deferred"
         elif not html and self.plt is None:
             availability = "Matplotlib indisponível"
         fit_id = detail.get("fit")
@@ -1340,6 +1343,10 @@ class _Publication:
                 finally:
                     self.plt.close(fig)
             self.artifact(path, fit)
+        elif not html and not self.render_static:
+            # A changed render-mode signature must not leave a stale cached PNG that
+            # adapters would mistake for an artifact of the current metric evidence.
+            (self.root / path).unlink(missing_ok=True)
         self.figures.append(entry)
 
     def line(self, stem, panels, title, *, subtitle=None, **metadata):
@@ -1425,6 +1432,10 @@ class _Publication:
             "parent": self.parent,
             "children": self.children,
             "figures": self.figures,
+            "static_rendering": {
+                "enabled": self.render_static,
+                "reason": None if self.render_static else "rendering_deferred",
+            },
         }
         for fit_id, paths in self.children.items():
             prefix = f"fits/{fit_id}/"
@@ -1615,7 +1626,9 @@ def _child_charts(publication, observations, fit):
     )
 
 
-def write_observation_figures(directory, report, *, parent_run_id=None, child_run_ids=None, allow_html=True):
+def write_observation_figures(
+    directory, report, *, parent_run_id=None, child_run_ids=None, allow_html=True, render_static=True
+):
     """Stage static and interactive plots alongside explicit availability and lineage.
 
     Returned paths are relative to the tracking directory; the adapter logs the
@@ -1625,7 +1638,9 @@ def write_observation_figures(directory, report, *, parent_run_id=None, child_ru
     if observations is None:
         return {"parent": [], "children": {}, "figures": []}
     started = time.perf_counter()
-    publication = _Publication(Path(directory), observations, parent_run_id, child_run_ids or {}, allow_html)
+    publication = _Publication(
+        Path(directory), observations, parent_run_id, child_run_ids or {}, allow_html, render_static
+    )
     fits = report.get("training_history") or []
     _parent_charts(publication, observations, fits, report)
     for fit in fits:

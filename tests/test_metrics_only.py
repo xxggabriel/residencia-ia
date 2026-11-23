@@ -191,7 +191,7 @@ def test_metrics_only_mlflow_keeps_complete_quality_and_system_series(tmp_path, 
     uri = (tmp_path / "mlruns").as_uri()
     monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
     monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
-    monkeypatch.setattr("continual_bench.infrastructure.run_artifacts.log_detailed_figures", lambda *args: [])
+    monkeypatch.setattr("continual_bench.infrastructure.run_artifacts.log_detailed_figures", no_checkpoint)
     client = MlflowClient(uri)
     directory = tmp_path / "evidence"
     directory.mkdir()
@@ -247,3 +247,62 @@ def test_metrics_only_mlflow_keeps_complete_quality_and_system_series(tmp_path, 
     again = publish_local_benchmark(directory, report, experiment_name="metrics-only-series", client=client)
     assert again["mlflow_run_id"] == run_id
     assert len(client.get_metric_history(run_id, "system/cpu")) == 600
+
+
+def test_metrics_only_defers_static_rendering_preserving_json_html_and_cache_mode(tmp_path, monkeypatch):
+    import re
+
+    from continual_bench.evaluation.tracking_observations import batch_quality, observations
+    from continual_bench.infrastructure.observation_tracking import write_observation_evidence
+
+    quality = batch_quality([0, 1], [0, 1], classes=[0, 1], positive_class=1, scores=[0.1, 0.9])
+    report = {
+        "training_history": [],
+        "tracking_observations": observations(
+            "binary", {"prequential": quality},
+            windows=[{"step": 2, "scope": "prequential", "quality": quality}],
+        ),
+    }
+    availability_calls = []
+
+    def unavailable_matplotlib():
+        availability_calls.append(1)
+        return False
+
+    monkeypatch.setattr(
+        "continual_bench.infrastructure.training_figures.matplotlib_available", unavailable_matplotlib
+    )
+    monkeypatch.setattr("continual_bench.infrastructure.training_figures._pyplot", no_checkpoint)
+    root = write_observation_evidence(tmp_path, report)
+    assert availability_calls == [1]  # The full default retains the original rendering path.
+    full_manifest = json.loads((root / "plots-manifest.json").read_text())
+    assert full_manifest["static_rendering"]["enabled"] is True
+    original = (root / "observations.json").read_bytes()
+    html = (root / "retraining-explorer.html").read_text()
+    original_data = json.loads(re.search(r'id="page-data">(.*?)</script>', html, re.S).group(1))
+    availability_calls.clear()
+    report["artifact_mode"] = "metrics_only"
+    # A prior cached static artifact must not survive the render-mode change.
+    stale = root / "overview" / "overview.png"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"obsolete-render")
+    write_observation_evidence(tmp_path, report)
+    manifest = json.loads((root / "plots-manifest.json").read_text())
+    assert availability_calls == []
+    assert manifest["source_checksums"]["render_mode"] == "deferred_static"
+    assert manifest["static_rendering"] == {"enabled": False, "reason": "rendering_deferred"}
+    assert not list(root.rglob("*.png"))
+    assert any(entry["availability"]["reason"] == "rendering_deferred" for entry in manifest["figures"])
+    assert all(
+        entry["availability"]["reason"] != "Matplotlib indisponível"
+        for entry in manifest["figures"]
+    )
+    assert (root / "observations.json").read_bytes() == original
+    current_html = (root / "retraining-explorer.html").read_text()
+    current_data = json.loads(re.search(r'id="page-data">(.*?)</script>', current_html, re.S).group(1))
+    assert current_data == original_data
+    # Reusing the same mode signature should not even enter the renderer again.
+    monkeypatch.setattr(
+        "continual_bench.infrastructure.training_figures.write_observation_figures", no_checkpoint
+    )
+    write_observation_evidence(tmp_path, report)
