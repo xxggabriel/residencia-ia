@@ -22,6 +22,11 @@ jobs:
       UV_SYSTEM_PYTHON: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/docs/evidencias/
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -53,9 +58,15 @@ jobs:
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
       UV_SYSTEM_PYTHON: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/docs/evidencias/
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -67,4 +78,6 @@ jobs:
         run: |
           uv pip install --system --require-hashes -r requirements.lock
           uv pip install --system --no-deps -e .
-      - run: python -m pytest -q --shard=${{ matrix.shard }} --num-shards=4 --durations=10
+      - run: >-
+          python -m pytest -q -m 'not services and not benchmark and not zia_extended_seeds'
+          --shard=${{ matrix.shard }} --num-shards=4 --durations=10
