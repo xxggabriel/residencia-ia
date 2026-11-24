@@ -32,9 +32,6 @@ DATASET_ROWS = {
     "airlines": 539_383,
     "insects_abrupt_imbalanced": 355_275,
     "insects_incremental_abrupt_reoccurring_imbalanced": 452_044,
-    "fraud": 50_000_000,
-    "ecommerce": 50_000_000,
-    "social": 100_000_000,
 }
 POLICIES = (
     "frozen",
@@ -50,6 +47,11 @@ POLICIES = (
     "oracle",
 )
 SEEDS = (42, 43, 44)
+CACHED_POLICIES = ("cara_cumulative", "cara_periodic", "upf", "oracle")
+STAGE_POLICIES = {
+    "base": tuple(policy for policy in POLICIES if policy not in CACHED_POLICIES),
+    "cached": CACHED_POLICIES,
+}
 FORBIDDEN = re.compile(
     r"(?:^|/)(?:models|checkpoints|candidates|\.zia-resume)(?:/|$)"
     r"|\.(?:pkl|pickle|ubj|npy|npz|pt|pth|ckpt|bin)$|/(?:model|checkpoint)\.tar\.gz$"
@@ -352,11 +354,15 @@ def collect_units(state, reader, work, budget, *, coordinates):
             uri = campaign_uri(bucket, campaign, "plan.json")
             plan, plan_source = download_json(reader, uri, work / "plan.json", budget)
             (work / "plan.json").unlink()
+            if set(state["datasets"]) == set(DATASET_ROWS):
+                expected = {(policy, seed) for policy in STAGE_POLICIES[stage] for seed in SEEDS}
+                actual = {(u["params"]["policy"], u["params"]["seed"]) for u in plan["units"]}
+                require(actual == expected and len(plan["units"]) == len(expected), "campaign matrix differs")
             for unit in plan["units"]:
                 run_id, params = unit["run_id"], unit["params"]
                 coordinate = (dataset, params["policy"], params["seed"])
                 require(
-                    coordinate in coordinates and coordinate not in seen,
+                    params.get("dataset") == dataset and coordinate in coordinates and coordinate not in seen,
                     "unexpected or duplicate suite coordinate",
                 )
                 require(re.fullmatch(r"[a-f0-9]{20}", run_id), "invalid run identity")
@@ -691,6 +697,67 @@ def write_scalars(rows, output):
         writer.writerows(aggregate)
 
 
+def validate_selection(state, status, rows, coordinates):
+    """The CLI exports only the selected suite; synthetic row overrides serve local tests."""
+    require(
+        set(state["datasets"]) == set(rows) and not set(rows) & {"fraud", "ecommerce", "social"},
+        "coordinator selection differs from the selected datasets; preserve historical state separately",
+    )
+    if set(rows) != set(DATASET_ROWS):
+        return
+    require(coordinates == expected_matrix(rows), "the selected suite requires every policy and seed")
+    requests = state.get("contract", {}).get("requests", {})
+    require(
+        set(requests) == set(rows)
+        and all(
+            state["datasets"][dataset].get("base", {}).get("request") == request
+            for dataset, request in requests.items()
+        ),
+        "coordinator differs from its selected request contract",
+    )
+    campaigns = {}
+    for dataset, stages in state["datasets"].items():
+        require(set(stages) == set(STAGE_POLICIES), "all selected base and cached campaigns are required")
+        for stage, record in stages.items():
+            request = record["request"]
+            matrix = request.get("matrix", {})
+            policies = matrix.get("policies", [])
+            require(
+                request.get("dataset") == dataset
+                and request.get("release") == state["release"]
+                and request.get("scope") == "full"
+                and not request.get("snapshot")
+                and matrix.get("kind") == "stream"
+                and matrix.get("artifact_mode") == "metrics_only"
+                and matrix.get("seeds") == list(SEEDS)
+                and matrix.get("iterative_training", {}).get("max_epochs") == 100
+                and set(policies) == set(STAGE_POLICIES[stage])
+                and len(policies) == len(STAGE_POLICIES[stage]),
+                "campaign request differs from the selected full metrics-only matrix",
+            )
+            caches = matrix.get("metric_cache_sources") or {}
+            require(
+                not caches if stage == "base" else set(caches) == {str(seed) for seed in SEEDS},
+                "cached campaign requires three independently seeded CARA cache receipts",
+            )
+            campaign = request["campaign_id"]
+            require(campaign not in campaigns, "duplicate campaign identity")
+            campaigns[campaign] = len(STAGE_POLICIES[stage]) * len(SEEDS)
+    require(
+        status.get("expected_units") == len(coordinates)
+        and status.get("expected_campaigns") == len(rows) * len(STAGE_POLICIES)
+        and set(status.get("campaigns", {})) == set(campaigns)
+        and all(
+            status["campaigns"][campaign].get("complete") is True
+            and status["campaigns"][campaign].get("expected_units")
+            == status["campaigns"][campaign].get("verified_units")
+            == count
+            for campaign, count in campaigns.items()
+        ),
+        "all selected campaign completion receipts are required",
+    )
+
+
 def export_evidence(
     state_dir,
     output,
@@ -717,6 +784,7 @@ def export_evidence(
     rows = expected_rows or DATASET_ROWS
     coordinates = expected_matrix(rows) if coordinates is None else set(coordinates)
     require(state["schema"] == "aws-ordered-dataset-suite-v1", "unsupported coordinator state")
+    validate_selection(state, status, rows, coordinates)
     require(
         status.get("complete") is True
         and status.get("verified_units") == len(coordinates)
@@ -794,6 +862,9 @@ def export_evidence(
     groups = defaultdict(list)
     for run_id, summary in summaries.items():
         groups[summary["case"]["config"]["dataset"], summary["input_sha256"]].append(run_id)
+    require(
+        len(groups) == len(rows), "each dataset must share one source identity across all policies and seeds"
+    )
     ranges = {}
     for key, runs in groups.items():
         start = max(summaries[r]["calibration_end"] for r in runs)
@@ -872,6 +943,8 @@ def export_evidence(
         "export_contract_sha256": sha256(contract_path),
         "coverage": {
             "cases": len(results),
+            "campaigns": sum(len(stages) for stages in state["datasets"].values()),
+            "cohorts": len(ranges),
             "datasets": sorted(rows),
             "seeds": sorted({c[2] for c in coordinates}),
             "policies": sorted({c[1] for c in coordinates}),

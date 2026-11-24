@@ -1,3 +1,4 @@
+import csv
 import gzip
 import hashlib
 import json
@@ -61,16 +62,21 @@ class FakeS3:
         ]
 
 
-def fixture_suite(tmp_path):
+def fixture_suite(tmp_path, *, full_selection=False):
     reader = FakeS3()
     bucket, campaign, release = "fixture-bucket", "fixture-full", "a" * 40
     source_sha, labels = "b" * 64, np.arange(20, dtype=np.uint8) % 2
     state_dir = tmp_path / "coordinator"
     state_dir.mkdir()
-    units, verified, original_reports = [], {}, {}
-    for policy in ("frozen", "cara"):
+    units, verified, original_reports, campaign_units = [], {}, {}, {}
+    datasets = {dataset: 24 for dataset in export.DATASET_ROWS} if full_selection else {"fixture": 24}
+    policies = export.POLICIES if full_selection else ("frozen", "cara")
+    for dataset, policy in ((dataset, policy) for dataset in datasets for policy in policies):
+        stage = "cached" if policy in export.CACHED_POLICIES else "base"
+        if full_selection:
+            campaign = f"fixture-{export.digest(dataset)[:8]}-{stage}"
         for seed in (42, 43, 44):
-            run_id = hashlib.sha256(f"{policy}/{seed}".encode()).hexdigest()[:20]
+            run_id = hashlib.sha256(f"{dataset}/{policy}/{seed}".encode()).hexdigest()[:20]
             prefix = f"s3://{bucket}/campaigns/{campaign}/runs/{run_id}/attempts/job-1"
             p = np.full(20, {42: 0.8, 43: 0.85, 44: 0.9}[seed])
             probabilities = np.column_stack((1 - p, p))
@@ -128,7 +134,7 @@ def fixture_suite(tmp_path):
                 "run_id": run_id,
                 "campaign_id": campaign,
                 "params": {
-                    "dataset": "fixture",
+                    "dataset": dataset,
                     "policy": policy,
                     "seed": seed,
                     "iterative_training": training,
@@ -140,7 +146,7 @@ def fixture_suite(tmp_path):
                 "complete": True,
                 "artifact_mode": "metrics_only",
                 "protocol": export.PROTOCOL,
-                "dataset": "fixture",
+                "dataset": dataset,
                 "scope": "full",
                 "policy": policy,
                 "model_params": {"seed": seed},
@@ -231,26 +237,68 @@ def fixture_suite(tmp_path):
             verified[run_id] = {
                 "final_sha256": export.digest(final),
                 "report_sha256": report_sha,
-                "dataset": "fixture",
+                "dataset": dataset,
                 "policy": policy,
                 "seed": seed,
             }
             units.append(unit)
-    reader.add(f"s3://{bucket}/campaigns/{campaign}/plan.json", {"units": units})
+            campaign_units.setdefault(campaign, []).append(unit)
+    for campaign, selected in campaign_units.items():
+        reader.add(f"s3://{bucket}/campaigns/{campaign}/plan.json", {"units": selected})
+    stages = {"fixture": {"base": {"request": {"campaign_id": campaign, "release": release}}}}
+    if full_selection:
+        stages = {}
+        for dataset in datasets:
+            stages[dataset] = {}
+            for stage, selected in export.STAGE_POLICIES.items():
+                matrix = {
+                    "kind": "stream",
+                    "policies": list(selected),
+                    "seeds": list(export.SEEDS),
+                    "artifact_mode": "metrics_only",
+                    "iterative_training": {"max_epochs": 100},
+                }
+                if stage == "cached":
+                    matrix["metric_cache_sources"] = {
+                        str(seed): {"uri": f"s3://{bucket}/cache/{dataset}/{seed}", "sha256": source_sha}
+                        for seed in export.SEEDS
+                    }
+                stages[dataset][stage] = {
+                    "request": {
+                        "campaign_id": f"fixture-{export.digest(dataset)[:8]}-{stage}",
+                        "release": release,
+                        "dataset": dataset,
+                        "scope": "full",
+                        "matrix": matrix,
+                    }
+                }
     state = {
         "schema": "aws-ordered-dataset-suite-v1",
         "bucket": bucket,
         "region": "us-east-1",
         "release": release,
-        "contract": {"fixture": True},
+        "contract": {
+            "requests": {dataset: records["base"]["request"] for dataset, records in stages.items()}
+        },
         "verified_finals": verified,
-        "datasets": {"fixture": {"base": {"request": {"campaign_id": campaign, "release": release}}}},
+        "datasets": stages,
     }
     export.save(state_dir / "suite-state.json", state)
     export.save(
-        state_dir / "latest-status.json", {"complete": True, "verified_units": 6, "batch": {"active": 0}}
+        state_dir / "latest-status.json",
+        {
+            "complete": True,
+            "verified_units": len(verified),
+            "expected_units": len(verified),
+            "expected_campaigns": len(campaign_units),
+            "batch": {"active": 0},
+            "campaigns": {
+                campaign: {"complete": True, "expected_units": len(selected), "verified_units": len(selected)}
+                for campaign, selected in campaign_units.items()
+            },
+        },
     )
-    coordinates = export.expected_matrix({"fixture": 24}, policies=("frozen", "cara"))
+    coordinates = export.expected_matrix(datasets, policies=policies)
     return reader, state_dir, original_reports, coordinates
 
 
@@ -304,6 +352,76 @@ def test_export_reconstructs_real_prediction_metrics_one_case_at_a_time_and_pres
         export.export_evidence(
             state_dir, output, scratch, reader, expected_rows={"fixture": 24}, coordinates=coordinates
         )
+
+
+def test_selected_four_dataset_export_covers_132_cases_eight_campaigns_and_four_common_cohorts(tmp_path):
+    reader, state_dir, reports, coordinates = fixture_suite(tmp_path, full_selection=True)
+    before = dict(reader.objects)
+    state_bytes = (state_dir / "suite-state.json").read_bytes()
+    output, scratch = tmp_path / "evidence", tmp_path / "scratch"
+    manifest = export.export_evidence(
+        state_dir,
+        output,
+        scratch,
+        reader,
+        expected_rows={dataset: 24 for dataset in export.DATASET_ROWS},
+        coordinates=coordinates,
+        scratch_bytes=1024**2,
+    )
+    assert manifest["coverage"] == {
+        "cases": 132,
+        "campaigns": 8,
+        "cohorts": 4,
+        "datasets": sorted(export.DATASET_ROWS),
+        "policies": sorted(export.POLICIES),
+        "seeds": [42, 43, 44],
+    }
+    cohorts = export.read(output / "cohorts.json")["cohorts"]
+    assert {row["dataset"] for row in cohorts} == set(export.DATASET_ROWS)
+    assert all(row["seq_range"] == [12, 20] for row in cohorts)
+    with (output / "comparison-mean-sd.csv").open() as stream:
+        aggregates = list(csv.DictReader(stream))
+    assert {row["dataset"] for row in aggregates} == set(export.DATASET_ROWS)
+    assert {row["policy"] for row in aggregates} == set(export.POLICIES)
+    assert all(int(row["n_defined"]) in (0, 3) for row in aggregates)
+    assert len(reports) == len(list((output / "cases").glob("*/qa.json"))) == 132
+    assert manifest["scratch"]["observed_peak_case_bytes"] <= 1024**2
+    assert not list(scratch.iterdir()) and not list(output.rglob("*.parquet"))
+    assert reader.objects == before and (state_dir / "suite-state.json").read_bytes() == state_bytes
+
+
+@pytest.mark.parametrize("mutation", ["zia", "seed", "policy", "cached", "campaign_count", "active"])
+def test_selected_export_refuses_incomplete_or_expanded_scope_before_any_s3_read(tmp_path, mutation):
+    reader, state_dir, _, coordinates = fixture_suite(tmp_path, full_selection=True)
+    state = export.read(state_dir / "suite-state.json")
+    status = export.read(state_dir / "latest-status.json")
+    if mutation == "zia":
+        state["datasets"]["fraud"] = {}
+    elif mutation == "seed":
+        state["datasets"]["electricity"]["base"]["request"]["matrix"]["seeds"] = [42, 43]
+        state["contract"]["requests"]["electricity"] = state["datasets"]["electricity"]["base"]["request"]
+    elif mutation == "policy":
+        coordinates.remove(("electricity", "oracle", 44))
+    elif mutation == "cached":
+        state["datasets"]["electricity"]["cached"]["request"]["matrix"]["metric_cache_sources"].pop("44")
+    elif mutation == "campaign_count":
+        status["campaigns"].pop(next(iter(status["campaigns"])))
+    else:
+        status["batch"]["active"] = 1
+    export.save(state_dir / "suite-state.json", state)
+    export.save(state_dir / "latest-status.json", status)
+    state_bytes = (state_dir / "suite-state.json").read_bytes()
+    with pytest.raises(ValueError):
+        export.export_evidence(
+            state_dir,
+            tmp_path / "evidence",
+            tmp_path / "scratch",
+            reader,
+            expected_rows={dataset: 24 for dataset in export.DATASET_ROWS},
+            coordinates=coordinates,
+        )
+    assert reader.reads == [] and (state_dir / "suite-state.json").read_bytes() == state_bytes
+    assert not (tmp_path / "scratch").exists()
 
 
 def test_lossless_gzip_shards_preserve_nulls_vectors_and_exact_byte_ranges(tmp_path):
