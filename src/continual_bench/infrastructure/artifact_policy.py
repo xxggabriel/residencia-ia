@@ -18,8 +18,14 @@ def metrics_only(report: dict) -> bool:
 def verify_metrics_only_files(directory) -> None:
     """Fail closed if a metrics-only result contains persisted model state."""
     forbidden = {".pkl", ".pickle", ".ubj", ".npy", ".npz", ".pt", ".pth", ".ckpt", ".bin"}
-    for path in Path(directory).rglob("*"):
+    state_directories = {"model", "models", "candidates", "checkpoints", ".zia-resume"}
+    root = Path(directory)
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("metrics_only evidence must not contain symlinked artifacts")
         if path.is_file() and (
-            path.suffix.lower() in forbidden or path.name in {"model.tar.gz", "checkpoint.tar.gz"}
+            path.suffix.lower() in forbidden
+            or path.name in {"model.tar.gz", "checkpoint.tar.gz"}
+            or state_directories.intersection(path.relative_to(root).parts[:-1])
         ):
             raise ValueError(f"metrics_only evidence contains model or checkpoint state: {path.name}")
