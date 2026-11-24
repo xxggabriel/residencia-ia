@@ -1,0 +1,29 @@
+"""Run one dataset's disjoint smoke cases inside its reserved container."""
+import datetime
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+dataset = sys.argv[1]
+root = Path('/evidence/suite-smoke-v7')
+plan = json.loads((root / 'suite-plan.json').read_text())
+cases = [case for case in plan['cases'] if case['config']['dataset'] == dataset]
+assert len(cases) == 33
+for seed in (42, 43, 44):
+    selected = [case for case in cases if case['config']['seed'] == seed]
+    selected.sort(key=lambda case: case['config']['policy'] != 'cara')
+    for case in selected:
+        key = case['case_id']
+        log = root / 'logs' / f'{key}.log'
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open('w') as stream:
+            result = subprocess.run([
+                sys.executable, '/app/scripts/run_dataset_suite.py',
+                '--root', '/prepared', '--output', str(root), '--execute-case', key,
+            ], stdout=stream, stderr=subprocess.STDOUT)
+        print(json.dumps({'dataset': dataset, 'seed': seed, 'policy': case['config']['policy'],
+                          'case_id': key, 'exit_code': result.returncode,
+                          'finished_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}), flush=True)
+        if result.returncode:
+            raise SystemExit(result.returncode)
