@@ -207,6 +207,8 @@ def run(
     stop_requested=None,
     progress=None,
     checkpoint=None,
+    artifact_mode="full",
+    matrix_metrics_cache=None,
 ):
     """Evaluate the stream and optionally report live metrics after completed blocks.
 
@@ -215,6 +217,13 @@ def run(
     """
     if policy not in POLICIES:
         raise ValueError(f"unknown stream policy: {policy}")
+    if artifact_mode not in {"full", "metrics_only"}:
+        raise ValueError("artifact_mode must be full or metrics_only")
+    metrics_only = artifact_mode == "metrics_only"
+    if metrics_only and checkpoint is not None:
+        raise ValueError("metrics_only cannot save or restore a training checkpoint")
+    if matrix_metrics_cache is not None and not metrics_only:
+        raise ValueError("matrix metric caches require metrics_only retention")
     started = time.monotonic()
     tracking_seconds = 0.0
 
@@ -226,6 +235,10 @@ def run(
 
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
+    if metrics_only:
+        from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
+
+        verify_metrics_only_files(output)
     path, manifest = load_stream_manifest(root, dataset, scope)
     if sha256_file(path) != manifest["sha256"]:
         raise ValueError("prepared dataset checksum differs from its manifest")
@@ -280,7 +293,7 @@ def run(
         model_params=spec.model_params,
         decision_threshold=threshold,
     )
-    history = TrainingHistory(output, stop_requested)
+    history = TrainingHistory(output, stop_requested, seed=iter_config.seed)
     if resume is not None:
         history.fits = resume["fits"]
         history.global_step = resume["global_fit_step"]
@@ -320,6 +333,29 @@ def run(
     policy_settings = {}
     batch_policy = None
     retraining_options = zia_retraining.settings(tracking_settings) if policy in BATCH_POLICY_KINDS else None
+    if metrics_only and retraining_options is not None:
+        explicit_seed = (tracking_settings.get("retraining") or {}).get("seed", iter_config.seed)
+        if explicit_seed != iter_config.seed:
+            raise ValueError("policy geometry/forecast seed differs from the iterative model seed")
+        retraining_options["seed"] = iter_config.seed
+    cache_metadata, cache_contract, execution_environment = None, None, None
+    if matrix_metrics_cache is not None and retraining_options is not None:
+        execution_environment = environment()
+        cache_contract = {
+            "dataset_sha256": manifest["sha256"],
+            "dataset_rows": manifest["rows"],
+            "classes": labels,
+            "features": manifest["features"],
+            "model": spec.model,
+            "model_params": spec.model_params,
+            "iterative_training": iter_config.model_dump(),
+            "threshold": threshold,
+            "replay_blocks": REPLAY_BLOCKS,
+            "block_rows": block_rows,
+            "split": split,
+            "retraining": retraining_options,
+            "code_sha256": execution_environment["code_sha256"],
+        }
     if policy == "online":
         policy_settings = model.online_params
     elif policy in ("drift", "drift_adwin"):
@@ -356,6 +392,7 @@ def run(
         return ClassificationMetrics(classes, threshold)
 
     state = StreamState(scores(), scores(), np.zeros(classes, dtype=np.int64), detector)
+    diagnostic_rows_read = 0
     evaluation = resume["state"] if resume is not None and resume["phase"] == "evaluation" else None
     if evaluation is not None:
         state = evaluation["stream"]
@@ -368,7 +405,7 @@ def run(
             model.restore_online_iterations(evaluation["online_iterations"])
     checkpoint_dir = output / ".zia-resume" if checkpoint is not None else None
     candidate_dir = nullcontext()
-    if batch_policy is not None:
+    if batch_policy is not None and not metrics_only:
         if checkpoint_dir is None:
             candidate_dir = TemporaryDirectory(prefix="zia-candidates-")
         else:
@@ -390,6 +427,17 @@ def run(
             resume=evaluation["predictions"] if evaluation is not None else None,
         ) as predictions,
     ):
+        if metrics_only:
+            # These never-trained probes are consumed only by diagnostics.
+            # Their labels never reach a learner or a policy decision. Include
+            # this additional read in the system sampler and physical counters.
+            offset = 0
+            for times, features, target, held_out in stream(0):
+                history.check_interrupted()
+                if held_out:
+                    state.probes.add(offset, times, features, target)
+                offset += len(target)
+            diagnostic_rows_read = offset
         if batch_policy is not None:
 
             def save_matrix(partial):
@@ -401,27 +449,64 @@ def run(
             if evaluation is None:
                 partial = resume["state"] if resume is not None else None
                 matrix_start = partial[0].processed_rows if partial is not None else 0
-                matrix, states = zia_retraining.stream_matrix(
-                    training_blocks(matrix_start),
-                    make_zia_model(
-                        spec.model,
-                        labels,
-                        config=iter_config,
-                        dataset=dataset,
-                        model_params=spec.model_params,
-                        decision_threshold=threshold,
-                    ),
-                    threshold,
-                    iter_config,
-                    REPLAY_BLOCKS,
-                    retraining_options,
-                    history=history,
-                    scratch=Path(scratch),
-                    tracker=tracker,
-                    progress=publish_progress if progress is not None else None,
-                    resume=partial,
-                    checkpoint=save_matrix if checkpoint is not None else None,
+                build_matrix = (
+                    zia_retraining.bounded_stream_matrix if metrics_only else zia_retraining.stream_matrix
                 )
+                if matrix_metrics_cache is not None and Path(matrix_metrics_cache).exists():
+                    matrix, states, source_execution = zia_retraining.read_matrix_metrics_cache(
+                        matrix_metrics_cache, cache_contract, history
+                    )
+                    cache_reused = True
+                else:
+                    matrix, states = build_matrix(
+                        training_blocks if metrics_only else training_blocks(matrix_start),
+                        make_zia_model(
+                            spec.model,
+                            labels,
+                            config=iter_config,
+                            dataset=dataset,
+                            model_params=spec.model_params,
+                            decision_threshold=threshold,
+                        ),
+                        threshold,
+                        iter_config,
+                        REPLAY_BLOCKS,
+                        retraining_options,
+                        history=history,
+                        tracker=tracker,
+                        progress=publish_progress if progress is not None else None,
+                        **(
+                            {}
+                            if metrics_only
+                            else {
+                                "scratch": Path(scratch),
+                                "resume": partial,
+                                "checkpoint": save_matrix if checkpoint is not None else None,
+                            }
+                        ),
+                    )
+                    cache_reused = False
+                    source_execution = {
+                        "code_sha256": (execution_environment or {}).get("code_sha256"),
+                        "git_revision": (execution_environment or {}).get("git_revision"),
+                        "dataset_sha256": manifest["sha256"],
+                        "seed": iter_config.seed,
+                        "policy": policy,
+                    }
+                    if matrix_metrics_cache is not None:
+                        zia_retraining.write_matrix_metrics_cache(
+                            matrix_metrics_cache, cache_contract, matrix, states, history, source_execution
+                        )
+                if matrix_metrics_cache is not None:
+                    cache_metadata = {
+                        "schema": zia_retraining.MATRIX_CACHE_SCHEMA,
+                        "file": Path(matrix_metrics_cache).name,
+                        "sha256": sha256_file(matrix_metrics_cache),
+                        "bytes": Path(matrix_metrics_cache).stat().st_size,
+                        "reused": cache_reused,
+                        "source_execution": source_execution,
+                        "contract_sha256": sha256(encoded(cache_contract)).hexdigest(),
+                    }
                 batch_policy.prepare(matrix)
             # Matrix construction reads the training prefix before the evaluation pass.
             progress_offset = int(matrix.rows.sum())
@@ -459,7 +544,7 @@ def run(
             action = "initial" if step == 0 else None
             chosen, phase = (states[0] if step == 0 and states is not None else None), None
             if not step:
-                if is_holdout:
+                if is_holdout and not metrics_only:
                     raise ValueError("no warm-up rows strictly before the temporal holdout")
                 state.warmup = len(y)
             if step:
@@ -504,7 +589,7 @@ def run(
                 tracking_seconds += time.monotonic() - mark
                 if not is_holdout:
                     state.blocks += 1
-                    if policy == "periodic" or state.detector is not None:
+                    if policy == "periodic" or state.detector is not None or batch_policy is not None:
                         state.replay.append((start, x, y, timestamps))
                     block_alarms = 0
                     if state.detector is not None:
@@ -547,12 +632,56 @@ def run(
             if action:
                 timer = time.monotonic()
                 if chosen is not None:
-                    # Pre-trained for the matrix with this exact window; no second fit.
+                    # Use the matrix candidate's exact training window and identity.
                     fit = chosen["fit"]
-                    candidate = Path(scratch) / chosen["file"]
-                    payload = candidate.read_bytes()
-                    extension = candidate.suffix[1:]
-                    model.load(payload)
+                    if metrics_only:
+                        # Matrix candidates are deliberately discarded. Recreate
+                        # only a promoted candidate from the identical released
+                        # replay window, recording this extra physical work.
+                        replay = list(state.replay)
+                        train_start = replay[0][0] if replay else start
+                        fit_x = np.concatenate([r[1] for r in replay]) if replay else x
+                        fit_y = np.concatenate([r[2] for r in replay]) if replay else y
+                        fit_timestamps = np.concatenate([r[3] for r in replay]) if replay else timestamps
+                        model.fit(
+                            fit_x,
+                            fit_y,
+                            False,
+                            config=iter_config,
+                            tracker=tracker,
+                            timestamps=fit_timestamps,
+                            capture_sigterm=stop_requested is None,
+                            stop_requested=stop_requested,
+                        )
+                        replay_fit = history.capture(
+                            model.training_summary,
+                            action="materialize_for_deployment",
+                            block_index=step,
+                            start=train_start,
+                            timestamps=fit_timestamps,
+                            seconds=time.monotonic() - timer,
+                            current_block_start=start,
+                        )
+                        replay_fit.update(
+                            source_candidate_fit_id=fit["fit_id"],
+                            promotion_status="diagnostic_materialization",
+                        )
+                        payload, extension = model.payload()
+                        if sha256(payload).hexdigest() != fit["checkpoint"]["sha256"]:
+                            raise ValueError("recreated candidate differs from the scored performance matrix")
+                        replay_fit["checkpoint"] = {
+                            "file": None,
+                            "sha256": sha256(payload).hexdigest(),
+                            "bytes": len(payload),
+                        }
+                        replay_fit["checkpoint_unavailable_reason"] = "metrics_only_no_persisted_model_state"
+                        history.save_partial(replay_fit)
+                        del fit_x, fit_y, fit_timestamps
+                    else:
+                        candidate = Path(scratch) / chosen["file"]
+                        payload = candidate.read_bytes()
+                        extension = candidate.suffix[1:]
+                        model.load(payload)
                 else:
                     if action == "reset_retrain":
                         train_start = state.replay[0][0]
@@ -592,8 +721,9 @@ def run(
                     raise ValueError("checkpoint fit window differs from its deployment block")
                 state.resets += action == "reset_retrain"
                 state.train_seconds += fit["train_seconds"]
-                filename = f"models/{len(state.versions):04d}.{extension}"
-                atomic_write(output / filename, payload)
+                filename = None if metrics_only else f"models/{len(state.versions):04d}.{extension}"
+                if filename is not None:
+                    atomic_write(output / filename, payload)
                 fit["deployed_version"] = len(state.versions)
                 fit["deployment_action"] = action
                 fit["promotion_status"] = "promoted"
@@ -604,6 +734,8 @@ def run(
                     "bytes": len(payload),
                 }
                 history.save_partial(fit)
+                if metrics_only:
+                    fit["checkpoint_unavailable_reason"] = "metrics_only_no_persisted_model_state"
                 state.versions.append(
                     {
                         "end_seq": state.rows,
@@ -620,6 +752,8 @@ def run(
                         **({"phase": phase} if phase else {}),
                     }
                 )
+                if metrics_only:
+                    state.probes.capture(model, threshold)
                 if action == "reset_retrain" and chosen is None:
                     gc.collect()
             if step % 10 == 0:
@@ -674,9 +808,13 @@ def run(
             batch_policy, matrix, states, retraining_options
         )
         for fit in history.fits:
-            if fit["deployed_version"] is None:
+            if fit["deployed_version"] is None and fit["action"] == "candidate":
                 fit["promotion_status"] = "rejected"
-                fit["checkpoint_unavailable_reason"] = "matrix_candidate_checkpoint_is_transient"
+                fit["checkpoint_unavailable_reason"] = (
+                    "metrics_only_no_persisted_model_state"
+                    if metrics_only
+                    else "matrix_candidate_checkpoint_is_transient"
+                )
     summary, by_class = online.metrics()
     final, final_by_class = holdout.metrics()
     errors = int(online.confusion.sum() - online.confusion.trace())
@@ -688,9 +826,24 @@ def run(
     unique = unique_train_rows(deployed_fits)
     if batch_policy is not None:
         retraining_metrics["retraining_matrix_training_presentations"] = sum(
-            fit["training_presentations"] for fit in history.fits
+            fit["training_presentations"] for fit in history.fits if fit["action"] == "candidate"
+        )
+    if metrics_only:
+        physical_fits = [f for f in history.fits if f.get("execution_origin") != "reused_metric_evidence"]
+        materializations = [f for f in history.fits if f["action"] == "materialize_for_deployment"]
+        retraining_metrics.update(
+            materialization_fit_count=len(materializations),
+            materialization_training_presentations=sum(f["training_presentations"] for f in materializations),
+            materialization_train_seconds=sum(f["train_seconds"] for f in materializations),
+            actual_total_fit_count=len(physical_fits),
+            actual_total_training_presentations=sum(f["training_presentations"] for f in physical_fits),
+            actual_total_fit_seconds=sum(f["train_seconds"] for f in physical_fits),
+            reused_matrix_candidate_fit_count=len(history.fits) - len(physical_fits),
+            diagnostic_source_rows_read=diagnostic_rows_read,
+            persisted_model_storage_bytes=0,
         )
     model_bytes = sum(v["bytes"] for v in versions)
+    persisted_model_bytes = 0 if metrics_only else model_bytes
     error_units = (
         summary["fp"] * costs["false_positive"] + summary["fn"] * costs["false_negative"]
         if classes == 2
@@ -703,7 +856,7 @@ def run(
         updates=updates,
         train_seconds=train_seconds,
         predict_seconds=predict_seconds,
-        model_storage_bytes=model_bytes,
+        model_storage_bytes=persisted_model_bytes,
     )
     attempt_seconds = time.monotonic() - started
     compute_seconds = previous_seconds + attempt_seconds
@@ -728,7 +881,7 @@ def run(
             costs["aws"],
             train_seconds=compute_seconds,
             predict_seconds=0,
-            model_storage_bytes=model_bytes,
+            model_storage_bytes=persisted_model_bytes,
         )
         if costs["aws"] is not None
         else None
@@ -756,7 +909,8 @@ def run(
         evaluation_attempt_wall_seconds=attempt_seconds,
         process_peak_rss_bytes=peak_memory,
         model_versions_count=len(versions),
-        model_storage_bytes=model_bytes,
+        model_storage_bytes=persisted_model_bytes,
+        **({"logical_model_serialized_bytes": model_bytes} if metrics_only else {}),
         mean_window_accuracy=sum(w["accuracy"] for w in windows if w["scope"] == "prequential")
         / stream_blocks,
         drift_alarm_count=alarms,
@@ -796,12 +950,15 @@ def run(
         if classes == 2
         else "multiclass: argmax, ties favor lower class ID"
     )
-    env = environment()
+    env = execution_environment or environment()
     if model.name == "xgboost":
         env["packages"]["xgboost"] = model.xgb.__version__
     report = {
         "complete": True,
-        "protocol": "batch_prequential_with_final_temporal_holdout",
+        "protocol": "ordered-stream-batch-prequential-metrics-v2"
+        if metrics_only
+        else "batch_prequential_with_final_temporal_holdout",
+        "artifact_mode": artifact_mode,
         "dataset": dataset,
         "scope": scope,
         "policy": policy,
@@ -823,6 +980,25 @@ def run(
             "iterative_training": iter_config.model_dump(),
             "decision_threshold": threshold,
             "decision_rule": decision_rule,
+            "artifact_mode": artifact_mode,
+            **({"matrix_metrics_cache": cache_metadata} if cache_metadata is not None else {}),
+            **(
+                {
+                    "retention_contract": {
+                        "weights": "never persisted, including temporary candidate files",
+                        "matrix_construction": "bounded rowwise recomputation from immutable source",
+                        "deployment": "deterministic refit checked against the candidate state hash",
+                        "train_seconds_scope": (
+                            "logical promoted fits; actual_total_fit_seconds includes reconstruction"
+                        ),
+                        "holdout_probes": (
+                            "fixed read-only diagnostic sample, excluded from training and decisions"
+                        ),
+                    }
+                }
+                if metrics_only
+                else {}
+            ),
         },
         "class_counts": state.class_counts.tolist(),
         "metrics": summary,
@@ -833,7 +1009,11 @@ def run(
         "class_metrics": dict(zip(labels, by_class, strict=True)),
         "holdout_class_metrics": dict(zip(labels, final_by_class, strict=True)),
         "model_versions": versions,
-        "model_explanation": model.explanation(manifest["features"]),
+        "model_explanation": (
+            {"status": "unavailable", "reason": "metrics_only_does_not_persist_learned_parameters"}
+            if metrics_only
+            else model.explanation(manifest["features"])
+        ),
         "training_history": history.fits,
         "alarms": alarm_events,
         "costs": cost_report,
@@ -846,7 +1026,7 @@ def run(
     mark = time.monotonic()
     prequential_observation = online.quality(labels, curves=True)
     holdout_observation = holdout.quality(labels, curves=True)
-    retention = state.probes.evaluate(model, output, versions, threshold)
+    retention = state.probes.evaluate(model, output, versions, threshold, artifact_mode=artifact_mode)
     tracking_seconds += time.monotonic() - mark
     report["tracking_observations"] = run_observations(
         report=report,
@@ -863,6 +1043,8 @@ def run(
     history.save()
     atomic_write(output / "report.json", encoded(report))
     atomic_write(output / "progress.json", encoded({"rows": rows, "total_rows": rows, "complete": True}))
+    if metrics_only:
+        verify_metrics_only_files(output)
     if checkpoint_dir is not None:
         shutil.rmtree(checkpoint_dir)
     return report

@@ -20,6 +20,16 @@ class TemporalHoldoutProbes:
 
     def __init__(self):
         self.data = {}
+        self.captured = []
+
+    def _parts(self):
+        return [(np.concatenate(x), np.concatenate(y)) for _, x, y, _ in self.data.values()]
+
+    def capture(self, model, threshold):
+        """Score fixed diagnostic probes while the version is live, without retaining weights."""
+        self.captured.append(
+            [float(np.mean(decide(model.predict(x), threshold) == y)) for x, y in self._parts()]
+        )
 
     def add(self, start, timestamps, features, labels):
         offset = 0
@@ -38,7 +48,7 @@ class TemporalHoldoutProbes:
                 self.data[period] = (first, x_parts, y_parts, count + take)
             offset = end
 
-    def evaluate(self, model, output, versions, threshold):
+    def evaluate(self, model, output, versions, threshold, *, artifact_mode="full"):
         periods, parts = [], []
         for start_ms, (first, x_parts, y_parts, count) in self.data.items():
             label = datetime.fromtimestamp(start_ms / 1000, timezone.utc).date().isoformat()
@@ -75,8 +85,13 @@ class TemporalHoldoutProbes:
                     }
                 )
                 continue
-            model.load((output / version["file"]).read_bytes())
-            row = [float(np.mean(decide(model.predict(x), threshold) == y)) for x, y in parts]
+            if artifact_mode == "metrics_only":
+                if len(self.captured) != len(versions):
+                    raise ValueError("missing live-version holdout diagnostics")
+                row = self.captured[index]
+            else:
+                model.load((output / version["file"]).read_bytes())
+                row = [float(np.mean(decide(model.predict(x), threshold) == y)) for x, y in parts]
             matrix.append(row)
             series.append({"step": index, "absolute_retention": sum(row) / len(row)})
         return {
@@ -93,6 +108,11 @@ class TemporalHoldoutProbes:
             "max_checkpoints": MAX_CHECKPOINTS,
             "max_periods": MAX_PERIODS,
             "max_rows_per_period": MAX_PERIOD_ROWS,
+            **(
+                {"evaluation_method": "live_version_on_fixed_read_only_holdout_probes"}
+                if artifact_mode == "metrics_only"
+                else {}
+            ),
         }
 
 
@@ -110,9 +130,10 @@ def run_observations(
 ):
     """Total counts include candidates; the legacy operational estimates cover deployed models."""
     fits = history.fits
+    executed = [fit for fit in fits if fit.get("execution_origin") != "reused_metric_evidence"]
     initial = next(fit for fit in fits if fit["deployed_version"] == 0)
     promoted = [fit for fit in fits if fit["deployed_version"] is not None]
-    rejected = [fit for fit in fits if fit["promotion_status"] == "rejected"]
+    rejected = [fit for fit in executed if fit["promotion_status"] == "rejected"]
     deployed_updates = promoted[1:]
     metrics = report["metrics"]
     evaluated = prequential["evaluated_examples"] + holdout["evaluated_examples"]
@@ -121,7 +142,7 @@ def run_observations(
         return sum(fit["observation_effort"].get(key) or 0 for fit in collection)
 
     def fit_seconds(key):
-        return sum(fit["observation_resources"].get(key) or 0 for fit in fits)
+        return sum(fit["observation_resources"].get(key) or 0 for fit in executed)
 
     update_epochs = total(deployed_updates, "epochs")
     if deployed_updates and all(fit["observation_effort"]["epochs"] is None for fit in deployed_updates):
@@ -153,14 +174,15 @@ def run_observations(
         effort={
             "examples_observed": metrics["dataset_rows"],
             "evaluated_examples": evaluated,
-            "unique_training_examples": unique_train_rows(fits),
-            "training_presentations": total(fits, "training_presentations"),
-            "replay_presentations": total(fits, "replay_presentations"),
-            "steps": total(fits, "steps"),
-            "epochs": total(fits, "epochs"),
+            "unique_training_examples": unique_train_rows(executed),
+            "training_presentations": total(executed, "training_presentations"),
+            "replay_presentations": total(executed, "replay_presentations"),
+            "steps": total(executed, "steps"),
+            "epochs": total(executed, "epochs"),
             "updates": len(deployed_updates),
             "promoted_versions": len(promoted),
-            "fit_count": len(fits),
+            "fit_count": len(executed),
+            "reused_matrix_candidate_fit_count": len(fits) - len(executed),
             "rejected_candidate_count": len(rejected),
             "rejected_training_presentations": total(rejected, "training_presentations"),
             "deployed_training_presentations": total(promoted, "training_presentations"),
