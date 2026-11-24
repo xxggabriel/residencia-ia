@@ -35,3 +35,13 @@ def test_metrics_only_rejects_symlinked_payload(tmp_path):
     (tmp_path / "report.json").symlink_to(tmp_path / "external-model.json")
     with pytest.raises(ValueError, match="symlinked"):
         verify_metrics_only_files(tmp_path)
+
+
+def test_model_explanation_allows_only_absence_metadata(tmp_path):
+    path = tmp_path / "artifacts/data/model/explanation.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"status":"unavailable","reason":"metrics_only_does_not_persist_learned_parameters"}')
+    verify_metrics_only_files(tmp_path)
+    path.write_text('{"weights": [1, 2, 3]}')
+    with pytest.raises(ValueError, match="model or checkpoint state"):
+        verify_metrics_only_files(tmp_path)
