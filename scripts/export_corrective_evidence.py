@@ -1027,24 +1027,6 @@ def export(state, output, *, make_plots=True, require_complete=False, historical
             )
         (output / "historical-comparison.md").write_text(text, encoding="utf-8")
 
-    rep_rows, rep_records = [], []
-    for job in sorted(set(jobs) | expected_names):
-        item = jobs.get(job, {})
-        record = {
-            "job": job,
-            "status": item.get("status", "pending"),
-            "datasets": replication_checks.get(job, []),
-        }
-        if item.get("status") == "passed" and item.get("output"):
-            path = contained(state, item["output"])
-            payload = json_read(path)
-            clean = portable(payload, state)
-            assert_portable(clean)
-            target = output / "replications" / f"{job}.json.gz"
-            gzip_write(target, json_bytes(clean))
-            record.update({"artifact": target.relative_to(output).as_posix(), "source_sha256": sha256(path)})
-            rep_rows.extend(replication_rows(clean, job))
-        rep_records.append(record)
     rep_fields = [
         "job",
         "protocol",
@@ -1063,9 +1045,35 @@ def export(state, output, *, make_plots=True, require_complete=False, historical
         "served_by",
         "coordinate",
     ]
+    rep_aggregate_rows, rep_records = [], []
     stream, table = writer(output / "replication-by-seed.csv", rep_fields)
     with stream:
-        table.writerows(rep_rows)
+        for job in sorted(set(jobs) | expected_names):
+            item = jobs.get(job, {})
+            record = {
+                "job": job,
+                "status": item.get("status", "pending"),
+                "datasets": replication_checks.get(job, []),
+            }
+            if item.get("status") == "passed" and item.get("output"):
+                path = contained(state, item["output"])
+                payload = json_read(path)
+                clean = portable(payload, state)
+                assert_portable(clean)
+                target = output / "replications" / f"{job}.json.gz"
+                gzip_write(target, json_bytes(clean))
+                record.update(
+                    {"artifact": target.relative_to(output).as_posix(), "source_sha256": sha256(path)}
+                )
+                for row in replication_rows(clean, job):
+                    table.writerow(row)
+                    if row["point_type"] in {"curve", "summary"}:
+                        rep_aggregate_rows.append(row)
+                    del row
+                # Candidate/analysis points have already reached the CSV. Do not
+                # retain their rows or a previous job's complete JSON payload.
+                del payload, clean
+            rep_records.append(record)
     rep_keys = [
         "job",
         "protocol",
@@ -1077,9 +1085,7 @@ def export(state, output, *, make_plots=True, require_complete=False, historical
         "metric",
         "step",
     ]
-    rep_aggregates = aggregate(
-        [r for r in rep_rows if r["point_type"] in {"curve", "summary"}], rep_keys, ddof=0
-    )
+    rep_aggregates = aggregate(rep_aggregate_rows, rep_keys, ddof=0)
     stream, table = writer(
         output / "replication-aggregate.csv", [*rep_keys, "n", "missing", "mean", "std", "ddof", "divisor"]
     )

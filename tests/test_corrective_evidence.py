@@ -1,9 +1,13 @@
 import csv
+import gc
 import gzip
+import io
 import json
+import weakref
 
 import pytest
 
+from scripts import export_corrective_evidence as evidence
 from scripts.export_corrective_evidence import (
     export,
     full_source_coverage_valid,
@@ -493,3 +497,91 @@ def test_full_source_canonical_ranges_cover_all_fifteen_batches_without_a_droppe
     coverage["source_row_ranges"][7]["start"] -= 1
     coverage["source_row_ranges"][-1]["stop"] -= 1
     assert not full_source_coverage_valid(coverage)
+
+
+def test_replication_candidate_and_analysis_rows_are_released_while_streaming(tmp_path, monkeypatch):
+    state = fixture_campaign(tmp_path / "state")
+    live = peak = consumed = 0
+
+    class TrackedRow(dict):
+        pass
+
+    def released():
+        nonlocal live
+        live -= 1
+
+    def many_rows(_payload, job):
+        nonlocal live, peak, consumed
+        yield {
+            "job": job,
+            "protocol": "fixture",
+            "dataset": "electricity",
+            "seed": 0,
+            "policy": "cara",
+            "parameter": "alpha",
+            "parameter_value": 0.0,
+            "point_type": "curve",
+            "metric": "cost",
+            "step": 0,
+            "value": 1.5,
+            "available": True,
+            "coordinate": "{}",
+        }
+        for index in range(1000):
+            row = TrackedRow(
+                job=job,
+                protocol="fixture",
+                dataset="electricity",
+                seed=0,
+                policy="candidate_matrix",
+                parameter="",
+                parameter_value="",
+                point_type="candidate" if index % 2 == 0 else "analysis",
+                metric="training/loss",
+                step=index,
+                value=index / 1000,
+                available=True,
+                coordinate="{}",
+            )
+            live += 1
+            peak = max(peak, live)
+            weakref.finalize(row, released)
+            yield row
+            consumed += 1
+            del row
+            gc.collect()
+            # CSV consumption must not retain the previously yielded point.
+            # Materializing the generator with list.extend fails here.
+            assert live == 0
+
+    monkeypatch.setattr(evidence, "replication_rows", many_rows)
+    output = tmp_path / "evidence"
+    result = export(state, output, make_plots=False, require_complete=True)
+    assert result["complete"] is True
+    assert consumed == 1000 and live == 0 and peak == 1
+    rows = read_csv(output / "replication-by-seed.csv")
+    assert len(rows) == 1001
+    assert [row["point_type"] for row in rows[1:]] == [
+        "candidate" if index % 2 == 0 else "analysis" for index in range(1000)
+    ]
+    assert [float(row["value"]) for row in rows[1:]] == [index / 1000 for index in range(1000)]
+    (aggregate,) = read_csv(output / "replication-aggregate.csv")
+    assert aggregate["point_type"] == "curve" and float(aggregate["mean"]) == 1.5
+
+
+def test_incremental_replication_csv_preserves_legacy_writer_bytes_and_payload_hash(tmp_path):
+    state = fixture_campaign(tmp_path / "state")
+    output = tmp_path / "evidence"
+    result = export(state, output, make_plots=False, require_complete=True)
+    actual = output / "replication-by-seed.csv"
+    fields = next(csv.reader(io.StringIO(actual.read_text())))
+    reference = io.StringIO(newline="")
+    previous = csv.DictWriter(reference, fields, extrasaction="ignore")
+    previous.writeheader()
+    payload = json.loads((state / "replications/upf.json").read_text())
+    previous.writerows(list(replication_rows(portable(payload, state), "upf")))
+    assert actual.read_bytes() == reference.getvalue().encode()
+    (job,) = result["replications"]
+    assert job["source_sha256"] == sha256(state / "replications/upf.json")
+    retained = gzip.decompress((output / job["artifact"]).read_bytes())
+    assert json.loads(retained) == portable(payload, state)
