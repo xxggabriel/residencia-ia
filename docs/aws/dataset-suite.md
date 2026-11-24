@@ -48,6 +48,11 @@ Fargate Spot, com um único ambiente Batch limitado a 64 vCPU. Até 32 tarefas p
 ocupar essa reserva simultaneamente. As demais aguardam na fila, e a capacidade
 Spot efetivamente disponível pode reduzir o paralelismo observado.
 
+Cada tarefa usa um worker de publicação de métricas e um worker de logging
+assíncrono. A concorrência de treino e a de publicação são limites diferentes:
+esse ajuste reduz a pressão simultânea sobre o rastreador sem remover pontos das
+séries. Os valores efetivos acompanham os metadados do ambiente.
+
 ## Condições antes da submissão
 
 O comando de coordenação é

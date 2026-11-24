@@ -768,6 +768,8 @@ def test_benchmarks_run_serverless_on_fargate_spot_and_resume_after_interruption
     assert env["BENCH_FARGATE_SPOT"] == {"Fn::If": ["Spot", "true", "false"]}
     assert env["BENCH_CHECKPOINT_INTERVAL_SECONDS"] == {"Ref": "BenchmarkCheckpointSeconds"}
     assert env["MLFLOW_ENABLE_ASYNC_LOGGING"] == "true"
+    assert env["MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE"] == "1"
+    assert env["BENCH_MLFLOW_PUBLISH_CONCURRENCY"] == "1"
     outputs = module["Outputs"]
     assert outputs["BenchmarkComputeBackend"]["Value"] == {
         "Fn::If": ["Spot", "batch-fargate-spot", "batch-fargate"]

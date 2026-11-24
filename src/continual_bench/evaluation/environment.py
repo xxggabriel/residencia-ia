@@ -58,7 +58,15 @@ def runtime_resources():
         "cgroup_v2_limits": limits,
         "thread_environment": {
             key: os.environ.get(key)
-            for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+            for key in (
+                "OMP_NUM_THREADS",
+                "OPENBLAS_NUM_THREADS",
+                "MKL_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS",
+                "BENCH_MLFLOW_PUBLISH_CONCURRENCY",
+                "MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE",
+                "MLFLOW_ASYNC_LOGGING_BUFFERING_SECONDS",
+            )
         },
         "scope": "observed_host_and_process_limits_not_dedicated_resource_reservation",
     }
