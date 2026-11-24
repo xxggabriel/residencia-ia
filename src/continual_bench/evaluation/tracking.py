@@ -281,6 +281,17 @@ def regime_metrics(predictions, changepoints, observed):
             )
             continue
         collected = BINARY_QUALITY.collect(rows)
+        curve = collected.get("roc_curve")
+        collected["roc_auc"] = (
+            math.fsum(
+                (right - left) * (high + low) / 2
+                for left, right, low, high in zip(
+                    curve["fpr"], curve["fpr"][1:], curve["tpr"], curve["tpr"][1:]
+                )
+            )
+            if curve is not None
+            else None
+        )
         unavailable = {}
         if collected.get("roc_auc") is None:
             unavailable["roc_auc"] = "single_class_or_undefined_in_regime"
