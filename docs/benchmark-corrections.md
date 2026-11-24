@@ -150,6 +150,10 @@ recortes sem depender de um identificador opaco.
 Use Python 3.12 com as dependências fixadas e credenciais de tracking fornecidas pelo
 ambiente. O entrypoint não contém endereço de servidor nem credenciais.
 
+As evidências versionadas ficam fora do contexto Docker. Elas não são dependências
+da imagem de execução; uma comparação histórica recebe seus arquivos por montagem
+ou por caminho explícito. Isso evita transferir os resultados a cada rebuild.
+
 O paralelismo de cálculo é separado do orçamento de publicação. Em serviços de
 tracking com poucas conexões, defina `BENCH_MLFLOW_PUBLISH_CONCURRENCY=1`; o cliente
 mantém todos os pontos e publica os ajustes de cada processo sequencialmente.
