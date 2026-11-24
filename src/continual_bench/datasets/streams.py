@@ -26,6 +26,7 @@ from typing import Protocol
 from continual_bench.infrastructure.storage import atomic_write
 
 from . import zia
+from .pinned_streams import PinnedRealStreamProvider
 
 FORMAT = zia.FORMAT
 SCOPES = zia.SCOPES
@@ -310,7 +311,7 @@ class StreamRegistry:
         return self.provider(dataset).load_manifest(root, dataset, scope)
 
 
-STREAMS = StreamRegistry([ZiaStreamProvider(), CatalogStreamProvider()])
+STREAMS = StreamRegistry([ZiaStreamProvider(), PinnedRealStreamProvider(), CatalogStreamProvider()])
 
 
 def stream_names() -> tuple[str, ...]:
