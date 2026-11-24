@@ -183,21 +183,24 @@ def execute_case(args):
         cache.parent.mkdir(parents=True, exist_ok=True)
         kwargs["matrix_metrics_cache"] = cache
     publisher = None
-    if plan["tracking_required"]:
-        if not os.environ.get("MLFLOW_TRACKING_URI"):
-            raise ValueError("tracking requires an explicitly configured MLflow endpoint")
-        from mlflow.tracking import MlflowClient
-
-        from continual_bench.evaluation.zia_publication import publish
-        from continual_bench.infrastructure.zia_tracking import begin
-
-        client = MlflowClient()
-        run_id, experiment = begin(
-            client, directory, config["dataset"], config["scope"], config["policy"], args.output.name
-        )
-        client.set_tags(run_id, {"seed": str(config["seed"]), "artifact_mode": "metrics_only"})
-        publisher = (client, run_id, experiment, publish)
     try:
+        if plan["tracking_required"]:
+            if not os.environ.get("MLFLOW_TRACKING_URI"):
+                raise ValueError("tracking requires an explicitly configured MLflow endpoint")
+            from mlflow.tracking import MlflowClient
+
+            from continual_bench.evaluation.zia_publication import publish
+            from continual_bench.infrastructure.zia_tracking import begin
+
+            client = MlflowClient()
+            run_id, experiment = begin(
+                client, directory, config["dataset"], config["scope"], config["policy"], args.output.name
+            )
+            # Retain the real run ID before the first subsequent tracking write,
+            # so a metadata or publication failure also terminates this parent.
+            publisher = (client, run_id, experiment, publish)
+            for tag, value in {"seed": str(config["seed"]), "artifact_mode": "metrics_only"}.items():
+                client.set_tag(run_id, tag, value)
         report = run(
             args.root,
             config["dataset"],
@@ -217,28 +220,28 @@ def execute_case(args):
             if receipt.get("complete") is not True:
                 raise ValueError("MLflow publication is incomplete")
         qa = verify_case(directory, case)
-    except Exception:
+        save(directory / "suite-case-qa.json", qa)
+        files = {
+            p.relative_to(directory).as_posix(): sha256_file(p)
+            for p in sorted(directory.rglob("*"))
+            if p.is_file()
+        }
+        save(
+            result_path,
+            {
+                "status": "passed",
+                "case": case,
+                "code": code,
+                "started_at": started,
+                "finished_at": now(),
+                "files": files,
+                "tracking": receipt,
+            },
+        )
+    except BaseException:
         if publisher is not None:
             publisher[0].set_terminated(publisher[1], "FAILED")
         raise
-    save(directory / "suite-case-qa.json", qa)
-    files = {
-        p.relative_to(directory).as_posix(): sha256_file(p)
-        for p in sorted(directory.rglob("*"))
-        if p.is_file()
-    }
-    save(
-        result_path,
-        {
-            "status": "passed",
-            "case": case,
-            "code": code,
-            "started_at": started,
-            "finished_at": now(),
-            "files": files,
-            "tracking": receipt,
-        },
-    )
 
 
 def run_suite(args, plan):

@@ -220,6 +220,11 @@ def test_reconstruction_rejects_seed_loss_model_files_and_prediction_corruption(
     with pytest.raises(ValueError, match="model or checkpoint"):
         qa.verify_case(directory, case)
     model.unlink()
+    serialized = directory / "candidate.json"
+    qa.save(serialized, {"learner": {"gradient_booster": {"model": {"trees": []}}}})
+    with pytest.raises(ValueError, match="serialized booster"):
+        qa.verify_case(directory, case)
+    serialized.unlink()
     path = directory / "predictions/part-0000.parquet"
     with path.open("ab") as stream:
         stream.write(b"corruption")
@@ -393,3 +398,125 @@ def test_actual_evaluator_evidence_passes_reconstruction_with_the_effective_seed
     result = qa.verify_case(directory, case)
     assert report["complete"] and result["complete"]
     assert result["source_rows"] == 128 and result["fit_seed_checks"] == 1
+
+
+def prepare_sdk_suite(tmp_path, monkeypatch, *, classes):
+    """Only source admission is isolated; evaluator, SDK and publication are real."""
+    from importlib.util import find_spec
+
+    from continual_bench.datasets.streams import StreamDataset
+    from continual_bench.evaluation import stream_benchmark
+
+    dataset = "electricity" if classes == 2 else "social"
+    model = "xgboost" if classes == 2 else "multinomial_logistic"
+    root = tmp_path / "inputs"
+    root.mkdir()
+    path = root / "fixture.parquet"
+    seq = np.arange(128)
+    pq.write_table(
+        pa.table(
+            {
+                "event_time": seq.astype(np.int64),
+                "label": (seq % classes).astype(np.uint8),
+                "feature": (seq / 128).astype(np.float32),
+            }
+        ),
+        path,
+    )
+    manifest = {
+        "dataset": dataset,
+        "scope": "smoke",
+        "rows": 128,
+        "sha256": qa.sha256(path),
+        "bytes": path.stat().st_size,
+        "features": ["feature"],
+        "license": "test fixture",
+        "source": {
+            "catalog": dataset,
+            "classes": [str(i) for i in range(classes)],
+            "revision": "fixture-v1",
+            "license": "test fixture",
+        },
+    }
+    monkeypatch.setattr(suite, "load_stream_manifest", lambda *_: (path, manifest))
+    monkeypatch.setattr(stream_benchmark, "load_stream_manifest", lambda *_: (path, manifest))
+    monkeypatch.setattr(
+        stream_benchmark,
+        "stream_spec",
+        lambda *_: StreamDataset(
+            dataset, "catalog", tuple(manifest["source"]["classes"]), model, {"smoke": 16, "full": 16}
+        ),
+    )
+    uri = (tmp_path / "mlruns").as_uri()
+    if find_spec("sqlalchemy") and find_spec("alembic"):
+        uri = "sqlite:///" + str(tmp_path / "tracking.db")
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    monkeypatch.setenv("_MLFLOW_SERVER_ARTIFACT_ROOT", (tmp_path / "artifacts").as_uri())
+    monkeypatch.setenv("MLFLOW_ENABLE_ASYNC_LOGGING", "false")
+    from mlflow.tracking._tracking_service import utils
+
+    monkeypatch.setattr(utils, "_tracking_uri", None)
+    args = arguments(tmp_path, root=root, datasets=[dataset], policies=["frozen"])
+    plan = suite.make_plan(args)
+    suite.save(args.output / "suite-plan.json", plan)
+    return args, plan, uri
+
+
+@pytest.mark.parametrize("classes", [2, 4])
+def test_execute_case_publishes_all_three_seeds_with_the_real_mlflow_sdk(tmp_path, monkeypatch, classes):
+    from mlflow.tracking import MlflowClient
+
+    args, plan, uri = prepare_sdk_suite(tmp_path, monkeypatch, classes=classes)
+    client = MlflowClient(tracking_uri=uri)
+    for case in plan["cases"]:
+        args.execute_case = case["case_id"]
+        suite.execute_case(args)
+        receipt = qa.read(args.output / "results" / (case["case_id"] + ".json"))
+        run = client.get_run(receipt["tracking"]["mlflow_run_id"])
+        assert run.info.status == "FINISHED"
+        assert run.data.tags["seed"] == str(case["config"]["seed"])
+        assert run.data.tags["artifact_mode"] == "metrics_only"
+        assert run.data.params["seed"] == str(case["config"]["seed"])
+        assert receipt["tracking"]["registered_model"] is None
+        directory = args.output / "cases" / case["case_id"]
+        report = qa.read(directory / "report.json")
+        checked = qa.verify_native(directory, report, receipt["tracking"], client)
+        assert checked["complete"] and checked["points"] > 20
+        children = client.search_runs(
+            [run.info.experiment_id], f"tags.`mlflow.parentRunId` = '{run.info.run_id}'"
+        )
+        assert len(children) == len(report["training_history"])
+        assert all(child.info.status == "FINISHED" for child in children)
+        assert all(not client.list_artifacts(child.info.run_id) for child in children)
+        qa.verify_retention(directory, report)
+    experiments = [e.experiment_id for e in client.search_experiments()]
+    assert not client.search_runs(experiments, "attributes.status = 'RUNNING'")
+    if uri.startswith("sqlite:"):
+        assert (tmp_path / "tracking.db").is_file()
+        assert (tmp_path / "artifacts").is_dir()
+    else:
+        assert (tmp_path / "mlruns").is_dir()
+
+
+def test_execute_case_terminates_real_parent_when_the_first_metadata_write_fails(tmp_path, monkeypatch):
+    from mlflow.tracking import MlflowClient
+
+    args, plan, uri = prepare_sdk_suite(tmp_path, monkeypatch, classes=4)
+    args.execute_case = plan["cases"][0]["case_id"]
+    original = MlflowClient.set_tag
+
+    def fail_seed(self, run_id, key, value, *args, **kwargs):
+        if key == "seed":
+            raise RuntimeError("injected tracking metadata failure")
+        return original(self, run_id, key, value, *args, **kwargs)
+
+    monkeypatch.setattr(MlflowClient, "set_tag", fail_seed)
+    with pytest.raises(RuntimeError, match="metadata failure"):
+        suite.execute_case(args)
+    client = MlflowClient(tracking_uri=uri)
+    experiments = [e.experiment_id for e in client.search_experiments()]
+    runs = client.search_runs(experiments)
+    assert len(runs) == 1 and runs[0].info.status == "FAILED"
+    assert not (args.output / "results" / (args.execute_case + ".json")).exists()
+    assert not (args.output / "cases" / args.execute_case / "report.json").exists()

@@ -70,7 +70,11 @@ def verify_retention(directory, report):
         require(not set(relative.parts) & {"models", "candidates", ".zia-resume"}, "model-state directory")
         if path.suffix == ".json":
             value = read(path)
-            require(not isinstance(value, dict) or "learner" not in value, "serialized booster payload")
+            learner = value.get("learner") if isinstance(value, dict) else None
+            serialized_booster = isinstance(learner, dict) and bool(
+                {"gradient_booster", "learner_model_param"} & learner.keys()
+            )
+            require(not serialized_booster, "serialized booster payload")
     require(
         report.get("artifact_mode", report["contract"].get("artifact_mode")) == "metrics_only",
         "report does not declare metrics_only",
