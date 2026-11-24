@@ -22,6 +22,7 @@ from pathlib import Path
 from continual_bench.infrastructure.object_store import (
     ObjectExists,
     get_json,
+    json_bytes,
     put_json,
     sha256_bytes,
     sha256_path,
@@ -503,6 +504,81 @@ def flush_partial_state(
     return payload
 
 
+def archive_partial_metrics(store, output: Path, prefix: str, status: dict, *, tracker=None) -> dict:
+    """Preserve incomplete observations without creating resumable training state.
+
+    This drain deliberately has no stop callback: the signal or cancellation that
+    interrupted evaluation must not prevent its own best-effort evidence upload.
+    The attempt namespace and conditional creates keep prior evidence immutable.
+    """
+    from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
+
+    verify_metrics_only_files(output)
+    # Native writers may still own an asynchronous ledger. Drain them before
+    # hashing any files so the manifest describes the bytes actually published.
+    flush_tracking(tracker)
+    verify_metrics_only_files(output)
+    partial_prefix = f"{prefix}/partial"
+    files = {}
+    sources = []
+    for relative, path in output_files(output):
+        reference = {"sha256": sha256_path(path), "bytes": path.stat().st_size}
+        files[relative] = reference
+        sources.append((relative, path, reference))
+
+    def publish_immutable(key, digest, size, upload):
+        stored = store.head(key)
+        if stored is None:
+            try:
+                stored = upload()
+            except ObjectExists:
+                stored = store.head(key)
+        if stored is None or stored.sha256 != digest or stored.size != size:
+            raise CheckpointError(f"Immutable partial metric evidence differs: {key}")
+
+    for relative, path, reference in sources:
+        key = f"{partial_prefix}/{relative}"
+        publish_immutable(
+            key,
+            reference["sha256"],
+            reference["bytes"],
+            lambda key=key, path=path, digest=reference["sha256"]: store.put_file(
+                key, path, if_absent=True, sha256=digest
+            ),
+        )
+    manifest = {
+        "version": "partial-metrics-v1",
+        "artifact_mode": "metrics_only",
+        "complete": False,
+        "scientific_status": "incomplete",
+        "evaluation_recovery": "restart_unit_without_training_checkpoint",
+        "campaign_id": status["campaign_id"],
+        "run_id": status["run_id"],
+        "attempt_key": status["attempt_key"],
+        "labels": status["labels"],
+        "files": files,
+    }
+    manifest_key = f"{partial_prefix}/partial-metrics-manifest.json"
+    payload = json_bytes(manifest)
+    # Publish the receipt last. Its existence confirms every referenced object
+    # was uploaded and verified, but does not declare a completed experiment.
+    publish_immutable(
+        manifest_key,
+        sha256_bytes(payload),
+        len(payload),
+        lambda: store.put_bytes(manifest_key, payload, if_absent=True, content_type="application/json"),
+    )
+    return {
+        "manifest_uri": store.uri(manifest_key),
+        "manifest_sha256": sha256_bytes(payload),
+        "prefix": store.uri(partial_prefix),
+        "files": len(files),
+        "bytes": sum(item["bytes"] for item in files.values()),
+        "complete": False,
+        "scientific_status": "incomplete",
+    }
+
+
 def verify_spot_inputs(store, key, unit, env):
     expected_id, contract_hash = run_identity(unit.campaign_id, unit.contract)
     if (
@@ -657,7 +733,7 @@ def run_unit(
     publishing = False
 
     def on_terminate(_signal):
-        if resumable or unit.kind == "zia":
+        if resumable or unit.kind == "zia" or metrics_only:
             # The evaluator reaches a safe point, then the attempt flushes MLflow.
             return
         flush_partial_state(store, workdir / "run", prefix, status_key, status, started=started, clock=clock)
@@ -1279,33 +1355,47 @@ def run_unit(
                 active_tracker.mark_failed(str(error)[:1000])
             except Exception:
                 pass
-        if not spot and unit.kind == "zia" and sigterm_handler.received:
+        if not metrics_only and not spot and unit.kind == "zia" and sigterm_handler.received:
             stop_zia_tracking(active_tracker, log)
             flush_partial_state(
                 store, workdir / "run", prefix, status_key, status, started=started, clock=clock
             )
             return code
         failure_state = {EXIT_CANCELLED: "CANCELLED", EXIT_INTERRUPTED: "INTERRUPTED"}.get(code, "FAILED")
-        if code == EXIT_FAILED and publication_required and (publishing or store.head(pending_key)):
-            failure_state = (
-                "TRACKING_FAILED" if isinstance(error, TrackingPublicationError) else "PUBLICATION_FAILED"
-            )
-        put_json(
-            store,
-            status_key,
-            {
-                **status,
-                "state": failure_state,
-                "finished_at": clock(),
-                "wall_seconds": time.monotonic() - started,
-                "diagnostic": diagnostic,
-                **(
-                    {"interruption_reason": reason, "checkpoint": checkpoint.receipt if checkpoint else None}
-                    if spot
-                    else {}
-                ),
-            },
-        )
+        if code == EXIT_FAILED and publication_required:
+            try:
+                publication_started = publishing or store.head(pending_key)
+            except Exception as probe_error:
+                if not metrics_only:
+                    raise
+                publication_started = False
+                diagnostic["publication_probe"] = {
+                    "error_type": type(probe_error).__name__,
+                    "message": str(probe_error)[:2000],
+                }
+                log.warning("could not inspect pending metric publication", exc_info=True)
+            if publication_started:
+                failure_state = (
+                    "TRACKING_FAILED" if isinstance(error, TrackingPublicationError) else "PUBLICATION_FAILED"
+                )
+        failure_status = {
+            **status,
+            "state": failure_state,
+            "finished_at": clock(),
+            "wall_seconds": time.monotonic() - started,
+            "diagnostic": diagnostic,
+            **(
+                {"interruption_reason": reason, "checkpoint": checkpoint.receipt if checkpoint else None}
+                if spot
+                else {}
+            ),
+        }
+        try:
+            put_json(store, status_key, failure_status)
+        except Exception:
+            if not metrics_only:
+                raise
+            log.warning("could not record failed metric attempt status", exc_info=True)
         if spot and not isinstance(error, SpotGrantError):
             try:
                 record_spot_tracking(failure_state, reason=reason or str(error)[:1000])
@@ -1319,6 +1409,24 @@ def run_unit(
                     mark_failed(str(error)[:1000])
             except Exception:
                 log.warning("could not record the failed Spot attempt in MLflow", exc_info=True)
+        if metrics_only and not isinstance(error, SpotGrantError) and (workdir / "run").is_dir():
+            partial = {}
+            try:
+                partial["partial_metrics"] = archive_partial_metrics(
+                    store, workdir / "run", prefix, status, tracker=active_tracker
+                )
+            except Exception as archive_error:
+                diagnostic["partial_metrics_archive"] = {
+                    "error_type": type(archive_error).__name__,
+                    "message": str(archive_error)[:2000],
+                }
+                log.warning("could not archive incomplete metric evidence", exc_info=True)
+            # Preserve the original failure and exit code even if best-effort
+            # evidence archival fails. Partial receipts never enter finalization.
+            try:
+                put_json(store, status_key, {**failure_status, **partial, "diagnostic": diagnostic})
+            except Exception:
+                log.warning("could not record incomplete metric archive status", exc_info=True)
         if emit:
             emit(
                 {"RunFailed": 1},

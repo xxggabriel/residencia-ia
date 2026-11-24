@@ -12,7 +12,7 @@ import os
 import shutil
 import time
 from collections import deque
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
@@ -72,6 +72,42 @@ ADWIN_DELTA = 0.002
 ADWIN_CLOCK = 32
 DDM_PARAMS = {"warm_start": 30, "warning_threshold": 2.0, "drift_threshold": 3.0}
 CHECKPOINT_VERSION = "zia-stream-v1"
+PARTIAL_SYSTEM_METRICS = "partial-system-metrics.json"
+
+
+@contextmanager
+def _retain_partial_system_metrics(state, output, *, enabled, dataset, scope, policy):
+    """Retain failed-attempt diagnostics after the sampler closes; never resume from them."""
+    try:
+        yield
+    except BaseException as error:
+        if enabled and (monitoring := state.get("monitoring")) is not None:
+            try:
+                atomic_write(
+                    Path(output) / PARTIAL_SYSTEM_METRICS,
+                    encoded(
+                        {
+                            "schema": "partial-system-metrics-v1",
+                            "status": "incomplete",
+                            "complete": False,
+                            "artifact_mode": "metrics_only",
+                            "dataset": dataset,
+                            "scope": scope,
+                            "policy": policy,
+                            "seed": state["seed"],
+                            "dataset_sha256": state["dataset_sha256"],
+                            "exception_type": type(error).__name__,
+                            "usable_for_resume": False,
+                            "usable_for_final_result": False,
+                            "system_metrics": monitoring.report(),
+                        }
+                    ),
+                )
+            except Exception as persistence_error:
+                error.add_note(
+                    "Partial system-metric evidence could not be saved: " + type(persistence_error).__name__
+                )
+        raise
 
 
 @dataclass
@@ -210,6 +246,51 @@ def run(
     artifact_mode="full",
     matrix_metrics_cache=None,
 ):
+    """Evaluate once; retain failed-attempt diagnostics without changing successful results."""
+    partial = {}
+    with _retain_partial_system_metrics(
+        partial,
+        output,
+        enabled=artifact_mode == "metrics_only",
+        dataset=dataset,
+        scope=scope,
+        policy=policy,
+    ):
+        return _run(
+            root,
+            dataset,
+            scope,
+            policy,
+            output,
+            tracking_settings,
+            tracker=tracker,
+            iterative_config=iterative_config,
+            stop_requested=stop_requested,
+            progress=progress,
+            checkpoint=checkpoint,
+            artifact_mode=artifact_mode,
+            matrix_metrics_cache=matrix_metrics_cache,
+            _partial_metrics_state=partial,
+        )
+
+
+def _run(
+    root,
+    dataset,
+    scope,
+    policy,
+    output,
+    tracking_settings,
+    *,
+    tracker=None,
+    iterative_config=None,
+    stop_requested=None,
+    progress=None,
+    checkpoint=None,
+    artifact_mode="full",
+    matrix_metrics_cache=None,
+    _partial_metrics_state=None,
+):
     """Evaluate the stream and optionally report live metrics after completed blocks.
 
     The callback step counts rows visited across matrix construction (if used)
@@ -307,6 +388,10 @@ def run(
         interval=0.5 if scope == "smoke" else 5,
         **({"max_samples": None} if metrics_only else {}),
     )
+    if _partial_metrics_state is not None:
+        _partial_metrics_state.update(
+            monitoring=monitoring, seed=iter_config.seed, dataset_sha256=manifest["sha256"]
+        )
 
     def system_report():
         return monitoring.report(previous=previous_samples, elapsed_offset=previous_seconds, segment=segment)
@@ -429,6 +514,7 @@ def run(
             threshold=threshold,
             staging=checkpoint_dir / "predictions" if checkpoint_dir is not None else None,
             resume=evaluation["predictions"] if evaluation is not None else None,
+            preserve_partial=metrics_only,
         ) as predictions,
     ):
         if metrics_only:
