@@ -4,6 +4,7 @@ import gzip
 import io
 import json
 import weakref
+from copy import deepcopy
 
 import pytest
 
@@ -585,3 +586,214 @@ def test_incremental_replication_csv_preserves_legacy_writer_bytes_and_payload_h
     assert job["source_sha256"] == sha256(state / "replications/upf.json")
     retained = gzip.decompress((output / job["artifact"]).read_bytes())
     assert json.loads(retained) == portable(payload, state)
+
+
+def resolve_pointer(value, pointer):
+    for raw in pointer.split("/")[1:]:
+        token = raw.replace("~1", "/").replace("~0", "~")
+        value = value[int(token)] if isinstance(value, list) else value[token]
+    return value
+
+
+def curve_section(include_arrays):
+    value = {
+        "roc_curve": {"auc": 0.5},
+        "pr_curve": {"average_precision": 0.75},
+        "residuals": {"mean_error": 0.0},
+        "series": [{"step": 2, "value": 0.4}, {"step": 3, "value": 0.6}],
+        "confusion_matrix": [[5, 1], [2, 3]],
+    }
+    if include_arrays:
+        value["roc_curve"].update(
+            fpr=[0.0, 0.5, 0.5, 1.0], tpr=[0.0, 0.25, 0.5, 1.0], thresholds=[None, 0.75, 0.75, 0.25]
+        )
+        value["pr_curve"].update(precision=[1.0, 0.5, 0.5, 0.75], recall=[0.0, 0.5, 0.5, 1.0])
+        value["residuals"]["error"] = [-0.5, 0.25, 0.25]
+    return value
+
+
+def add_curve_fixture(state, include_arrays):
+    path = state / "matrix/cases/cara-42/binary/cara-42/report.json"
+    report = json.loads(path.read_text())
+    section = curve_section(include_arrays)
+    report["tracking"]["details"] = {"regimes": [section]}
+    report["observations_v1"] = {"scopes": {"a/b~c": deepcopy(section)}}
+    dump(path, report)
+    return report
+
+
+def test_v2_vector_index_reconstructs_every_array_including_ties_and_escaped_pointers(tmp_path):
+    state = fixture_campaign(tmp_path / "state")
+    source = add_curve_fixture(state, True)
+    output = tmp_path / "evidence"
+    result = export(state, output, make_plots=False, require_complete=True)
+    vectors = read_csv(output / result["representation"]["vector_index"])
+    assert result["schema"] == "corrective-evidence-v2"
+    assert result["representation"]["indexed_arrays"] == len(vectors) == 12
+    retained = {}
+    for entry in vectors:
+        artifact = output / entry["artifact"]
+        if entry["artifact"] not in retained:
+            with gzip.open(artifact, "rt") as stream:
+                retained[entry["artifact"]] = json.load(stream)
+        actual = resolve_pointer(retained[entry["artifact"]], entry["json_pointer"])
+        expected = resolve_pointer(source, entry["json_pointer"])
+        assert actual == expected and len(actual) == int(entry["length"])
+        raw = json.dumps(expected, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        assert entry["sha256"] == evidence.hashlib.sha256(raw.encode()).hexdigest()
+    assert any("a~1b~0c" in entry["json_pointer"] for entry in vectors)
+    thresholds = [
+        resolve_pointer(retained[entry["artifact"]], entry["json_pointer"])
+        for entry in vectors
+        if entry["json_pointer"].endswith("/thresholds")
+    ]
+    assert thresholds == [[None, 0.75, 0.75, 0.25]] * 2
+    scalar_rows = read_csv(output / "metrics-long.csv")
+    assert not any(
+        row["metric"].endswith(
+            (
+                "roc_curve/fpr",
+                "roc_curve/tpr",
+                "roc_curve/thresholds",
+                "pr_curve/precision",
+                "pr_curve/recall",
+                "residuals/error",
+            )
+        )
+        for row in scalar_rows
+    )
+    assert any(row["metric"].endswith("roc_curve/auc") for row in scalar_rows)
+    assert any(row["metric"].endswith("confusion_matrix") for row in scalar_rows)
+    assert any(row["metric"].endswith("series") and row["step"] == "3" for row in scalar_rows)
+
+
+def test_vector_index_preserves_default_numeric_leaves_temporal_series_and_matrices():
+    class Collector:
+        def __init__(self):
+            self.rows = []
+
+        def record(self, artifact, pointer, container, value):
+            self.rows.append((artifact, pointer, container, value))
+
+    payload = {
+        "roc_curve": {
+            "auc": 0.5,
+            "fpr": [0.0, 0.5, 0.5, 1.0],
+            "confusion_matrix": [[1, 2], [3, 4]],
+            "series": [{"step": 1, "value": 0.2}, {"step": 2, "value": 0.4}],
+        },
+        "residuals": [{"step": 10, "value": 0.1}, {"step": 11, "value": 0.2}],
+        "performance_matrix": [[0.1, None], [0.2, 0.3]],
+    }
+    before = list(evidence.numeric_leaves(payload))
+    assert len([r for r in before if r[0] == "roc_curve/fpr"]) == 4
+    index = Collector()
+    view = evidence.indexed_csv_view(payload, "report.json.gz", index)
+    after = list(evidence.numeric_leaves(view))
+    assert after == [row for row in before if row[0] != "roc_curve/fpr"]
+    assert list(evidence.numeric_leaves(payload)) == before
+    assert index.rows == [("report.json.gz", "/roc_curve/fpr", "roc_curve", [0.0, 0.5, 0.5, 1.0])]
+
+
+def test_scalar_series_matrix_csv_and_aggregates_equal_the_same_payload_without_dense_arrays(tmp_path):
+    first = fixture_campaign(tmp_path / "dense-state")
+    second = fixture_campaign(tmp_path / "scalar-state")
+    add_curve_fixture(first, True)
+    add_curve_fixture(second, False)
+    export(first, tmp_path / "dense", make_plots=False)
+    export(second, tmp_path / "scalar", make_plots=False)
+    for name in (
+        "metrics-long.csv",
+        "aggregate-metrics.csv",
+        "paired-by-seed.csv",
+        "replication-by-seed.csv",
+        "replication-aggregate.csv",
+    ):
+        assert (tmp_path / "dense" / name).read_bytes() == (tmp_path / "scalar" / name).read_bytes()
+
+
+def test_replication_candidate_vectors_are_resolved_from_the_complete_replication_artifact(tmp_path):
+    state = fixture_campaign(tmp_path / "state")
+    path = state / "replications/upf.json"
+    payload = json.loads(path.read_text())
+    payload["electricity"]["candidate_tracking"] = [
+        {"contract": {"seed": 0}, "training_history": [], "tracking_observations": curve_section(True)}
+    ]
+    dump(path, list(payload.values()))
+    output = tmp_path / "evidence"
+    export(state, output, make_plots=False, require_complete=True)
+    vectors = read_csv(output / "vector-index.csv")
+    assert len(vectors) == 6
+    with gzip.open(output / "replications/upf.json.gz", "rt") as stream:
+        retained = json.load(stream)
+    assert all(entry["json_pointer"].startswith("/0/candidate_tracking/0/") for entry in vectors)
+    assert all(
+        resolve_pointer(retained, entry["json_pointer"])
+        == resolve_pointer(list(payload.values()), entry["json_pointer"])
+        for entry in vectors
+    )
+    metrics = read_csv(output / "replication-by-seed.csv")
+    assert not any(row["metric"].endswith("roc_curve/fpr") for row in metrics)
+    assert any(
+        row["point_type"] == "candidate" and row["metric"].endswith("roc_curve/auc") for row in metrics
+    )
+
+
+def test_payloads_without_dense_vectors_keep_an_empty_catalog_and_native_scientific_schema(tmp_path):
+    state = fixture_campaign(tmp_path / "state")
+    output = tmp_path / "evidence"
+    result = export(state, output, make_plots=False)
+    assert result["representation"]["indexed_arrays"] == 0
+    assert read_csv(output / "vector-index.csv") == []
+    with gzip.open(output / "reports/cara-42.json.gz", "rt") as stream:
+        report = json.load(stream)
+    source = json.loads((state / "matrix/cases/cara-42/binary/cara-42/report.json").read_text())
+    assert report == portable(source, state)
+
+
+def test_large_payloads_use_compact_gzip6_with_exact_numeric_types_and_source_hashes(tmp_path, monkeypatch):
+    state = fixture_campaign(tmp_path / "state")
+    path = state / "matrix/cases/cara-42/binary/cara-42/report.json"
+    source = json.loads(path.read_text())
+    source["typed_values"] = [1, 1.0, -0.0, True, False, None, 1e-300, 1e300, "ação"]
+    dump(path, source)
+    original_sha256 = sha256(path)
+    monkeypatch.setattr(evidence, "LARGE_PAYLOAD_BYTES", 1)
+    output = tmp_path / "evidence"
+    result = export(state, output, make_plots=False, require_complete=True)
+    case = next(row for row in result["cases"] if row["case_key"] == "cara-42")
+    encoding = case["payload_encoding"]
+    raw = gzip.decompress((output / case["report"]).read_bytes())
+    restored = json.loads(raw)
+    expected = portable(source, state)
+    compact = json.dumps(
+        expected, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    assert raw == compact and restored == expected
+    assert [type(value) for value in restored["typed_values"]] == [
+        type(value) for value in source["typed_values"]
+    ]
+    assert b"-0.0" in raw
+    assert encoding["json_format"] == "compact" and encoding["gzip_level"] == 6
+    assert encoding["canonical_compact_sha256"] == encoding["uncompressed_sha256"]
+    assert encoding["canonical_compact_sha256"] == evidence.hashlib.sha256(compact).hexdigest()
+    assert encoding["uncompressed_bytes"] == len(raw)
+    assert case["source_report_sha256"] == sha256(path) == original_sha256
+    assert (output / "manifest.json").read_bytes().startswith(b"{\n")
+    assert (output / "campaign-plan.json").read_bytes().startswith(b"{\n")
+    assert all(job["payload_encoding"]["gzip_level"] == 6 for job in result["replications"])
+
+
+def test_compact_large_payload_encoding_is_deterministic_and_small_payloads_stay_readable(tmp_path):
+    payload = {"thresholds": [None, 0.75, 0.75, -0.0], "metric": 1.0, "available": True}
+    first = tmp_path / "first.json.gz"
+    second = tmp_path / "second.json.gz"
+    large = evidence.LARGE_PAYLOAD_BYTES
+    a = evidence.write_payload(first, payload, source_bytes=large)
+    b = evidence.write_payload(second, payload, source_bytes=large)
+    assert first.read_bytes() == second.read_bytes() and a == b
+    third = tmp_path / "small.json.gz"
+    small = evidence.write_payload(third, payload, source_bytes=large - 1)
+    assert small["json_format"] == "pretty" and small["gzip_level"] == 9
+    assert gzip.decompress(third.read_bytes()).startswith(b"{\n")
+    assert json.loads(gzip.decompress(third.read_bytes())) == payload

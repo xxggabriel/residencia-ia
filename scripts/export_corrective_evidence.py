@@ -19,6 +19,7 @@ import math
 import re
 import textwrap
 from collections import defaultdict
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, pstdev, stdev
@@ -26,7 +27,23 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from continual_bench.core.metrics import Metrics
 
-SCHEMA = "corrective-evidence-v1"
+SCHEMA = "corrective-evidence-v2"
+DENSE_ARRAY_FIELDS = frozenset({"roc_curve", "pr_curve", "residuals"})
+PROTECTED_ARRAY_FIELDS = frozenset(
+    {
+        "series",
+        "windows",
+        "training_history",
+        "system_metrics",
+        "confusion_matrix",
+        "performance_matrix",
+        "staleness_matrix",
+        "matrix",
+        "matrices",
+    }
+)
+INDEXED_ARRAY = object()
+LARGE_PAYLOAD_BYTES = 1024 * 1024
 COORDINATES = ("dataset", "model", "policy", "detector", "seed", "mode")
 SECRET_KEY = re.compile(r"password|secret|token|authorization|cookie|credential|access.key", re.I)
 MODEL_SUFFIXES = {".pkl", ".pickle", ".bin", ".ubj", ".joblib", ".pt", ".pth", ".ckpt", ".onnx"}
@@ -39,6 +56,7 @@ TABLE_NAMES = (
     "replication-aggregate",
     "intentional-exclusions",
     "historical-comparison",
+    "vector-index",
 )
 METRIC_SECTIONS = (
     "metrics",
@@ -91,6 +109,12 @@ def json_bytes(value):
     return (json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False, indent=2) + "\n").encode()
 
 
+def compact_json_bytes(value):
+    return json.dumps(
+        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -99,10 +123,30 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def gzip_write(path, raw):
+def gzip_write(path, raw, *, compresslevel=9):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as output, gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as packed:
+    with (
+        path.open("wb") as output,
+        gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0, compresslevel=compresslevel) as packed,
+    ):
         packed.write(raw)
+
+
+def write_payload(path, value, *, source_bytes):
+    """Preserve the JSON value and numeric types while adapting only its encoding."""
+    compact = compact_json_bytes(value)
+    canonical_sha256 = hashlib.sha256(compact).hexdigest()
+    large = source_bytes >= LARGE_PAYLOAD_BYTES
+    raw = compact if large else json_bytes(value)
+    gzip_write(path, raw, compresslevel=6 if large else 9)
+    return {
+        "json_format": "compact" if large else "pretty",
+        "gzip_level": 6 if large else 9,
+        "uncompressed_bytes": len(raw),
+        "uncompressed_sha256": hashlib.sha256(raw).hexdigest(),
+        "canonical_compact_sha256": canonical_sha256,
+        "compressed_bytes": path.stat().st_size,
+    }
 
 
 def portable(value, state, *, key=""):
@@ -273,6 +317,71 @@ def writer(path, fields):
     output = csv.DictWriter(stream, fields, extrasaction="ignore")
     output.writeheader()
     return stream, output
+
+
+def pointer_token(value):
+    return str(value).replace("~", "~0").replace("/", "~1")
+
+
+def vector_sha256(value):
+    return hashlib.sha256(compact_json_bytes(value)).hexdigest()
+
+
+class VectorIndex:
+    """Stream references to exact dense arrays retained in complete native payloads."""
+
+    def __init__(self, path, resources):
+        stream, self.table = writer(path, ["artifact", "json_pointer", "container", "length", "sha256"])
+        resources.enter_context(stream)
+        self.count = 0
+
+    def record(self, artifact, pointer, container, value):
+        self.table.writerow(
+            {
+                "artifact": artifact,
+                "json_pointer": pointer,
+                "container": container,
+                "length": len(value),
+                "sha256": vector_sha256(value),
+            }
+        )
+        self.count += 1
+
+
+def indexed_csv_view(value, artifact, index, *, pointer="", container=None):
+    """Create only a CSV view; leave the complete archived scientific payload intact.
+
+    Only arrays below the three explicit dense-curve fields are represented by
+    catalog references. Scalars inside those fields and every other list,
+    including temporal series and matrices, remain available to numeric_leaves.
+    """
+    if isinstance(value, list):
+        temporal = bool(value) and all(
+            isinstance(item, dict) and {"step", "value"} <= item.keys() for item in value
+        )
+        if container is not None and not temporal:
+            index.record(artifact, pointer, container, value)
+            return INDEXED_ARRAY
+        return [
+            indexed_csv_view(item, artifact, index, pointer=f"{pointer}/{position}")
+            for position, item in enumerate(value)
+        ]
+    if isinstance(value, dict):
+        return {
+            key: indexed_csv_view(
+                item,
+                artifact,
+                index,
+                pointer=f"{pointer}/{pointer_token(key)}",
+                container=(
+                    None
+                    if key in PROTECTED_ARRAY_FIELDS
+                    else container or (key if key in DENSE_ARRAY_FIELDS else None)
+                ),
+            )
+            for key, item in value.items()
+        }
+    return value
 
 
 def pack_large_tables(output, threshold=20 * 1024 * 1024):
@@ -811,6 +920,18 @@ def figures(output, paired_aggregate, replication_aggregate, cohorts):
 
 
 def export(state, output, *, make_plots=True, require_complete=False, historical_insects=None):
+    with ExitStack() as resources:
+        return _export(
+            state,
+            output,
+            make_plots=make_plots,
+            require_complete=require_complete,
+            historical_insects=historical_insects,
+            resources=resources,
+        )
+
+
+def _export(state, output, *, make_plots, require_complete, historical_insects, resources):
     state, output = Path(state).resolve(), Path(output).resolve()
     if output == state or output.is_relative_to(state / "matrix"):
         raise ValueError("output must not replace campaign input files")
@@ -863,6 +984,7 @@ def export(state, output, *, make_plots=True, require_complete=False, historical
         if json_read(output / "campaign-plan.json") != portable(plan, state):
             raise ValueError("the evidence execution plan changed; use a new output directory")
     records, original_scores = [], []
+    vectors = VectorIndex(output / "vector-index.csv", resources)
     fieldnames = [
         "case_key",
         *COORDINATES,
@@ -885,12 +1007,14 @@ def export(state, output, *, make_plots=True, require_complete=False, historical
             clean = portable(report, state)
             assert_portable(clean)
             target = output / "reports" / f"{case.key}.json.gz"
-            gzip_write(target, json_bytes(clean))
+            payload_encoding = write_payload(target, clean, source_bytes=case.report.stat().st_size)
+            csv_report = indexed_csv_view(clean, target.relative_to(output).as_posix(), vectors)
             record.update(
                 {
                     "report": target.relative_to(output).as_posix(),
                     "source_report_sha256": sha256(case.report),
                     "retained_report_sha256": sha256(target),
+                    "payload_encoding": payload_encoding,
                     "run_key": report.get("run_key"),
                     "data_sha256": (report.get("dataset") or {}).get("sha256"),
                     "code_sha256": (report.get("environment") or {}).get("code_sha256"),
@@ -898,9 +1022,9 @@ def export(state, output, *, make_plots=True, require_complete=False, historical
                 }
             )
             for section in METRIC_SECTIONS:
-                if section not in report:
+                if section not in csv_report:
                     continue
-                for metric, step, value, context in numeric_leaves(report[section], section):
+                for metric, step, value, context in numeric_leaves(csv_report[section], section):
                     metrics_csv.writerow(
                         {
                             **case.coordinates,
@@ -931,6 +1055,7 @@ def export(state, output, *, make_plots=True, require_complete=False, historical
                 record["prediction_ledger"] = target.relative_to(output).as_posix()
                 record["source_prediction_sha256"] = sha256(case.prediction)
             records.append(record)
+            del csv_report, clean, report
     finally:
         stream.close()
 
@@ -1061,18 +1186,23 @@ def export(state, output, *, make_plots=True, require_complete=False, historical
                 clean = portable(payload, state)
                 assert_portable(clean)
                 target = output / "replications" / f"{job}.json.gz"
-                gzip_write(target, json_bytes(clean))
+                payload_encoding = write_payload(target, clean, source_bytes=path.stat().st_size)
+                csv_payload = indexed_csv_view(clean, target.relative_to(output).as_posix(), vectors)
                 record.update(
-                    {"artifact": target.relative_to(output).as_posix(), "source_sha256": sha256(path)}
+                    {
+                        "artifact": target.relative_to(output).as_posix(),
+                        "source_sha256": sha256(path),
+                        "payload_encoding": payload_encoding,
+                    }
                 )
-                for row in replication_rows(clean, job):
+                for row in replication_rows(csv_payload, job):
                     table.writerow(row)
                     if row["point_type"] in {"curve", "summary"}:
                         rep_aggregate_rows.append(row)
                     del row
                 # Candidate/analysis points have already reached the CSV. Do not
                 # retain their rows or a previous job's complete JSON payload.
-                del payload, clean
+                del payload, clean, csv_payload
             rep_records.append(record)
     rep_keys = [
         "job",
@@ -1114,6 +1244,8 @@ def export(state, output, *, make_plots=True, require_complete=False, historical
         raise ValueError("metric definition catalog changed within one campaign")
     if catalogs:
         (output / "metric-definitions.json").write_bytes(next(iter(catalogs.values())).read_bytes())
+    # Flush the streaming catalog before sizing, compressing and hashing it.
+    resources.close()
     table_files = pack_large_tables(output)
     manifest = {
         "schema": SCHEMA,
@@ -1133,6 +1265,26 @@ def export(state, output, *, make_plots=True, require_complete=False, historical
         "paired_cohorts": cohorts,
         "figures": generated_figures,
         "table_files": table_files,
+        "representation": {
+            "version": 2,
+            "scientific_payload_schema": "unchanged; complete reports and replications retained",
+            "payload_encoding": {
+                "large_source_threshold_bytes": LARGE_PAYLOAD_BYTES,
+                "large_reports_replications": "sorted compact UTF-8 JSON + deterministic gzip level 6",
+                "small_reports_replications": "sorted pretty UTF-8 JSON + deterministic gzip level 9",
+                "plans_manifest_metadata": "pretty UTF-8 JSON",
+                "per_artifact_details": "cases[].payload_encoding and replications[].payload_encoding",
+            },
+            "tabular_scalars_series_matrices": "retained in the metric CSVs",
+            "indexed_dense_array_fields": sorted(DENSE_ARRAY_FIELDS),
+            "vector_index": table_files["vector-index.csv"],
+            "indexed_arrays": vectors.count,
+            "json_pointer": "RFC 6901, relative to the complete artifact JSON root",
+            "vector_hash": "SHA-256 of UTF-8 JSON array with sort_keys=True, ensure_ascii=False, "
+            "separators=(',',':'), allow_nan=False",
+            "array_values": "stored in full at each cataloged artifact/pointer location",
+            "numeric_leaves_default": "unchanged; dense-vector references are explicit export views only",
+        },
         "retention": "metrics_reports_prediction_ledgers_and_provenance_only_no_model_or_checkpoint",
         "exporter": {
             "script_sha256": sha256(Path(__file__)),
