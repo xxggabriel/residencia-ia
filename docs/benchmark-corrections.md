@@ -220,9 +220,12 @@ Na AWS, use o mesmo arquivo `configs/matrices/insects-corrected.yaml` em uma sol
 de matriz binária com release e fontes fixadas, conforme o [runbook](aws/operations.md).
 No modo metrics-only, uma interrupção Spot reinicia a avaliação incompleta sem restaurar
 pesos. Leases e tentativas permanecem rastreáveis; métricas de progresso de tentativas
-distintas não se misturam. O suporte de retenção desta revisão cobre o binário;
-avaliadores que não o suportam rejeitam a solicitação explicitamente. Portabilidade
-de código e testes de integração não constituem prova de uma execução AWS.
+distintas não se misturam. A revisão histórica dessa campanha cobre o binário.
+A [suíte posterior de streams ordenados](dataset-suite.md) estende a retenção ao
+avaliador batch-prequential de Electricity, Airlines, INSECTS e Zia, com três seeds
+e cache exclusivo de métricas. Avaliadores sem esse suporte continuam rejeitando a
+solicitação. Portabilidade de código e testes de integração não constituem prova
+de uma execução AWS.
 
 ## Evidência da execução
 

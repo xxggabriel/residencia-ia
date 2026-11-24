@@ -267,6 +267,14 @@ make lint    # ruff
 
 ## Documentação
 
+A [suíte de comparação entre datasets](docs/dataset-suite.md) usa um novo protocolo
+comum para Electricity, Airlines, duas variantes INSECTS, Fraud, E-commerce e Social.
+São 231 casos com três seeds e onze políticas, preservando as fontes completas e
+somente métricas. O [runbook Fargate Spot](docs/aws/dataset-suite.md) descreve os
+smoke tests, o deploy e a submissão em duas fases, com 2 vCPU e 4 GiB por tarefa e
+teto de 64 vCPU. Online fica fora dos pedidos AWS. A conclusão dessa campanha exige
+os recibos e as verificações descritos no runbook.
+
 O [protocolo corretivo e a campanha de avaliação](docs/benchmark-corrections.md)
 descrevem disponibilidade de rótulos, separação treino/teste, retenção exclusiva de
 métricas e execução com o mesmo código em ambiente local ou AWS. A campanha concluiu

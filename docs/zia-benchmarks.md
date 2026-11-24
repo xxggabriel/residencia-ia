@@ -1,5 +1,11 @@
 # Benchmarks temporais Zia Data Labs
 
+A [suíte de comparação entre datasets](dataset-suite.md) utiliza este avaliador
+com retenção `metrics_only`, três seeds e onze políticas por stream. Ela preserva
+os rótulos multiclasse de Social, não grava modelos e exclui Online dos pedidos
+AWS. As instruções abaixo também descrevem os perfis anteriores de retenção
+completa, incluindo seus checkpoints e exemplos com doze políticas.
+
 Cada dataset tem uma DAG do Airflow com 12 runs. Na AWS, os exemplos de
 campanha do Batch também definem 12 runs por dataset nos escopos `full` e `smoke`
 e podem ser iniciados pelo SageMaker Pipelines. Cada campanha fixa o modelo, os dados, os limites e o

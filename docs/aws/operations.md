@@ -172,7 +172,16 @@ a run. Sem o pacote MLflow, o worker usa o transporte REST/SigV4.
 Use `<campaign_id>--<sufixo>` para repetir uma execução falha com o mesmo pedido. Use um novo
 ID se mudar o plano ou se a campanha anterior foi explicitamente cancelada.
 
-### Campanha integral dos três datasets Zia
+### Suíte integral sem checkpoints
+
+Para comparar Electricity, Airlines, INSECTS, Fraud, E-commerce e Social, siga o
+[runbook da suíte integral](dataset-suite.md). Ele utiliza fontes completas, três
+seeds, `metrics_only`, onze políticas sem Online e duas fases de execução. O deploy
+deve terminar antes da submissão, e a reserva de cada tarefa é de 2 vCPU e 4 GiB,
+com teto compartilhado de 64 vCPU. O modo não restaura treino após interrupções;
+somente a publicação de métricas concluídas pode ser recuperada.
+
+### Exemplos anteriores dos três datasets Zia
 
 Os exemplos `dataset-{fraud,social,ecommerce}-full.json` preparam 50, 100 e 50 milhões
 de eventos, respectivamente. Aguarde os três marcadores `_SUCCESS.json` no escopo `full`
