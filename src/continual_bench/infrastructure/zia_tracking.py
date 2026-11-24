@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from .artifact_policy import metrics_only
 from .metric_tracking import log_metric_points
 from .storage import publication_lock
 
@@ -41,46 +42,65 @@ def publish_run_metrics(client, directory, run_id, report):
     contract = report["contract"]
     source = contract["input"]["source"]
     env = contract["environment"]
-    # Zia streams carry a pinned Hugging Face source; catalog streams name their catalog entry.
+    # Older immutable real-stream manifests keep their canonical license in source.
+    license_name = contract["input"].get("license")
+    if license_name is None:
+        license_name = source.get("license")
+    if not isinstance(license_name, str) or not license_name.strip():
+        raise ValueError("dataset license is absent from the prepared input and source")
+    if source.get("license") is not None and source["license"] != license_name:
+        raise ValueError("dataset license differs between the prepared input and source")
+    # Preserve raw-source identity separately from the prepared Parquet digest.
     dataset_source = (
         f"ziadatalabs/{source['repo']}"
         if "repo" in source
-        else f"catalog/{source.get('catalog', report['dataset'])}"
+        else (
+            f"pinned-real/{report['dataset']}"
+            if source.get("url")
+            else f"catalog/{source.get('catalog', report['dataset'])}"
+        )
+    )
+    source_uri = source.get("url") or (
+        f"https://huggingface.co/datasets/{dataset_source}/resolve/{source['revision']}/{source['file']}"
+        if "repo" in source
+        else f"catalog://{source.get('catalog', report['dataset'])}"
     )
     params = {
         "model": report["model"],
         "policy": report["policy"],
         "protocol": report["protocol"],
         "dataset_source": dataset_source,
-        "dataset_revision": source.get("revision", "catalog"),
+        "dataset_source_uri": source_uri,
+        "dataset_revision": (
+            source.get("revision") or source.get("raw_sha256") or source.get("source_version") or "catalog"
+        ),
+        "dataset_source_version": source.get("source_version"),
+        "dataset_raw_sha256": source.get("raw_sha256"),
         "dataset_sha256": contract["input"]["sha256"],
-        "dataset_license": contract["input"]["license"],
+        "dataset_license": license_name,
         "samples": contract["input"]["rows"],
         "holdout_start": contract["holdout_start"],
         "block_rows": contract["block_rows"],
         "model_params": json.dumps(report["model_params"]),
         "code_sha256": env["code_sha256"],
         "git_revision": env["git_revision"],
+        "seed": (contract.get("iterative_training") or {}).get("seed"),
+        "artifact_mode": report.get("artifact_mode", "full"),
     }
     if aws := report["costs"].get("aws"):
         params["aws_region"] = aws["settings"]["region"]
     client.log_batch(
         run_id,
-        params=[Param(name, str(value)) for name, value in params.items()],
+        params=[Param(name, str(value)) for name, value in params.items() if value is not None],
         synchronous=True,
     )
     inputs = client.get_run(run_id).inputs
     if not inputs or not inputs.dataset_inputs:
-        url = (
-            f"https://huggingface.co/datasets/{dataset_source}/resolve/{source['revision']}/{source['file']}"
-            if "repo" in source
-            else f"catalog://{source.get('catalog', report['dataset'])}"
-        )
         dataset = Dataset(
             name=params["dataset_source"],
             digest=params["dataset_sha256"][:32],
             source_type="http",
-            source=json.dumps({"url": url}),
+            source=json.dumps({"url": source_uri}),
             profile=json.dumps(
                 {
                     "num_rows": params["samples"],
@@ -131,8 +151,12 @@ def publish_run_metrics(client, directory, run_id, report):
         ("tracking_v1/posthoc_cost_sensitivity", index, value)
         for index, (_, value) in enumerate(report["cost_sensitivity"])
     )
-    log_metric_points(client, run_id, points)
+    if metrics_only(report):
+        log_metric_points(client, run_id, points, max_points_per_key=None)
+    else:
+        log_metric_points(client, run_id, points)
     client.log_artifact(run_id, str(directory / "report.json"))
     # Only recorded model versions count toward AWS storage and are published.
     for model in report["model_versions"]:
-        client.log_artifact(run_id, str(directory / model["file"]), artifact_path="models")
+        if model.get("file"):
+            client.log_artifact(run_id, str(directory / model["file"]), artifact_path="models")

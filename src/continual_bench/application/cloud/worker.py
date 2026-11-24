@@ -10,6 +10,7 @@ failed attempts keep their own evidence.
 import io
 import json
 import logging
+import math
 import os
 import sys
 import tarfile
@@ -200,10 +201,40 @@ def verify_native_loader(directory: Path, report: dict, data_root: Path, rows: i
 
 
 def zia_snapshot(store, unit):
+    if "stream_source" in unit.contract:
+        from .stream_sources import verify_stream_source
+
+        manifest = verify_stream_source(
+            store, unit.params["dataset"], unit.params["scope"], unit.params["source_sha256"]
+        )
+        if manifest != unit.contract["stream_source"]:
+            raise ContractError("prepared stream differs from the campaign plan")
+        return manifest
     manifest = verify_snapshot(store, SnapshotRef(**unit.params["snapshot"]))
     if manifest["manifest_sha256"] != unit.contract["snapshot"]["manifest_sha256"]:
         raise SnapshotNotReady("incompatible", "snapshot manifest differs from the campaign plan")
     return manifest
+
+
+def verify_matrix_metric_cache(store, reference):
+    """Admit only same-store, checksum-pinned metric evidence from a final run."""
+    from .contracts import MatrixMetricsCacheRef
+
+    reference = MatrixMetricsCacheRef.model_validate(reference)
+    _, key = split_uri(reference.uri)
+    if store.uri(key) != reference.uri:
+        raise ContractError("matrix metric cache is outside the campaign object store")
+    head = store.head(key)
+    if head is None or head.sha256 != reference.sha256 or head.size <= 0:
+        raise ContractError("matrix metric cache is missing or differs from its SHA-256")
+    parts = key.split("/")
+    source_final = get_json(store, layout.final_key(parts[1], parts[3]))
+    if (
+        source_final.get("artifact_mode") != "metrics_only"
+        or source_final.get("outputs_uri", "").rstrip("/") + "/matrix-metrics.json.gz" != reference.uri
+    ):
+        raise ContractError("matrix metric cache has no completed metrics-only source run")
+    return key
 
 
 def execute_zia(
@@ -233,10 +264,36 @@ def execute_zia(
     if hashlib.sha256(tracking_path.read_bytes()).hexdigest() != unit.contract["tracking_sha256"]:
         raise ContractError("tracking profile differs from the campaign plan")
     settings = TrackingConfig.model_validate(yaml.safe_load(tracking_path.read_text())).model_dump()
-    data_root = materialize(store, manifest, workdir / "data")
+    if "stream_source" in unit.contract:
+        from .stream_sources import materialize_stream_source
+
+        data_root = materialize_stream_source(
+            store, params["dataset"], params["scope"], params["source_sha256"], workdir / "data"
+        )
+    else:
+        data_root = materialize(store, manifest, workdir / "data")
+    options = {"checkpoint": checkpoint} if checkpoint is not None else {}
+    if "seed" in params or "iterative_training" in params:
+        seed = params["seed"]
+        options["iterative_config"] = {**params.get("iterative_training", {}), "seed": seed}
+        settings["retraining"] = {**(settings.get("retraining") or {}), "seed": seed}
+    if params.get("artifact_mode") == "metrics_only":
+        options["artifact_mode"] = "metrics_only"
     if stop_requested is not None and stop_requested():
         raise InterruptedError("Zia stopped before evaluation after SIGTERM")
     output = workdir / "run"
+    if params.get("artifact_mode") == "metrics_only":
+        from continual_bench.core.policies import BATCH_POLICY_KINDS
+
+        if params["policy"] in BATCH_POLICY_KINDS:
+            cache_path = output / "matrix-metrics.json.gz"
+            output.mkdir(parents=True, exist_ok=True)
+            if reference := params.get("matrix_metrics_cache"):
+                key = verify_matrix_metric_cache(store, reference)
+                store.download(key, cache_path)
+                if sha256_path(cache_path) != reference["sha256"]:
+                    raise ContractError("downloaded matrix metric cache checksum mismatch")
+            options["matrix_metrics_cache"] = cache_path
     log.info("evaluation starting", extra={"fields": {"rows": manifest["rows"], "policy": params["policy"]}})
     report = run(
         data_root,
@@ -247,7 +304,7 @@ def execute_zia(
         settings,
         stop_requested=stop_requested if checkpoint is None else None,
         progress=progress,
-        **({"checkpoint": checkpoint} if checkpoint is not None else {}),
+        **options,
     )
     if stop_requested is not None and stop_requested():
         raise InterruptedError("Zia evaluation stopped after SIGTERM")
@@ -325,7 +382,7 @@ def complete_zia_tracking(tracker, store, final, output, report, adapted):
             output_dir=output,
             store=store,
             outputs_uri=final["outputs_uri"],
-            model_package_arn=final["model"]["model_package_arn"],
+            model_package_arn=(final.get("model") or {}).get("model_package_arn"),
         )
         or {}
     )
@@ -469,7 +526,11 @@ def verify_spot_inputs(store, key, unit, env):
     ):
         raise ContractError("instance image or revision differs from the campaign release")
     if unit.kind == "zia":
+        if reference := unit.params.get("matrix_metrics_cache"):
+            verify_matrix_metric_cache(store, reference)
         manifest = zia_snapshot(store, unit)
+        if "stream_source" in unit.contract:
+            return manifest
         if manifest["prepared"]["sha256"] != unit.contract["snapshot"]["prepared_sha256"]:
             raise SnapshotNotReady("incompatible", "prepared dataset differs from the campaign plan")
         return manifest
@@ -550,7 +611,8 @@ def run_unit(
     metrics_only = artifact_mode == "metrics_only"
     job_id, attempt = env.get("AWS_BATCH_JOB_ID"), env.get("AWS_BATCH_JOB_ATTEMPT")
     attempt_key = layout.attempt_key_for(job_id, attempt)
-    # Fargate Spot attempts are resumable: checkpoints in S3, one logical MLflow run.
+    # Full attempts can resume training. Metrics-only attempts restart evaluation
+    # and recover only completed metric publication, under one logical MLflow run.
     resumable = bool(job_id) and env.get("BENCH_FARGATE_SPOT", "false") == "true"
     task_arn = ecs_task_arn(env)
     worker_id = task_arn or job_id
@@ -596,7 +658,7 @@ def run_unit(
 
     def on_terminate(_signal):
         if resumable or unit.kind == "zia":
-            # The evaluator checkpoints at its next safe point, then the attempt flushes MLflow.
+            # The evaluator reaches a safe point, then the attempt flushes MLflow.
             return
         flush_partial_state(store, workdir / "run", prefix, status_key, status, started=started, clock=clock)
         if matrix_tracker is not None:
@@ -641,10 +703,8 @@ def run_unit(
             "artifact_mode", "full"
         ):
             raise ContractError("artifact_mode differs between the unit and evaluator configuration")
-        if metrics_only and (unit.kind != "matrix_case" or unit.params.get("evaluator") != "binary"):
-            raise ContractError(
-                "metrics_only is supported by binary matrix units; other evaluators retain models"
-            )
+        if metrics_only and unit.kind != "zia" and unit.params.get("evaluator") != "binary":
+            raise ContractError("metrics_only is supported by binary matrix units and ordered stream units")
         if resumable or unit.kind == "zia":
             zia_signal_scope.enter_context(sigterm_handler)
         with nullcontext() if resumable or unit.kind == "zia" else sigterm_handler:
@@ -704,6 +764,11 @@ def run_unit(
                 raise ContractError("job runs an image other than the campaign release")
             if unit.kind == "zia":
                 active_tracker = tracker(unit) if callable(tracker) else tracker
+                for target in (active_tracker, getattr(active_tracker, "mlflow_tracker", None)):
+                    if target is not None:
+                        target.artifact_mode = artifact_mode
+                        if "seed" in unit.params:
+                            target.seed = unit.params["seed"]
                 if tracking_required and not hasattr(active_tracker, "publish_run_report"):
                     raise TrackingPublicationError("MLflow is configured but the worker has no publisher")
                 bind_spot_tracking(active_tracker)
@@ -715,6 +780,25 @@ def run_unit(
 
                     def live_progress(step, metrics):
                         if stop_requested():
+                            return
+                        if metrics_only:
+                            # Preserve every observed point locally before best-effort
+                            # live transport. Final publication reconciles this ledger.
+                            directory = workdir / "run"
+                            directory.mkdir(parents=True, exist_ok=True)
+                            item = {
+                                "step": step,
+                                "timestamp": int(time.time() * 1000),
+                                "prefix": f"attempts/{attempt_key}/progress",
+                                "values": {
+                                    k: float(v)
+                                    for k, v in metrics.items()
+                                    if type(v) in (int, float) and math.isfinite(v)
+                                },
+                            }
+                            with (directory / "live-metrics.jsonl").open("a") as stream:
+                                stream.write(json.dumps(item, allow_nan=False) + "\n")
+                        if not callable(callback):
                             return
                         try:
                             callback(step, metrics)
@@ -731,7 +815,7 @@ def run_unit(
                         workdir,
                         log,
                         stop_requested=stop_requested,
-                        progress=live_progress if callable(callback) else None,
+                        progress=live_progress if metrics_only or callable(callback) else None,
                         **options,
                     )
                     check_stop()
@@ -800,23 +884,36 @@ def run_unit(
             for name, value in documents.items():
                 (output / name).write_text(json.dumps(value, sort_keys=True, indent=2))
             check_stop()
-            loader = verify_native_loader(output, report, outcome["data_root"])
-            (output / "model").mkdir(exist_ok=True)
-            (output / "model" / "model.tar.gz").write_bytes(model_tarball(output, metadata))
+            loader = None
+            if metrics_only:
+                from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
+
+                verify_metrics_only_files(output)
+            else:
+                loader = verify_native_loader(output, report, outcome["data_root"])
+                (output / "model").mkdir(exist_ok=True)
+                (output / "model" / "model.tar.gz").write_bytes(model_tarball(output, metadata))
             rows = zia_rows(_base(unit, attempt_key), report, store.uri(final_key), outputs_uri)
             (output / ROWS_FILE).write_text(json.dumps(rows, sort_keys=True, allow_nan=False))
-            if hasattr(active_tracker, "prepare_artifacts"):
+            if not metrics_only and hasattr(active_tracker, "prepare_artifacts"):
                 active_tracker.prepare_artifacts(report, output)
             check_stop()
             final.update(
                 {
-                    "snapshot": unit.contract["snapshot"],
+                    "snapshot": unit.contract.get("snapshot"),
+                    **(
+                        {"stream_source": unit.contract["stream_source"]}
+                        if "stream_source" in unit.contract
+                        else {}
+                    ),
                     "report_uri": f"{outputs_uri}/report.json",
                     "report_sha256": sha256_path(output / "report.json"),
                     "training_history_uri": f"{outputs_uri}/training-history.json",
                     "predictions_manifest_uri": f"{outputs_uri}/predictions-manifest.json",
                     "artifacts_index_uri": f"{outputs_uri}/artifacts/data/index.json",
-                    "model": {
+                    "model": None
+                    if metrics_only
+                    else {
                         "state_sha256": metadata["state_sha256"],
                         "native_uri": f"{outputs_uri}/{metadata['native_path']}",
                         "archive_uri": f"{outputs_uri}/model/model.tar.gz",
@@ -863,7 +960,7 @@ def run_unit(
                     "links": links,
                 }
             )
-            final.update(stage_publication(store, output, prefix, checkpoint, check_stop=check_stop))
+            final.update(stage_publication(store, output, prefix, publication_archive, check_stop=check_stop))
             adapted = outcome["adapted"]
             final["tracking"] = {"required": tracking_required, "complete": False}
         elif unit.kind != "zia" and not resuming:
@@ -981,11 +1078,11 @@ def run_unit(
                     store, final, workdir / "publication", check_stop=check_stop
                 )
                 report = json.loads((output / "report.json").read_text())
-                metadata = json.loads((output / "model-metadata.json").read_text())
+                metadata = None if metrics_only else json.loads((output / "model-metadata.json").read_text())
                 adapted = tracking_report(report, prediction_manifest(output, report))
                 evaluation_seconds = final["evaluation_seconds"]
                 check_stop()
-            if registry is not None:
+            if registry is not None and not metrics_only:
                 if spot:
                     spot.check_publication(strict=True)
                 model_package = registry(
@@ -1247,6 +1344,7 @@ def _base(unit: RunUnit, attempt_key: str) -> dict:
         "policy": unit.labels.get("policy"),
         "kind": unit.kind,
         "git_sha": unit.contract["release"]["git_sha"],
+        **({"seed": int(unit.labels["seed"])} if "seed" in unit.labels else {}),
     }
 
 

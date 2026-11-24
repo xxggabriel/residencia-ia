@@ -16,8 +16,9 @@ GIT_SHA = r"^[0-9a-f]{40}$"
 DIGEST = r"^sha256:[0-9a-f]{64}$"
 ZIA_POLICIES = ("frozen", "drift", "incremental", "periodic")
 EVALUATION_PROTOCOL = "zia-batch-prequential-holdout-v1"
+STREAM_METRICS_PROTOCOL = "ordered-stream-batch-prequential-metrics-v2"
 OFFLINE_MATRIX_FAMILIES = ("river_abrupt", "river_moving", "river_regression")
-# Serverless resumable backend: AWS Batch on FARGATE_SPOT, checkpoints in S3 between attempts.
+# AWS Batch on FARGATE_SPOT; metrics-only attempts restart evaluation without model checkpoints.
 SPOT_BACKEND = "batch-fargate-spot"
 
 
@@ -116,9 +117,37 @@ class ReleaseManifest(Strict):
         return value
 
 
+class MatrixMetricsCacheRef(Strict):
+    """A completed run's immutable matrix metrics, never serialized model state."""
+
+    uri: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("uri")
+    @classmethod
+    def campaign_evidence_only(cls, value):
+        from continual_bench.infrastructure.object_store import split_uri
+
+        _, key = split_uri(value)
+        if not re.fullmatch(
+            r"campaigns/[a-z0-9-]{1,40}/runs/[a-f0-9]{20}/attempts/[A-Za-z0-9_.-]+/matrix-metrics\.json\.gz",
+            key,
+        ):
+            raise ValueError("matrix metric cache must name a completed campaign evidence file")
+        return value
+
+
 class ZiaMatrix(Strict):
     kind: Literal["zia"] = "zia"
     policies: tuple[ZiaPolicy, ...] = ZIA_POLICIES
+    # Keep historical requests as one seed/full retention. New campaigns opt in
+    # explicitly to three independent seeded units and metrics-only retention.
+    seeds: tuple[int, ...] = Field(default=(42,), min_length=1)
+    artifact_mode: Literal["full", "metrics_only"] = "full"
+    iterative_training: dict = Field(default_factory=dict, exclude_if=lambda value: not value)
+    metric_cache_sources: dict[int, MatrixMetricsCacheRef] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
 
     @field_validator("policies")
     @classmethod
@@ -126,6 +155,37 @@ class ZiaMatrix(Strict):
         if not value or len(set(value)) != len(value):
             raise ValueError("policies must be nonempty and unique")
         return value
+
+    @field_validator("seeds")
+    @classmethod
+    def valid_seeds(cls, value):
+        if len(set(value)) != len(value) or any(seed < 0 or seed >= 2**31 for seed in value):
+            raise ValueError("seeds must be unique integers in [0, 2**31)")
+        return value
+
+    @field_validator("iterative_training")
+    @classmethod
+    def valid_training(cls, value):
+        from continual_bench.config import IterativeTrainingConfig
+
+        if "seed" in value:
+            raise ValueError("set training randomness through matrix.seeds")
+        IterativeTrainingConfig.model_validate(value)
+        return value
+
+    @model_validator(mode="after")
+    def metric_cache_scope(self):
+        if self.metric_cache_sources and (
+            self.artifact_mode != "metrics_only" or not set(self.metric_cache_sources) <= set(self.seeds)
+        ):
+            raise ValueError("metric cache sources require metrics_only and matching matrix seeds")
+        return self
+
+
+class StreamMatrix(ZiaMatrix):
+    """The same batch-prequential evaluator with a checksum-pinned prepared stream."""
+
+    kind: Literal["stream"] = "stream"
 
 
 class ExperimentMatrixRef(Strict):
@@ -171,7 +231,7 @@ class CampaignRequest(Strict):
     scope: Literal["smoke", "full"] | None = None
     snapshot: SnapshotRef | None = None
     release: str = Field(default="latest", pattern=r"^(latest|[0-9a-f]{40})$")
-    matrix: ZiaMatrix | ExperimentMatrixRef | ProjectSuite | BenchmarkWorkload = Field(
+    matrix: ZiaMatrix | StreamMatrix | ExperimentMatrixRef | ProjectSuite | BenchmarkWorkload = Field(
         default_factory=ZiaMatrix, discriminator="kind"
     )
     source_digests: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
@@ -205,6 +265,11 @@ class CampaignRequest(Strict):
                 raise ValueError("Zia campaigns require a prepared snapshot")
             if (self.dataset, self.scope) != (self.snapshot.dataset, self.snapshot.scope):
                 raise ValueError("dataset/scope differ from the snapshot")
+        elif self.matrix.kind == "stream":
+            if self.snapshot is not None or not self.dataset or not self.scope:
+                raise ValueError("stream campaigns require dataset/scope and no Zia snapshot")
+            if set(self.source_digests) != {self.dataset}:
+                raise ValueError("stream campaigns require exactly the dataset prepared source digest")
         elif self.snapshot is not None:
             raise ValueError("matrix campaigns use source_digests for external data")
         return self

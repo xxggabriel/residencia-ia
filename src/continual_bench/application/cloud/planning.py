@@ -16,6 +16,7 @@ from .contracts import (
     EVALUATION_PROTOCOL,
     OFFLINE_MATRIX_FAMILIES,
     SPOT_BACKEND,
+    STREAM_METRICS_PROTOCOL,
     CampaignRequest,
     ReleaseManifest,
     RunUnit,
@@ -89,28 +90,58 @@ def admit_capacity(
     return evidence
 
 
-def _zia_units(request, release, snapshot_manifest, tracking_sha256):
+def _zia_units(request, release, snapshot_manifest, tracking_sha256, stream_manifest=None):
     snapshot = request.snapshot
     for policy in request.matrix.policies:
-        params = {
-            "dataset": snapshot.dataset,
-            "scope": snapshot.scope,
-            "policy": policy,
-            "tracking": request.tracking,
-            "snapshot": snapshot.model_dump(),
-        }
-        yield (
-            "zia",
-            params,
-            {"policy": policy, "dataset": snapshot.dataset, "scope": snapshot.scope},
-            {
-                "snapshot": {
-                    "id": snapshot.snapshot_id,
-                    "manifest_sha256": snapshot_manifest["manifest_sha256"],
-                    "prepared_sha256": snapshot_manifest["prepared"]["sha256"],
-                },
-            },
-        )
+        for seed in request.matrix.seeds:
+            params = {
+                "dataset": request.dataset,
+                "scope": request.scope,
+                "policy": policy,
+                "tracking": request.tracking,
+            }
+            labels = {"policy": policy, "dataset": request.dataset, "scope": request.scope}
+            # Omit default values for the original one-seed full-retention
+            # requests so existing immutable plans and run IDs remain valid.
+            if (
+                "seeds" in request.matrix.model_fields_set
+                or request.matrix.kind == "stream"
+                or request.matrix.iterative_training
+                or request.matrix.artifact_mode == "metrics_only"
+            ):
+                params["seed"] = seed
+                labels["seed"] = str(seed)
+                from continual_bench.datasets.streams import stream_spec
+
+                labels["model"] = stream_spec(request.dataset).model
+            if request.matrix.artifact_mode != "full":
+                params["artifact_mode"] = request.matrix.artifact_mode
+            if request.matrix.iterative_training:
+                from continual_bench.config import IterativeTrainingConfig
+
+                params["iterative_training"] = IterativeTrainingConfig.model_validate(
+                    {**request.matrix.iterative_training, "seed": seed}
+                ).model_dump(mode="json")
+            if seed in request.matrix.metric_cache_sources:
+                params["matrix_metrics_cache"] = request.matrix.metric_cache_sources[seed].model_dump()
+            if snapshot is not None:
+                params["snapshot"] = snapshot.model_dump()
+                extra = {
+                    "snapshot": {
+                        "id": snapshot.snapshot_id,
+                        "manifest_sha256": snapshot_manifest["manifest_sha256"],
+                        "prepared_sha256": snapshot_manifest["prepared"]["sha256"],
+                    }
+                }
+            else:
+                if stream_manifest is None:
+                    raise ValueError("stream planning requires a verified prepared stream manifest")
+                expected = request.source_digests[request.dataset]
+                if stream_manifest["prepared_sha256"] != expected:
+                    raise ValueError("prepared stream differs from the requested source digest")
+                params["source_sha256"] = expected
+                extra = {"stream_source": dict(stream_manifest)}
+            yield "zia", params, labels, extra
 
 
 def _matrix_units(request, release, project_root):
@@ -280,11 +311,16 @@ def _matrix_units(request, release, project_root):
 
 
 def build_plan(
-    request: CampaignRequest, release: ReleaseManifest, *, snapshot_manifest=None, project_root="."
+    request: CampaignRequest,
+    release: ReleaseManifest,
+    *,
+    snapshot_manifest=None,
+    stream_manifest=None,
+    project_root=".",
 ) -> dict:
     tracking_sha256 = file_sha256(project_root, request.tracking)
-    if request.matrix.kind == "zia":
-        expansions = _zia_units(request, release, snapshot_manifest, tracking_sha256)
+    if request.matrix.kind in {"zia", "stream"}:
+        expansions = _zia_units(request, release, snapshot_manifest, tracking_sha256, stream_manifest)
     else:
         expansions = _matrix_units(request, release, project_root)
     spot = release.benchmark_compute == SPOT_BACKEND
@@ -297,7 +333,13 @@ def build_plan(
     units = []
     for kind, params, labels, extra in expansions:
         contract = {
-            "protocol": EVALUATION_PROTOCOL if kind == "zia" else f"matrix-{params['evaluator']}",
+            "protocol": (
+                STREAM_METRICS_PROTOCOL
+                if kind == "zia" and params.get("artifact_mode") == "metrics_only"
+                else EVALUATION_PROTOCOL
+                if kind == "zia"
+                else f"matrix-{params['evaluator']}"
+            ),
             "kind": kind,
             "params": params,
             "tracking_sha256": tracking_sha256,
@@ -325,6 +367,10 @@ def build_plan(
     # Fargate Spot submits up to 32 units at once; Batch runs as many as the vCPU quota allows.
     concurrency = min(request.max_parallel or (32 if spot else 4), len(units))
     recorded_request = request.model_dump(mode="json")
+    if request.matrix.kind in {"zia", "stream"}:
+        for field in ("seeds", "artifact_mode", "iterative_training", "metric_cache_sources"):
+            if field not in request.matrix.model_fields_set:
+                recorded_request["matrix"].pop(field, None)
     if not spot:
         recorded_request.setdefault("max_parallel", 4)  # Match existing legacy plan documents.
     return {

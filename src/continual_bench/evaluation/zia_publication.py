@@ -24,7 +24,9 @@ from continual_bench.models.zia import ZiaPredictor, make_zia_model
 
 
 def dataset_source_uri(source):
-    """Provenance URI of a prepared stream: the pinned Hugging Face file or the catalog entry."""
+    """Provenance URI of the original file or a generated catalog dataset."""
+    if source.get("url"):
+        return source["url"]
     if "repo" not in source:
         return f"catalog://{source.get('catalog', 'unknown')}"
     return (

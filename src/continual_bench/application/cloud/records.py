@@ -81,7 +81,7 @@ def zia_rows(base: dict, report: dict, final_uri: str, outputs_uri: str) -> dict
                     "iterations",
                 )
             },
-            "uri": f"{outputs_uri}/{v['file']}",
+            "uri": f"{outputs_uri}/{v['file']}" if v.get("file") else None,
         }
         for index, v in enumerate(report["model_versions"])
     ]

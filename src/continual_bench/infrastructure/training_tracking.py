@@ -49,9 +49,26 @@ def training_round_mlflow(parent_run_id, report, now_ms=0):
                 "train_samples",
                 "validation_samples",
                 "training_presentations",
+                "seed",
             )
             if fit.get(key) is not None
         }
+        if fit.get("seed") is not None:
+            tags["cb-seed"] = str(fit["seed"])
+        origin = fit.get("execution_origin")
+        if origin is not None:
+            tags["cb-fit-execution-origin"] = str(origin)
+            params["execution_origin"] = str(origin)
+        if source := fit.get("source_matrix"):
+            source_json = json.dumps(source, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            params["source_matrix_sha256"] = hashlib.sha256(source_json.encode()).hexdigest()
+            for key in ("code_sha256", "git_revision", "dataset_sha256", "seed", "policy"):
+                if source.get(key) is not None:
+                    params[f"source_matrix_{key}"] = str(source[key])
+            cache = (report.get("contract") or {}).get("matrix_metrics_cache") or {}
+            if cache.get("sha256"):
+                tags["cb-source-matrix-cache-sha256"] = cache["sha256"]
+                params["source_matrix_cache_sha256"] = cache["sha256"]
         if checkpoint.get("sha256"):
             params["checkpoint_sha256"] = checkpoint["sha256"]
         if checkpoint.get("file"):
