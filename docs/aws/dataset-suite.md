@@ -127,3 +127,74 @@ reinicia sem restaurar treino; apenas a publicação de métricas já concluída
 ser recuperada. As métricas temporais e os custos das tentativas permanecem
 separados. Uma estimativa de reserva computacional não é apresentada como
 faturamento Spot real.
+
+## Exportação das evidências após a campanha
+
+O exportador
+[`scripts/aws/export_dataset_evidence.py`](../../scripts/aws/export_dataset_evidence.py)
+consome o estado do coordenador e exige a conclusão integral registrada, com todas
+as unidades verificadas e nenhuma tarefa ativa. O comando faz somente consultas
+S3 de listagem, metadados e leitura. Não inicia jobs, não altera objetos publicados
+e não remove dados remotos.
+
+```bash
+python scripts/aws/export_dataset_evidence.py \
+  --state-dir state/aws-dataset-suite \
+  --output docs/evidencias/aws-dataset-suite \
+  --scratch-root state/aws-evidence-scratch \
+  --scratch-gib 20 --max-file-mib 64
+```
+
+Esse é um comando de pós-processamento. Sua presença no repositório não comprova
+que uma campanha ou uma exportação já tenha sido executada.
+
+Primeiro são lidos os planos e os manifestos finais, que precisam coincidir com as
+identidades já verificadas pelo coordenador. Os relatórios completos são baixados
+e conferidos por SHA-256. A coorte principal é determinada depois de examinar
+todas as políticas e seeds de cada fonte: seu início sucede a maior fase de
+calibração e seu fim antecede o holdout comum.
+
+As predições são tratadas um caso de cada vez. O exportador confere seus manifestos,
+fixa a versão S3 ou condiciona a leitura ao ETag, valida os bytes e o SHA-256 de
+cada parte e usa o verificador da suíte para reconstruir as métricas por janela,
+partição e coorte comum. O histórico de fits publicado também precisa coincidir
+com o histórico integral do relatório.
+
+O scratch tem um limite explícito de 20 GiB no comando acima. O espaço de um caso
+é conferido antes dos downloads, incluindo a soma de todas as partes de predição.
+Se esse orçamento não comportar o caso, a exportação falha antes de baixar suas
+predições. Ao terminar a auditoria, apenas a cópia temporária local é removida.
+As predições e as fontes originais continuam no S3, com suas URIs registradas.
+
+Uma interrupção da exportação não obriga a baixar novamente os casos já auditados.
+O recibo local de cada caso sela os hashes de seu QA, de sua proveniência e dos
+arquivos comprimidos. A retomada exige os mesmos contratos, coortes e objetos
+publicados; alterações inesperadas bloqueiam o reúso. Essa recuperação usa somente
+evidências concluídas, sem restaurar estado de treino.
+
+O pacote contém os relatórios completos comprimidos, os contratos de métricas,
+históricos de treino, índices de artefatos, o catálogo `tracking_v1` derivado e os
+ledgers de progresso quando presentes e compatíveis com o formato de métricas.
+Os arquivos de relatório não são reduzidos a um resumo de escalares: vetores,
+curvas, decisões, tipos JSON e valores `null` permanecem disponíveis. Arquivos
+maiores são divididos em faixas de bytes e comprimidos sem perda. O manifesto
+informa a ordem e os hashes necessários para recompor os bytes originais.
+
+As provas de cada caso distinguem objetos efetivamente baixados e conferidos de
+objetos apenas listados no inventário. Os primeiros registram URI, SHA-256,
+tamanho, ETag e VersionId quando disponível. Uma listagem não é apresentada como
+verificação dos bytes ou das versões dos objetos que não foram lidos. Dados brutos
+e pesos não são incorporados ao pacote.
+
+As tabelas principais mantêm a coorte pareada por stream, política e seed. As
+tabelas dos demais escalares conservam os escopos prequential integral e holdout,
+sem misturá-los com a comparação principal. Médias e desvios padrão amostrais
+usam `ddof=1` e indicam `n_defined` e `n_undefined`. Uma métrica sem dois valores
+definidos não recebe um desvio padrão fabricado. Os contratos completos preservam
+a distinção entre custos lógicos dos modelos promovidos, trabalho físico,
+construção da matriz, reúso de métricas e reconstrução de modelos em memória.
+
+O manifesto e o arquivo `SHA256SUMS` descrevem o pacote exportado. Sua conclusão
+comprova o escopo de reconstrução e de preservação das evidências, não uma leitura
+independente das APIs do MLflow. Essa auditoria nativa deve ser vinculada como
+prova separada, incluindo os child runs e as séries de observações pertinentes.
