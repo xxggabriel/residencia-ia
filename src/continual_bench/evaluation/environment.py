@@ -81,6 +81,7 @@ def environment():
         "scikit-learn",
         "matplotlib",
         "xgboost",
+        "xgboost-cpu",
         "psutil",
     ):
         try:
