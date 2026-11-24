@@ -18,10 +18,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from river import linear_model, optim, preprocessing, tree, utils
 
 from continual_bench.core.contracts import DecisionContext, Event
 from continual_bench.core.metrics import Metrics
 from continual_bench.core.observability import OnlineObservability
+from continual_bench.models.linear import RiverModel
+from continual_bench.models.tree import HoeffdingTreeModel
 from continual_bench.retraining import PerformanceMatrix, SimResult, build_matrix, simulate
 from continual_bench.retraining.analysis import (
     DEFAULT_RULES,
@@ -36,6 +39,121 @@ from .binary import BinaryRun, Outcome, Progress, continual_evaluation
 from .environment import current_rss_bytes
 
 MAX_RETRAINING_BLOCKS = 24
+_SCORE_CHUNK_ROWS = 4096
+_SCORE_WORK_BYTES = 4 * 1024 * 1024
+_RIVER_PREDICT = RiverModel.predict
+_RIVER_ENCODE = RiverModel.encode
+_TREE_PREDICT = HoeffdingTreeModel.predict
+_TREE_PROBA = tree.HoeffdingTreeClassifier.predict_proba_one
+_SCALER_TRANSFORM = preprocessing.StandardScaler.transform_one
+_LOGISTIC_PROBA = linear_model.LogisticRegression.predict_proba_one
+_LOGISTIC_DOT = linear_model.LogisticRegression._raw_dot_one
+_LOGISTIC_MEAN = optim.losses.Log.mean_func
+
+
+def _score_chunk_rows(dimensions: int) -> int:
+    """Bound the three dense float64 work arrays independently of dataset length."""
+    return max(1, min(_SCORE_CHUNK_ROWS, _SCORE_WORK_BYTES // (3 * 8 * max(1, dimensions))))
+
+
+def _read_only_native_prediction(state: Any) -> bool:
+    """Only known implementations may share decoded row dictionaries across scores."""
+    if type(state) is RiverModel:
+        return (
+            getattr(state.predict, "__func__", None) is _RIVER_PREDICT
+            and getattr(state.encode, "__func__", None) is _RIVER_ENCODE
+        )
+    return (
+        type(state) is HoeffdingTreeModel
+        and getattr(state.predict, "__func__", None) is _TREE_PREDICT
+        and type(state.classifier) is tree.HoeffdingTreeClassifier
+        and getattr(state.classifier.predict_proba_one, "__func__", None) is _TREE_PROBA
+    )
+
+
+def _dense_logistic_classes(state: Any, x: np.ndarray, codec) -> tuple[np.ndarray, np.ndarray] | None:
+    """Float64 class scoring only; ambiguous rows must use the original scalar predictor.
+
+    Elementwise scaling uses the same scalar standard deviations as River. The
+    reduction may reorder products, so a conservative floating-point envelope
+    routes near-zero logits, sigmoid ties and non-finite reductions to the scalar
+    path. Probabilities and prequential prediction ledgers never use this path.
+    """
+    if (
+        type(state) is not RiverModel
+        or not _read_only_native_prediction(state)
+        or codec.cat_to_id
+        or x.dtype != np.float64
+        or x.ndim != 2
+        or x.shape[1] != len(codec.names)
+        or not codec.names
+    ):
+        return None
+    scaler, classifier = state.scaler, state.classifier
+    if (
+        type(scaler) is not preprocessing.StandardScaler
+        or scaler.window_size is not None
+        or scaler.with_std is not True
+        or getattr(scaler.transform_one, "__func__", None) is not _SCALER_TRANSFORM
+        or type(classifier) is not linear_model.LogisticRegression
+        or type(classifier._weights) is not utils.VectorDict
+        or getattr(classifier.predict_proba_one, "__func__", None) is not _LOGISTIC_PROBA
+        or getattr(classifier._raw_dot_one, "__func__", None) is not _LOGISTIC_DOT
+        or type(classifier.loss) is not optim.losses.Log
+        or getattr(classifier.loss.mean_func, "__func__", None) is not _LOGISTIC_MEAN
+    ):
+        return None
+    names = codec.names
+    # Scalar StandardScaler indexes defaultdicts for unseen keys. Preserve that
+    # observable behavior through the scalar path, rather than silently omitting
+    # or pre-populating missing entries in a vectorized prediction.
+    if any(name not in scaler.means or name not in scaler.vars for name in names):
+        return None
+    means = np.asarray([scaler.means.get(name, 0.0) for name in names], dtype=np.float64)
+    variances = np.asarray([scaler.vars.get(name, 0.0) for name in names], dtype=np.float64)
+    weights_dict = classifier.weights
+    weights = np.asarray([weights_dict.get(name, 0.0) for name in names], dtype=np.float64)
+    intercept = float(classifier.intercept)
+    if (
+        not np.isfinite(means).all()
+        or not np.isfinite(variances).all()
+        or np.any(variances < 0)
+        or not np.isfinite(weights).all()
+        or not math.isfinite(intercept)
+    ):
+        return None
+    # Python's **0.5 is the operation used by StandardScaler.transform_one.
+    deviations = np.asarray([float(v) ** 0.5 if v else 1.0 for v in variances])
+    active = variances != 0
+    boolean_columns = [i for i, name in enumerate(names) if name in codec.bool_cols]
+    predictions = np.empty(len(x), dtype=np.bool_)
+    fallback = []
+    epsilon = np.finfo(np.float64).eps
+    chunk_rows = _score_chunk_rows(len(names))
+    for start in range(0, len(x), chunk_rows):
+        chunk = x[start : start + chunk_rows]
+        # Missing values retain FeatureCodec.decode's omission semantics. In
+        # boolean columns only canonical encoded 0/1 values use the numeric path.
+        if not np.isfinite(chunk).all() or (
+            boolean_columns and not np.isin(chunk[:, boolean_columns], (0.0, 1.0)).all()
+        ):
+            return None
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            scaled = np.zeros_like(chunk)
+            np.subtract(chunk, means, out=scaled, where=active)
+            np.divide(scaled, deviations, out=scaled, where=active)
+            terms = scaled * weights
+            logits = terms.sum(axis=1) + intercept
+            magnitude = np.abs(terms).sum(axis=1) + abs(intercept)
+            envelope = 32.0 * epsilon * (len(names) + 2) * (magnitude + 1.0)
+        predictions[start : start + len(chunk)] = logits >= 0.0
+        uncertain = (
+            (~np.isfinite(logits))
+            | (~np.isfinite(magnitude))
+            | ((np.abs(logits) <= envelope) & (magnitude != 0.0))
+        )
+        fallback.extend((start + np.flatnonzero(uncertain)).tolist())
+    return predictions, np.asarray(fallback, dtype=np.int64)
 
 
 class FeatureCodec:
@@ -120,6 +238,7 @@ class BinaryLearner:
         self.pending: deque[tuple[int, int, dict[str, Any], bool]] = deque()
         self.released: deque[tuple[int, int, dict[str, Any], bool]] = deque(maxlen=replay_window)
         self.training_records: list[dict[str, Any]] = []
+        self._decoded_cache: tuple[np.ndarray, tuple, list[dict[str, Any]]] | None = None
 
     def fit(self, index: int, x: np.ndarray, y: np.ndarray, *context: np.ndarray) -> Any:
         rows = self.codec.decode(x)
@@ -161,7 +280,28 @@ class BinaryLearner:
         return model
 
     def losses(self, state: Any, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        rows = self.codec.decode(x)
+        bulk = _dense_logistic_classes(state, x, self.codec)
+        if bulk is not None:
+            self._decoded_cache = None
+            preds, fallback = bulk
+            chunk_rows = _score_chunk_rows(len(self.codec.names))
+            for start in range(0, len(fallback), chunk_rows):
+                indices = fallback[start : start + chunk_rows]
+                uncertain_rows = self.codec.decode(x[indices])
+                preds[indices] = [state.predict(feat) >= 0.5 for feat in uncertain_rows]
+            return preds != np.asarray(y, dtype=np.bool_)
+        if _read_only_native_prediction(state) and not x.dtype.hasobject:
+            payload = memoryview(x) if x.flags.c_contiguous else x.tobytes(order="C")
+            signature = (x.shape, x.dtype.str, hashlib.sha256(payload).digest())
+            cached = self._decoded_cache
+            if cached is None or cached[0] is not x or cached[1] != signature:
+                rows = self.codec.decode(x)
+                self._decoded_cache = (x, signature, rows)
+            else:
+                rows = cached[2]
+        else:
+            self._decoded_cache = None
+            rows = self.codec.decode(x)
         preds = np.array([state.predict(feat) >= 0.5 for feat in rows], dtype=np.bool_)
         return preds != np.asarray(y, dtype=np.bool_)
 
