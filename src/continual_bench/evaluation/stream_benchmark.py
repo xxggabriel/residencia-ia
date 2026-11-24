@@ -302,7 +302,11 @@ def run(
     previous_samples = () if resume is None else resume["system_samples"]
     previous_peak_rss = None if resume is None else resume["process_peak_rss_bytes"]
     segment = None if checkpoint is None else (0 if resume is None else resume["system_segment"] + 1)
-    monitoring = SystemMetricsSampler(output, interval=0.5 if scope == "smoke" else 5)
+    monitoring = SystemMetricsSampler(
+        output,
+        interval=0.5 if scope == "smoke" else 5,
+        **({"max_samples": None} if metrics_only else {}),
+    )
 
     def system_report():
         return monitoring.report(previous=previous_samples, elapsed_offset=previous_seconds, segment=segment)

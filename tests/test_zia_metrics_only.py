@@ -213,3 +213,52 @@ def test_metrics_only_rejects_preexisting_weights_before_evaluation(metric_strea
     (output / "models" / "old.json").write_text('{"trees": []}')
     with pytest.raises(ValueError, match="model or checkpoint"):
         evaluate(metric_stream, "social", "frozen", 42, "metrics_only", "only")
+
+
+@pytest.mark.parametrize("mode", ["full", "metrics_only"])
+def test_stream_system_samples_exceed_legacy_cap_without_time_delay(metric_stream, monkeypatch, mode):
+    import time
+
+    from continual_bench.evaluation.system_metrics import MAX_SAMPLES, SystemMetricsSampler
+    from continual_bench.infrastructure.run_artifacts import system_metric_points
+
+    constructors = []
+    count = MAX_SAMPLES + 7
+
+    class FastSampler(SystemMetricsSampler):
+        def __init__(self, *args, **kwargs):
+            constructors.append(dict(kwargs))
+            super().__init__(*args, **kwargs)
+            self.counter = 0
+
+        def _measure(self, cpu=True):
+            value = self.counter
+            self.counter += 1
+            return {"test_sample_counter": value, "process_memory_rss_megabytes": 1.0}
+
+        def __enter__(self):
+            self._started = time.monotonic()
+            for _ in range(count):
+                self.sample(cpu=False)
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(stream, "SystemMetricsSampler", FastSampler)
+    report = evaluate(metric_stream, "social", "frozen", 42, mode, "sampled")
+    system = report["system_metrics"]
+    if mode == "metrics_only":
+        assert constructors[0]["max_samples"] is None
+        assert system["max_retained_samples"] is None
+        assert system["interval_seconds"] == 0.5
+        assert [row["values"]["test_sample_counter"] for row in system["samples"]] == list(range(count))
+        points, _ = system_metric_points(system)
+        assert [(step, value) for key, step, value in points if key == "system/test_sample_counter"] == list(
+            enumerate(range(count))
+        )
+    else:
+        assert "max_samples" not in constructors[0]
+        assert system["max_retained_samples"] == MAX_SAMPLES
+        assert len(system["samples"]) < MAX_SAMPLES
+        assert system["interval_seconds"] > 0.5
