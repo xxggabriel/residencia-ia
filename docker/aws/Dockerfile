@@ -27,7 +27,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY configs ./configs
 COPY scripts/run_corrective_benchmarks.py scripts/replicate_upf.py scripts/replicate_cara.py \
      scripts/export_corrective_evidence.py scripts/prepare_real_sources.py \
-     scripts/publish_corrective_execution_times.py ./scripts/
+     scripts/publish_corrective_execution_times.py scripts/run_dataset_suite.py \
+     scripts/verify_dataset_suite.py ./scripts/
 ARG GIT_SHA=uncommitted
 ENV BENCH_GIT_REVISION=${GIT_SHA}
 LABEL org.opencontainers.image.source="continual-bench" org.opencontainers.image.revision="${GIT_SHA}"
