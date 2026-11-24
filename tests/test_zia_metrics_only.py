@@ -76,7 +76,14 @@ def evaluate(fixture, dataset, policy, seed, mode, name, **kwargs):
     )
 
 
-@pytest.mark.parametrize("seed", [42, 43, 44])
+@pytest.mark.parametrize(
+    "seed",
+    [
+        42,
+        pytest.param(43, marks=pytest.mark.zia_extended_seeds),
+        pytest.param(44, marks=pytest.mark.zia_extended_seeds),
+    ],
+)
 @pytest.mark.parametrize("dataset", ["social", "fraud"])
 @pytest.mark.parametrize("policy", stream.POLICIES)
 def test_metrics_only_preserves_full_predictions_and_retention(metric_stream, dataset, policy, seed):
@@ -126,7 +133,14 @@ def test_metrics_only_preserves_full_predictions_and_retention(metric_stream, da
         assert actual["metrics"]["actual_total_fit_count"] == len(actual["training_history"])
 
 
-@pytest.mark.parametrize("seed", [42, 43, 44])
+@pytest.mark.parametrize(
+    "seed",
+    [
+        42,
+        pytest.param(43, marks=pytest.mark.zia_extended_seeds),
+        pytest.param(44, marks=pytest.mark.zia_extended_seeds),
+    ],
+)
 @pytest.mark.parametrize("dataset", ["social", "fraud"])
 def test_metric_matrix_cache_reuses_measurements_without_reusing_weights(metric_stream, dataset, seed):
     root, _ = metric_stream

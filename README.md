@@ -263,6 +263,9 @@ make lint    # ruff
 
 - `pytest` padrão não usa serviços nem campanhas completas (`-m 'not services and not benchmark'`).
 - `-m services` é integração com serviços reais; `-m benchmark` são experimentos completos, executados à parte.
+- Nos testes de paridade de métricas, cache de matrizes e invariância do holdout de Zia,
+  o CI roda a seed 42 para Social e Fraud. As seeds 43 e 44 rodam com `make test` ou,
+  isoladamente, com `uv run --frozen pytest -m zia_extended_seeds`.
 - Para o escopo e as evidências de implantação, veja [validação na AWS](docs/aws/validation.md).
 
 ## Documentação

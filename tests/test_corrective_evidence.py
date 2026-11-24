@@ -1,5 +1,4 @@
 import csv
-import gc
 import gzip
 import io
 import json
@@ -550,9 +549,8 @@ def test_replication_candidate_and_analysis_rows_are_released_while_streaming(tm
             yield row
             consumed += 1
             del row
-            gc.collect()
             # CSV consumption must not retain the previously yielded point.
-            # Materializing the generator with list.extend fails here.
+            # These acyclic rows are released by CPython's reference counting.
             assert live == 0
 
     monkeypatch.setattr(evidence, "replication_rows", many_rows)
