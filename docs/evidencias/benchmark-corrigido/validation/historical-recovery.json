@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "title": "Recuperação parcial de evidências históricas",
+  "scope": "Resumo público sanitizado de uma recuperação já documentada. Esta transformação não executou experimentos, testes, consultas a serviços ou nova busca de arquivos.",
+  "source_report": {
+    "identifier": "historical-recovery-report.json",
+    "sha256": "e616805efd928786bcd5dcc37ab28d0d461ba58fc68570eeef0a25e3fd1c5ba5",
+    "observation_recorded_at": "2026-11-23T23:13:55.673939+00:00"
+  },
+  "raw_source_recovery": {
+    "sources_named_in_original_manifest": 3,
+    "recovered_sources_matching_sha256": 1,
+    "recovered": [
+      {
+        "source_id": "electricity_arff",
+        "manifest_filename": "electricity-normalized.arff",
+        "sha256": "2d86fbc74c69a5c04bcde0119bce280dd6d8efa0115987edc75b77ccf024d7f2",
+        "expected_sha256": "2d86fbc74c69a5c04bcde0119bce280dd6d8efa0115987edc75b77ccf024d7f2",
+        "bytes": 3092013,
+        "sha256_matches_manifest": true
+      }
+    ],
+    "not_recovered": [
+      {
+        "source_id": "electricity_csv",
+        "manifest_filename": "elec.csv",
+        "expected_sha256": "cdf901433885f29eca6911f70c0eeafb50d90596c879c30c5b99f5a2e8e734ff",
+        "recovered_in_inspected_scope": false
+      },
+      {
+        "source_id": "airlines_csv",
+        "manifest_filename": "airlines.csv",
+        "expected_sha256": "0bbf1719c7a5c82a1144723c0bdb6d7f563118057e5f979a3c34f824fb40b980",
+        "recovered_in_inspected_scope": false
+      }
+    ],
+    "limits": "O ARFF de Electricity corresponde por SHA-256 ao insumo identificado no manifesto. Essa correspondência de conteúdo não comprova, isoladamente, qual cópia foi efetivamente lida por um processo histórico. Os dois CSVs não foram encontrados no escopo inspecionado; isso não comprova ausência em outros locais."
+  },
+  "historical_parallel_launcher": {
+    "expected_sha256": "43849cf97141d5cf1887a799d39fa3cb276126569355badf3ee97a67646eaeec",
+    "recovered": false,
+    "limits": "Os dois launchers conhecidos inspecionados possuem hashes diferentes do launcher específico registrado no manifesto. Seu conteúdo e o comando histórico exato continuam não recuperados."
+  },
+  "existing_receipt_checks": {
+    "receipts_checked": 3,
+    "report_sha256_matches": 3,
+    "records": [
+      {
+        "evidence_id": "case-01",
+        "dataset": "sea",
+        "samples": 1200,
+        "model": "logistic",
+        "policy": "cara",
+        "receipt_sha256": "2fa487cd18e921b683c9d77f8a1548b3b1b49fe54c71f5898c29be885f4130db",
+        "report_sha256": "c8f5031925e282e1ed05765545e3eb6360d47b8290b96e52ca972a99afba4905",
+        "report_sha256_matches_receipt": true,
+        "mlflow_run_id": "278d4ffd30b8459fb527d7fa96aebc33",
+        "mlflow_experiment_id": "38",
+        "execution_recorded_in_existing_report": "local"
+      },
+      {
+        "evidence_id": "case-02",
+        "dataset": "airlines",
+        "samples": 539383,
+        "model": "logistic",
+        "policy": "cara",
+        "receipt_sha256": "fb9124f390e35a599dd3a3a95898a26ec962dcd60446bb121c7963124cfc159e",
+        "report_sha256": "e592b1ee6357c94e7fb67f3773540b1e138d3c228652234c6b861b1c6cacd4a7",
+        "report_sha256_matches_receipt": true,
+        "mlflow_run_id": "e5a64ce9dec643f18abc14d8ebad285f",
+        "mlflow_experiment_id": "38",
+        "execution_recorded_in_existing_report": "local"
+      },
+      {
+        "evidence_id": "case-03",
+        "dataset": "electricity",
+        "samples": 45312,
+        "model": "logistic",
+        "policy": "cara_cumulative",
+        "receipt_sha256": "e234c04eb8ba69a1631ca740f057044d61d4bdef550ee7e86f41f8849ca49cac",
+        "report_sha256": "dc94b5009375159aa5b70ffb006410f8374cf2f5a1d1e8ee259e53f8b98b2ba6",
+        "report_sha256_matches_receipt": true,
+        "mlflow_run_id": "1ee9eb2dc0a84623b2ca24bd6d947871",
+        "mlflow_experiment_id": "39",
+        "execution_recorded_in_existing_report": "local"
+      }
+    ],
+    "limits": "Os três recibos existentes foram conferidos contra os hashes dos respectivos relatórios. Eles registram execução local em campanhas distintas. Não houve consulta atual ao MLflow nem confirmação remota de disponibilidade ou integridade. Esses vínculos não comprovam execução AWS, implantação ou correspondência com os comprovantes históricos específicos da tarefa #83 ou com as 66 execuções INSECTS."
+  },
+  "remaining_gaps": [
+    "Dois CSVs brutos do manifesto e o launcher específico não foram recuperados.",
+    "O repositório de origem de csv_revision e o comando histórico exato do launcher continuam sem identificação comprovada.",
+    "Hardware, parâmetros OMP/BLAS e concorrência dos ensaios individuais históricos não foram recuperados por esta etapa.",
+    "Os comprovantes externos específicos de AWS e demais serviços citados na tarefa #83 não foram recuperados nesta etapa."
+  ],
+  "task_disposition": [
+    {
+      "task": 83,
+      "closed_by_this_recovery": false,
+      "conclusion": "Permanece aberta por lacunas nos comprovantes históricos específicos; os recibos encontrados não demonstram implantação AWS."
+    },
+    {
+      "task": 101,
+      "closed_by_this_recovery": false,
+      "conclusion": "Permanece aberta: houve recuperação parcial, sem completar a proveniência e o pacote experimental."
+    }
+  ],
+  "publication_boundary": "Este resumo contém identificadores, metadados e hashes. Não incorpora dados brutos, bancos de dados, credenciais ou caminhos e identificadores pessoais de infraestrutura."
+}

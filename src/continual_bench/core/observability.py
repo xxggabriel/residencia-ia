@@ -149,6 +149,23 @@ class OnlineObservability:
                 self.continual_versions.append(self.current_model_version)
         self.instrumentation_seconds += time.perf_counter() - started
 
+    def record_unobserved_shadow(self, update):
+        """An update with no intervening prediction has no realized shadow-gain population."""
+        if not self.settings.get("adaptation_shadows"):
+            return
+        self.comparisons.append(
+            {
+                "id": len(self.comparisons),
+                **update,
+                "evaluated": 0,
+                "old_errors": 0,
+                "new_errors": 0,
+                "old_weighted_loss": 0.0,
+                "new_weighted_loss": 0.0,
+                "shadow_unavailable_reason": "no_prediction_between_consecutive_released_label_updates",
+            }
+        )
+
     def record_learning(
         self, seq, seconds, size, *, initial=False, prediction=None, validation=None, checkpoint=None
     ):

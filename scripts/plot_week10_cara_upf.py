@@ -187,9 +187,13 @@ def plot_trajectory(root, row):
             fontsize=9,
             bbox={"facecolor": "white", "edgecolor": "#e4b7ae", "boxstyle": "round,pad=.24"},
         )
-    ax.set_title("Seed 0 · α = 0,1 · modelo novo entra no próprio lote", loc="left", fontsize=11)
+    ax.set_title(
+        "Benchmark pareado no mesmo lote · seed 0 · α = 0,1 · 2.000 registros por lote, 400 no teste",
+        loc="left",
+        fontsize=10,
+    )
     ax.set_xticks(range(first, len(matrix)), [f"D{i}" for i in range(first, len(matrix))])
-    ax.set_xlabel("Lote avaliado · faixas de Wilson de 95% para os exemplos de teste de cada lote")
+    ax.set_xlabel("Lote avaliado · intervalos de Wilson de 95% para a acurácia em cada lote")
     ax.set_ylabel("Acurácia")
     ax.set_ylim(top=min(1.05, ax.get_ylim()[1] + 0.065))
     ax.yaxis.set_major_formatter(PercentFormatter(1))
@@ -203,7 +207,7 @@ def plot_curves(root, rows, protocol):
     columns = (
         [
             ("strategy_cost", "Custo da estratégia", False),
-            ("strategy_scpe", "SCPE (%)", False),
+            ("strategy_scpe", "SCPE (%) · κ > 0", False),
             ("average_accuracy", "Acurácia", True),
             ("retrains", "Retreinamentos", False),
         ]
@@ -216,7 +220,11 @@ def plot_curves(root, rows, protocol):
     )
     fig, axes = plt.subplots(2, len(columns), figsize=(15, 7.8), layout="constrained")
     fig.suptitle(
-        f"Resultados no protocolo {protocol.upper()}", fontsize=19, fontweight="bold", x=0.04, ha="left"
+        f"Electricity e Airlines · protocolo {protocol.upper()} · média de {5 if cara else 10} seeds",
+        fontsize=18,
+        fontweight="bold",
+        x=0.04,
+        ha="left",
     )
     for i, row in enumerate(rows):
         grid = row["kappa" if cara else "alphas"]
@@ -226,7 +234,10 @@ def plot_curves(root, rows, protocol):
                 ax.plot(
                     grid,
                     curves[metric],
-                    color=COLORS.get(p),
+                    color="#222222" if p == "always_retrain" else COLORS.get(p),
+                    linestyle="--" if p == "always_retrain" else "-",
+                    marker="o" if not cara else None,
+                    markersize=2.5,
                     lw=1.55,
                     label=LABELS.get(p, "Sempre retreinar" if p == "always_retrain" else p),
                 )
@@ -246,8 +257,8 @@ def plot_curves(root, rows, protocol):
 def plot_auc(root, rows):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.6), layout="constrained")
     fig.suptitle(
-        "AUC do custo no protocolo UPF · comparação com o artigo",
-        fontsize=17,
+        "Electricity e Airlines · AUC do custo combinado no protocolo UPF",
+        fontsize=16,
         fontweight="bold",
         x=0.04,
         ha="left",
@@ -262,23 +273,32 @@ def plot_auc(root, rows):
             color="#2564a0",
             xerr=[s["auc_std"] for _, s in data],
             capsize=3,
-            label="Local · média ± DP",
+            label="Local · média ± 1 desvio padrão (10 seeds)",
         )
         ax.barh(y + 0.16, [s["paper_auc"] for _, s in data], height=0.29, color="#a1b1bb", label="Publicado")
         ax.set_yticks(y, [LABELS[p] for p, _ in data])
         ax.invert_yaxis()
         ax.set_title(row["dataset"].title(), loc="left", fontweight="bold")
-        ax.set_xlabel("AUC do custo · menor é melhor")
+        alpha_top = str(row["alphas"][-1]).replace(".", ",")
+        ax.set_xlabel(f"AUC do custo combinado · α de 0 a {alpha_top}")
         setup_axis(ax)
     handles, names = axes[0].get_legend_handles_labels()
+    right = max(ax.get_xlim()[1] for ax in axes)
+    for ax in axes:
+        ax.set_xlim(0, right)
     fig.legend(handles, names, loc="outside lower center", ncols=2, frameon=False)
     save(root, fig, "auc-upf-publicado-local")
 
 
 def plot_gap(root):
     fig, axes = plt.subplots(2, 2, figsize=(12, 6.7), layout="constrained")
-    fig.suptitle("Distância ao Oracle de erro por custo de retreinamento", fontsize=18, fontweight="bold")
+    fig.suptitle(
+        "Electricity e Airlines · diferença de custo combinado para o Oracle de erro",
+        fontsize=17,
+        fontweight="bold",
+    )
     modes = ("next-batch", "same-batch")
+    mode_labels = ("Implantação no lote seguinte", "Implantação no mesmo lote")
     policies = ("frozen", "cara", "cara_cumulative", "cara_periodic", "upf")
     all_rows = [archive(root, mode) for mode in modes]
 
@@ -300,9 +320,9 @@ def plot_gap(root):
             ]
             ax.set_xticks(ticks, [str(row["alphas"][k]).replace(".", ",") for k in ticks], fontsize=8)
             ax.set_yticks(range(len(policies)), [LABELS[p] for p in policies])
-            ax.set_title(f"{row['dataset'].title()} · {modes[i]}", loc="left")
+            ax.set_title(f"{row['dataset'].title()} · {mode_labels[i]}", loc="left")
             ax.set_xlabel("α · valores avaliados em colunas de mesma largura")
-    fig.colorbar(image, ax=axes, label="Excesso de custo de erro", fraction=0.037)
+    fig.colorbar(image, ax=axes, label="Diferença de custo combinado", fraction=0.037)
     save(root, fig, "sensibilidade-oracle")
 
 

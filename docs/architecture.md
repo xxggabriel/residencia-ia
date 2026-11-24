@@ -8,7 +8,7 @@ comparações entre estratégias.
 
 ```
 cli ─┐
-orchestration (servidores HTTP de jobs, pipelines ZenML)
+orchestration (servidores HTTP de jobs, ZenML, controle AWS, SageMaker)
      │
 application (casos de uso: runner, campanha, matriz, fábrica de componentes, prontidão)
      │
@@ -31,6 +31,7 @@ abaixo dela; `core` não importa River, Pydantic, Kafka, ZenML, MinIO nem MLflow
 | `models` | Famílias de modelos com um construtor por tipo de tarefa | `__init__` (catálogo), `linear`, `tree`, `neighbors`, `encoding`, `serving` |
 | `detectors` | Catálogo de detectores de drift | `__init__`, `river` |
 | `evaluation` | Protocolos de avaliação, derivação de métricas, métricas de sistema e gráficos | `binary`, `holdout`, `prequential`, `typed`, `epochs`, `tracking`, `reporting`, `costs`, `scoring`, `environment`, `system_metrics`, `artifacts` |
+| `retraining` | Políticas de decisão por lote e referências retrospectivas | `matrix`, `policies`, `forecaster`, `schedule`, `pricing` |
 | `application` | Casos de uso | `runner`, `components`, `matrix`, `campaign`, `readiness`, `plugin_identity`, `cloud/*` (perfil AWS) |
 | `infrastructure` | E/S externa | `storage`, `versioning`, `services`, `catalog`, `metric_tracking`, `epoch_tracking`, `run_artifacts`, `object_store`, `stream_order`, `aws/*` (boto3) |
 | `orchestration` | Pontos de entrada que agendam trabalho finito | `server`, `epoch_server`, `zenml_pipeline`, `zenml_steps`, `epoch_pipeline`, `aws_control`, `aws_cli`, `sagemaker` |
@@ -63,7 +64,7 @@ que suporta:
 
 | Avaliador | Tipos de alvo | Observação |
 |---|---|---|
-| Binário (`Config`: streaming, incremental, offline) | binary | Motor com detector + política. Datasets ou modelos incompatíveis são rejeitados na validação. |
+| Binário (`Config`: streaming, incremental, offline) | binary | Motor com detector + política. CARA, UPF e Oracle usam um caminho próprio, restrito ao incremental. Datasets ou modelos incompatíveis são rejeitados na validação. |
 | Typed prequential (`TypedConfig`) | multiclass, regression | Fluxos binários são adaptados para as classes `"0"`/`"1"` sem perda de informação. |
 | Épocas (`EpochConfig`) | multiclass, regression | Mesmo adaptador; holdout oficial ou sufixo temporal purgado. |
 
@@ -81,8 +82,8 @@ de cada caso) e `summary.json` (uma linha por caso com dataset, semente, modelo,
 política e métricas finais). Uma nova execução reaproveita os casos concluídos; cada caso
 continua idempotente pela identidade da sua configuração. Veja também
 `configs/matrices/any-model.yaml` para o avaliador typed com regressão. Na AWS, o mesmo plano
-alimenta o Step Functions e gera uma unidade Batch por caso. Cada tentativa recebe um run no
-MLflow. Consulte a campanha `infra/examples/campaign-binary-matrix.json` e o
+alimenta o Step Functions e gera uma unidade Batch por caso. No Spot, as tentativas retomam
+o mesmo run lógico no MLflow; no On-Demand, o rastreamento da matriz é por tentativa. Consulte a campanha `infra/examples/campaign-binary-matrix.json` e o
 [guia do perfil AWS](aws/operations.md#campanhas-no-sagemaker-studio).
 
 ## Como estender
@@ -123,7 +124,8 @@ resultado.
 `application.cloud` implementa aquisição, preparação, plano, execução de uma run, publicação,
 reconciliação e custos do perfil AWS. Os adaptadores boto3 ficam em `infrastructure.aws` e
 são injetados nas fronteiras de I/O. O perfil reaproveita o avaliador Zia, os geradores de
-artefatos e o planejador de matrizes. Sua execução usa Step Functions, Batch e S3. A entrega
+artefatos e o planejador de matrizes. Sua execução usa Step Functions, Batch e S3. Os workflows
+reservam a rede de interface antes de iniciar os jobs privados e compartilham a stack temporária. A entrega
 do runtime usa GitHub Actions com OIDC.
 
 A stack complementar `studio.yaml` expõe a preparação, a campanha Batch e a verificação do

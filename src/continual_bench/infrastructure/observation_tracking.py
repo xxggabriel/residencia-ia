@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 
+from .artifact_policy import metrics_only
 from .dashboard_page import write_dashboard_html
 from .retraining_pages import HTML_REVISION, PAGE_PATHS
 from .storage import atomic_write
@@ -124,11 +125,12 @@ def write_observation_evidence(directory, report, parent_run_id=None, children=(
         "observations_sha256": hashlib.sha256(payload).hexdigest(),
         "training_history_sha256": _fit_source_checksum(directory),
         "html_revision": HTML_REVISION,
+        "render_mode": "deferred_static" if metrics_only(report) else "static_and_interactive",
     }
     manifest = json.loads(manifest_path.read_bytes()) if manifest_path.is_file() else {}
     if manifest.get("source_checksums") != signature or not (root / "observations.json").is_file():
         # The signature is committed after the plots and canonical data.
-        manifest = write_observation_figures(root, report)
+        manifest = write_observation_figures(root, report, render_static=not metrics_only(report))
         atomic_write(root / "observations.json", payload)
         manifest["source_checksums"] = signature
         for fit in report.get("training_history", ()):
@@ -186,6 +188,8 @@ def publish_sdk_observations(
     children,
     *,
     max_points_per_key: int | None = 250,
+    metrics_already_logged=False,
+    upload_artifacts=True,
 ):
     from mlflow.entities import RunTag
 
@@ -194,11 +198,14 @@ def publish_sdk_observations(
     root = write_observation_evidence(directory, report, run_id, children)
     if root is None:
         return None
-    sampled = downsample_points(parent_observation_points(report), max_points_per_key=max_points_per_key)
-    log_metric_points(client, run_id, sampled, max_points_per_key=max_points_per_key)
+    if not metrics_already_logged:
+        sampled = downsample_points(parent_observation_points(report), max_points_per_key=max_points_per_key)
+        log_metric_points(client, run_id, sampled, max_points_per_key=max_points_per_key)
     client.log_batch(
         run_id, tags=[RunTag(key, value) for key, value in observation_tags(report).items()], synchronous=True
     )
+    if not upload_artifacts:
+        return f"{ARTIFACT_ROOT}/plots-manifest.json"
     dashboard_path = Path(directory) / "dashboard.html"
     if dashboard_path.is_file():
         client.log_artifact(run_id, str(dashboard_path))

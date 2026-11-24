@@ -10,6 +10,8 @@ from typing import Callable
 
 from .contracts import Decision, DecisionContext, Event
 from .metrics import Metrics
+from .observability import OnlineObservability
+from .policies import OnlineUpdate
 
 
 class Engine:
@@ -125,12 +127,12 @@ class Engine:
                 (self.audit + json.dumps([event.event_id, p], separators=(",", ":"))).encode()
             ).hexdigest()
         if accepted:
-            self.release(accepted[-1].timestamp)
+            self.release(accepted[-1].timestamp, coalesce_online_shadows=len(accepted) > 1)
         self.compute_seconds += time.perf_counter() - start
         if self.observer is not None:
             self.observer.sample_memory()
 
-    def release(self, now: int) -> None:
+    def release(self, now: int, *, coalesce_online_shadows: bool = False) -> None:
         # Dataset adapters require monotonically increasing available_at.
         reserved = getattr(getattr(self.observer, "continual", None), "reserved_seqs", frozenset())
         while self.pending and self.pending[0][0].available_at <= now:
@@ -158,7 +160,14 @@ class Engine:
             if decision.action != "none":
                 train_samples = self._admitted_training(decision)
                 if train_samples is not None:
-                    self._update(event, decision, train_samples, now, prediction=(p, trace))
+                    self._update(
+                        event,
+                        decision,
+                        train_samples,
+                        now,
+                        prediction=(p, trace),
+                        coalesce_online_shadows=coalesce_online_shadows,
+                    )
             if self.current.n == self.metric_window:
                 self.close_window(event.seq)
             if self.observer is not None:
@@ -260,9 +269,48 @@ class Engine:
             "model_version": trace.get("model_version"),
         }
 
-    def _update(self, event: Event, decision: Decision, train_samples: int, now: int, *, prediction=None):
+    def _can_skip_online_shadow(self, now: int) -> bool:
+        """Prove another built-in update occurs before any new prediction.
+
+        This is deliberately closed to policy/observer subclasses: their callbacks
+        may have different update guards or consume an intermediate shadow. Label
+        availability is monotone, so stop at the first label outside this release.
+        """
+        if (
+            getattr(self.versions, "artifact_mode", "full") != "metrics_only"
+            or type(self.policy) is not OnlineUpdate
+            or type(self.observer) is not OnlineObservability
+            or self.promotion is not None
+            or (self.training_budget is not None and self.training_budget - self.training_used < 2)
+        ):
+            return False
+        reserved = getattr(getattr(self.observer, "continual", None), "reserved_seqs", frozenset())
+        for pending, _, _ in self.pending:
+            if pending.available_at > now:
+                break
+            if pending.seq >= self.warmup and pending.seq not in reserved:
+                return True
+        return False
+
+    def _update(
+        self,
+        event: Event,
+        decision: Decision,
+        train_samples: int,
+        now: int,
+        *,
+        prediction=None,
+        coalesce_online_shadows=False,
+    ):
         validation_count = self._validation_count
-        previous = self.observer.before_update(self.model) if self.observer is not None else None
+        # A discarded intermediate shadow has no realized comparison population.
+        # Keep its logical record; retain a real snapshot before the last update.
+        idle_shadow = (
+            coalesce_online_shadows and decision.action == "learn_one" and self._can_skip_online_shadow(now)
+        )
+        previous = (
+            self.observer.before_update(self.model) if self.observer is not None and not idle_shadow else None
+        )
         started = time.perf_counter()
         promoted = True
         validation, evaluation, checkpoint = {}, None, None
@@ -316,7 +364,10 @@ class Engine:
         if promoted:
             self.updates.append(record)
             if self.observer is not None:
-                self.observer.after_update(previous, record)
+                if idle_shadow:
+                    self.observer.record_unobserved_shadow(record)
+                else:
+                    self.observer.after_update(previous, record)
             if self.versions is not None:
                 version_training = {
                     "action": decision.action,

@@ -293,6 +293,8 @@ def publish(config, report, root):
 
     identity = config.identity()
     directory = Path(root) / identity
+    if config.artifact_mode == "metrics_only":
+        return _publish_metrics_only(config, report, directory)
     # Same lock across both sinks; a single worker replica owns publication.
     with run_lock(root, identity):
         files = [
@@ -324,5 +326,33 @@ def publish(config, report, root):
             objects=objects,
         )
         receipt = {"run_key": identity, **tracked, **catalog, "objects": uris}
+        atomic_write(directory / "receipt.json", json.dumps(receipt, indent=2).encode())
+        return receipt
+
+
+def _publish_metrics_only(config, report, directory):
+    """Publish metrics and provenance through the existing tracker without a model registry."""
+    from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
+
+    from .benchmark_tracking import publish_local_benchmark
+    from .storage import atomic_write, run_lock
+
+    with run_lock(directory.parent, config.identity()):
+        verify_metrics_only_files(directory)
+        atomic_write(directory / "config.json", config.model_dump_json(indent=2).encode())
+        atomic_write(directory / "environment.json", json.dumps(report["environment"], indent=2).encode())
+        tracked = publish_local_benchmark(
+            directory, report, experiment_name=experiment_name(config.model_dump(mode="json"))
+        )
+        objects = S3Objects()
+        uris = []
+        for path in sorted(directory.rglob("*")):
+            relative = path.relative_to(directory)
+            if not path.is_file() or any(part.startswith(".") for part in relative.parts):
+                continue
+            if path.name in {"events.jsonl", "receipt.json"}:
+                continue
+            uris.append(objects.upload(f"{config.identity()}/{relative.as_posix()}", path))
+        receipt = {"run_key": config.identity(), "artifact_mode": "metrics_only", **tracked, "objects": uris}
         atomic_write(directory / "receipt.json", json.dumps(receipt, indent=2).encode())
         return receipt

@@ -17,12 +17,13 @@ OBSERVATION_FIELDS = {
 
 
 class TrainingHistory:
-    def __init__(self, output, stop_requested=None):
+    def __init__(self, output, stop_requested=None, *, seed=None):
         self.output = output
         self.partial = output / "training-fits-partial"
         self.stop_requested = stop_requested
         self.fits = []
         self.global_step = 0
+        self.seed = seed
 
     def check_interrupted(self):
         if self.stop_requested is not None and self.stop_requested():
@@ -76,6 +77,7 @@ class TrainingHistory:
             "source_model_reason": "fresh_initialization" if action not in ("continue", "online") else None,
             "promotion_status": "interrupted" if interrupted else "candidate",
             "fit_sequence": len(self.fits) + 1,
+            **({"seed": self.seed} if self.seed is not None else {}),
             **{key: result[key] for key in OBSERVATION_FIELDS if key in result},
         }
         epoch_coordinates = ("best_epoch", "last_epoch", "checkpoint_epoch")

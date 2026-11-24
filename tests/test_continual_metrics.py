@@ -52,6 +52,31 @@ def without_seconds(value):
     return value
 
 
+def test_completed_reference_prefix_can_be_released_without_changing_evidence():
+    subject = ContinualEvaluation(ReferenceModel, probes(), [2, 4, 6])
+    model = TableModel()
+    for task in range(3):
+        add_episode(subject, model, task, [0.6, 0.7, 0.8])
+    evidence = subject.report()
+    references = pickle.dumps(subject.reference_models)
+    assert len(subject.examples) == 6
+    assert subject.release_training_examples()
+    assert subject.examples == []
+    assert subject.report() == evidence
+    assert pickle.dumps(subject.reference_models) == references
+
+
+def test_unfinished_reference_prefix_is_preserved_for_later_joint_training():
+    subject = ContinualEvaluation(ReferenceModel, probes(), [2, 4, 6])
+    model = TableModel()
+    add_episode(subject, model, 0, [0.6, 0.7, 0.8])
+    retained = copy.deepcopy(subject.examples)
+    assert not subject.release_training_examples()
+    assert subject.examples == retained
+    add_episode(subject, model, 1, [0.6, 0.7, 0.8])
+    assert subject.matrix[-1]["reference_joint"]["train_samples"] == 4
+
+
 def test_equations_preserve_negative_forgetting_positive_bwt_and_diagonal_fwt():
     subject = ContinualEvaluation(ReferenceModel, probes(), [2, 4, 6])
     model = TableModel()

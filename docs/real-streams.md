@@ -2,6 +2,9 @@
 
 O [loader de fluxos reais](../src/continual_bench/datasets/real_streams.py) oferece `prepare_real_stream(name, cache, limit=100, seed=42, *, download=False)` para `insects` e `gas`, com aquisição limitada por bytes, prazo e cardinalidade. A fonte expõe `samples_iter()` de `TaskSample` e `manifest()`. A aquisição remota exige `download=True`. Na avaliação prequential a configuração usa `LocalManifestSource` para fontes locais já preparadas.
 
+O INSECTS balanceado e o Gas nesta primeira parte pertencem à suíte por épocas. As
+variantes desbalanceadas têm um [protocolo binário próprio](#benchmark-binário-da-semana-10).
+
 ## Fontes e versões
 
 | Dataset | Fonte primária e versão selecionada | Contrato |
@@ -28,3 +31,72 @@ O limite de 100 selecionou exatamente o prefixo publicado, sem embaralhamento ne
 Gas preservou a ordem dos dez lotes e registrou `task_id`/grupo por lote, além das cardinalidades e classes do arquivo completo. Um prefixo de 100 pôde abranger apenas parte do primeiro lote e das classes; ele não foi descrito como avaliação de todas as mudanças do dataset. INSECTS preservou a ordem do CSV `abrupt_balanced`. Nenhum loader inventou pontos de drift verdadeiros: `changepoints=None`. O relógio de replay foi ordinal simulado e não substituiu o calendário original de cada observação.
 
 Os testes de contrato cobrem parsers, ordem de lotes, classes, integridade, corrupção, retry explícito, limites e rejeição de respostas HTML. INSECTS e Gas passaram no teste smoke com 100 exemplos reais por fonte e duas épocas. [Relatório de execução](task-dataset-execution.md)
+
+## Benchmark binário da Semana 10
+
+| Fonte do catálogo | CSV original | Linhas | Fronteiras abruptas anotadas |
+|---|---|---:|---:|
+| `insects_abrupt_imbalanced` | `abrupt_imbalanced.csv` | 355.275 | 5 |
+| `insects_incremental_abrupt_reoccurring_imbalanced` | `incremental_abrupt_imbalanced.csv` | 452.044 | 2 |
+
+O [lock de fluxos reais](../configs/contracts/real-streams.lock.json) registra SHA-256,
+cardinalidade, limites dos regimes e distribuição de classes. O adaptador mantém os
+33 atributos e a ordem do CSV e projeta o rótulo original `2` para positivo (`1`), com
+as demais cinco classes no negativo (`0`). Os índices de mudança começam em zero e
+indicam o início do novo regime. São usados para avaliação e auditoria, sem virar
+atributo, task ID ou sinal prospectivo para a política.
+
+O piloto testa streaming e incremental: Online, Frozen e ADWIN nos dois modos; CARA,
+UPF e Oracle só no incremental. A [matriz histórica](../configs/matrices/insects-72.yaml)
+combinou dois fluxos, dois modelos (regressão logística e Hoeffding Tree), seis políticas
+e três seeds, planejando 72 runs. O catálogo da suíte por épocas permanece com 17 entradas.
+Os comandos abaixo permitem consultar esse planejamento histórico:
+
+```bash
+uv run --frozen continual-bench matrix configs/matrices/insects-pilot.yaml --dry-run
+uv run --frozen continual-bench matrix configs/matrices/insects-72.yaml --dry-run
+```
+
+Para executar localmente, coloque os arquivos com os nomes da tabela em um diretório
+e exporte `BENCH_DATASETS=/caminho/dos/csvs` antes de repetir o comando sem
+`--dry-run`. Também é possível apontar essa variável para a raiz do cache com os
+recibos de aquisição. O avaliador valida o SHA-256 antes de ler a fonte. Na AWS, siga o
+[runbook de publicação e submissão](aws/operations.md#matriz-binária-insects).
+
+A campanha da Semana 10 arquivou 66 de 72 unidades. As seis pendências vieram das duas combinações
+Online com Hoeffding, nas três seeds. Use as [métricas pareadas](evidencias/semana-10/insects/README.md)
+quando a pergunta exigir comparar os mesmos eventos em todas as execuções; as métricas
+do recorte original de cada run podem ter denominadores diferentes. Consulte F1 macro,
+recall por classe e o baseline majoritário além da acurácia.
+
+### Campanha corretiva integral
+
+A [matriz corretiva](../configs/matrices/insects-corrected.yaml) mantém as duas fontes
+integrais da tabela, com 355.275 e 452.044 registros, e os dois modelos. Com Congelado,
+ADWIN, CARA, UPF e Oracle nas seeds 42, 43 e 44, foram concluídos os 60 runs. Online está fora desta
+rodada: suas quatro combinações de fonte e modelo, equivalentes a 12 runs, ficaram
+para a próxima. Essa exclusão é um novo recorte e não completa as seis pendências
+históricas de Online com Hoeffding.
+
+Todas as linhas admitidas são consumidas, incluindo a cauda dos arquivos. Aquecimento,
+probes reservados e população de avaliação mantêm funções distintas; cobertura integral
+da entrada não significa usar todas as linhas como teste independente. O protocolo por
+blocos filtra treino e observações das decisões pela disponibilidade dos rótulos e
+registra o replay efetivo. Veja o [contrato e os comandos da campanha](benchmark-corrections.md).
+
+Na mesma rodada, foram concluídos 24 ensaios UPF em oito jobs. As comparações individuais
+usaram três seeds nos quatro datasets, e os pares Electricity/Airlines usaram as mesmas
+três seeds nos modos `same-batch` e `next-batch`. Electricity e Airlines incluíram,
+respectivamente, todas as 45.312 e 539.383 linhas dos ARFFs admitidos. Cada arquivo foi
+dividido em 15 blocos contíguos, sete offline e oito online, com holdout interno de 20%.
+Gauss e Circles usaram 75.000 exemplos gerados por ensaio, sem seleção de uma janela
+parcial. As três seeds não transformam o mesmo fluxo real em três fontes independentes.
+O protocolo integral tem identidade própria e não é equivalente ao artigo nem às
+janelas históricas. Em `same-batch`, CARA e UPF têm informações distintas no momento
+da decisão; `next-batch` usa implantação no lote seguinte.
+
+O [registro da campanha corretiva](evidencias/benchmark-corrigido/README.md) identifica a
+cobertura observada, os artefatos e a situação de sua conferência. A conclusão das
+execuções não substitui essa verificação. Os arquivos da Semana 10 permanecem
+preservados. Custos do cenário não representam faturamento real, e o suporte do código
+à AWS não comprova que essa campanha tenha sido executada naquele ambiente.

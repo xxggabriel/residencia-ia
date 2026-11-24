@@ -3,9 +3,9 @@ UPF, Regol et al. 2025).
 
 ``err[i, j]`` is the 0-1 error rate of the model trained at the end of batch ``i`` on the later
 batch ``j``. Training at the end of batch ``i`` and deploying from ``i + 1`` keeps the protocol
-test-then-train: no model is ever scored on the labels that trained it. Both papers evaluate a
-model retrained at ``t`` on batch ``t`` itself; that accounting needs a held-out slice of every
-batch and is deliberately not used here (all schedules, the Oracle included, share this timing).
+test-then-train: no model is ever scored on the labels that trained it. CARA's same-batch
+staleness-cost accounting is distinct from its shifted prequential accuracy evaluation.
+The separate paper replay supplies a held-out slice of every batch for its diagonal errors.
 
 The matrix is built once, with all future entries, so the Oracle and the offline sweeps can use
 it. Online policies only ever receive a :class:`MatrixView`, which masks everything that was not
@@ -59,6 +59,13 @@ class PerformanceMatrix:
     rows: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
     # Paper replay has held-out errors for models serving their own online training batches.
     paper_timing: bool = False
+    # Optional event-time contract. err remains a retrospective scoring matrix;
+    # a MatrixView uses only losses whose labels have arrived at its decision cutoff.
+    decision_cutoffs: np.ndarray | None = None
+    label_available_at: list[np.ndarray] | None = None
+    point_available_at: list[np.ndarray] | None = None
+    row_loss: dict[tuple[int, int], np.ndarray] = field(default_factory=dict)
+    training_records: list[dict] = field(default_factory=list)
 
     def __post_init__(self):
         size = self.err.shape[0]
@@ -76,6 +83,16 @@ class PerformanceMatrix:
             diagonal = self.err.diagonal()[self.offline :]
             if not np.all((diagonal >= 0) & (diagonal <= 1)):
                 raise ValueError("paper timing requires held-out errors for every online candidate")
+        if self.decision_cutoffs is not None:
+            if (
+                self.label_available_at is None
+                or self.point_available_at is None
+                or len(self.decision_cutoffs) != size
+                or len(self.label_available_at) != size
+                or len(self.point_available_at) != size
+                or np.any(np.diff(self.decision_cutoffs) <= 0)
+            ):
+                raise ValueError("event-time metadata must cover every ordered matrix block")
 
     @property
     def batches(self) -> int:
@@ -111,7 +128,7 @@ class PerformanceMatrix:
             self._gamma = 1.0 / (sample.shape[1] * (variance if variance > 1e-12 else 1.0))
         return self._gamma
 
-    def staleness(self, t: int, model: int) -> float:
+    def staleness(self, t: int, model: int, *, cutoff: int | None = None) -> float:
         """Relative staleness of ``model`` for the queries of batch ``t`` (CARA, eq. 1-3).
 
         ``psi(Q_t, D_t, M) - psi(Q_t, D_model, M)`` with an RBF similarity, averaged over queries so
@@ -119,6 +136,10 @@ class PerformanceMatrix:
         """
         if not model < t:
             raise ValueError("staleness is defined for a model trained before batch t")
+        cache = self.__dict__.setdefault("_staleness_cache", {})
+        key = (t, model, cutoff)
+        if key in cache:
+            return cache[key]
         queries = self.queries[t]
         gamma = self.kernel_gamma()
 
@@ -126,10 +147,39 @@ class PerformanceMatrix:
 
         def psi(batch: int, loss: np.ndarray) -> float:
             data = self.points[batch]
+            if cutoff is not None and self.point_available_at is not None:
+                visible = self.point_available_at[batch] <= cutoff
+                if not visible.any():
+                    return float("nan")
+                data, loss = data[visible], loss[visible]
             distance = query_norm + (data**2).sum(axis=1)[None, :] - 2 * queries @ data.T
             return float((np.exp(-gamma * np.maximum(distance, 0.0)) * loss[None, :]).mean())
 
-        return psi(t, self.sub_loss[model, t]) - psi(model, self.sub_loss[model, model])
+        value = psi(t, self.sub_loss[model, t]) - psi(model, self.sub_loss[model, model])
+        cache[key] = value
+        return value
+
+    def error_at(self, model: int, batch: int, cutoff: int | None) -> float:
+        """Observed label error, separate from the full retrospective scoring error."""
+        if cutoff is None or self.label_available_at is None:
+            return float(self.err[model, batch])
+        visible = self.label_available_at[batch] <= cutoff
+        if not visible.any():
+            return float("nan")
+        if visible.all():
+            return float(self.err[model, batch])
+        return float(self.row_loss[model, batch][visible].mean())
+
+    def candidate_available(self, batch: int) -> bool:
+        """An untrained candidate is retained for diagnostics, never promoted as a retrain."""
+        return not self.training_records or (
+            batch < len(self.training_records) and self.training_records[batch]["train_samples"] > 0
+        )
+
+    @property
+    def admissible_retrains(self) -> frozenset[int]:
+        """Candidate indices with released training labels, including a paper diagonal if present."""
+        return frozenset(t for t in range(self.offline, self.batches) if self.candidate_available(t))
 
     def staleness_matrix(self) -> np.ndarray:
         """``s[t, model]`` for every observed ``model < t`` (full matrix; reporting and the Oracle only)."""
@@ -147,13 +197,54 @@ class PerformanceMatrix:
         def clean(array):
             return [[None if not math.isfinite(v) else float(v) for v in row] for row in array]
 
-        return {
+        result = {
             "offline": self.offline,
             "batches": self.batches,
             "err": clean(self.err),
             "fit_seconds": [None if not math.isfinite(v) else float(v) for v in self.fit_seconds],
             "rows": self.rows.tolist(),
         }
+        if self.decision_cutoffs is not None:
+            result["temporal_contract"] = {
+                "version": "released-labels-v1",
+                "decision_cutoffs": self.decision_cutoffs.tolist(),
+                "decision_information": "only observed rows with available_at <= cutoff",
+                "scoring_information": "full retrospective labels, never passed as decision errors",
+                "candidate_training": self.training_records,
+                "train_seq_range_convention": (
+                    "half-open source sequence interval; reserved rows may be absent"
+                ),
+                "observed_label_counts_axes": ["decision_batch", "observed_batch"],
+                "observed_error_columns": ["model_batch", "evaluated_batch", "error_on_released_labels"],
+                "observed_label_counts": [
+                    [
+                        int(np.count_nonzero(self.label_available_at[batch] <= cutoff))
+                        if batch <= upto
+                        else None
+                        for batch in range(self.batches)
+                    ]
+                    for upto, cutoff in enumerate(self.decision_cutoffs)
+                ],
+                "staleness_query_counts": [len(query) for query in self.queries],
+                "observed_staleness_point_counts": [
+                    [
+                        int(np.count_nonzero(self.point_available_at[batch] <= cutoff))
+                        if batch <= upto
+                        else None
+                        for batch in range(self.batches)
+                    ]
+                    for upto, cutoff in enumerate(self.decision_cutoffs)
+                ],
+                "observed_errors": [
+                    {
+                        "decision_batch": upto,
+                        "cutoff_timestamp": int(self.decision_cutoffs[upto]),
+                        "values": [list(item) for item in self.view(upto, range(upto)).observations()],
+                    }
+                    for upto in range(1, self.batches)
+                ],
+            }
+        return result
 
 
 class MatrixView:
@@ -163,6 +254,7 @@ class MatrixView:
         if not 0 <= upto < matrix.batches or not models or max(models) > upto:
             raise ValueError("a view cannot contain models trained after its horizon")
         self._matrix, self.upto, self.models = matrix, upto, models
+        self.cutoff = None if matrix.decision_cutoffs is None else int(matrix.decision_cutoffs[upto])
 
     def _first_evaluation(self, model: int) -> int:
         return model if self._matrix.paper_timing and model >= self._matrix.offline else model + 1
@@ -170,7 +262,10 @@ class MatrixView:
     def err(self, model: int, batch: int) -> float:
         if model not in self.models or not self._first_evaluation(model) <= batch <= self.upto:
             raise ValueError("error not observable at this decision time")
-        return float(self._matrix.err[model, batch])
+        value = self._matrix.error_at(model, batch, self.cutoff)
+        if not math.isfinite(value):
+            raise ValueError("no labels observable at this decision time")
+        return value
 
     def shift(self, batch: int) -> float:
         if batch > self.upto:
@@ -180,14 +275,15 @@ class MatrixView:
     def staleness(self, t: int, model: int) -> float:
         if model not in self.models or t > self.upto:
             raise ValueError("staleness not observable at this decision time")
-        return self._matrix.staleness(t, model)
+        return self._matrix.staleness(t, model, cutoff=self.cutoff)
 
     def observations(self) -> list[tuple[int, int, float]]:
         """All ``(model, batch, error)`` triples visible now: the UPF regression dataset."""
         return [
-            (i, j, float(self._matrix.err[i, j]))
+            (i, j, value)
             for i in sorted(self.models)
             for j in range(self._first_evaluation(i), self.upto + 1)
+            if math.isfinite(value := self._matrix.error_at(i, j, self.cutoff))
         ]
 
 
@@ -222,6 +318,8 @@ def build_matrix(
     state: MatrixBuildState | None = None,
     checkpoint: Callable[[MatrixBuildState], None] | None = None,
     loss_dtype: type = np.float64,
+    label_available_at: list[np.ndarray] | None = None,
+    decision_cutoffs: list[int] | np.ndarray | None = None,
 ) -> tuple[PerformanceMatrix, list[object]]:
     """Single pass over ordered batches; returns the matrix and every trained model state.
 
@@ -241,6 +339,12 @@ def build_matrix(
     observations. This reference is fixed before any later batch is processed.
     The learner consumes the unchanged features, including missing values.
     """
+    if (label_available_at is None) != (decision_cutoffs is None):
+        raise ValueError("label availability and decision cutoffs must be supplied together")
+    if label_available_at is not None and (state is not None or checkpoint is not None):
+        raise ValueError("event-time matrix builds do not support partial matrix checkpoints")
+    point_available_at = [] if label_available_at is not None else None
+    row_loss: dict[tuple[int, int], np.ndarray] = {}
     rng = np.random.default_rng(seed)
     state = MatrixBuildState() if state is None else state
     if state.rng_state is not None:
@@ -264,6 +368,10 @@ def build_matrix(
         if feature_fill is None:
             feature_fill = np.divide(sums, observed, out=np.zeros_like(sums), where=observed > 0)
         point_index = rng.choice(len(y), size=min(n_points, len(y)), replace=False)
+        if label_available_at is not None:
+            if j >= len(label_available_at) or len(label_available_at[j]) != len(y):
+                raise ValueError("label availability must match every batch row")
+            point_available_at.append(np.asarray(label_available_at[j])[point_index])
         if query_iterator is None:
             query_index = rng.choice(len(y), size=min(n_queries, len(y)), replace=False)
             queries.append(_geometry_sample(x[query_index], feature_fill))
@@ -282,16 +390,18 @@ def build_matrix(
                 if query_x is None
                 else np.asarray(learner.losses(state, query_x, query_y), dtype=loss_dtype)
             )
-            return loss[point_index], float(on_queries.mean())
+            return loss[point_index], float(on_queries.mean()), loss
 
         if workers > 1 and len(states) > 1:
             with ThreadPoolExecutor(workers) as pool:
                 scored = list(pool.map(score, states))
         else:
             scored = [score(state) for state in states]
-        for i, (sampled_loss, error) in enumerate(scored):
+        for i, (sampled_loss, error, full_loss) in enumerate(scored):
             errs[i].append(error)
             sub_loss[i, j] = sampled_loss
+            if label_available_at is not None:
+                row_loss[i, j] = full_loss
         if pending is not None:
             started = time.perf_counter()
             candidate = learner.fit(j, x, y, *fit_context)
@@ -326,6 +436,11 @@ def build_matrix(
         feature_means=np.asarray(means),
         fit_seconds=np.asarray(seconds),
         rows=np.asarray(rows),
+        label_available_at=label_available_at,
+        point_available_at=point_available_at,
+        decision_cutoffs=None if decision_cutoffs is None else np.asarray(decision_cutoffs, dtype=np.int64),
+        row_loss=row_loss,
+        training_records=getattr(learner, "training_records", []),
     )
     return matrix, states
 

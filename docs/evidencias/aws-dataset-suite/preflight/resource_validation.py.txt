@@ -1,0 +1,134 @@
+"""Measure the real full-data replay envelope without persisting model state."""
+import argparse
+import gc
+import hashlib
+import json
+import math
+import time
+from pathlib import Path
+
+import numpy as np
+from mlflow.tracking import MlflowClient
+from mlflow.entities import Metric, Param
+
+from continual_bench.config import IterativeTrainingConfig
+from continual_bench.datasets.streams import load_stream_manifest, stream_spec
+from continual_bench.evaluation.environment import encoded, environment, peak_rss_bytes
+from continual_bench.evaluation.stream_benchmark import batches
+from continual_bench.evaluation.system_metrics import SystemMetricsSampler
+from continual_bench.evaluation.zia_metrics import ClassificationMetrics
+from continual_bench.evaluation.zia_training_history import TrainingHistory
+from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
+from continual_bench.infrastructure.training_tracking import publish_training_history
+from continual_bench.infrastructure.run_artifacts import system_metric_points
+from continual_bench.models.zia import make_zia_model
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('dataset')
+    args = parser.parse_args()
+    output = Path('/evidence/resource-validation') / args.dataset
+    output.mkdir(parents=True, exist_ok=True)
+    path, manifest = load_stream_manifest('/prepared', args.dataset, 'full')
+    spec = stream_spec(args.dataset, manifest)
+    split = int(manifest['rows'] * 0.9)
+    blocks = []
+    for timestamp, x, y, held_out in batches(path, spec.block_rows['full'], split):
+        assert not held_out
+        blocks.append((timestamp, x, y))
+        if len(blocks) == 6:
+            break
+    assert len(blocks) == 6
+    # Match the four released blocks used for a candidate at index four.
+    timestamps, x, y = (np.concatenate(parts) for parts in zip(*blocks[1:5], strict=True))
+    probe_t, probe_x, probe_y = blocks[5]
+    probe_x, probe_y = probe_x[:256], probe_y[:256]
+    client = MlflowClient()
+    experiment = client.get_experiment_by_name('dataset-suite-resource-validation')
+    if experiment is None:
+        raise ValueError('resource validation experiment must be created before workers start')
+    receipts = []
+    for seed in (42, 43, 44):
+        directory = output / str(seed)
+        directory.mkdir(exist_ok=True)
+        config = IterativeTrainingConfig(seed=seed)
+        model = make_zia_model(spec.model, list(spec.classes), config=config,
+                               dataset=args.dataset, model_params=spec.model_params,
+                               decision_threshold=0.5 if spec.class_count == 2 else None)
+        parent = client.create_run(experiment.experiment_id, tags={
+            'mlflow.runName': f'{args.dataset}-replay-envelope-{seed}',
+            'dataset': args.dataset, 'seed': str(seed), 'artifact_mode': 'metrics_only',
+            'scope': 'full-source-replay-envelope-not-a-full-campaign',
+        }).info.run_id
+        try:
+            sampler = SystemMetricsSampler(directory, interval=0.5, max_samples=None)
+            started = time.monotonic()
+            with sampler:
+                model.fit(x, y, False, config=config, timestamps=timestamps,
+                          capture_sigterm=False)
+                history = TrainingHistory(directory, seed=seed)
+                fit = history.capture(model.training_summary, action='resource_validation',
+                                      block_index=4, start=len(blocks[0][2]),
+                                      timestamps=timestamps, seconds=time.monotonic() - started)
+                payload, extension = model.payload()
+                model_hash = hashlib.sha256(payload).hexdigest()
+                model_bytes = len(payload)
+                del payload
+                probabilities = model.predict(probe_x)
+                assert np.isfinite(probabilities).all()
+                np.testing.assert_allclose(probabilities.sum(axis=1), 1, atol=1e-6)
+                quality = ClassificationMetrics(spec.class_count, 0.5 if spec.class_count == 2 else None)
+                quality.add(probe_y, probabilities)
+            report = {
+                'schema': 'full-source-replay-envelope-v1', 'complete': True,
+                'dataset': args.dataset, 'seed': seed, 'artifact_mode': 'metrics_only',
+                'input_sha256': manifest['sha256'], 'input_rows': manifest['rows'],
+                'replay_rows': len(y), 'block_rows': spec.block_rows['full'],
+                'iterative_training': config.model_dump(), 'environment': environment(),
+                'wall_seconds': time.monotonic() - started,
+                'process_peak_rss_bytes': peak_rss_bytes(),
+                'model_logical_sha256': model_hash, 'model_logical_bytes': model_bytes,
+                'training_history': history.fits,
+                'probe_quality': quality.metrics(),
+                'tracking_observations': {'scope': 'resource_validation'},
+                'system': sampler.report(),
+                'interpretation': 'One real replay fit and a subsequent 256-row probe; not a complete benchmark.',
+            }
+            history.save()
+            (directory / 'resource-validation.json').write_bytes(encoded(report))
+            verify_metrics_only_files(directory)
+            children = publish_training_history(client, parent, directory, report, include_checkpoints=False)
+            params = {**config.model_dump(), 'dataset': args.dataset,
+                      'source_sha256': manifest['sha256'], 'replay_rows': len(y)}
+            client.log_batch(parent, params=[Param(key, str(value)) for key, value in params.items()])
+            points = [(key, 0, report[key]) for key in
+                      ('wall_seconds','process_peak_rss_bytes','model_logical_bytes')]
+            system_points, _ = system_metric_points(report['system'])
+            points.extend(system_points)
+            points.extend(('probe_quality/'+key, 0, value)
+                          for key, value in report['probe_quality'][0].items())
+            points = [(key, step, float(value)) for key, step, value in points
+                      if isinstance(value, (int, float)) and math.isfinite(value)]
+            timestamp = int(time.time() * 1000)
+            for offset in range(0, len(points), 1000):
+                client.log_batch(parent, metrics=[Metric(key, value, timestamp, step)
+                                                 for key, step, value in points[offset:offset+1000]])
+            client.log_artifact(parent, str(directory / 'resource-validation.json'))
+            client.set_terminated(parent, 'FINISHED')
+            receipt = {'seed': seed, 'complete': True, 'parent_run_id': parent,
+                       'child_run_ids': children, 'replay_rows': len(y),
+                       'process_peak_rss_bytes': report['process_peak_rss_bytes']}
+            receipts.append(receipt)
+            print(json.dumps({'dataset': args.dataset, **receipt}), flush=True)
+        except Exception:
+            client.set_terminated(parent, 'FAILED')
+            raise
+        del model
+        gc.collect()
+    (output / 'receipt.json').write_bytes(encoded({'complete': True, 'seeds': [42,43,44],
+                                                  'dataset': args.dataset, 'runs': receipts}))
+
+
+if __name__ == '__main__':
+    main()

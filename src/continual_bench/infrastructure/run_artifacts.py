@@ -8,6 +8,8 @@ Republishing is idempotent: existing metric points are checked, not duplicated.
 
 from pathlib import Path
 
+from continual_bench.infrastructure.artifact_policy import metrics_only, verify_metrics_only_files
+
 from .metric_tracking import downsample_points, missing_metric_points
 from .observation_tracking import publish_sdk_observations
 from .training_tracking import publish_training_history
@@ -26,28 +28,37 @@ def system_metric_points(system) -> tuple[list[tuple[str, int, float]], dict]:
     return points, stamps
 
 
-def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoints=True) -> dict:
+def publish_run_artifacts(
+    client, run_id, directory, report, *, include_checkpoints=True, observations_already_logged=False
+) -> dict:
     from .tracking import MetricPoint, as_backend
 
     backend = as_backend(client)
+    complete_series = metrics_only(report)
+    if complete_series:
+        verify_metrics_only_files(directory)
+        include_checkpoints = False
     points, stamps = system_metric_points(report.get("system_metrics"))
-    sampled = downsample_points(points, max_points_per_key=DEFAULT_MAX_SYSTEM_POINTS)
+    sampled = downsample_points(
+        points, max_points_per_key=None if complete_series else DEFAULT_MAX_SYSTEM_POINTS
+    )
     missing = missing_metric_points(client, run_id, sampled)
     backend.log_batch(
         run_id, metrics=[MetricPoint(key, value, step, stamps[key, step]) for key, step, value in missing]
     )
     root = Path(directory) / "artifacts"
     uploaded = 0
-    for folder in ("plots", "data"):
+    for folder in () if complete_series else ("plots", "data"):
         if (root / folder).is_dir():
             client.log_artifacts(run_id, str(root / folder), artifact_path=folder)
             uploaded += sum(1 for path in (root / folder).rglob("*") if path.is_file())
-    figures = log_detailed_figures(report, run_id)
+    figures = [] if complete_series else log_detailed_figures(report, run_id)
     system = report.get("system_metrics") or {}
     backend.log_batch(
         run_id,
         tags={
             "detailed_figures": str(len(figures)),
+            "detailed_figures_status": "rendering_deferred" if complete_series else "enabled",
             "system_metrics_collector": system.get("collector", "absent"),
             "run_artifacts": f"{uploaded} files; plots/ and data/",
         },
@@ -65,9 +76,37 @@ def publish_run_artifacts(client, run_id, directory, report, *, include_checkpoi
             report,
             include_checkpoints=include_checkpoints,
         )
-    manifest = publish_sdk_observations(client, run_id, directory, report, result.get("training_rounds", []))
+    manifest = publish_sdk_observations(
+        client,
+        run_id,
+        directory,
+        report,
+        result.get("training_rounds", []),
+        **({"max_points_per_key": None} if complete_series else {}),
+        metrics_already_logged=observations_already_logged,
+        upload_artifacts=not complete_series,
+    )
     if manifest:
-        result["observation_plots"] = manifest
+        result["observation_evidence_path"] = manifest
+        if not complete_series:
+            result["observation_plots"] = manifest
+    if complete_series:
+        from .metric_evidence_bundle import build_metric_evidence_bundle
+
+        bundle = build_metric_evidence_bundle(directory)
+        client.log_artifact(run_id, str(Path(directory) / bundle["artifact_path"]))
+        result["metric_evidence_bundle"] = bundle
+        result["artifact_files"] = 1
+        backend.log_batch(
+            run_id,
+            tags={
+                "run_artifacts": (
+                    f"one metric-evidence.zip archive; {bundle['evidence_file_count']} evidence files"
+                ),
+                "metric_evidence_sha256": bundle["sha256"],
+                "dashboard_access": "extract metric-evidence.zip and open dashboard.html",
+            },
+        )
     return result
 
 

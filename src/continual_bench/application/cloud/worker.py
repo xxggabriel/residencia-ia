@@ -10,6 +10,7 @@ failed attempts keep their own evidence.
 import io
 import json
 import logging
+import math
 import os
 import sys
 import tarfile
@@ -21,6 +22,7 @@ from pathlib import Path
 from continual_bench.infrastructure.object_store import (
     ObjectExists,
     get_json,
+    json_bytes,
     put_json,
     sha256_bytes,
     sha256_path,
@@ -200,10 +202,40 @@ def verify_native_loader(directory: Path, report: dict, data_root: Path, rows: i
 
 
 def zia_snapshot(store, unit):
+    if "stream_source" in unit.contract:
+        from .stream_sources import verify_stream_source
+
+        manifest = verify_stream_source(
+            store, unit.params["dataset"], unit.params["scope"], unit.params["source_sha256"]
+        )
+        if manifest != unit.contract["stream_source"]:
+            raise ContractError("prepared stream differs from the campaign plan")
+        return manifest
     manifest = verify_snapshot(store, SnapshotRef(**unit.params["snapshot"]))
     if manifest["manifest_sha256"] != unit.contract["snapshot"]["manifest_sha256"]:
         raise SnapshotNotReady("incompatible", "snapshot manifest differs from the campaign plan")
     return manifest
+
+
+def verify_matrix_metric_cache(store, reference):
+    """Admit only same-store, checksum-pinned metric evidence from a final run."""
+    from .contracts import MatrixMetricsCacheRef
+
+    reference = MatrixMetricsCacheRef.model_validate(reference)
+    _, key = split_uri(reference.uri)
+    if store.uri(key) != reference.uri:
+        raise ContractError("matrix metric cache is outside the campaign object store")
+    head = store.head(key)
+    if head is None or head.sha256 != reference.sha256 or head.size <= 0:
+        raise ContractError("matrix metric cache is missing or differs from its SHA-256")
+    parts = key.split("/")
+    source_final = get_json(store, layout.final_key(parts[1], parts[3]))
+    if (
+        source_final.get("artifact_mode") != "metrics_only"
+        or source_final.get("outputs_uri", "").rstrip("/") + "/matrix-metrics.json.gz" != reference.uri
+    ):
+        raise ContractError("matrix metric cache has no completed metrics-only source run")
+    return key
 
 
 def execute_zia(
@@ -233,10 +265,36 @@ def execute_zia(
     if hashlib.sha256(tracking_path.read_bytes()).hexdigest() != unit.contract["tracking_sha256"]:
         raise ContractError("tracking profile differs from the campaign plan")
     settings = TrackingConfig.model_validate(yaml.safe_load(tracking_path.read_text())).model_dump()
-    data_root = materialize(store, manifest, workdir / "data")
+    if "stream_source" in unit.contract:
+        from .stream_sources import materialize_stream_source
+
+        data_root = materialize_stream_source(
+            store, params["dataset"], params["scope"], params["source_sha256"], workdir / "data"
+        )
+    else:
+        data_root = materialize(store, manifest, workdir / "data")
+    options = {"checkpoint": checkpoint} if checkpoint is not None else {}
+    if "seed" in params or "iterative_training" in params:
+        seed = params["seed"]
+        options["iterative_config"] = {**params.get("iterative_training", {}), "seed": seed}
+        settings["retraining"] = {**(settings.get("retraining") or {}), "seed": seed}
+    if params.get("artifact_mode") == "metrics_only":
+        options["artifact_mode"] = "metrics_only"
     if stop_requested is not None and stop_requested():
         raise InterruptedError("Zia stopped before evaluation after SIGTERM")
     output = workdir / "run"
+    if params.get("artifact_mode") == "metrics_only":
+        from continual_bench.core.policies import BATCH_POLICY_KINDS
+
+        if params["policy"] in BATCH_POLICY_KINDS:
+            cache_path = output / "matrix-metrics.json.gz"
+            output.mkdir(parents=True, exist_ok=True)
+            if reference := params.get("matrix_metrics_cache"):
+                key = verify_matrix_metric_cache(store, reference)
+                store.download(key, cache_path)
+                if sha256_path(cache_path) != reference["sha256"]:
+                    raise ContractError("downloaded matrix metric cache checksum mismatch")
+            options["matrix_metrics_cache"] = cache_path
     log.info("evaluation starting", extra={"fields": {"rows": manifest["rows"], "policy": params["policy"]}})
     report = run(
         data_root,
@@ -247,7 +305,7 @@ def execute_zia(
         settings,
         stop_requested=stop_requested if checkpoint is None else None,
         progress=progress,
-        **({"checkpoint": checkpoint} if checkpoint is not None else {}),
+        **options,
     )
     if stop_requested is not None and stop_requested():
         raise InterruptedError("Zia evaluation stopped after SIGTERM")
@@ -325,7 +383,7 @@ def complete_zia_tracking(tracker, store, final, output, report, adapted):
             output_dir=output,
             store=store,
             outputs_uri=final["outputs_uri"],
-            model_package_arn=final["model"]["model_package_arn"],
+            model_package_arn=(final.get("model") or {}).get("model_package_arn"),
         )
         or {}
     )
@@ -370,13 +428,24 @@ def complete_zia_tracking(tracker, store, final, output, report, adapted):
     }
 
 
-def execute_matrix_case(store, unit: RunUnit, workdir: Path, *, progress=None, checkpoint=None) -> dict:
+def execute_matrix_case(
+    store, unit: RunUnit, workdir: Path, *, progress=None, checkpoint=None, stop_requested=None
+) -> dict:
     from continual_bench.application.matrix import _execute_case, _headline
     from continual_bench.config import Config, EpochConfig, TypedConfig
 
     evaluator = unit.params["evaluator"]
     schema = {"binary": Config, "typed": TypedConfig, "epochs": EpochConfig}[evaluator]
     config = schema.model_validate(unit.params["config"])
+    if getattr(config, "artifact_mode", "full") == "metrics_only" and stop_requested is not None:
+        callback = progress
+
+        def progress(step, values):
+            if stop_requested():
+                raise InterruptedError("metrics-only evaluation interrupted; next attempt restarts the unit")
+            if callback is not None:
+                callback(step, values)
+
     output = workdir / "run"
     source = None
     if "source_sha256" in unit.params:
@@ -435,6 +504,81 @@ def flush_partial_state(
     return payload
 
 
+def archive_partial_metrics(store, output: Path, prefix: str, status: dict, *, tracker=None) -> dict:
+    """Preserve incomplete observations without creating resumable training state.
+
+    This drain deliberately has no stop callback: the signal or cancellation that
+    interrupted evaluation must not prevent its own best-effort evidence upload.
+    The attempt namespace and conditional creates keep prior evidence immutable.
+    """
+    from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
+
+    verify_metrics_only_files(output)
+    # Native writers may still own an asynchronous ledger. Drain them before
+    # hashing any files so the manifest describes the bytes actually published.
+    flush_tracking(tracker)
+    verify_metrics_only_files(output)
+    partial_prefix = f"{prefix}/partial"
+    files = {}
+    sources = []
+    for relative, path in output_files(output):
+        reference = {"sha256": sha256_path(path), "bytes": path.stat().st_size}
+        files[relative] = reference
+        sources.append((relative, path, reference))
+
+    def publish_immutable(key, digest, size, upload):
+        stored = store.head(key)
+        if stored is None:
+            try:
+                stored = upload()
+            except ObjectExists:
+                stored = store.head(key)
+        if stored is None or stored.sha256 != digest or stored.size != size:
+            raise CheckpointError(f"Immutable partial metric evidence differs: {key}")
+
+    for relative, path, reference in sources:
+        key = f"{partial_prefix}/{relative}"
+        publish_immutable(
+            key,
+            reference["sha256"],
+            reference["bytes"],
+            lambda key=key, path=path, digest=reference["sha256"]: store.put_file(
+                key, path, if_absent=True, sha256=digest
+            ),
+        )
+    manifest = {
+        "version": "partial-metrics-v1",
+        "artifact_mode": "metrics_only",
+        "complete": False,
+        "scientific_status": "incomplete",
+        "evaluation_recovery": "restart_unit_without_training_checkpoint",
+        "campaign_id": status["campaign_id"],
+        "run_id": status["run_id"],
+        "attempt_key": status["attempt_key"],
+        "labels": status["labels"],
+        "files": files,
+    }
+    manifest_key = f"{partial_prefix}/partial-metrics-manifest.json"
+    payload = json_bytes(manifest)
+    # Publish the receipt last. Its existence confirms every referenced object
+    # was uploaded and verified, but does not declare a completed experiment.
+    publish_immutable(
+        manifest_key,
+        sha256_bytes(payload),
+        len(payload),
+        lambda: store.put_bytes(manifest_key, payload, if_absent=True, content_type="application/json"),
+    )
+    return {
+        "manifest_uri": store.uri(manifest_key),
+        "manifest_sha256": sha256_bytes(payload),
+        "prefix": store.uri(partial_prefix),
+        "files": len(files),
+        "bytes": sum(item["bytes"] for item in files.values()),
+        "complete": False,
+        "scientific_status": "incomplete",
+    }
+
+
 def verify_spot_inputs(store, key, unit, env):
     expected_id, contract_hash = run_identity(unit.campaign_id, unit.contract)
     if (
@@ -458,7 +602,11 @@ def verify_spot_inputs(store, key, unit, env):
     ):
         raise ContractError("instance image or revision differs from the campaign release")
     if unit.kind == "zia":
+        if reference := unit.params.get("matrix_metrics_cache"):
+            verify_matrix_metric_cache(store, reference)
         manifest = zia_snapshot(store, unit)
+        if "stream_source" in unit.contract:
+            return manifest
         if manifest["prepared"]["sha256"] != unit.contract["snapshot"]["prepared_sha256"]:
             raise SnapshotNotReady("incompatible", "prepared dataset differs from the campaign plan")
         return manifest
@@ -533,9 +681,14 @@ def run_unit(
     workdir = Path(workdir)
     key = split_uri(unit_ref)[1] if "://" in unit_ref else unit_ref
     unit = RunUnit(**get_json(store, key))
+    artifact_mode = unit.params.get("artifact_mode") or (unit.params.get("config") or {}).get(
+        "artifact_mode", "full"
+    )
+    metrics_only = artifact_mode == "metrics_only"
     job_id, attempt = env.get("AWS_BATCH_JOB_ID"), env.get("AWS_BATCH_JOB_ATTEMPT")
     attempt_key = layout.attempt_key_for(job_id, attempt)
-    # Fargate Spot attempts are resumable: checkpoints in S3, one logical MLflow run.
+    # Full attempts can resume training. Metrics-only attempts restart evaluation
+    # and recover only completed metric publication, under one logical MLflow run.
     resumable = bool(job_id) and env.get("BENCH_FARGATE_SPOT", "false") == "true"
     task_arn = ecs_task_arn(env)
     worker_id = task_arn or job_id
@@ -576,11 +729,12 @@ def run_unit(
     live_attempt = None
     spot = None
     checkpoint = None
+    publication_archive = None
     publishing = False
 
     def on_terminate(_signal):
-        if resumable or unit.kind == "zia":
-            # The evaluator checkpoints at its next safe point, then the attempt flushes MLflow.
+        if resumable or unit.kind == "zia" or metrics_only:
+            # The evaluator reaches a safe point, then the attempt flushes MLflow.
             return
         flush_partial_state(store, workdir / "run", prefix, status_key, status, started=started, clock=clock)
         if matrix_tracker is not None:
@@ -619,6 +773,14 @@ def run_unit(
         return True
 
     try:
+        if artifact_mode not in {"full", "metrics_only"}:
+            raise ContractError("artifact_mode must be full or metrics_only")
+        if unit.kind == "matrix_case" and artifact_mode != (unit.params.get("config") or {}).get(
+            "artifact_mode", "full"
+        ):
+            raise ContractError("artifact_mode differs between the unit and evaluator configuration")
+        if metrics_only and unit.kind != "zia" and unit.params.get("evaluator") != "binary":
+            raise ContractError("metrics_only is supported by binary matrix units and ordered stream units")
         if resumable or unit.kind == "zia":
             zia_signal_scope.enter_context(sigterm_handler)
         with nullcontext() if resumable or unit.kind == "zia" else sigterm_handler:
@@ -648,26 +810,41 @@ def run_unit(
                 if store.head(final_key) is not None:
                     check_stop()
                     return reuse_final(store, final_key, status_key, status, log, clock)
-                checkpoint = SpotCheckpoint(
-                    store,
-                    unit,
-                    workdir / "run",
-                    spot.attempt,
-                    requested=stop_requested,
-                    logger=log,
-                    interval=float(env.get("BENCH_CHECKPOINT_INTERVAL_SECONDS", "30")),
-                )
-                if store.head(pending_key) is not None:
-                    status["resumed_checkpoint"] = store.uri(pending_key)
+                if metrics_only:
+                    from .metric_evidence import MetricEvidenceArchive
+
+                    publication_archive = MetricEvidenceArchive(store, unit, workdir / "run")
+                    status["artifact_mode"] = "metrics_only"
+                    status["evaluation_recovery"] = "restart_unit_without_training_checkpoint"
+                    if store.head(pending_key) is not None:
+                        status["resumed_publication"] = store.uri(pending_key)
                 else:
-                    checkpoint.prepare_restore()
-                    status["resumed_checkpoint"] = checkpoint.resumed
+                    checkpoint = SpotCheckpoint(
+                        store,
+                        unit,
+                        workdir / "run",
+                        spot.attempt,
+                        requested=stop_requested,
+                        logger=log,
+                        interval=float(env.get("BENCH_CHECKPOINT_INTERVAL_SECONDS", "30")),
+                    )
+                    publication_archive = checkpoint
+                    if store.head(pending_key) is not None:
+                        status["resumed_checkpoint"] = store.uri(pending_key)
+                    else:
+                        checkpoint.prepare_restore()
+                        status["resumed_checkpoint"] = checkpoint.resumed
             put_json(store, status_key, {**status, "state": "RUNNING"})
             expected_image = unit.contract["release"]["runtime_image"]
             if env.get("BENCH_IMAGE_DIGEST") and env["BENCH_IMAGE_DIGEST"] != expected_image:
                 raise ContractError("job runs an image other than the campaign release")
             if unit.kind == "zia":
                 active_tracker = tracker(unit) if callable(tracker) else tracker
+                for target in (active_tracker, getattr(active_tracker, "mlflow_tracker", None)):
+                    if target is not None:
+                        target.artifact_mode = artifact_mode
+                        if "seed" in unit.params:
+                            target.seed = unit.params["seed"]
                 if tracking_required and not hasattr(active_tracker, "publish_run_report"):
                     raise TrackingPublicationError("MLflow is configured but the worker has no publisher")
                 bind_spot_tracking(active_tracker)
@@ -679,6 +856,25 @@ def run_unit(
 
                     def live_progress(step, metrics):
                         if stop_requested():
+                            return
+                        if metrics_only:
+                            # Preserve every observed point locally before best-effort
+                            # live transport. Final publication reconciles this ledger.
+                            directory = workdir / "run"
+                            directory.mkdir(parents=True, exist_ok=True)
+                            item = {
+                                "step": step,
+                                "timestamp": int(time.time() * 1000),
+                                "prefix": f"attempts/{attempt_key}/progress",
+                                "values": {
+                                    k: float(v)
+                                    for k, v in metrics.items()
+                                    if type(v) in (int, float) and math.isfinite(v)
+                                },
+                            }
+                            with (directory / "live-metrics.jsonl").open("a") as stream:
+                                stream.write(json.dumps(item, allow_nan=False) + "\n")
+                        if not callable(callback):
                             return
                         try:
                             callback(step, metrics)
@@ -695,13 +891,15 @@ def run_unit(
                         workdir,
                         log,
                         stop_requested=stop_requested,
-                        progress=live_progress if callable(callback) else None,
+                        progress=live_progress if metrics_only or callable(callback) else None,
                         **options,
                     )
                     check_stop()
             else:
                 resuming = publication_required and store.head(pending_key) is not None
-                options = {"checkpoint": checkpoint} if spot else {}
+                options = {"checkpoint": checkpoint} if checkpoint is not None else {}
+                if metrics_only:
+                    options["stop_requested"] = stop_requested
                 if tracking_required and not resuming:
                     from continual_bench.infrastructure.aws.matrix_tracking import MatrixMlflowRun
 
@@ -753,30 +951,45 @@ def run_unit(
                     )
                 }
             )
-            final["attempt"]["checkpoint"] = checkpoint.receipt
+            final["attempt"]["checkpoint"] = checkpoint.receipt if checkpoint is not None else None
+        if metrics_only:
+            final["artifact_mode"] = "metrics_only"
         if unit.kind == "zia" and not resuming:
             report, output = outcome["report"], outcome["output"]
             metadata, links, documents = outcome["documents"](report, outcome["adapted"], outputs_uri)
             for name, value in documents.items():
                 (output / name).write_text(json.dumps(value, sort_keys=True, indent=2))
             check_stop()
-            loader = verify_native_loader(output, report, outcome["data_root"])
-            (output / "model").mkdir(exist_ok=True)
-            (output / "model" / "model.tar.gz").write_bytes(model_tarball(output, metadata))
+            loader = None
+            if metrics_only:
+                from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
+
+                verify_metrics_only_files(output)
+            else:
+                loader = verify_native_loader(output, report, outcome["data_root"])
+                (output / "model").mkdir(exist_ok=True)
+                (output / "model" / "model.tar.gz").write_bytes(model_tarball(output, metadata))
             rows = zia_rows(_base(unit, attempt_key), report, store.uri(final_key), outputs_uri)
             (output / ROWS_FILE).write_text(json.dumps(rows, sort_keys=True, allow_nan=False))
-            if hasattr(active_tracker, "prepare_artifacts"):
+            if not metrics_only and hasattr(active_tracker, "prepare_artifacts"):
                 active_tracker.prepare_artifacts(report, output)
             check_stop()
             final.update(
                 {
-                    "snapshot": unit.contract["snapshot"],
+                    "snapshot": unit.contract.get("snapshot"),
+                    **(
+                        {"stream_source": unit.contract["stream_source"]}
+                        if "stream_source" in unit.contract
+                        else {}
+                    ),
                     "report_uri": f"{outputs_uri}/report.json",
                     "report_sha256": sha256_path(output / "report.json"),
                     "training_history_uri": f"{outputs_uri}/training-history.json",
                     "predictions_manifest_uri": f"{outputs_uri}/predictions-manifest.json",
                     "artifacts_index_uri": f"{outputs_uri}/artifacts/data/index.json",
-                    "model": {
+                    "model": None
+                    if metrics_only
+                    else {
                         "state_sha256": metadata["state_sha256"],
                         "native_uri": f"{outputs_uri}/{metadata['native_path']}",
                         "archive_uri": f"{outputs_uri}/model/model.tar.gz",
@@ -823,7 +1036,7 @@ def run_unit(
                     "links": links,
                 }
             )
-            final.update(stage_publication(store, output, prefix, checkpoint, check_stop=check_stop))
+            final.update(stage_publication(store, output, prefix, publication_archive, check_stop=check_stop))
             adapted = outcome["adapted"]
             final["tracking"] = {"required": tracking_required, "complete": False}
         elif unit.kind != "zia" and not resuming:
@@ -831,6 +1044,10 @@ def run_unit(
 
             report = outcome["report"]
             report_path = outcome["report_path"]
+            if metrics_only:
+                from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
+
+                verify_metrics_only_files(outcome["output"])
             directory = report_path.parent
             relative_report = report_path.relative_to(outcome["output"]).as_posix()
             relative_evidence = directory.relative_to(outcome["output"]).as_posix()
@@ -864,7 +1081,7 @@ def run_unit(
                     store,
                     outcome["output"],
                     prefix,
-                    checkpoint,
+                    publication_archive,
                     check_stop=check_stop if spot else None,
                 )
             )
@@ -890,7 +1107,7 @@ def run_unit(
                     raise ContractError("Archived evidence does not match the unit contract")
                 publication_root = workdir / "publication"
                 publication_root.mkdir(parents=True, exist_ok=True)
-                checkpoint.restore_files(
+                publication_archive.restore_files(
                     final["publication_files"],
                     publication_root,
                     check_stop=check_stop,
@@ -937,11 +1154,11 @@ def run_unit(
                     store, final, workdir / "publication", check_stop=check_stop
                 )
                 report = json.loads((output / "report.json").read_text())
-                metadata = json.loads((output / "model-metadata.json").read_text())
+                metadata = None if metrics_only else json.loads((output / "model-metadata.json").read_text())
                 adapted = tracking_report(report, prediction_manifest(output, report))
                 evaluation_seconds = final["evaluation_seconds"]
                 check_stop()
-            if registry is not None:
+            if registry is not None and not metrics_only:
                 if spot:
                     spot.check_publication(strict=True)
                 model_package = registry(
@@ -1138,33 +1355,47 @@ def run_unit(
                 active_tracker.mark_failed(str(error)[:1000])
             except Exception:
                 pass
-        if not spot and unit.kind == "zia" and sigterm_handler.received:
+        if not metrics_only and not spot and unit.kind == "zia" and sigterm_handler.received:
             stop_zia_tracking(active_tracker, log)
             flush_partial_state(
                 store, workdir / "run", prefix, status_key, status, started=started, clock=clock
             )
             return code
         failure_state = {EXIT_CANCELLED: "CANCELLED", EXIT_INTERRUPTED: "INTERRUPTED"}.get(code, "FAILED")
-        if code == EXIT_FAILED and publication_required and (publishing or store.head(pending_key)):
-            failure_state = (
-                "TRACKING_FAILED" if isinstance(error, TrackingPublicationError) else "PUBLICATION_FAILED"
-            )
-        put_json(
-            store,
-            status_key,
-            {
-                **status,
-                "state": failure_state,
-                "finished_at": clock(),
-                "wall_seconds": time.monotonic() - started,
-                "diagnostic": diagnostic,
-                **(
-                    {"interruption_reason": reason, "checkpoint": checkpoint.receipt if checkpoint else None}
-                    if spot
-                    else {}
-                ),
-            },
-        )
+        if code == EXIT_FAILED and publication_required:
+            try:
+                publication_started = publishing or store.head(pending_key)
+            except Exception as probe_error:
+                if not metrics_only:
+                    raise
+                publication_started = False
+                diagnostic["publication_probe"] = {
+                    "error_type": type(probe_error).__name__,
+                    "message": str(probe_error)[:2000],
+                }
+                log.warning("could not inspect pending metric publication", exc_info=True)
+            if publication_started:
+                failure_state = (
+                    "TRACKING_FAILED" if isinstance(error, TrackingPublicationError) else "PUBLICATION_FAILED"
+                )
+        failure_status = {
+            **status,
+            "state": failure_state,
+            "finished_at": clock(),
+            "wall_seconds": time.monotonic() - started,
+            "diagnostic": diagnostic,
+            **(
+                {"interruption_reason": reason, "checkpoint": checkpoint.receipt if checkpoint else None}
+                if spot
+                else {}
+            ),
+        }
+        try:
+            put_json(store, status_key, failure_status)
+        except Exception:
+            if not metrics_only:
+                raise
+            log.warning("could not record failed metric attempt status", exc_info=True)
         if spot and not isinstance(error, SpotGrantError):
             try:
                 record_spot_tracking(failure_state, reason=reason or str(error)[:1000])
@@ -1178,6 +1409,24 @@ def run_unit(
                     mark_failed(str(error)[:1000])
             except Exception:
                 log.warning("could not record the failed Spot attempt in MLflow", exc_info=True)
+        if metrics_only and not isinstance(error, SpotGrantError) and (workdir / "run").is_dir():
+            partial = {}
+            try:
+                partial["partial_metrics"] = archive_partial_metrics(
+                    store, workdir / "run", prefix, status, tracker=active_tracker
+                )
+            except Exception as archive_error:
+                diagnostic["partial_metrics_archive"] = {
+                    "error_type": type(archive_error).__name__,
+                    "message": str(archive_error)[:2000],
+                }
+                log.warning("could not archive incomplete metric evidence", exc_info=True)
+            # Preserve the original failure and exit code even if best-effort
+            # evidence archival fails. Partial receipts never enter finalization.
+            try:
+                put_json(store, status_key, {**failure_status, **partial, "diagnostic": diagnostic})
+            except Exception:
+                log.warning("could not record incomplete metric archive status", exc_info=True)
         if emit:
             emit(
                 {"RunFailed": 1},
@@ -1203,6 +1452,7 @@ def _base(unit: RunUnit, attempt_key: str) -> dict:
         "policy": unit.labels.get("policy"),
         "kind": unit.kind,
         "git_sha": unit.contract["release"]["git_sha"],
+        **({"seed": int(unit.labels["seed"])} if "seed" in unit.labels else {}),
     }
 
 

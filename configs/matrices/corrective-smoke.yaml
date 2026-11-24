@@ -1,0 +1,26 @@
+extends: base.yaml
+name: causal-metrics-smoke
+evaluator: binary
+policy_seed_from_dataset: true
+datasets:
+  - {name: sea, samples: 1200, label_delay: 3}
+models:
+  - {name: logistic, params: {learning_rate: 0.05}}
+  - {name: hoeffding_tree, params: {grace_period: 50, max_depth: 8}}
+strategies:
+  - {detector: {name: none}, policy: {name: none}}
+  - {detector: {name: adwin}, policy: {name: drift}}
+  - {detector: {name: none}, policy: {name: cara, params: {alpha: 0.01}}}
+  - {detector: {name: none}, policy: {name: upf, params: {alpha: 0.01, samples: 10}}}
+  - {detector: {name: none}, policy: {name: oracle, params: {alpha: 0.01}}}
+modes: [incremental]
+seeds: [42, 43, 44]
+base:
+  artifact_mode: metrics_only
+  warmup: 100
+  batch_size: 100
+  replay_window: 256
+  metric_window: 100
+  max_seconds: 600
+  tracking:
+    extends: ../base/tracking-corrective.yaml

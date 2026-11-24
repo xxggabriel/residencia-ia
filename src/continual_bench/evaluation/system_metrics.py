@@ -40,11 +40,16 @@ class SystemMetricsSampler:
     doubles, so memory stays bounded for arbitrarily long attempts.
     """
 
-    def __init__(self, disk_path=".", interval: float = DEFAULT_INTERVAL):
+    def __init__(
+        self, disk_path=".", interval: float = DEFAULT_INTERVAL, *, max_samples: int | None = MAX_SAMPLES
+    ):
         if not interval > 0:
             raise ValueError("system metrics interval must be positive")
+        if max_samples is not None and max_samples < 2:
+            raise ValueError("system metrics max_samples must be at least two or None")
         self.disk_path = str(Path(disk_path))
         self.interval = interval
+        self.max_samples = max_samples
         self.samples: list[dict] = []
         self._stop = threading.Event()
         self._thread = None
@@ -171,7 +176,7 @@ class SystemMetricsSampler:
                     "values": values,
                 }
             )
-            if len(self.samples) >= MAX_SAMPLES:
+            if self.max_samples is not None and len(self.samples) >= self.max_samples:
                 self.samples = self.samples[::2]
                 self.interval *= 2
 
@@ -217,6 +222,7 @@ class SystemMetricsSampler:
                 "excludes plots and publication"
             ),
             "interval_seconds": self.interval,
+            "max_retained_samples": self.max_samples,
             "collector": "psutil" if self._psutil is not None else "procfs_and_disk_usage",
             "unavailable_reason": None if self._psutil is not None else "psutil is not installed",
             "gpus": len(self._gpus[1]),

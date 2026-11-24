@@ -10,6 +10,7 @@ from continual_bench.datasets.streams import sha256_file
 from continual_bench.evaluation.environment import encoded
 from continual_bench.evaluation.zia_artifacts import tracking_report, write_zia_artifacts
 from continual_bench.evaluation.zia_predictions import INDEX, PredictionArchive, prediction_manifest
+from continual_bench.infrastructure.artifact_policy import metrics_only, verify_metrics_only_files
 from continual_bench.infrastructure.metric_tracking import log_metric_points, publish_tracking
 from continual_bench.infrastructure.run_artifacts import publish_run_artifacts
 from continual_bench.infrastructure.storage import atomic_write, publication_lock
@@ -23,7 +24,9 @@ from continual_bench.models.zia import ZiaPredictor, make_zia_model
 
 
 def dataset_source_uri(source):
-    """Provenance URI of a prepared stream: the pinned Hugging Face file or the catalog entry."""
+    """Provenance URI of the original file or a generated catalog dataset."""
+    if source.get("url"):
+        return source["url"]
     if "repo" not in source:
         return f"catalog://{source.get('catalog', 'unknown')}"
     return (
@@ -38,20 +41,25 @@ def run_documents(report, adapted, base_uri):
     manifest, env = adapted["dataset"], adapted["environment"]
     source = manifest["source"]
     final = versions[-1]
-    metadata = {
-        "dataset": report["dataset"],
-        "model": report["model"],
-        "model_params": report["model_params"],
-        "features": manifest["features"],
-        "classes": source["classes"],
-        "dataset_version": manifest["sha256"],
-        "code_sha256": env["code_sha256"],
-        "state_sha256": final["sha256"],
-        "final_version_id": final["sha256"],
-        "native_path": final["file"],
-        "payload": Path(final["file"]).name,
-        "output": "class probabilities in classes order",
-    }
+    only_metrics = metrics_only(report)
+    metadata = (
+        None
+        if only_metrics
+        else {
+            "dataset": report["dataset"],
+            "model": report["model"],
+            "model_params": report["model_params"],
+            "features": manifest["features"],
+            "classes": source["classes"],
+            "dataset_version": manifest["sha256"],
+            "code_sha256": env["code_sha256"],
+            "state_sha256": final["sha256"],
+            "final_version_id": final["sha256"],
+            "native_path": final["file"],
+            "payload": Path(final["file"]).name,
+            "output": "class probabilities in classes order",
+        }
+    )
     catalog = {
         "dataset_version": manifest["sha256"],
         "source": manifest,
@@ -62,7 +70,7 @@ def run_documents(report, adapted, base_uri):
         "dataset_version": manifest["sha256"],
         "dataset_source_uri": dataset_source_uri(source),
         "dataset_catalog_uri": f"{base_uri}/dataset-catalog.json",
-        "model_states_uri": f"{base_uri}/models",
+        "model_states_uri": None if only_metrics else f"{base_uri}/models",
         "model_index_uri": f"{base_uri}/model-versions.json",
         "model_state_sha256": final["sha256"],
         "model_versions_count": len(versions),
@@ -72,12 +80,20 @@ def run_documents(report, adapted, base_uri):
     files = {
         "manifest.json": manifest,
         "environment.json": env,
-        "model-metadata.json": metadata,
+        **({} if metadata is None else {"model-metadata.json": metadata}),
         "model-versions.json": {
             "versions": versions,
             "final_version_id": final["sha256"],
             "count": len(versions),
-            "storage_bytes": sum(v["bytes"] for v in versions),
+            "storage_bytes": 0 if only_metrics else sum(v["bytes"] for v in versions),
+            **(
+                {
+                    "artifact_mode": "metrics_only",
+                    "logical_serialized_bytes": sum(v["bytes"] for v in versions),
+                }
+                if only_metrics
+                else {}
+            ),
         },
         "dataset-catalog.json": catalog,
         "catalog-links.json": links,
@@ -95,6 +111,8 @@ def run_documents(report, adapted, base_uri):
 
 
 def replay_predictions(directory, report, root):
+    if metrics_only(report):
+        raise ValueError("metrics_only predictions must be retained, not replayed from model checkpoints")
     from continual_bench.evaluation.zia import batches
 
     contract = report["contract"]
@@ -226,12 +244,19 @@ def publish_artifacts(client, directory, run_id, report, root, *, derived=False,
 def _publish_artifacts(client, directory, run_id, report, root, derived=False, elapsed_seconds=None):
     from mlflow.entities import RunTag
 
+    from continual_bench.infrastructure.tracking import as_backend
+
     directory = Path(directory)
     run = client.get_run(run_id)
     if run.data.tags.get("zia_run_key") != directory.name:
         raise ValueError("MLflow run does not match the retained Zia evidence")
     versions = report["model_versions"]
-    for version in versions:
+    only_metrics = metrics_only(report)
+    if only_metrics:
+        verify_metrics_only_files(directory)
+        if any(version.get("file") is not None for version in versions):
+            raise ValueError("metrics_only model version advertises persisted weights")
+    for version in () if only_metrics else versions:
         path = directory / version["file"]
         if path.stat().st_size != version["bytes"] or sha256_file(path) != version["sha256"]:
             raise ValueError("retained model file differs from the Zia report")
@@ -239,7 +264,8 @@ def _publish_artifacts(client, directory, run_id, report, root, derived=False, e
     if "training_history" in report:
         if json.loads(history.read_bytes()) != {"version": 1, "fits": report["training_history"]}:
             raise ValueError("retained training history differs from the Zia report")
-    client.set_tag(run_id, "zia_artifacts_status", "publishing")
+    backend = as_backend(client)
+    backend.log_batch(run_id, tags={"zia_artifacts_status": "publishing"})
     evidence = publish_predictions(client, run, directory, report, root)
     adapted = tracking_report(report, evidence)
     if elapsed_seconds is not None:
@@ -259,43 +285,56 @@ def _publish_artifacts(client, directory, run_id, report, root, derived=False, e
         path = directory / name
         atomic_write(path, encoded(value))
         client.log_artifact(run_id, str(path))
-    version = publish_model(client, run, directory, report, metadata, root)
-    client.log_batch(
-        run_id,
-        synchronous=True,
-        tags=[
-            RunTag("registered_model", version.name),
-            RunTag("registered_model_version", str(version.version)),
-        ],
-    )
+    version = None
+    if not only_metrics:
+        version = publish_model(client, run, directory, report, metadata, root)
+        client.log_batch(
+            run_id,
+            synchronous=True,
+            tags=[
+                RunTag("registered_model", version.name),
+                RunTag("registered_model_version", str(version.version)),
+            ],
+        )
+    else:
+        client.set_tag(run_id, "model_retention", "metrics_only_no_registered_model")
     log_metric_points(client, run_id, [("training_used", 0, report["metrics"]["training_used_post_warmup"])])
-    tracking = publish_tracking(client, run_id, adapted, directory, derived=derived)
-    training_rounds = artifacts.get("training_rounds", [])
-    client.log_batch(
+    tracking = publish_tracking(
+        client,
         run_id,
-        tags=[
-            RunTag("cb-training-round-count", str(len(training_rounds))),
-            RunTag("zia_artifacts_status", "complete"),
-        ],
-        synchronous=True,
+        adapted,
+        directory,
+        derived=derived,
+        **({"max_points_per_key": None} if only_metrics else {}),
+    )
+    training_rounds = artifacts.get("training_rounds", [])
+    backend.log_batch(
+        run_id,
+        tags={
+            "cb-training-round-count": str(len(training_rounds)),
+            "zia_artifacts_status": "complete",
+        },
     )
     return {
         "run_artifacts": artifacts,
         "tracking": tracking,
         "training_rounds": training_rounds,
-        "registered_model": version.name,
-        "registered_model_version": str(version.version),
+        "registered_model": None if version is None else version.name,
+        "registered_model_version": None if version is None else str(version.version),
         **links,
     }
 
 
 def publish(client, directory, run_id, experiment_id, report, root):
+    from continual_bench.infrastructure.tracking import as_backend
+
     directory = Path(directory)
     with publication_lock(directory.parent, f"zia-run-{run_id}"):
-        client.set_tag(run_id, "benchmark_complete", "false")
+        backend = as_backend(client)
+        backend.log_batch(run_id, tags={"benchmark_complete": "false"})
         publish_run_metrics(client, directory, run_id, report)
         artifacts = _publish_artifacts(client, directory, run_id, report, root)
-        client.set_tag(run_id, "benchmark_complete", "true")
+        backend.log_batch(run_id, tags={"benchmark_complete": "true"})
         client.set_terminated(run_id, "FINISHED")
         receipt = {
             "mlflow_run_id": run_id,

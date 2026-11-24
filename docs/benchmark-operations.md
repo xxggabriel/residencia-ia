@@ -192,6 +192,11 @@ os demais parâmetros de cada configuração em experimentos controlados.
 
 ## Campanha controlada v3
 
+As seções v3, v4 e v5 registram as campanhas e ferramentas usadas naquelas revisões.
+Para as campanhas mais recentes, consulte as evidências da Semana 10:
+[CARA e UPF](evidencias/semana-10/cara-upf/README.md) e
+[INSECTS](evidencias/semana-10/insects/README.md).
+
 A DAG manual `benchmark_controlled` usa cinco sementes (42–46), 3000 amostras e atraso de rótulo 3.
 O manifesto executável é `configs/history/campaign-controlled-v3.json`: 261 configurações únicas
 (240 prequential, 15 offline e seis controles que reproduzem o antigo online esparso na semente 42).

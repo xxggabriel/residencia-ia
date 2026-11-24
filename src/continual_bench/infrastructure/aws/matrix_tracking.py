@@ -83,6 +83,10 @@ class MatrixMlflowRun(BenchmarkMlflowRun):
         if not self.mlflow_run_id and not self.spot:
             return
         self.step = max(self.step, step)
+        if (self.unit.params.get("config") or {}).get("artifact_mode") == "metrics_only":
+            # Restarted evaluation has new clocks and measurements. Keep each attempt's
+            # live series independent while the final report retains the logical run.
+            prefix = f"attempts/{self.attempt_key}/{prefix}"
         stamp = int(time.time() * 1000)
         points = [
             {"key": f"{prefix}/{key}", "value": float(value), "step": step, "timestamp": stamp}

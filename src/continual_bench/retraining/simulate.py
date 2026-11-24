@@ -72,7 +72,7 @@ def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float, same_batch: bo
             # UPF commits before seeing j. Query-based CARA baselines can observe its queries.
             upto = j - 1 if isinstance(rule, UPF) else j
             began = time.perf_counter()
-            if rule.decide(j, deployed, matrix.view(upto, models)):
+            if matrix.candidate_available(j) and rule.decide(j, deployed, matrix.view(upto, models)):
                 retrains.append(j)
                 models.add(j)
                 deployed = j
@@ -83,7 +83,7 @@ def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float, same_batch: bo
         if same_batch:
             errors.append(float(matrix.err[deployed, j]))
             began = time.perf_counter()
-            if rule.decide(j, deployed, matrix.view(j, models)):
+            if matrix.candidate_available(j) and rule.decide(j, deployed, matrix.view(j, models)):
                 retrains.append(j)
                 models.add(j)
                 deployed = j
@@ -95,7 +95,7 @@ def simulate(rule: Rule, matrix: PerformanceMatrix, alpha: float, same_batch: bo
         if j == matrix.batches - 1:
             break
         began = time.perf_counter()
-        if rule.decide(j, deployed, matrix.view(j, models)):
+        if matrix.candidate_available(j) and rule.decide(j, deployed, matrix.view(j, models)):
             retrains.append(j)
             models.add(j)
             deployed = j

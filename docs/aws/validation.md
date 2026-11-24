@@ -1,5 +1,10 @@
 # Evidências de validação
 
+Os registros abaixo descrevem as revisões e ambientes observados nas datas indicadas. Para
+procedimentos da revisão atual, consulte o [runbook](operations.md). A campanha INSECTS
+tem [evidência própria](../evidencias/semana-10/insects/README.md), com 66 de 72 unidades
+concluídas; esse resultado não substitui o teste de interrupção e retomada Spot.
+
 Os registros abaixo descrevem as revisões, execuções e ambientes observados em cada data.
 Para comandos de operação e configuração, consulte o [guia operacional](operations.md).
 

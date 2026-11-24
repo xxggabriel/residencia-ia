@@ -112,7 +112,7 @@ def split_batch(x, y, rng, train_fraction: float = 0.8):
     return x[order[:cut]], y[order[:cut]], x[order[cut:]], y[order[cut:]]
 
 
-def electricity_batches(path: str | Path, size: int = 2000):
+def electricity_arrays(path: str | Path):
     """NSW electricity (Harries) in the file's chronological order, 6 features, UP = 1.
 
     Uses features period, nswprice, nswdemand, vicprice, vicdemand and transfer, as in UPF Table 4
@@ -128,9 +128,21 @@ def electricity_batches(path: str | Path, size: int = 2000):
         fields = line.strip().split(",")
         rows.append([float(v) for v in fields[2:8]])
         labels.append(1 if fields[8].strip().upper() == "UP" else 0)
-    x, y = np.asarray(rows), np.asarray(labels, dtype=np.int64)
+    return np.asarray(rows), np.asarray(labels, dtype=np.int64)
+
+
+def electricity_batches(path: str | Path, size: int = 2000):
+    """Legacy fixed-width batches, retaining their historical complete-batch selection."""
+    x, y = electricity_arrays(path)
     count = len(y) // size
     return [(x[i * size : (i + 1) * size], y[i * size : (i + 1) * size]) for i in range(count)]
+
+
+def full_source_batches(x, y, n_batches: int = 15):
+    """Partition every source row once, chronologically, including an uneven final remainder."""
+    if n_batches < 1 or len(x) != len(y) or len(y) < 2 * n_batches:
+        raise ValueError("full-source evaluation needs matching arrays and at least two rows per batch")
+    return list(zip(np.array_split(x, n_batches), np.array_split(y, n_batches), strict=True))
 
 
 def _cached(cache: Path, build):

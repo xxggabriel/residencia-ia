@@ -1,0 +1,64 @@
+"""Execute six distant, existing planned jobs without changing the controller state."""
+import concurrent.futures
+import datetime
+import hashlib
+import json
+import pathlib
+import subprocess
+import sys
+import threading
+
+ROOT = pathlib.Path('/evidence/full-98a6dd5')
+PLAN = ROOT / 'campaign-plan.json'
+SIDECAR = ROOT / 'campaign-auxiliary-execution.json'
+plan = json.loads(PLAN.read_text())
+assert plan['code']['git_revision'] == '98a6dd5a676f46bf1df337de82b33fd0e554c085'
+cases = plan['matrix']['cases'][-6:]
+assert all(c['coordinates']['dataset'] == 'insects_incremental_abrupt_reoccurring_imbalanced' and c['coordinates']['model'] == 'hoeffding_tree' and c['config']['artifact_mode'] == 'metrics_only' for c in cases)
+assert len({c['case_key'] for c in cases}) == 6
+now = lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
+state = {
+ 'schema':'corrective-auxiliary-scheduling-v1',
+ 'evaluation_revision':plan['code']['git_revision'],
+ 'original_plan_sha256':hashlib.sha256(PLAN.read_bytes()).hexdigest(),
+ 'script_sha256':hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+ 'started_at':now(), 'complete':False,
+ 'original_controller_workers':4, 'auxiliary_workers':2, 'maximum_combined_workers':6,
+ 'original_container_limits':{'cpus':8,'memory_bytes':12*1024**3},
+ 'auxiliary_container_limits':{'cpus':2,'memory_bytes':8*1024**3},
+ 'tracking_publish_concurrency_per_process':1,
+ 'selection':'six last existing matrix cases, in reverse plan order',
+ 'case_keys':[c['case_key'] for c in cases],
+ 'scope':'Existing execute-job CLI only. No configuration, library or campaign-status changes. The original controller validates and adopts completed job-result receipts when it reaches these jobs.',
+ 'timing_limit':'Concurrent shared execution with different cgroup limits; wall and system times do not establish an isolated policy performance comparison.',
+ 'jobs':{}
+}
+lock = threading.Lock()
+def save():
+ tmp=SIDECAR.with_suffix('.tmp');tmp.write_text(json.dumps(state,sort_keys=True,indent=2));tmp.replace(SIDECAR)
+def mark(key,value):
+ with lock: state['jobs'][key]=value;save()
+save()
+def launch(case):
+ key=case['case_key']; job='matrix-'+key
+ status=json.loads((ROOT/'campaign-status.json').read_text())
+ # Stop adding work as soon as the original controller reaches this dataset/model.
+ if any(v.get('status') == 'running' and next(c['coordinates'] for c in plan['matrix']['cases'] if c['case_key']==k)['dataset'] == case['coordinates']['dataset'] and next(c['coordinates'] for c in plan['matrix']['cases'] if c['case_key']==k)['model'] == case['coordinates']['model'] for k,v in status['matrix'].items()):
+  mark(key,{'status':'skipped_controller_reached_group','finished_at':now()});return
+ result=ROOT/'job-results'/(job+'.json')
+ if result.exists() or key in status['matrix']:
+  mark(key,{'status':'skipped_existing_or_running','finished_at':now()});return
+ command=[sys.executable,'/app/scripts/run_corrective_benchmarks.py','--output',str(ROOT),'--execute-job',job,'--data-directory','/inputs']
+ started=now();mark(key,{'status':'running','started_at':started,'command':command})
+ log=ROOT/'logs'/(job+'-auxiliary.log')
+ with log.open('w') as stream: completed=subprocess.run(command,cwd='/app',stdout=stream,stderr=subprocess.STDOUT)
+ value={'status':'passed' if completed.returncode==0 else 'failed','exit_code':completed.returncode,'started_at':started,'finished_at':now(),'command':command,'log':log.relative_to(ROOT).as_posix()}
+ if completed.returncode==0:
+  payload=json.loads(result.read_text());assert payload['code']==plan['code'] and payload['status']=='passed'
+  report=ROOT/payload['report'];assert hashlib.sha256(report.read_bytes()).hexdigest()==payload['artifact_sha256']
+  value['job_result']=result.relative_to(ROOT).as_posix();value['job_result_sha256']=hashlib.sha256(result.read_bytes()).hexdigest()
+ mark(key,value);print(job,value['status'],flush=True)
+with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+ for future in concurrent.futures.as_completed([pool.submit(launch,c) for c in reversed(cases)]):future.result()
+state['complete']=True;state['finished_at']=now();save()
+sys.exit(1 if any(v['status']=='failed' for v in state['jobs'].values()) else 0)

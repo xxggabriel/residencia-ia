@@ -16,7 +16,7 @@ A etapa de 4 de novembro acrescentou os loaders brutos e os testes de **100 exem
 - Foi acrescentado o suplemento `semana09-metrics-v1`: validação de anotações de drift, resumo GEM, forgetting após aprendizado, retenção, recursos e near-future accuracy operacional com snapshots congelados. Ausência de anotações manteve F1 do detector indisponível. FWT de GEM sem baseline inicial permaneceu indisponível. As definições históricas da Semana 08 foram preservadas e distinguidas.
 - Foram acrescentados campanha declarativa limitada, journal, locks, falhas visíveis e retomada verificada, além de configuração de um cliente transitório de testes com serviços. Os parâmetros vazios novos foram omitidos das identidades históricas. Não foram atualizadas dependências ou lockfiles.
 
-A matriz com componentes, versões, fontes, testes e restrições está em [cobertura](task-coverage.md). O catálogo executável está em `configs/contracts/dataset-catalog.json`.
+A matriz com componentes, versões, fontes, testes e restrições está em [cobertura](task-coverage.md). O catálogo executável está em [`datasets/catalog.py`](../src/continual_bench/datasets/catalog.py). O [JSON de candidatos](../configs/contracts/dataset-catalog.json) preserva o levantamento da Semana 09.
 
 ## Ambiente e isolamento
 

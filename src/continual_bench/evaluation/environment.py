@@ -13,6 +13,65 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 DATASET_LOCKS = ("image-datasets.lock.json", "real-streams.lock.json", "temporal-vision.lock.json")
 
 
+def runtime_resources():
+    """Reproduction metadata without hostnames, private addresses or credentials.
+
+    Host totals and the process/container limits are separate observations. A shared
+    machine's memory and CPU count are not treated as a reservation for this run.
+    """
+    cpu_model = platform.processor() or None
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                cpu_model = line.partition(":")[2].strip()
+                break
+    except OSError:
+        pass
+    memory = None
+    try:
+        memory = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, OSError, ValueError):
+        pass
+    try:
+        affinity_count = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        affinity_count = None
+    limits = {}
+    roots = [Path("/sys/fs/cgroup")]
+    try:
+        line = next(x for x in Path("/proc/self/cgroup").read_text().splitlines() if x.startswith("0::"))
+        roots.insert(0, roots[0] / line[3:].lstrip("/"))
+    except (OSError, StopIteration):
+        pass
+    for filename in ("cpu.max", "memory.max", "cpuset.cpus.effective"):
+        for root in roots:
+            try:
+                limits[filename] = (root / filename).read_text().strip()
+                break
+            except OSError:
+                continue
+    return {
+        "cpu_model": cpu_model,
+        "logical_cpus": os.cpu_count(),
+        "affinity_cpus": affinity_count,
+        "host_memory_bytes": memory,
+        "cgroup_v2_limits": limits,
+        "thread_environment": {
+            key: os.environ.get(key)
+            for key in (
+                "OMP_NUM_THREADS",
+                "OPENBLAS_NUM_THREADS",
+                "MKL_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS",
+                "BENCH_MLFLOW_PUBLISH_CONCURRENCY",
+                "MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE",
+                "MLFLOW_ASYNC_LOGGING_BUFFERING_SECONDS",
+            )
+        },
+        "scope": "observed_host_and_process_limits_not_dedicated_resource_reservation",
+    }
+
+
 def environment():
     versions = {}
     for package in (
@@ -30,6 +89,7 @@ def environment():
         "scikit-learn",
         "matplotlib",
         "xgboost",
+        "xgboost-cpu",
         "psutil",
     ):
         try:
@@ -56,6 +116,7 @@ def environment():
         "code_sha256": digest.hexdigest(),
         "git_revision": os.environ.get("BENCH_GIT_REVISION", "uncommitted"),
         "python_hash_seed": os.environ.get("PYTHONHASHSEED", "random"),
+        "resources": runtime_resources(),
     }
 
 

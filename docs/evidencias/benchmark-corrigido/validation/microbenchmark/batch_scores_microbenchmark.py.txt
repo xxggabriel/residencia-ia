@@ -1,0 +1,98 @@
+"""Private bounded score microbenchmark; never creates a model/checkpoint artifact."""
+
+import hashlib
+import importlib.metadata
+import json
+import os
+import platform
+import pickle
+import resource
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+from continual_bench.core.contracts import Event
+from continual_bench.evaluation.binary_retraining import BinaryLearner, FeatureCodec
+from continual_bench.evaluation import binary_retraining
+from continual_bench.evaluation.environment import runtime_resources
+from continual_bench.models.linear import RiverModel
+from continual_bench.models.tree import HoeffdingTreeModel
+
+mode, seed = sys.argv[1], int(sys.argv[2])
+rng = np.random.default_rng(seed)
+count, dimensions = 30_000, 33
+values = rng.normal(size=(count, dimensions))
+targets = values @ rng.normal(size=dimensions) >= 0
+events = [
+    Event(str(i), i, i, i, {f"f{j}": float(v) for j, v in enumerate(row)}, bool(target))
+    for i, (row, target) in enumerate(zip(values, targets, strict=True))
+]
+codec = FeatureCodec(events)
+x, y = codec.encode(events)
+input_sha = hashlib.sha256(x.tobytes() + y.tobytes()).hexdigest()
+result = {
+    "mode": mode,
+    "seed": seed,
+    "rows": count,
+    "dimensions": dimensions,
+    "candidates": 3,
+    "input_sha256": input_sha,
+    "python": platform.python_version(),
+    "platform": platform.platform(),
+    "architecture": platform.machine(),
+    "resources": runtime_resources(),
+    "packages": {name: importlib.metadata.version(name) for name in ["numpy", "river", "scikit-learn"]},
+    "scoring_module_sha256": hashlib.sha256(Path(binary_retraining.__file__).read_bytes()).hexdigest(),
+    "threads": {k: os.environ.get(k) for k in ["OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"]},
+    "scope": "class-only candidate matrix scores; excludes learner training and input preparation",
+    "checkpoints_written": 0,
+    "models": {},
+}
+for name, factory in [("logistic", RiverModel), ("hoeffding_tree", HoeffdingTreeModel)]:
+    models = []
+    for index in range(3):
+        model = factory()
+        start = index * 37
+        for row, target in zip(codec.decode(x[start:start + 2048]), y[start:start + 2048], strict=True):
+            model.learn(row, bool(target))
+        models.append(model)
+    learner = BinaryLearner(factory, codec, 2048)
+    state_hashes_before = [hashlib.sha256(pickle.dumps(model)).hexdigest() for model in models]
+    started, cpu_started = time.perf_counter(), time.process_time()
+    scored = []
+    predicted_classes = []
+    for model in models:
+        if mode == "baseline":
+            rows = codec.decode(x)
+            predicted = np.asarray([model.predict(row) >= 0.5 for row in rows], dtype=bool)
+            loss = predicted != y.astype(bool)
+        else:
+            loss = learner.losses(model, x, y)
+            predicted = np.logical_xor(loss, y.astype(bool))
+        scored.append(loss)
+        predicted_classes.append(predicted)
+    cpu, wall = time.process_time() - cpu_started, time.perf_counter() - started
+    result["models"][name] = {
+        "cpu_seconds": cpu,
+        "wall_seconds": wall,
+        "loss_sha256": hashlib.sha256(b"".join(loss.tobytes() for loss in scored)).hexdigest(),
+        "class_sha256": hashlib.sha256(b"".join(p.tobytes() for p in predicted_classes)).hexdigest(),
+        "errors": [int(loss.sum()) for loss in scored],
+        "scored_rows": count * len(models),
+        "state_sha256_before": state_hashes_before,
+        "state_sha256_after": [hashlib.sha256(pickle.dumps(model)).hexdigest() for model in models],
+    }
+    del models, learner, scored, predicted_classes
+if sys.platform == "darwin":
+    cpu = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True)
+    if cpu.returncode == 0:
+        result["resources"]["cpu_model"] = cpu.stdout.strip()
+result["peak_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (
+    1 if sys.platform == "darwin" else 1024
+)
+output = Path(__file__).parent / f"batch-scores-formal-{mode}-seed-{seed}.json"
+output.write_text(json.dumps(result, indent=2) + "\n")
+print(json.dumps({"mode": mode, "seed": seed, "models": result["models"]}), flush=True)

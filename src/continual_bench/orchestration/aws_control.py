@@ -101,8 +101,21 @@ def plan_campaign(ctx, event):
     if ctx.store.head(layout.cancelled_key(request.campaign_id)) is not None:
         raise planning.CampaignConflict(f"Campaign {request.campaign_id} was explicitly cancelled")
     snapshot = snapshots.verify_snapshot(ctx.store, request.snapshot) if request.snapshot else None
-    plan = planning.build_plan(request, release, snapshot_manifest=snapshot, project_root=ctx.project_root)
-    verify_plan_sources(ctx.store, plan["units"])
+    stream_manifest = None
+    if request.matrix.kind == "stream":
+        from continual_bench.application.cloud.stream_sources import verify_stream_source
+
+        stream_manifest = verify_stream_source(
+            ctx.store, request.dataset, request.scope, request.source_digests[request.dataset]
+        )
+    plan = planning.build_plan(
+        request,
+        release,
+        snapshot_manifest=snapshot,
+        stream_manifest=stream_manifest,
+        project_root=ctx.project_root,
+    )
+    verify_plan_sources(ctx.store, [u for u in plan["units"] if u["kind"] == "matrix_case"])
     # Spot campaigns submit every unit at once; Batch queues what exceeds the vCPU quota.
     evidence = ctx.capacity(plan["concurrency"], queue_excess=spot)
 

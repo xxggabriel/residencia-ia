@@ -17,6 +17,8 @@ from continual_bench.evaluation.zia_metrics import decide
 from continual_bench.infrastructure.storage import atomic_write
 
 INDEX = "predictions-manifest.json"
+PARTIAL_INDEX = "partial-predictions-manifest.json"
+PARTIAL_DIRECTORY = "partial-predictions"
 BLOCKS_PER_PART = 16
 
 
@@ -32,8 +34,10 @@ class PredictionArchive:
         *,
         staging=None,
         resume=None,
+        preserve_partial=False,
     ):
         self.directory = Path(directory)
+        self.preserve_partial = preserve_partial
         self.classes = classes
         self.threshold = 0.5 if threshold is None else threshold
         self.schema = pa.schema(
@@ -138,6 +142,56 @@ class PredictionArchive:
         }
 
     def __exit__(self, exc_type, _error, _traceback):
+        if exc_type is not None and self.preserve_partial:
+            # A failed attempt retains only sealed prediction parts. It never
+            # publishes INDEX or provides a scientific checkpoint/resume state.
+            try:
+                self._close_part()
+            except Exception as error:
+                _error.add_note("Could not seal a partial prediction part: " + type(error).__name__)
+            try:
+                if self.parts:
+                    target = self.directory / PARTIAL_DIRECTORY
+                    target.mkdir()
+                    for part in self.parts:
+                        source = self.staging / part["file"]
+                        if (
+                            source.is_symlink()
+                            or not source.is_file()
+                            or source.stat().st_size != part["bytes"]
+                            or sha256_file(source) != part["sha256"]
+                        ):
+                            raise ValueError("sealed partial prediction part differs from its receipt")
+                        source.replace(target / part["file"])
+                atomic_write(
+                    self.directory / PARTIAL_INDEX,
+                    encoded(
+                        {
+                            **self.manifest,
+                            "schema": "partial-stream-predictions-v1",
+                            "status": "incomplete",
+                            "complete": False,
+                            "exception_type": exc_type.__name__,
+                            "usable_for_resume": False,
+                            "usable_for_final_result": False,
+                            "closed_parts_only": True,
+                            "directory": PARTIAL_DIRECTORY,
+                            "rows": sum(part["rows"] for part in self.parts),
+                            "observed_prediction_rows": self.rows,
+                            "parts": self.parts,
+                            "fading_accuracy": self.fading,
+                        }
+                    ),
+                )
+            except Exception as error:
+                _error.add_note("Could not preserve partial prediction evidence: " + type(error).__name__)
+            finally:
+                if self.temp is not None:
+                    try:
+                        self.temp.cleanup()
+                    except Exception as error:
+                        _error.add_note("Could not clean prediction staging: " + type(error).__name__)
+            return False
         try:
             self._close_part()
             if exc_type is None:

@@ -1,0 +1,62 @@
+{
+  "schema": "corrective-portable-runtime-readiness-v1",
+  "source_revision": "07aa7f5acdd30101c446b733b134f82b172df352",
+  "image_id": "sha256:51a3227715a3a12230d8567ea6b6e44097a68db0d0ff00dfb6594a2a23328159",
+  "platform": "linux/amd64",
+  "tested_at": "2026-11-24T05:38:51.024919+00:00",
+  "network": "none",
+  "credentials_or_input_mounts": false,
+  "benchmark_execution_image": false,
+  "frozen_benchmark_image_preserved": "sha256:6d052fa7849b07722d5cf4012e18a557336b277d8e8c856f481f2e25a8b414c9",
+  "checks": [
+    {
+      "command": [
+        "continual-bench",
+        "aws",
+        "selftest",
+        "--role",
+        "runtime",
+        "--require-x86-64"
+      ],
+      "exit_code": 0,
+      "stdout": "{\n  \"python\": \"3.12.13\",\n  \"machine\": \"x86_64\",\n  \"role\": \"runtime\",\n  \"imports\": [\n    \"continual_bench.evaluation.zia\",\n    \"continual_bench.evaluation.stream_benchmark\",\n    \"continual_bench.infrastructure.tracking\",\n    \"continual_bench.application.cloud.worker\",\n    \"continual_bench.infrastructure.aws.s3\",\n    \"continual_bench.infrastructure.aws.experiments\",\n    \"continual_bench.infrastructure.aws.mlflow_tracking\",\n    \"continual_bench.models.training.loop\",\n    \"duckdb\",\n    \"pyarrow\",\n    \"xgboost\",\n    \"boto3\"\n  ],\n  \"status\": \"ok\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python",
+        "/app/scripts/run_corrective_benchmarks.py",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: run_corrective_benchmarks.py [-h] --output OUTPUT [--matrix MATRIX]\n                                    [--data-directory DATA_DIRECTORY]\n                                    [--parallel-cases PARALLEL_CASES]\n                                    [--seeds SEEDS SEEDS SEEDS]\n                                    [--samples SAMPLES]\n                                    [--families {matrix,upf,paired} [{matrix,upf,paired} ...]]\n                                    [--replication-datasets {gauss,circles,electricity,airlines} [{gauss,circles,electricity,airlines} ...]]\n                                    [--tracking] [--plan-only]\n\nRun a versioned corrective campaign, retaining metrics rather than model\ncheckpoints. The same Python entry point runs on a workstation, a batch\nworker, or another managed executor. Credentials and resource reservations\nbelong to the caller. Completed units may be reused; an interrupted unit\nrestarts its evaluation.\n\noptions:\n  -h, --help            show this help message and exit\n  --output OUTPUT\n  --matrix MATRIX\n  --data-directory DATA_DIRECTORY\n  --parallel-cases PARALLEL_CASES\n  --seeds SEEDS SEEDS SEEDS\n  --samples SAMPLES\n  --families {matrix,upf,paired} [{matrix,upf,paired} ...]\n  --replication-datasets {gauss,circles,electricity,airlines} [{gauss,circles,electricity,airlines} ...]\n  --tracking\n  --plan-only\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python",
+        "/app/scripts/export_corrective_evidence.py",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: export_corrective_evidence.py [-h] --state STATE --output OUTPUT\n                                     [--no-plots] [--require-complete]\n                                     [--historical-insects HISTORICAL_INSECTS]\n\nExport metric-only evidence for a versioned corrective benchmark campaign. The\nsource directory stays untouched. Raw inputs, models and training snapshots\nare never copied. Native reports and prediction ledgers retain the information\nneeded to audit every reported metric; paired scores are recalculated on\ncommon event IDs with the benchmark's own exact binary Metrics implementation.\n\noptions:\n  -h, --help            show this help message and exit\n  --state STATE\n  --output OUTPUT\n  --no-plots\n  --require-complete\n  --historical-insects HISTORICAL_INSECTS\n                        Read-only Week 10 INSECTS archive or its dados\n                        directory for a descriptive table\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python",
+        "/app/scripts/publish_corrective_execution_times.py",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: publish_corrective_execution_times.py [-h] --state STATE --output\n                                             OUTPUT [--tracking]\n\nDerive recorded job-body wall times after a complete corrective campaign. This\npost-processing step never trains, changes reports or fills legacy timers.\nOnly --tracking writes a new metric and provenance tags to the 60 matrix\nparents.\n\noptions:\n  -h, --help       show this help message and exit\n  --state STATE\n  --output OUTPUT\n  --tracking\n",
+      "stderr": ""
+    }
+  ],
+  "source_script_hashes": {
+    "export_corrective_evidence.py": "2234b9146f99c8b868220f77844bc72bfa660f03cbed8b6ee3ef70724fb3ed56",
+    "publish_corrective_execution_times.py": "da8df4cbb4cf99156e62e43d2f07233a7d8b9b1b4589935179488c58d155ba54"
+  },
+  "passed": true,
+  "scope": "Native x86 runtime selftest and CLI packaging only. No AWS job or benchmark was executed with this image."
+}

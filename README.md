@@ -42,7 +42,7 @@ Requer Python 3.12 e [uv](https://docs.astral.sh/uv/). As dependências estão f
 (exportadas com hashes em `requirements.lock`).
 
 ```bash
-uv sync --frozen --extra dev --extra services --extra datasets
+uv sync --frozen --extra dev --extra services --extra datasets --extra large-datasets
 ```
 
 | Extra | Conteúdo |
@@ -50,7 +50,9 @@ uv sync --frozen --extra dev --extra services --extra datasets
 | `dev` | pytest, ruff |
 | `services` | ZenML, MLflow, boto3, Kafka, s3fs, pandas |
 | `datasets` | Pillow, pyarrow (loaders nativos de imagens e Parquet) |
-| `large-datasets` | DuckDB, XGBoost |
+| `large-datasets` | DuckDB, XGBoost (Zia e avaliação UPF de referência) |
+| `plots` | Matplotlib, para gerar figuras localmente |
+| `replication` | Alias mantido por compatibilidade; não instala dependências adicionais |
 | `aws` | boto3, pandas (perfil gerenciado, lock próprio `requirements-aws.lock`) |
 | `aws-mlflow` | SDK opcional para o MLflow gerenciado, com `sagemaker-mlflow` e matplotlib |
 
@@ -59,15 +61,16 @@ O Airflow usa um ambiente Python separado.
 ## Uso rápido
 
 ```bash
-PYTHONPATH=. uv run pytest -q
+make test
 uv run continual-bench run configs/runs/streaming.yaml
 uv run continual-bench run configs/runs/incremental.yaml
 uv run continual-bench run configs/runs/offline.yaml
 uv run continual-bench smoke --state state/smoke --samples 600 --baselines
 ```
 
-O `smoke` executa **21 experimentos limitados** (3 fontes × 2 protocolos prequential × 3 modelos de
-referência, mais 3 avaliações com separação temporal). O modo local lê JSONL, sem Kafka
+Com `--baselines`, o `smoke` executa **21 casos limitados**: três fontes, três políticas
+(`none`, `periodic`, `drift`) em cada modo prequential e um holdout por fonte. Todos
+usam o modelo padrão. O modo local lê JSONL, sem Kafka
 (`transport: local_jsonl`).
 
 Comandos da CLI (`continual-bench <comando>`):
@@ -100,10 +103,15 @@ Executa 63 configurações em subprocessos separados e grava `matrix-summary.jso
 - **Incremental (por lote):** todas as predições do lote ocorrem antes de qualquer treino dele; rótulos são liberados no fim do lote conforme `available_at`. Pode divergir do streaming.
 - **Offline (holdout temporal):** treina no prefixo, avalia congelado no sufixo, removendo do treino rótulos ainda indisponíveis no início do teste. Política deve ser `none`; não é comparável ao prequential.
 
-Regras comuns: ordem original nunca embaralhada; timestamps **simulados** (`epoch + sequência`);
-`warmup` treina uma única vez e é excluído das métricas; ao final há drenagem dos rótulos pendentes.
-Fontes novas exigem `timestamp` estritamente crescente e `available_at` não decrescente.
-Conjuntos de diagnóstico (*probes*) usam outra semente e nunca entram no treino, no detector ou na política.
+O motor prequential preserva a ordem da fonte. Nos exemplos com relógio simulado,
+`timestamp = epoch + sequência`. No motor por evento ou lote com políticas comuns,
+o aquecimento inicial fica fora do placar e os rótulos pendentes são drenados ao final.
+CARA, UPF e Oracle usam uma [fase offline da matriz](docs/cost-aware-retraining.md#binário-incremental).
+O fluxo binário exige `timestamp` estritamente crescente e `available_at` não decrescente.
+No protocolo prequential binário, os diagnósticos de retenção usam probes independentes em fontes
+sintéticas ou exemplos reservados em fontes reais que suportam esse diagnóstico. No caminho com
+reserva no próprio fluxo, esses exemplos ficam fora do treino, do detector e do placar prequential.
+Veja [observações e retenção](docs/benchmark-observations.md#retenção-por-episódio).
 
 ## Componentes e extensão
 
@@ -115,7 +123,7 @@ métricas, sem dependências externas) → `config/` → `datasets/`, `models/`,
 |---|---|
 | Modelo | Regressão logística e linear, Hoeffding Tree, kNN (River) |
 | Detector | ADWIN, DDM, EDDM, HDDM-A/W, Page-Hinkley, KSWIN, nenhum |
-| Política | nenhuma, online, periódica, por drift, por desempenho; em lotes (Zia): CARA-T/CT/P, UPF e Oracle ([docs](docs/cost-aware-retraining.md)) |
+| Política | nenhuma, online, periódica, por drift, por desempenho; em lotes (binário incremental e Zia): CARA-T/CT/P, UPF e Oracle ([docs](docs/cost-aware-retraining.md)) |
 | Persistência | Ponto de recuperação local atômico, S3/MinIO, MLflow |
 
 O detector **não** decide retreinamento: as políticas impõem `cooldown`, `min_samples`, `min_window` e
@@ -149,7 +157,8 @@ uv run continual-bench iterative-worker --cache /caminho/cache \
 
 ## Conjuntos de dados
 
-O [catálogo de aquisição e experimentos](docs/dataset-catalog.md) descreve as 17 fontes da suíte da residência.
+O [catálogo de aquisição e experimentos](docs/dataset-catalog.md) distingue as 17 entradas da
+suíte por épocas das fontes adicionais disponíveis para matrizes.
 `continual-bench components` lista as fontes registradas no catálogo executável. A preparação e a admissão
 são explícitas e seguem os locks ou manifestos de cada fonte.
 
@@ -157,7 +166,7 @@ são explícitas e seguem os locks ou manifestos de cada fonte.
 |---|---|
 | Sintéticos (River, BSD-3-Clause) | SEA, Agrawal, STAGGER, Hyperplane, RBF drift, Friedman drift (regressão) |
 | Reais com versão e SHA-256 fixados | Electricity (OpenML 151), Airlines (OpenML 1169) |
-| Manifestos locais (licença, hashes e anotações exigidos) | Insects, Gas Sensor Array Drift |
+| Fluxos reais com loaders próprios | INSECTS balanceado, Gas Sensor Array Drift e duas variantes binárias desbalanceadas de INSECTS |
 | Imagens | Split MNIST, Permuted MNIST, Split CIFAR-10/100, CORe50, CLEAR-10/100 |
 
 Os [benchmarks Zia Data Labs](docs/zia-benchmarks.md) (rede social, fraude e e-commerce) usam fluxos
@@ -165,8 +174,9 @@ Parquet temporais próprios e rodam com Docker Compose e na AWS. Na AWS, o catá
 publica os snapshots e reúne os links para os runs Zia correspondentes no MLflow.
 
 Cada execução registra fonte, versão, semente, SHA-256 do JSONL, limites dos conceitos e tipo de timestamp.
-Nos datasets reais não há pontos de mudança nem probes inventados; licenças seguem o rótulo do publicador
-([fontes fixadas](configs/contracts/real-sources.lock.json)). Consulte a regra de aquisição e ordenação de cada fonte nos guias abaixo.
+Os datasets OpenML não têm fronteiras de drift anotadas no contrato. As duas variantes binárias de
+INSECTS têm fronteiras publicadas, reservadas à avaliação e à auditoria. Consulte os locks
+[OpenML](configs/contracts/real-sources.lock.json) e [USP/UCI](configs/contracts/real-streams.lock.json).
 Veja [docs/image-datasets.md](docs/image-datasets.md), [docs/real-streams.md](docs/real-streams.md),
 [docs/temporal-vision.md](docs/temporal-vision.md) e
 [aquisição e execução](docs/task-dataset-execution.md).
@@ -208,10 +218,11 @@ Operação completa, ZenML/MinIO e evidências: [docs/benchmark-operations.md](d
 ## Perfil AWS
 
 O deploy usa GitHub Actions com OIDC. Na AWS, o Step Functions coordena aquisição, preparação
-e campanhas Batch sobre Fargate. S3, Glue e Athena preservam e consultam os resultados, e o CUR
-2.0 fornece dados de faturamento. O runtime do Batch mantém as duas sub-redes privadas. O endpoint
-gateway do S3 atende ambas, e `InterfaceEndpointAzMode` controla a distribuição dos endpoints de
-interface entre zonas de disponibilidade.
+e campanhas Batch. A configuração base usa Fargate Spot para o benchmark e Fargate On-Demand
+para o preparo. S3, Glue e Athena preservam e consultam os resultados; o CUR 2.0 fornece dados de
+faturamento. O runtime aceita uma ou duas sub-redes privadas. O gateway S3 atende as sub-redes
+configuradas; os endpoints de interface são provisionados sob demanda e compartilhados pelos
+workflows. Consulte o [ciclo dos endpoints](docs/aws/operations.md#7-ciclo-dos-endpoints-de-interface).
 
 No SageMaker Studio, `continual-bench-campaign` acompanha a preparação, o workflow Batch e a
 verificação do resultado. `continual-bench-native` acompanha jobs de Processing, Training e Tuning.
@@ -236,7 +247,7 @@ src/continual_bench/   core, config, datasets, models, detectors, evaluation, ap
 configs/               runs, matrices, campaigns, typed, contratos e locks
 dags/                  DAGs do Airflow
 scripts/               campanhas, validações, análise e execução de benchmarks
-infra/ cfn-project/    CloudFormation, buildspecs, Athena, Flink
+infra/                 CloudFormation, Step Functions, Athena, Glue, Flink e SageMaker
 docker/ compose*.yaml  imagens e conjuntos de serviços
 docs/                  documentação e evidências de validação versionadas
 examples/              plugins de referência
@@ -256,11 +267,37 @@ make lint    # ruff
 
 ## Documentação
 
-[Arquitetura](docs/architecture.md) ·
-[Operação](docs/benchmark-operations.md) ·
-[Confiabilidade](docs/reliability.md) ·
-[Pesquisa](docs/research.md) ·
-[Métricas](docs/task-metrics.md) ·
-[Políticas](docs/task-policies.md) ·
-[AWS](docs/aws/README.md) ·
-[Diagrama do ciclo de vida](docs/diagrams/ciclo-de-vida-sistema.drawio.pdf)
+A [suíte de comparação entre datasets](docs/dataset-suite.md) usa um novo protocolo
+comum para Electricity, Airlines, duas variantes INSECTS, Fraud, E-commerce e Social.
+São 231 casos com três seeds e onze políticas, preservando as fontes completas e
+somente métricas. O [runbook Fargate Spot](docs/aws/dataset-suite.md) descreve os
+smoke tests, o deploy e a submissão em duas fases, com 2 vCPU e 4 GiB por tarefa e
+teto de 64 vCPU. Online fica fora dos pedidos AWS. A conclusão dessa campanha exige
+os recibos e as verificações descritos no runbook.
+
+O [protocolo corretivo e a campanha de avaliação](docs/benchmark-corrections.md)
+descrevem disponibilidade de rótulos, separação treino/teste, retenção exclusiva de
+métricas e execução com o mesmo código em ambiente local ou AWS. A campanha concluiu
+60 de 60 runs INSECTS e 24 ensaios UPF em oito jobs, nas seeds 42, 43 e 44, com
+cobertura integral das fontes admitidas. Online ficou adiado para a próxima rodada,
+com quatro configurações e 12 runs. Os resultados históricos da Semana 10 permanecem
+preservados.
+
+O [dossiê da campanha corretiva](docs/evidencias/benchmark-corrigido/README.md) reúne
+o registro da execução e da conferência dos artefatos. Conclusão de execução não
+substitui essa conferência. O protocolo UPF integral difere das janelas e da baseline
+do artigo; sua AUC não representa uma reprodução equivalente dos números publicados.
+Custos de cenário permanecem separados de faturamento real. A portabilidade do código
+não comprova, por si só, que esses resultados tenham sido executados na AWS.
+
+| Para | Consulte |
+|---|---|
+| Entender e estender o código | [Arquitetura](docs/architecture.md), [configurações](configs/README.md), [diagrama do ciclo de vida](docs/diagrams/ciclo-de-vida-sistema.drawio.pdf) |
+| Selecionar dados e comparar métodos | [Catálogo](docs/dataset-catalog.md), [fluxos INSECTS e Gas](docs/real-streams.md), [Zia](docs/zia-benchmarks.md), [políticas por custo](docs/cost-aware-retraining.md), [referências de pesquisa](docs/research.md) |
+| Operar o laboratório | [Docker Compose e Airflow](docs/benchmark-operations.md), [AWS](docs/aws/README.md), [recuperação](docs/reliability.md) |
+| Interpretar métricas e artefatos | [Contrato de métricas](docs/tracking-metrics.md), [observações por ajuste](docs/benchmark-observations.md), [MLflow](docs/mlflow-tracking.md), [custos](docs/cost-accounting.md) |
+| Consultar resultados arquivados | [Semana 09](docs/task-report.md), [Semana 10: CARA/UPF](docs/evidencias/semana-10/cara-upf/README.md), [Semana 10: INSECTS](docs/evidencias/semana-10/insects/README.md), [campanha corretiva](docs/evidencias/benchmark-corrigido/README.md), [validações AWS](docs/aws/validation.md) |
+
+A campanha INSECTS da Semana 10 arquivou **66 de 72 unidades concluídas**; o comparativo de
+Electricity/Airlines arquivou o protocolo pareado local e experimentos de referência dos artigos.
+Em ambos os casos, os resultados se aplicam aos recortes, modelos e protocolos indicados nos relatórios.

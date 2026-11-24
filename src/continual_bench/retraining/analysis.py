@@ -124,12 +124,20 @@ def analyze(
 ) -> dict:
     """``same_batch`` switches the CARA rules and the strategy Oracle to the paper's accounting."""
     first, last = matrix.offline, matrix.batches - 1
+    allowed = matrix.admissible_retrains
+    decision_candidates = set(range(first, last + 1 if matrix.paper_timing or same_batch else last))
+    bound_available = decision_candidates.issubset(allowed)
     if matrix.paper_timing:
         top = alpha_max_same_batch(
-            matrix.err.T, matrix.initial, first, last, retrain_errors=matrix.err.diagonal()
+            matrix.err.T,
+            matrix.initial,
+            first,
+            last,
+            retrain_errors=matrix.err.diagonal(),
+            allowed_retrains=allowed,
         )
     else:
-        top = alpha_max(matrix.err, matrix.initial, first, last)
+        top = alpha_max(matrix.err, matrix.initial, first, last, allowed_retrains=allowed)
     oracle_top = top
     if alpha_top is not None:  # fixed range from the paper (UPF Table 4) instead of the oracle's own
         top = float(alpha_top)
@@ -170,9 +178,13 @@ def analyze(
         if "oracle_staleness" in rules:
             value = sims["oracle_staleness", alpha].strategy_cost(matrix)
         elif same_batch or matrix.paper_timing:
-            _, value = optimal_schedule_same_batch(stale_cost.T, matrix.initial, first, last, alpha)
+            _, value = optimal_schedule_same_batch(
+                stale_cost.T, matrix.initial, first, last, alpha, allowed_retrains=allowed
+            )
         else:
-            _, value = optimal_schedule(stale_cost, matrix.initial, first, last, alpha)
+            _, value = optimal_schedule(
+                stale_cost, matrix.initial, first, last, alpha, allowed_retrains=allowed
+            )
         strategy_oracle[alpha] = value
     lipschitz = lipschitz_bound(matrix.err, first)
     horizon = matrix.horizon  # T of Proposition 3.1
@@ -258,6 +270,9 @@ def analyze(
             "decision_points": matrix.horizon if matrix.paper_timing else matrix.horizon - 1,
             "oracle_alpha_max": _num(oracle_top),
             "initial_model": matrix.initial,
+            "admissible_retrain_points": sorted(decision_candidates.intersection(allowed)),
+            "retrain_bound_available": bound_available,
+            "retrain_bound_unavailable_reason": None if bound_available else "restricted_candidate_support",
             "alpha_max": _num(top),
             "focus_alpha": focus,
             "lipschitz_L": _num(lipschitz),
@@ -271,9 +286,13 @@ def analyze(
                 else "retrain after batch t serves t+1 onward (test-then-train)"
             ),
             "bound_alphas": {
-                f"r<={r}": _num(alpha_for_retrain_bound(r, lipschitz, horizon)) for r in range(3)
+                f"r<={r}": _num(alpha_for_retrain_bound(r, lipschitz, horizon)) if bound_available else None
+                for r in range(3)
             },
-            "retrain_upper_bound": {str(a): _num(retrain_upper_bound(a, lipschitz, horizon)) for a in alphas},
+            "retrain_upper_bound": {
+                str(a): _num(retrain_upper_bound(a, lipschitz, horizon)) if bound_available else None
+                for a in alphas
+            },
         },
         "alphas": alphas,
         "rules": report_rules,
@@ -303,7 +322,9 @@ def deployed_metrics(analysis: dict, rule: str, result: SimResult, oracle: SimRe
         "retraining_lipschitz_L": setup["lipschitz_L"],
         "retraining_retrain_upper_bound": _num(
             retrain_upper_bound(result.alpha, setup["lipschitz_L"] or 0.0, setup["online_batches"])
-        ),
+        )
+        if setup.get("retrain_bound_available", True)
+        else None,
         "upf_paper_auc": curve["auc"],
         "retraining_mean_scpe": curve["mean_scpe"],
         "retraining_offline_seconds": curve["offline_seconds"],

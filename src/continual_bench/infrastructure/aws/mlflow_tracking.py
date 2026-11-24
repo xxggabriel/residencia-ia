@@ -21,6 +21,7 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
 from continual_bench.config.iterative import IterativeTrainingConfig
+from continual_bench.infrastructure.artifact_policy import metrics_only, verify_metrics_only_files
 from continual_bench.infrastructure.metric_tracking import (
     DEFAULT_MAX_POINTS_PER_KEY,
     downsample_points,
@@ -264,6 +265,8 @@ def report_params(tracker: "SageMakerMlflowTracker", report: dict[str, Any]) -> 
         "block_rows": contract.get("block_rows", ""),
         "code_sha256": env.get("code_sha256", ""),
         "git_revision": env.get("git_revision", tracker.git_sha),
+        "seed": (contract.get("iterative_training") or {}).get("seed"),
+        "artifact_mode": report.get("artifact_mode") or contract.get("artifact_mode"),
     }
     for mp_key, mp_val in (report.get("model_params") or {}).items():
         param_dict[f"model_{mp_key}"] = mp_val
@@ -280,6 +283,9 @@ def report_metric_items(
     max_system_points: int | None = 200,
 ) -> list[dict[str, Any]]:
     """Finite metric points (key, value, timestamp, step) shared by both publishers."""
+    if metrics_only(report):
+        max_points_per_key = None
+        max_system_points = None
     metric_items: list[dict[str, Any]] = []
 
     def _add_metric(key: str, val: Any, step: int = 0, ts: int = now_ms) -> None:
@@ -349,6 +355,37 @@ def report_metric_items(
         ):
             _add_metric(key, value, step)
     return metric_items
+
+
+def retained_progress_items(directory):
+    """Recover complete observed live series, including points whose transport failed."""
+    path = Path(directory) / "live-metrics.jsonl" if directory is not None else None
+    if path is None or not path.is_file():
+        return []
+    points = []
+    with path.open() as stream:
+        for line in stream:
+            item = json.loads(line)
+            if (
+                not isinstance(item["prefix"], str)
+                or not item["prefix"].startswith("attempts/")
+                or type(item["step"]) is not int
+                or item["step"] < 0
+                or type(item["timestamp"]) is not int
+            ):
+                raise ValueError("invalid retained live metric coordinate")
+            for key, value in item["values"].items():
+                if type(value) not in (int, float) or not math.isfinite(value):
+                    raise ValueError("invalid retained live metric value")
+                points.append(
+                    {
+                        "key": sanitize_mlflow_name(f"{item['prefix']}/{key}"),
+                        "step": item["step"],
+                        "value": float(value),
+                        "timestamp": item["timestamp"],
+                    }
+                )
+    return points
 
 
 class SageMakerMlflowTracker:
@@ -610,6 +647,8 @@ class SageMakerMlflowTracker:
         ]
         if self.campaign_id:
             tags.append({"key": "cb-campaign-id", "value": str(self.campaign_id)})
+        if getattr(self, "seed", None) is not None:
+            tags.append({"key": "cb-seed", "value": str(self.seed)})
         if self.attempt_key and not self.spot:
             tags.append({"key": "cb-attempt-key", "value": self.attempt_key})
         if self._spot_attempt_tags:
@@ -950,9 +989,14 @@ class SageMakerMlflowTracker:
         if step <= self._progress_step:
             return
         stamp = int(time.time() * 1000)
+        prefix = (
+            f"attempts/{self.attempt_key}/progress"
+            if getattr(self, "artifact_mode", "full") == "metrics_only"
+            else "progress"
+        )
         points = [
             {
-                "key": sanitize_mlflow_name(f"progress/{key}"),
+                "key": sanitize_mlflow_name(f"{prefix}/{key}"),
                 "value": float(value),
                 "step": step,
                 "timestamp": stamp,
@@ -963,6 +1007,19 @@ class SageMakerMlflowTracker:
         if not points:
             return
         self._progress_step = step
+        if getattr(self, "artifact_mode", "full") == "metrics_only":
+            if self.native_logger is not None:
+                self.log_progress_metrics(points)
+                return
+            if self._live_writer is None:
+                self._live_writer = AsyncMetricWriter(
+                    self.log_progress_metrics,
+                    PROGRESS_INTERVAL_SECONDS,
+                    coalesce=False,
+                    max_pending=1000,
+                )
+            self._live_writer.submit(points)
+            return
         if self.native_logger is not None:
             # MLflow buffers and sends from its own thread pool; no extra coalescing needed.
             self.log_progress_metrics(points)
@@ -1249,9 +1306,12 @@ class SageMakerMlflowTracker:
         `aws-mlflow` extra) and falls back to the REST/SigV4 client below otherwise or on failure.
         """
         self._flush_progress()
+        metric_retention = metrics_only(report)
+        if metric_retention and output_dir is not None:
+            verify_metrics_only_files(output_dir)
         library = (
             None
-            if self.spot
+            if self.spot or metric_retention
             else self._publish_with_library(
                 report,
                 adapted=adapted,
@@ -1309,12 +1369,14 @@ class SageMakerMlflowTracker:
             return {"published": False, "errors": list(self.api_errors)}
 
         # 3. Log Dataset Input Lineage
-        if source.get("repo") and inp.get("sha256"):
+        if source and inp.get("sha256"):
             try:
-                ds_name = f"ziadatalabs/{source['repo']}"
-                ds_url = (
-                    f"https://huggingface.co/datasets/{ds_name}"
-                    f"/resolve/{source.get('revision', 'main')}/{source.get('file', '')}"
+                ds_name = f"ziadatalabs/{source['repo']}" if source.get("repo") else str(report["dataset"])
+                ds_url = source.get("url") or (
+                    f"https://huggingface.co/datasets/ziadatalabs/{source['repo']}"
+                    f"/resolve/{source['revision']}/{source['file']}"
+                    if source.get("repo")
+                    else f"catalog://{source.get('catalog', 'unknown')}"
                 )
                 self._request(
                     "POST",
@@ -1352,7 +1414,10 @@ class SageMakerMlflowTracker:
         uploaded = {"files": 0, "bytes": 0, "artifact_uri": self.artifact_uri}
         try:
             # Deterministic timestamps keep replay of the same evidence idempotent.
-            if not self.log_completed_metrics(report_metric_items(report, 0, adapted)):
+            points = report_metric_items(report, 0, adapted)
+            if metric_retention:
+                points.extend(retained_progress_items(output_dir))
+            if not self.log_completed_metrics(points):
                 return {"published": False, "errors": list(self.api_errors)}
             child_runs = self.publish_training_rounds(report)
             if output_dir is not None:
@@ -1373,10 +1438,11 @@ class SageMakerMlflowTracker:
         # 6. Register and version models in MLflow Model Registry
         model_registry_info: dict[str, Any] = {}
         try:
-            model_registry_info = self.register_run_models(
-                report=report,
-                model_package_arn=model_package_arn,
-            )
+            if not metric_retention:
+                model_registry_info = self.register_run_models(
+                    report=report,
+                    model_package_arn=model_package_arn,
+                )
         except Exception as err:
             self._record_error("register_run_models", err)
             if self.spot:

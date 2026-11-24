@@ -687,12 +687,14 @@ Resources:
           - {Name: MLFLOW_TRACKING_URI, Value: !If [MlflowTracking, !GetAtt MlflowApp.Arn, ""]}
           - {Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region}
           - {Name: BENCH_BENCHMARK_VCPUS, Value: !Ref BenchmarkVcpus}
+          - {Name: PYTHONHASHSEED, Value: "0"}
           - {Name: BENCH_FARGATE_SPOT, Value: !If [Spot, "true", "false"]}
           - {Name: BENCH_CHECKPOINT_INTERVAL_SECONDS, Value: !Ref BenchmarkCheckpointSeconds}
           # MLflow's own async logging (mlflow.config.enable_async_logging): training never
           # blocks on the tracking server; workers flush the queue on SIGTERM and at publication.
           - {Name: MLFLOW_ENABLE_ASYNC_LOGGING, Value: "true"}
-          - {Name: MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE, Value: "4"}
+          - {Name: MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE, Value: "1"}
+          - {Name: BENCH_MLFLOW_PUBLISH_CONCURRENCY, Value: "1"}
           - {Name: MLFLOW_ASYNC_LOGGING_BUFFERING_SECONDS, Value: "5"}
           - {Name: OMP_NUM_THREADS, Value: "2"}
           - {Name: OPENBLAS_NUM_THREADS, Value: "2"}

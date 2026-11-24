@@ -1,5 +1,7 @@
 # Referências e decisões de pesquisa
 
+Resultados arquivados da Semana 10: [CARA e UPF em Electricity e Airlines](evidencias/semana-10/cara-upf/README.md) e [benchmark INSECTS](evidencias/semana-10/insects/README.md).
+
 O levantamento de 26/10/2026 embasou a arquitetura inicial do projeto. As referências abaixo registram as escolhas daquele momento. Para a configuração atual, consulte a [arquitetura do projeto](architecture.md), o [configuração do Docker Compose](../compose.yaml) e o [guia AWS](aws/README.md).
 
 | Escolha | Evidência e estado | Adequação e limite |

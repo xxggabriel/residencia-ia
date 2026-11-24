@@ -6,6 +6,9 @@ Stream51 saiu do catálogo, adaptador, lock e DAG em 8 de novembro de 2026. O ga
 
 Para preparar a execução no Airflow, rode `scripts/validate_dataset_epochs.py` no ambiente do worker. Use `--state` com o diretório configurado em `BENCH_DATASET_SMOKES` (padrão `/state/dataset-smokes`), `--cache` com o cache e `--real-directory` com o diretório dos dados reais. Confirme `complete=true` no recibo `dataset-smoke-complete.json` e verifique `/datasets-ready` antes de disparar a DAG `benchmark_task_suite`. [Operação no Airflow](benchmark-operations.md#executar-no-airflow).
 
+As duas variantes binárias de INSECTS adicionadas na Semana 10 não entram no gate;
+elas têm [uma matriz específica](real-streams.md#benchmark-binário-da-semana-10).
+
 ## Validação inicial de 4 de novembro
 
 Foram implementados loaders executáveis para as 18 fontes/variantes explicitadas no projeto, na branch local `Semana-09`. Foram realizados testes iniciais com containers isolados. **A DAG completa não foi iniciada: a aquisição do Stream51 permaneceu bloqueada pela resolução DNS da origem oficial.** O seu adaptador passou pelos testes de contrato com fixtures; isso não homologou seus dados reais.

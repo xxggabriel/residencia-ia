@@ -129,11 +129,12 @@ O deploy lê o objeto `config/runtime-parameters.json` do bucket de artefatos qu
 
 Em 16/11/2026, o runtime de referência estava com `AvailabilityZoneCount=2` e
 `InterfaceEndpointAzMode=single`. O arquivo de overrides no S3 ainda indicava uma AZ
-para o Batch e omitia o modo dos endpoints. Para preservar o perfil implantado, atualize
-os dois parâmetros no objeto antes de um novo deploy por GitHub Actions. Consulte
+para o Batch e omitia o modo dos endpoints. Confira os valores atuais do objeto antes
+de um deploy. Para manter o perfil de duas sub-redes com endpoints em uma AZ, preserve
+os dois parâmetros da segunda linha da tabela. Consulte
 [a evidência de rede](validation.md#rede-do-batch).
 
-A parcela fixa incide enquanto a stack temporária existe. A tabela usa 730 h/mês para
+A parcela por hora incide enquanto os endpoints de interface estão provisionados. A tabela usa 730 h/mês para
 ilustrar o custo de manter os endpoints provisionados continuamente. Com cinco endpoints em
 uma AZ, a tarifa de USD 0,01/h por endpoint totaliza USD 0,05/h enquanto a stack existe.
 Veja o [ciclo dos endpoints](operations.md#7-ciclo-dos-endpoints-de-interface).
@@ -148,4 +149,4 @@ Em ambientes que dispensam registro de modelos e tracking, combine `EnableModelR
 e `EnableMlflowTracking=false` para remover os endpoints do SageMaker API e MLflow. Mantenha
 Streaming e Feature Store desabilitados quando estiverem fora do escopo do ambiente.
 Use as saídas `InterfaceEndpoints` (soma dos endpoints) e `InterfaceEndpointAvailabilityZoneCount`
-para estimar a parcela fixa; `S3GatewayEndpointId` identifica o gateway no inventário da stack.
+para estimar a parcela por hora quando estiverem provisionados; `S3GatewayEndpointId` identifica o gateway no inventário da stack.

@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 
+from continual_bench.infrastructure.artifact_policy import metrics_only, verify_metrics_only_files
 from continual_bench.infrastructure.benchmark_tracking import benchmark_metric_points
 from continual_bench.infrastructure.metric_tracking import metric_points
 from continual_bench.infrastructure.object_store import split_uri
@@ -53,6 +54,8 @@ class BenchmarkMlflowRun(SageMakerMlflowTracker):
     def publish_training_evidence(self, report, directory, *, store=None, headline=None, outputs_uri=None):
         """Return a receipt only after all required metrics, children, and artifacts are stored."""
         directory = Path(directory)
+        if metrics_only(report):
+            verify_metrics_only_files(directory)
         if "training_history" in report:
             if json.loads((directory / HISTORY_FILE).read_bytes()) != {
                 "version": 1,

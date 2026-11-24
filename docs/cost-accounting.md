@@ -62,6 +62,11 @@ Tempos ou tamanho de modelo desconhecidos deixam o respectivo componente e o tot
 
 Os três fluxos também geram o gráfico `costs/aws_usd` com os componentes em USD e os dados correspondentes em JSON. No MLflow, o fluxo principal publica `tracking_v1/summary/aws_cost_*_usd`; por épocas, publica `costs/aws/cost_*_usd` no agregado. O fluxo tipado conserva sua publicação local.
 
+Para CARA, UPF e Oracle no binário incremental, o [cenário de preço por retreino](cost-aware-retraining.md#binário-incremental)
+alimenta a decisão por `α = λ × custo_retreino_usd`. No INSECTS, o perfil de comparação é
+Fargate On-Demand de 2 vCPU, 4 GiB e 50 GiB de disco efêmero. Mantenha essa estimativa separada
+dos recursos alocados à tentativa, de sua estimativa Spot e da fatura apurada pelo CUR.
+
 ## Validação com serviços reais — 08/11/2026
 
 A validação usou uma única run, em cliente transitório com código e estado isolados. Não foi iniciada uma campanha nem repetido o benchmark. A run processou 180 amostras SEA em streaming, com regressão logística, ADWIN e política periódica (cinco atualizações). O ZenML concluiu as quatro etapas; o MLflow finalizou a run `eba563d87b8644bfad6c3c76896c60eb` no experimento `4`.

@@ -376,6 +376,7 @@ def binary_observations(report, observer, *, duration_seconds, tracking_seconds=
                 (fit.get("checkpoint") or {}).get("bytes", 0)
                 for fit in report["training_history"]
                 if fit.get("promotion_status") == "rejected"
+                and (fit.get("checkpoint") or {}).get("retained", True)
             ),
             "fargate_retrain_alpha": fargate_retraining.get("alpha"),
             "fargate_retrain_lambda": fargate_retraining.get("lambda"),

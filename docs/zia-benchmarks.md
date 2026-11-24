@@ -1,5 +1,11 @@
 # Benchmarks temporais Zia Data Labs
 
+A [suíte de comparação entre datasets](dataset-suite.md) utiliza este avaliador
+com retenção `metrics_only`, três seeds e onze políticas por stream. Ela preserva
+os rótulos multiclasse de Social, não grava modelos e exclui Online dos pedidos
+AWS. As instruções abaixo também descrevem os perfis anteriores de retenção
+completa, incluindo seus checkpoints e exemplos com doze políticas.
+
 Cada dataset tem uma DAG do Airflow com 12 runs. Na AWS, os exemplos de
 campanha do Batch também definem 12 runs por dataset nos escopos `full` e `smoke`
 e podem ser iniciados pelo SageMaker Pipelines. Cada campanha fixa o modelo, os dados, os limites e o
@@ -154,14 +160,15 @@ distinto. O escopo integral também é manual e exige escolher `scope: full`.
 O nome do experimento segue
 `continual-bench/zia-<dataset>-<scope>-<campaign>`. O worker mantém
 `progress.json`, `report.json` e `receipt.json` no estado da run. Uma
-publicação incompleta pode ser repetida usando a mesma campanha. Uma
-interrupção anterior ao relatório final pode refazer o treinamento.
+publicação incompleta pode ser repetida usando a mesma campanha. No Compose,
+uma interrupção anterior ao relatório final pode refazer o treinamento.
 
 Na AWS, publique o snapshot e confira seu marcador `_SUCCESS.json` antes de
 iniciar as campanhas, ou envie também a solicitação de preparação ao Pipeline.
-O Batch guarda o relatório, as predições e o modelo final no S3. Quando o tracking
-está configurado, o manifesto final inclui o ID da run e o recibo de publicação
-no MLflow App. Os gráficos comparativos da campanha ficam no S3 e o
+O Batch guarda o relatório, as predições e o modelo final no S3. No Spot, o
+worker retoma do checkpoint confirmado quando disponível. Quando o tracking está
+configurado, o manifesto final inclui o ID da run e o recibo de publicação no
+MLflow App. Consulte os [experimentos por revisão](mlflow-tracking.md#mlflow-no-sagemaker-studio). Os gráficos comparativos da campanha ficam no S3 e o
 `summary.json` indica o URI do índice. Abra a
 execução de `continual-bench-campaign` no SageMaker Studio para acompanhar as
 etapas e consulte os resultados por job no Batch e no MLflow. Os snapshots

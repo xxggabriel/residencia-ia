@@ -19,7 +19,9 @@ ou da camada de aplicação.
 | Separação temporal | Contrato local `validate_temporal_holdout` | Novo validador de disponibilidade e IDs nas partições | Testes de leakage por ID e por rótulos tardios |
 | Objetivo de retreinamento UPF | [Regol et al., ICML 2025](https://proceedings.mlr.press/v267/regol25a.html), [arXiv 2505.14903v1, seção 5](https://arxiv.org/html/2505.14903v1) | Mantida distinção entre custo de cenário, sensibilidade pós-hoc e campanha UPF; AUC UPF só nos runs das políticas cost-aware ([métricas](cost-aware-retraining.md#métricas-rastreadas)) | Sem alegação de reprodução dos números do artigo |
 
-O [relatório da Semana 09](task-report.md) registra a execução histórica dos testes.
+O [relatório da Semana 09](task-report.md) registra a execução histórica dos testes. Para os escopos,
+a disponibilidade dos indicadores e a retenção nas avaliações atuais, consulte o
+[contrato de métricas](tracking-metrics.md) e as [observações por ajuste](benchmark-observations.md).
 
 ## Detecção e ausência de anotações
 
@@ -91,8 +93,7 @@ pôde ultrapassar o offset da previsão. A garantia de que o modelo fornecido fo
 treinado apenas nesse prefixo permaneceu responsabilidade do engine.
 
 Com `tracking.task_evaluation` configurado, o runner chama
-`evaluation.reporting.supplemental_report(report, directory,
-near_future=collector)` gerou
+`evaluation.reporting.supplemental_report(report, directory, near_future=collector)` para gerar
 `task_evaluation-metrics.json` com escrita atômica. Sem o coletor, a acurácia futura
 permaneceu indisponível: um ledger prequential comum não reconstruiu modelos
 congelados retroativamente. O resumo reutilizou tempo, memória, frequência e

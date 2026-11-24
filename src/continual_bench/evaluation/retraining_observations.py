@@ -73,10 +73,13 @@ def candidate_report(
     duration_before_tracking=0.0,
     drift=None,
     evaluation=None,
+    artifact_mode="full",
 ):
     """Reuse the protocol's train/holdout partitions. The decision matrix never consumes these scores."""
     if initial is not None and (type(initial) is not int or not 0 <= initial < len(splits)):
         raise ValueError("initial candidate index must point to a fitted batch")
+    if artifact_mode not in {"full", "metrics_only"}:
+        raise ValueError("artifact_mode must be full or metrics_only")
     started = time.perf_counter()
     source_digest = sample_identity(splits)
     env = environment()
@@ -98,6 +101,8 @@ def candidate_report(
         if drift is not None
         else None,
     }
+    if artifact_mode != "full":
+        contract["artifact_mode"] = artifact_mode
     run_key = hashlib.sha256(encoded(contract)).hexdigest()[:24]
     if "MLFLOW_TRACKING_URI" in os.environ:
         root = Path(os.environ.get("BENCH_STATE", "state")) / "retraining-replication"
@@ -135,7 +140,11 @@ def candidate_report(
                     experiment_name="continual-bench/retraining-replication",
                 )
             except Exception as error:  # The retained report supports retry after a publication failure.
+                if artifact_mode == "metrics_only":
+                    raise
                 receipt = {"complete": False, "error": f"{type(error).__name__}: {str(error)[:500]}"}
+            if artifact_mode == "metrics_only" and receipt.get("complete") is not True:
+                raise RuntimeError("metrics-only candidate tracking did not confirm complete publication")
             return {**report, "mlflow": receipt}
     return _record_candidates(
         contract,
@@ -197,9 +206,11 @@ def _record_candidates(
         raw, extension = learner.observation_checkpoint(state)
         checkpoint = (
             write_state(directory, f"models/{fit_id}.{extension}", raw, format=extension)
-            if directory is not None
+            if directory is not None and contract.get("artifact_mode", "full") == "full"
             else {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw), "format": extension}
         )
+        if contract.get("artifact_mode") == "metrics_only":
+            checkpoint.update(retained=False, storage_bytes=0)
         durations = learner.observation_durations(index, elapsed)
         train_rows, step_count = len(y_train), len(durations)
         steps = [

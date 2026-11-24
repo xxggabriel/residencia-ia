@@ -281,6 +281,17 @@ def regime_metrics(predictions, changepoints, observed):
             )
             continue
         collected = BINARY_QUALITY.collect(rows)
+        curve = collected.get("roc_curve")
+        collected["roc_auc"] = (
+            math.fsum(
+                (right - left) * (high + low) / 2
+                for left, right, low, high in zip(
+                    curve["fpr"], curve["fpr"][1:], curve["tpr"], curve["tpr"][1:]
+                )
+            )
+            if curve is not None
+            else None
+        )
         unavailable = {}
         if collected.get("roc_auc") is None:
             unavailable["roc_auc"] = "single_class_or_undefined_in_regime"
@@ -913,7 +924,12 @@ def save_tracking_files(directory, report, settings, observer=None, events=None)
         references = []
         for item in observer.continual.reference_models:
             path = directory / "references" / f"{item['name']}-{item['task']}"
-            versions = ModelVersions(path, report["dataset"]["sha256"], report["environment"]["code_sha256"])
+            versions = ModelVersions(
+                path,
+                report["dataset"]["sha256"],
+                report["environment"]["code_sha256"],
+                artifact_mode=(report.get("config") or {}).get("artifact_mode", "full"),
+            )
             versions.record(
                 item["model"], {"action": "reference_initial_fit", "seq_range": item["seq_range"]}
             )

@@ -1,7 +1,7 @@
 # Plataforma AWS gerenciada do continual-bench
 
 Perfil de execução em us-east-1 que adquire e prepara datasets, executa campanhas de
-benchmark em paralelo no AWS Batch com Fargate Spot (serverless, 2 vCPU e 4 GiB por tarefa),
+benchmark em paralelo no AWS Batch com Fargate Spot por padrão (2 vCPU e 4 GiB por tarefa no template base),
 publica resultados consultáveis no S3,
 Glue e Athena, registra candidatos no SageMaker Model Registry e concilia custos com o CUR 2.0.
 O SageMaker Studio acompanha as campanhas e os jobs nativos em Pipelines. As métricas
@@ -20,12 +20,12 @@ MinIO e Kafka locais.
 ## Publicação, execução e acompanhamento
 
 ```
-GitHub main ──push/merge──▶ GitHub Actions ─▶ testes, lint, cfn-lint, ASL, smoke local
+GitHub main ──push/merge──▶ GitHub Actions ─▶ testes, lint, cfn-lint e ASL
                                               ─▶ imagens x86_64 (tag git-<sha>, digest) ─▶ change set ─▶ releases/<sha>
 operador ──start-execution──▶ state machine de datasets ─▶ resolver ─▶ adquirir (CodeBuild, fora da VPC)
                                                         ─▶ validar ─▶ preparar (Batch privado) ─▶ manifesto + _SUCCESS
-operador ──start-execution──▶ state machine de benchmark ─▶ plano no S3 ─▶ Map (1 job Batch Fargate Spot por run,
-                                                           todos submetidos de uma vez) ─▶ consolidar ─▶ verificar tasks paradas
+operador ──start-execution──▶ state machine de benchmark ─▶ plano no S3 ─▶ endpoints ─▶ Map (1 job Batch Fargate Spot por run,
+                                                           concorrência limitada pelo plano) ─▶ consolidar ─▶ verificar tasks paradas
 EventBridge (Batch e Step Functions) ─▶ Lambda de controle ─▶ registro, SNS e reconciliação (nunca inicia campanhas)
 SageMaker Studio ─▶ continual-bench-campaign ─▶ callbacks que iniciam e acompanham os workflows
 SageMaker Studio ─▶ continual-bench-native ─▶ Processing, Training e Tuning (Social)

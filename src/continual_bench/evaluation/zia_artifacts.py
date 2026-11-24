@@ -13,6 +13,7 @@ from continual_bench.evaluation.artifacts import (
 )
 from continual_bench.evaluation.tracking import VERSION, metric_catalog
 from continual_bench.evaluation.training_evidence import training_figures
+from continual_bench.infrastructure.artifact_policy import metrics_only
 from continual_bench.infrastructure.observation_tracking import write_observation_evidence
 from continual_bench.infrastructure.storage import atomic_write
 
@@ -117,6 +118,7 @@ def tracking_report(report, predictions=None):
             if u["action"] == "reset_retrain"
         ]
     return {
+        "artifact_mode": report.get("artifact_mode", "full"),
         "dataset": manifest,
         "environment": report["contract"]["environment"],
         "tracking": tracking,
@@ -217,7 +219,7 @@ def write_zia_artifacts(directory, report, adapted):
     write_observation_evidence(directory, report)
     return write_artifacts(
         directory,
-        figures,
+        [] if metrics_only(report) else figures,
         {
             "summary/metrics": {
                 "metrics": tracking["metrics"],
@@ -239,6 +241,26 @@ def write_zia_artifacts(directory, report, adapted):
             "model/explanation": report["model_explanation"],
             "retraining/analysis": report.get("retraining"),
             "training/history": None if history is None else {"version": 1, "fits": history},
+            **(
+                {
+                    "rendering/status": {
+                        "status": "deferred",
+                        "reason": "metrics_only_preserves_all_plot_data_without_rendering",
+                    },
+                    **{
+                        f"figures/{figure.group}/{figure.name}": {
+                            "title": figure.title,
+                            "group": figure.group,
+                            "name": figure.name,
+                            "kind": figure.kind,
+                            **figure.data,
+                        }
+                        for figure in figures
+                    },
+                }
+                if metrics_only(report)
+                else {}
+            ),
         },
     )
 
