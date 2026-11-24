@@ -136,6 +136,7 @@ def run_observations(
     rejected = [fit for fit in executed if fit["promotion_status"] == "rejected"]
     deployed_updates = promoted[1:]
     metrics = report["metrics"]
+    source = report["contract"]["input"]["source"]
     evaluated = prequential["evaluated_examples"] + holdout["evaluated_examples"]
 
     def total(collection, key):
@@ -220,7 +221,9 @@ def run_observations(
         lineage={
             "dataset": report["dataset"],
             "dataset_version": report["contract"]["input"]["sha256"],
-            "source_revision": report["contract"]["input"]["source"]["revision"],
+            "source_revision": (
+                source.get("revision") or source.get("raw_sha256") or source.get("source_version")
+            ),
             "model": report["model"],
             "policy": report["policy"],
             "seed": report["contract"]["iterative_training"]["seed"],
