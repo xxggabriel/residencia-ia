@@ -16,6 +16,7 @@ import json
 import math
 import statistics
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,13 @@ from continual_bench.evaluation.zia_metrics import SCORE_BINS, ClassificationMet
 from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
 from continual_bench.infrastructure.metric_tracking import metric_points
 from continual_bench.infrastructure.storage import atomic_write
+
+PUBLICATION_MARKERS = {
+    "tracking_v1_status": "complete",
+    "zia_artifacts_status": "complete",
+    "benchmark_complete": "true",
+}
+MAX_NATIVE_WORKERS = 4
 
 
 def read(path):
@@ -252,18 +260,38 @@ def verify_case(directory, case, *, common_range=None):
     return result
 
 
-def verify_native(directory, report, receipt, client):
+def verify_native(directory, report, receipt, client, *, workers=4):
+    require(
+        type(workers) is int and 1 <= workers <= MAX_NATIVE_WORKERS,
+        "native history workers must be between 1 and 4",
+    )
     require(receipt and receipt.get("complete") is True, "tracking receipt is incomplete")
     run_id = receipt["mlflow_run_id"]
-    run = client.get_run(run_id)
-    require(run.info.status == "FINISHED", "native run is not FINISHED")
+
+    def publication_snapshot(run):
+        require(run.info.status == "FINISHED", "native run is not FINISHED")
+        tags = getattr(getattr(run, "data", None), "tags", None) or {}
+        values = {name: tags.get(name) for name in PUBLICATION_MARKERS}
+        for name, expected_value in PUBLICATION_MARKERS.items():
+            require(
+                type(values[name]) is str and values[name] == expected_value,
+                f"native publication marker {name} is incomplete",
+            )
+        return values
+
+    markers_before_histories = publication_snapshot(client.get_run(run_id))
     index = read(Path(directory) / "predictions-manifest.json")
     expected = defaultdict(dict)
+    undefined_points = 0
     for key, step, value in metric_points(tracking_report(report, index)["tracking"]):
         if value is not None:
             expected[key][step] = value
-    checked = 0
-    for key, points in expected.items():
+        else:
+            undefined_points += 1
+
+    def verify_history(key, points):
+        # MlflowClient 3.17.2 retrieves all history pages internally. Each key
+        # remains independent; no latest-value view or point limit is used here.
         history = client.get_metric_history(run_id, key)
         observed = defaultdict(list)
         for item in history:
@@ -271,16 +299,47 @@ def verify_native(directory, report, receipt, client):
         require(set(observed) == set(points), f"native metric axis differs for {key}")
         for step, value in points.items():
             require(len(observed[step]) == 1, f"native metric coordinate duplicated for {key}/{step}")
+            actual = observed[step][0]
             require(
-                math.isclose(observed[step][0], value, rel_tol=1e-12, abs_tol=1e-12),
+                type(actual) in (int, float) and math.isfinite(actual),
+                f"native metric is not finite numeric for {key}/{step}",
+            )
+            require(
+                math.isclose(actual, value, rel_tol=1e-12, abs_tol=1e-12),
                 f"native metric differs for {key}/{step}",
             )
-            checked += 1
+        return len(points)
+
+    checked = 0
+    if expected:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pending = [pool.submit(verify_history, key, points) for key, points in expected.items()]
+            try:
+                for future in as_completed(pending):
+                    checked += future.result()
+            except BaseException:
+                for future in pending:
+                    future.cancel()
+                raise
+    run = client.get_run(run_id)
+    markers = publication_snapshot(run)
     return {
         "complete": True,
         "run_id": run_id,
+        "run_status": run.info.status,
+        "publication_markers": markers,
+        "publication_markers_before_histories": markers_before_histories,
+        "required_publication_markers": dict(PUBLICATION_MARKERS),
+        "checks": {
+            "run_finished": True,
+            "publication_markers_complete": True,
+            "publication_markers_rechecked_after_histories": True,
+            "full_history_axes_coordinates_and_values": True,
+        },
         "series": len(expected),
         "points": checked,
+        "undefined_catalog_points_not_logged_as_numbers": undefined_points,
+        "history_read_workers": workers,
         "scope": "all finite parent tracking_v1 catalog coordinates",
     }
 
@@ -328,7 +387,11 @@ def comparison_tables(results, output):
     return {"seed_rows": len(rows), "aggregate_rows": len(aggregate), "sample_sd_ddof": 1}
 
 
-def verify_suite(output, *, native_tracking=False):
+def verify_suite(output, *, native_tracking=False, native_workers=4):
+    require(
+        type(native_workers) is int and 1 <= native_workers <= MAX_NATIVE_WORKERS,
+        "native history workers must be between 1 and 4",
+    )
     output = Path(output)
     plan = read(output / "suite-plan.json")
     require(plan["schema"] == "ordered-dataset-suite-v1", "unsupported suite plan")
@@ -375,7 +438,7 @@ def verify_suite(output, *, native_tracking=False):
                 )
             if client is not None:
                 result["native_tracking"] = verify_native(
-                    directory, report, receipts[case["case_id"]]["tracking"], client
+                    directory, report, receipts[case["case_id"]]["tracking"], client, workers=native_workers
                 )
             results.append(result)
     require(len(results) == len(cases), "suite verification is incomplete")
@@ -399,6 +462,7 @@ def verify_suite(output, *, native_tracking=False):
             "fit_seeds_verified": True,
             "tracking_receipts_complete": plan["tracking_required"],
             "native_tracking_catalog_verified": native_tracking,
+            "native_publication_markers_verified": native_tracking,
         },
         "comparison_tables": comparison_tables(results, output),
         "cases": results,
@@ -417,8 +481,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--native-tracking", action="store_true")
+    parser.add_argument("--native-workers", type=int, choices=range(1, MAX_NATIVE_WORKERS + 1), default=4)
     args = parser.parse_args()
-    report = verify_suite(args.output, native_tracking=args.native_tracking)
+    report = verify_suite(
+        args.output, native_tracking=args.native_tracking, native_workers=args.native_workers
+    )
     print(json.dumps({k: v for k, v in report.items() if k not in {"cases", "interpretation"}}, indent=2))
 
 

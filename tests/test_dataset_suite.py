@@ -313,7 +313,16 @@ def test_native_readback_checks_entire_history_not_only_latest(tmp_path):
 
     class Client:
         def get_run(self, run_id):
-            return SimpleNamespace(info=SimpleNamespace(status="FINISHED"))
+            return SimpleNamespace(
+                info=SimpleNamespace(status="FINISHED"),
+                data=SimpleNamespace(
+                    tags={
+                        "tracking_v1_status": "complete",
+                        "zia_artifacts_status": "complete",
+                        "benchmark_complete": "true",
+                    }
+                ),
+            )
 
         def get_metric_history(self, run_id, key):
             return [
