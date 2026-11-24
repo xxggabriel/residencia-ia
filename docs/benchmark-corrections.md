@@ -21,6 +21,22 @@ zero significa informação indisponível. Não se inventa erro zero para calibr
 decidir. O CARA sem calibração offline válida fica inativo; o UPF sem observações
 suficientes não decide com um histórico fictício.
 
+A matriz binária limita a construção retrospectiva a 24 blocos contíguos. O tamanho
+efetivo é o maior entre `batch_size` e o teto do número de eventos elegíveis dividido
+por 24; uma cauda muito curta é incorporada ao bloco anterior. A fase offline usa
+aproximadamente o primeiro terço dos blocos. Assim, o `batch_size: 500` configurado
+não significa que os candidatos dos fluxos integrais sejam ajustados a cada 500
+eventos. Os intervalos efetivos constam nos relatórios. O limite reduz o custo da
+matriz sem selecionar uma amostra parcial da fonte.
+
+O cálculo das perdas retrospectivas da logística usa operações em lote apenas para
+a implementação nativa, com entradas numéricas e estado compatível. Linhas próximas
+da fronteira de decisão voltam ao preditor escalar, com margem conservadora para o
+arredondamento. As probabilidades do ledger continuam saindo do preditor original.
+Modelos nativos com predição sem mutação podem reutilizar a decodificação do bloco
+corrente; tipos personalizados seguem o caminho original. Os testes comparam classes,
+perdas e estado nas três seeds antes de admitir essa otimização.
+
 O Oracle conhece perdas futuras para escolher sua agenda, mas usa candidatos sujeitos
 ao mesmo corte de treino e à mesma implantação que os comparadores. Sua agenda não é
 uma política prospectiva. A seleção causal dos rótulos e o limite exato do replay
@@ -64,6 +80,11 @@ do modelo têm cadência explícita, com medições nas fronteiras registradas e
 final. Uma identidade lógica não é um hash dos pesos. Valores não medidos permanecem
 indisponíveis entre os cortes. O treinamento e as predições não dependem dessa cadência.
 
+Depois que todos os episódios e suas referências terminam, o modo metrics-only
+libera o prefixo de exemplos mantido para essas referências. As métricas, os modelos
+em memória ainda necessários à linhagem e seus metadados permanecem disponíveis. Um
+prefixo incompleto continua retido até concluir os cálculos que dependem dele.
+
 O perfil corretivo mantém os indicadores de qualidade, detecção, adaptação, retenção,
 treino, recursos e custos disponíveis no respectivo protocolo. Inclui quatro janelas
 limitadas de avaliação futura com modelo congelado, horizonte 32 e gap 1. Ausência de
@@ -75,6 +96,11 @@ Nesse perfil, a renderização dos PNGs detalhados de cada run e ajuste fica adi
 Os dados completos, as séries no MLflow, o HTML e a linhagem permanecem disponíveis.
 Os gráficos comparativos são gerados na consolidação, reduzindo trabalho repetido
 de visualização durante a campanha.
+
+A AUROC por regime é a área da curva ROC calculada com os escores retidos e empates
+agrupados. O campo escalar é preenchido quando essa curva é válida. A ausência desse
+campo no coletor intermediário não significa que o valor seja indefinido. Regimes
+com uma única classe mantêm a indisponibilidade explícita.
 
 A evidência numérica e o HTML são agrupados em `metric-evidence.zip`, com um
 manifesto de membros e hashes. O relatório principal permanece acessível
@@ -95,6 +121,14 @@ faturamento são campos distintos. A construção dos candidatos não é confund
 os ajustes escolhidos pela política. Tempos de processo, benchmark, instrumentação e
 publicação também têm escopos separados. Métricas de um host ou cgroup compartilhado
 não representam consumo exclusivo de uma política.
+
+Em particular, `compute_seconds` do protocolo por lotes inclui a construção de seus
+candidatos. Nos baselines por evento, a matriz suplementar é construída depois desse
+temporizador. Esses campos não sustentam uma comparação direta de custo total entre
+as políticas. `wall_seconds_this_attempt` é capturado antes das derivações finais;
+os horários de início e término de cada job abrangem também finalização e publicação.
+O sampler de sistema acompanha o processo durante a avaliação e a finalização, com
+seu escopo compartilhado registrado no relatório.
 
 ## Execução portátil
 

@@ -47,9 +47,10 @@ indicam o início do novo regime. São usados para avaliação e auditoria, sem 
 atributo, task ID ou sinal prospectivo para a política.
 
 O piloto testa streaming e incremental: Online, Frozen e ADWIN nos dois modos; CARA,
-UPF e Oracle só no incremental. A [matriz completa](../configs/matrices/insects-72.yaml)
-combina dois fluxos, dois modelos (regressão logística e Hoeffding Tree), seis políticas
-e três seeds. O catálogo da suíte por épocas permanece com 17 entradas.
+UPF e Oracle só no incremental. A [matriz histórica](../configs/matrices/insects-72.yaml)
+combinou dois fluxos, dois modelos (regressão logística e Hoeffding Tree), seis políticas
+e três seeds, planejando 72 runs. O catálogo da suíte por épocas permanece com 17 entradas.
+Os comandos abaixo permitem consultar esse planejamento histórico:
 
 ```bash
 uv run --frozen continual-bench matrix configs/matrices/insects-pilot.yaml --dry-run
@@ -62,8 +63,35 @@ e exporte `BENCH_DATASETS=/caminho/dos/csvs` antes de repetir o comando sem
 recibos de aquisição. O avaliador valida o SHA-256 antes de ler a fonte. Na AWS, siga o
 [runbook de publicação e submissão](aws/operations.md#matriz-binária-insects).
 
-A campanha arquivou 66 de 72 unidades. As seis pendências vieram das duas combinações
+A campanha da Semana 10 arquivou 66 de 72 unidades. As seis pendências vieram das duas combinações
 Online com Hoeffding, nas três seeds. Use as [métricas pareadas](evidencias/semana-10/insects/README.md)
 quando a pergunta exigir comparar os mesmos eventos em todas as execuções; as métricas
 do recorte original de cada run podem ter denominadores diferentes. Consulte F1 macro,
 recall por classe e o baseline majoritário além da acurácia.
+
+### Campanha corretiva em andamento
+
+A [matriz corretiva](../configs/matrices/insects-corrected.yaml) mantém as duas fontes
+integrais da tabela, com 355.275 e 452.044 registros, e os dois modelos. Com Congelado,
+ADWIN, CARA, UPF e Oracle nas seeds 42, 43 e 44, são 60 runs. Online está fora desta
+rodada: suas quatro combinações de fonte e modelo, equivalentes a 12 runs, ficaram
+para a próxima. Essa exclusão é um novo recorte e não completa as seis pendências
+históricas de Online com Hoeffding.
+
+Todas as linhas admitidas são consumidas, incluindo a cauda dos arquivos. Aquecimento,
+probes reservados e população de avaliação mantêm funções distintas; cobertura integral
+da entrada não significa usar todas as linhas como teste independente. O protocolo por
+blocos filtra treino e observações das decisões pela disponibilidade dos rótulos e
+registra o replay efetivo. Veja o [contrato e os comandos da campanha](benchmark-corrections.md).
+
+Na mesma rodada, as comparações UPF individuais usam três seeds nos quatro datasets.
+Os pares Electricity/Airlines usam as mesmas três seeds nos modos `same-batch` e
+`next-batch`, totalizando 24 ensaios. Para Electricity e Airlines, todo o ARFF é
+dividido em 15 blocos contíguos, sete offline e oito online, com holdout interno de 20%.
+O protocolo integral tem identidade própria e não é equivalente ao artigo nem às
+janelas históricas. Em `same-batch`, CARA e UPF têm informações distintas no momento
+da decisão; `next-batch` usa implantação no lote seguinte.
+
+O [registro da campanha corretiva](evidencias/benchmark-corrigido/README.md) reunirá a
+cobertura observada, os resultados e as limitações após a execução. Os arquivos da
+Semana 10 permanecem preservados e não são substituídos por resultados ainda pendentes.
