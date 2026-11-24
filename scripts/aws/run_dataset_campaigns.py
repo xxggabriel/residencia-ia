@@ -34,6 +34,12 @@ CACHED_POLICIES = ("cara_cumulative", "cara_periodic", "upf", "oracle")
 POLICIES = BASE_POLICIES + CACHED_POLICIES
 ACTIVE = {"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"}
 PROTOCOL = "ordered-stream-batch-prequential-metrics-v2"
+QUEUE_WAIT_SECONDS = 86_400
+QUEUE_WAIT_REASONS = {
+    "MISCONFIGURATION:COMPUTE_ENVIRONMENT_MAX_RESOURCE",
+    "MISCONFIGURATION:JOB_RESOURCE_REQUIREMENT",
+    "CAPACITY:INSUFFICIENT_INSTANCE_CAPACITY",
+}
 
 
 def read_json(path):
@@ -264,6 +270,24 @@ def verify_workflow(deployment, *, runner=subprocess.run):
     return actual
 
 
+def queue_wait_contract(queue):
+    """The deployed queue must not cancel full-suite capacity waits before one day."""
+    actions = queue.get("jobStateTimeLimitActions", [])
+    observed = set()
+    for action in actions:
+        if action.get("action") != "CANCEL" or action.get("state") != "RUNNABLE":
+            continue
+        reason, seconds = action.get("reason"), action.get("maxTimeSeconds")
+        if type(seconds) is not int or seconds < QUEUE_WAIT_SECONDS:
+            raise ValueError("queue CANCEL/RUNNABLE time limits must allow at least 86400 seconds")
+        if reason in observed:
+            raise ValueError("queue has ambiguous duplicate CANCEL/RUNNABLE reasons")
+        observed.add(reason)
+    if not QUEUE_WAIT_REASONS <= observed:
+        raise ValueError("queue is missing required full-suite CANCEL/RUNNABLE time limit actions")
+    return {"minimum_queue_wait_seconds": QUEUE_WAIT_SECONDS, "job_state_time_limit_actions": actions}
+
+
 def preflight(client, bucket, project, release):
     stacks = client.call("cloudformation", "describe-stacks", {"StackName": f"{project}-runtime"})["Stacks"]
     stack = stacks[0]
@@ -296,6 +320,7 @@ def preflight(client, bucket, project, release):
     queue = client.call("batch", "describe-job-queues", {"jobQueues": [outputs["JobQueueArn"]]})["jobQueues"][
         0
     ]
+    queue_admission = queue_wait_contract(queue)
     environments = client.call(
         "batch",
         "describe-compute-environments",
@@ -363,6 +388,7 @@ def preflight(client, bucket, project, release):
         "job_definition": definition,
         "resources": resources,
         "queue": outputs["JobQueueArn"],
+        "queue_admission": queue_admission,
         "quota": quota,
         "compute_environments": environments,
         "regional_fargate_tasks": regional_tasks,
@@ -616,6 +642,9 @@ def batch_snapshot(client, queue, campaign_ids):
 
 def status(client, state, *, advance=False):
     result = {"at_epoch_seconds": time.time(), "campaigns": {}}
+    if advance:
+        queue = client.call("batch", "describe-job-queues", {"jobQueues": [state["queue"]]})["jobQueues"][0]
+        result["queue_admission"] = queue_wait_contract(queue)
     verified = state.setdefault("verified_finals", {})
     for dataset, stages in state["datasets"].items():
         for stage, record in list(stages.items()):

@@ -69,6 +69,10 @@ Antes da primeira submissão, o comando verifica:
 - stack concluída, release publicada e imagem por digest compatíveis;
 - job definition Fargate de exatamente 2 vCPU e 4.096 MiB, ambiente Spot válido com
   teto de 64 vCPU e quota regional suficiente;
+- regras reais de cancelamento da fila em `RUNNABLE` com espera mínima de 86.400
+  segundos para as razões de capacidade e configuração previstas no template. O
+  recibo registra as regras retornadas pela AWS, e `advance` as confere novamente
+  antes de iniciar a segunda fase;
 - uso regional de Fargate. Se houver tarefas externas ao ambiente da suíte, o comando
   interrompe a submissão para permitir a conciliação do orçamento de recursos.
 

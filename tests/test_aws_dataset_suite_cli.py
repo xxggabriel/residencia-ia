@@ -289,6 +289,10 @@ class RuntimeClient:
         self.image = "repo@sha256:" + HASH
         self.resources = [{"type": "VCPU", "value": "2"}, {"type": "MEMORY", "value": "4096"}]
         self.compute_type, self.max_vcpus, self.quota = "FARGATE_SPOT", 64, 64
+        self.queue_actions = [
+            {"action": "CANCEL", "state": "RUNNABLE", "maxTimeSeconds": 86400, "reason": reason}
+            for reason in sorted(suite.QUEUE_WAIT_REASONS)
+        ]
         self.external = False
 
     def json_object(self, bucket, key):
@@ -336,6 +340,7 @@ class RuntimeClient:
                     {
                         "state": "ENABLED",
                         "status": "VALID",
+                        "jobStateTimeLimitActions": self.queue_actions,
                         "computeEnvironmentOrder": [{"computeEnvironment": "compute"}],
                     }
                 ]
@@ -419,8 +424,63 @@ def test_status_does_not_start_cached_stage_without_all_three_cara_caches(monkey
     monkeypatch.setattr(suite, "batch_snapshot", lambda *args: {"active": 0})
     calls = []
     monkeypatch.setattr(suite, "start_request", lambda *args: calls.append(args) or {"executionArn": "new"})
-    assert not suite.status(None, state, advance=True)["complete"]
+    client = RuntimeClient()
+    assert not suite.status(client, state, advance=True)["complete"]
     assert calls == [] and "cached" not in state["datasets"]["electricity"]
     caches["44"] = {"uri": "uri3", "sha256": HASH}
-    suite.status(None, state, advance=True)
+    suite.status(client, state, advance=True)
     assert len(calls) == 1 and "cached" in state["datasets"]["electricity"]
+
+
+@pytest.mark.parametrize("reason", sorted(suite.QUEUE_WAIT_REASONS))
+def test_preflight_refuses_each_queue_cancellation_before_full_wait(reason):
+    client = RuntimeClient()
+    next(action for action in client.queue_actions if action["reason"] == reason)["maxTimeSeconds"] = 3600
+    with pytest.raises(ValueError, match="at least 86400"):
+        suite.preflight(client, BUCKET, "project", SHA)
+
+
+def test_preflight_records_real_queue_actions_at_full_wait():
+    client = RuntimeClient()
+    result = suite.preflight(client, BUCKET, "project", SHA)
+    assert result["queue_admission"] == {
+        "minimum_queue_wait_seconds": 86400,
+        "job_state_time_limit_actions": client.queue_actions,
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation", ["absent", "missing_reason", "wrong_state", "duplicate", "additional_short"]
+)
+def test_queue_time_limit_contract_fails_closed_for_missing_or_ambiguous_actions(mutation):
+    client = RuntimeClient()
+    if mutation == "absent":
+        client.queue_actions.clear()
+    elif mutation == "missing_reason":
+        client.queue_actions.pop()
+    elif mutation == "wrong_state":
+        client.queue_actions[0]["state"] = "RUNNING"
+    elif mutation == "duplicate":
+        client.queue_actions.append(dict(client.queue_actions[0]))
+    else:
+        client.queue_actions.append(
+            {
+                "action": "CANCEL",
+                "state": "RUNNABLE",
+                "reason": "OTHER:CAPACITY",
+                "maxTimeSeconds": 3600,
+            }
+        )
+    with pytest.raises(ValueError):
+        suite.preflight(client, BUCKET, "project", SHA)
+
+
+def test_advance_rechecks_live_queue_before_starting_any_campaign(monkeypatch):
+    client = RuntimeClient()
+    client.queue_actions[0]["maxTimeSeconds"] = 3600
+    state = {"queue": "queue", "datasets": {}}
+    starts = []
+    monkeypatch.setattr(suite, "start_request", lambda *args: starts.append(args))
+    with pytest.raises(ValueError, match="at least 86400"):
+        suite.status(client, state, advance=True)
+    assert starts == []
