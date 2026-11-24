@@ -222,3 +222,14 @@ unidades. O plano ou a aprovação dos testes não substitui métricas efetivame
 produzidas. O exportador conserva relatórios e ledgers derivados em gzip, CSVs por
 run, janela e repetição, gráficos e manifesto SHA-256. As fontes históricas não são
 reescritas.
+
+`manifest.table_files` resolve cada tabela lógica para um arquivo ou para um
+descritor `csv+gzip-shards`. As partes desse descritor têm ordem explícita, intervalos
+de linhas e hashes; cada uma fica abaixo de 64 MiB comprimidos. Para reconstruir o
+CSV, leia as partes na ordem indicada, mantendo o primeiro cabeçalho e omitindo os
+cabeçalhos repetidos. O hash do CSV lógico verifica o conteúdo reconstruído.
+
+Curvas ROC/PR e vetores densos continuam completos nos relatórios JSON comprimidos.
+`vector-index.csv` localiza cada vetor pelo artefato e por um JSON Pointer RFC 6901,
+com quantidade de elementos e hash canônico do array. Esses vetores não são
+duplicados linha a linha no CSV de escalares, séries temporais e matrizes.

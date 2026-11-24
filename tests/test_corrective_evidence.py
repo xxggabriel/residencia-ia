@@ -797,3 +797,99 @@ def test_compact_large_payload_encoding_is_deterministic_and_small_payloads_stay
     assert small["json_format"] == "pretty" and small["gzip_level"] == 9
     assert gzip.decompress(third.read_bytes()).startswith(b"{\n")
     assert json.loads(gzip.decompress(third.read_bytes())) == payload
+
+
+def csv_source(path, rows=400):
+    header = ["metric", "coordinate", "value"]
+    values = [
+        [
+            f"metric-{index}",
+            f'ação,"quoted"\nrow-{index}',
+            evidence.hashlib.sha256(str(index).encode()).hexdigest(),
+        ]
+        for index in range(rows)
+    ]
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream)
+    writer.writerow(header)
+    writer.writerows(values)
+    raw = stream.getvalue().encode("utf-8")
+    if path.name.endswith(".gz"):
+        evidence.gzip_write(path, raw)
+    else:
+        path.write_bytes(raw)
+    return raw, header, values
+
+
+def reconstruct_shards(output, descriptor):
+    header = evidence._csv_record_bytes(descriptor["header"])
+    rebuilt = bytearray()
+    rows = []
+    cursor = 0
+    for position, part in enumerate(descriptor["shards"]):
+        path = output / part["path"]
+        raw = gzip.decompress(path.read_bytes())
+        assert raw.startswith(header)
+        assert sha256(path) == part["sha256"]
+        assert evidence.hashlib.sha256(raw).hexdigest() == part["uncompressed_sha256"]
+        assert len(raw) == part["uncompressed_bytes"]
+        assert path.stat().st_size == part["bytes"] < descriptor["max_shard_bytes"]
+        records = list(csv.reader(io.StringIO(raw.decode("utf-8"), newline="")))
+        assert records[0] == descriptor["header"] and len(records) - 1 == part["rows"]
+        assert part["source_row_range"] == [cursor, cursor + part["rows"]]
+        cursor += part["rows"]
+        rows.extend(records[1:])
+        rebuilt.extend(raw if position == 0 else raw[len(header) :])
+    assert cursor == descriptor["data_rows"]
+    return bytes(rebuilt), rows
+
+
+@pytest.mark.parametrize("compressed_source", [False, True])
+def test_csv_shards_reconstruct_exact_bytes_records_order_headers_and_hashes(tmp_path, compressed_source):
+    source = tmp_path / ("metrics-long.csv.gz" if compressed_source else "metrics-long.csv")
+    raw, header, values = csv_source(source)
+    output = tmp_path / "parts"
+    descriptor = evidence.shard_csv_gzip(source, output, max_bytes=512)
+    assert descriptor["format"] == "csv+gzip-shards" and descriptor["header_repeated"] is True
+    assert len(descriptor["shards"]) > 1
+    assert descriptor["header"] == header and descriptor["data_rows"] == len(values)
+    assert descriptor["logical_csv_bytes"] == len(raw)
+    assert descriptor["logical_csv_sha256"] == evidence.hashlib.sha256(raw).hexdigest()
+    rebuilt, rows = reconstruct_shards(output, descriptor)
+    assert rebuilt == raw and rows == values
+    assert evidence.table_parts(descriptor) == [part["path"] for part in descriptor["shards"]]
+    assert evidence.table_parts("coverage.csv") == ["coverage.csv"]
+
+
+def test_csv_shard_compression_and_boundaries_are_deterministic(tmp_path):
+    source = tmp_path / "metrics-long.csv"
+    csv_source(source)
+    first = evidence.shard_csv_gzip(source, tmp_path / "a", max_bytes=700)
+    second = evidence.shard_csv_gzip(source, tmp_path / "b", max_bytes=700)
+    assert first == second
+    assert all(
+        (tmp_path / "a" / part["path"]).read_bytes() == (tmp_path / "b" / part["path"]).read_bytes()
+        for part in first["shards"]
+    )
+
+
+def test_table_pack_shards_only_above_compressed_trigger_and_keeps_other_tables_compatible(tmp_path):
+    raw, _, _ = csv_source(tmp_path / "metrics-long.csv")
+    (tmp_path / "coverage.csv").write_bytes(b"case,status\r\n1,passed\r\n")
+    (tmp_path / "unrelated.csv").write_bytes(b"preserve me")
+    paths = evidence.pack_large_tables(tmp_path, threshold=100, shard_trigger=1000, shard_max=700)
+    assert isinstance(paths["metrics-long.csv"], dict)
+    assert paths["coverage.csv"] == "coverage.csv"
+    assert not (tmp_path / "metrics-long.csv").exists()
+    assert not (tmp_path / "metrics-long.csv.gz").exists()
+    rebuilt, _ = reconstruct_shards(tmp_path, paths["metrics-long.csv"])
+    assert rebuilt == raw and (tmp_path / "unrelated.csv").read_bytes() == b"preserve me"
+
+
+def test_oversize_csv_record_fails_without_deleting_or_altering_its_source(tmp_path):
+    source = tmp_path / "metrics-long.csv"
+    csv_source(source, rows=1)
+    before = source.read_bytes()
+    with pytest.raises(ValueError, match="one CSV record exceeds"):
+        evidence.shard_csv_gzip(source, tmp_path / "parts", max_bytes=64)
+    assert source.read_bytes() == before

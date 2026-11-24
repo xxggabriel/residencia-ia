@@ -13,11 +13,13 @@ import csv
 import gzip
 import hashlib
 import inspect
+import io
 import ipaddress
 import json
 import math
 import re
 import textwrap
+import zlib
 from collections import defaultdict
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -44,6 +46,8 @@ PROTECTED_ARRAY_FIELDS = frozenset(
 )
 INDEXED_ARRAY = object()
 LARGE_PAYLOAD_BYTES = 1024 * 1024
+TABLE_SHARD_TRIGGER_BYTES = 95 * 1024 * 1024
+TABLE_SHARD_MAX_BYTES = 64 * 1024 * 1024
 COORDINATES = ("dataset", "model", "policy", "detector", "seed", "mode")
 SECRET_KEY = re.compile(r"password|secret|token|authorization|cookie|credential|access.key", re.I)
 MODEL_SUFFIXES = {".pkl", ".pickle", ".bin", ".ubj", ".joblib", ".pt", ".pth", ".ckpt", ".onnx"}
@@ -384,8 +388,169 @@ def indexed_csv_view(value, artifact, index, *, pointer="", container=None):
     return value
 
 
-def pack_large_tables(output, threshold=20 * 1024 * 1024):
-    """Keep large metric tables lossless and below ordinary source-hosting limits."""
+def _csv_record_bytes(row):
+    buffer = io.StringIO(newline="")
+    csv.writer(buffer).writerow(row)
+    return buffer.getvalue().encode("utf-8")
+
+
+def _logical_csv_digest(path):
+    opener = gzip.open if str(path).endswith(".gz") else open
+    digest, size = hashlib.sha256(), 0
+    with opener(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+            size += len(block)
+    return size, digest.hexdigest()
+
+
+def shard_csv_gzip(source, output, *, max_bytes=TABLE_SHARD_MAX_BYTES):
+    """Split a canonical CSV by records, with bounded gzip files and repeated headers.
+
+    Probe a copied compressor once per bounded batch. Only batches that fit are
+    committed; a boundary batch is recompressed in the next part. The final gzip
+    trailer is included in every size check. No data row is split or discarded.
+    """
+    source, output = Path(source), Path(output)
+    if max_bytes < 64:
+        raise ValueError("CSV shard budget must be at least 64 bytes")
+    output.mkdir(parents=True, exist_ok=True)
+    logical_name = source.name[:-3] if source.name.endswith(".gz") else source.name
+    if not logical_name.endswith(".csv"):
+        raise ValueError("CSV shard input must be .csv or .csv.gz")
+    stem = logical_name[:-4]
+    original_bytes, original_sha256 = _logical_csv_digest(source)
+    logical_hash = hashlib.sha256()
+    logical_bytes = processed_rows = 0
+    parts = []
+    state = {"stream": None}
+    header = None
+
+    def start():
+        path = output / f"{stem}.part-{len(parts) + 1:05d}.csv.gz"
+        stream = path.open("wb")
+        compressor = zlib.compressobj(level=9, wbits=31)
+        stream.write(compressor.compress(header) + compressor.flush(zlib.Z_SYNC_FLUSH))
+        state.update(
+            stream=stream,
+            path=path,
+            compressor=compressor,
+            rows=0,
+            first_row=processed_rows,
+            raw_bytes=len(header),
+            raw_hash=hashlib.sha256(header),
+        )
+        if stream.tell() + len(compressor.copy().flush(zlib.Z_FINISH)) >= max_bytes:
+            raise ValueError("CSV header exceeds shard size budget")
+
+    def finish():
+        stream = state["stream"]
+        stream.write(state["compressor"].flush(zlib.Z_FINISH))
+        stream.close()
+        state["stream"] = None
+        path = state["path"]
+        if path.stat().st_size >= max_bytes:
+            raise ValueError("CSV shard exceeds compressed size budget")
+        parts.append(
+            {
+                "path": path.name,
+                "rows": state["rows"],
+                "bytes": path.stat().st_size,
+                "sha256": sha256(path),
+                "uncompressed_bytes": state["raw_bytes"],
+                "uncompressed_sha256": state["raw_hash"].hexdigest(),
+                "source_row_range": [state["first_row"], processed_rows],
+            }
+        )
+
+    def append(records):
+        nonlocal processed_rows
+        raw = b"".join(records)
+        trial = state["compressor"].copy()
+        encoded = trial.compress(raw) + trial.flush(zlib.Z_SYNC_FLUSH)
+        final_bytes = state["stream"].tell() + len(encoded) + len(trial.copy().flush(zlib.Z_FINISH))
+        if final_bytes >= max_bytes:
+            if state["rows"]:
+                finish()
+                start()
+                return append(records)
+            if len(records) == 1:
+                raise ValueError("one CSV record exceeds shard size budget")
+            middle = len(records) // 2
+            append(records[:middle])
+            return append(records[middle:])
+        state["stream"].write(encoded)
+        state["compressor"] = trial
+        state["raw_hash"].update(raw)
+        state["raw_bytes"] += len(raw)
+        state["rows"] += len(records)
+        processed_rows += len(records)
+
+    opener = gzip.open if str(source).endswith(".gz") else open
+    try:
+        with opener(source, "rt", encoding="utf-8", newline="") as stream:
+            records = csv.reader(stream)
+            fields = next(records, None)
+            if fields is None:
+                raise ValueError("CSV shard input has no header")
+            header = _csv_record_bytes(fields)
+            logical_hash.update(header)
+            logical_bytes += len(header)
+            start()
+            batch, batch_bytes = [], 0
+            batch_limit = min(1024 * 1024, max(64, max_bytes // 8))
+            for row in records:
+                raw = _csv_record_bytes(row)
+                logical_hash.update(raw)
+                logical_bytes += len(raw)
+                batch.append(raw)
+                batch_bytes += len(raw)
+                if batch_bytes >= batch_limit:
+                    append(batch)
+                    batch, batch_bytes = [], 0
+            if batch:
+                append(batch)
+            finish()
+    finally:
+        if state["stream"] is not None:
+            state["stream"].close()
+    if logical_bytes != original_bytes or logical_hash.hexdigest() != original_sha256:
+        raise ValueError("CSV canonical record encoding does not match the source bytes")
+    return {
+        "format": "csv+gzip-shards",
+        "header": fields,
+        "header_repeated": True,
+        "data_rows": processed_rows,
+        "logical_csv_bytes": original_bytes,
+        "logical_csv_sha256": original_sha256,
+        "source_artifact": source.name,
+        "source_sha256": sha256(source),
+        "gzip_level": 9,
+        "max_shard_bytes": max_bytes,
+        "shards": parts,
+    }
+
+
+def table_parts(entry):
+    """Resolve a manifest table entry in its required concatenation order."""
+    return [entry] if isinstance(entry, str) else [part["path"] for part in entry["shards"]]
+
+
+def _clean_table_parts(output, name, keep=()):
+    pattern = re.compile(re.escape(name) + r"\.part-\d{5}\.csv\.gz$")
+    for path in output.iterdir():
+        if path.is_file() and pattern.fullmatch(path.name) and path.name not in keep:
+            path.unlink()
+
+
+def pack_large_tables(
+    output,
+    threshold=20 * 1024 * 1024,
+    *,
+    shard_trigger=TABLE_SHARD_TRIGGER_BYTES,
+    shard_max=TABLE_SHARD_MAX_BYTES,
+):
+    """Keep small table paths compatible; shard only gzips exceeding the measured limit."""
     table_files = {}
     for name in TABLE_NAMES:
         path = output / (name + ".csv")
@@ -397,11 +562,21 @@ def pack_large_tables(output, threshold=20 * 1024 * 1024):
                 with gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0) as packed:
                     for block in iter(lambda: source.read(1024 * 1024), b""):
                         packed.write(block)
+                        if stream.tell() > shard_trigger:
+                            break  # The finalized file can only grow beyond this size.
+            if compressed.stat().st_size > shard_trigger:
+                entry = shard_csv_gzip(path, output, max_bytes=shard_max)
+                table_files[path.name] = entry
+                compressed.unlink()
+                _clean_table_parts(output, name, table_parts(entry))
+            else:
+                table_files[path.name] = compressed.name
+                _clean_table_parts(output, name)
             path.unlink()
-            table_files[path.name] = compressed.name
         else:
             compressed.unlink(missing_ok=True)
             table_files[path.name] = path.name
+            _clean_table_parts(output, name)
     return table_files
 
 
@@ -1276,6 +1451,17 @@ def _export(state, output, *, make_plots, require_complete, historical_insects, 
                 "per_artifact_details": "cases[].payload_encoding and replications[].payload_encoding",
             },
             "tabular_scalars_series_matrices": "retained in the metric CSVs",
+            "table_files_contract": {
+                "version": 2,
+                "single_file": "relative filename string",
+                "sharded_table": "descriptor with format=csv+gzip-shards and an ordered shards list",
+                "reconstruction": "read parts in listed order; keep the first CSV header and skip subsequent "
+                "repeated headers; use UTF-8 and the canonical Excel CSV dialect",
+                "source_row_range": "zero-based, half-open data-row positions excluding the repeated header",
+                "shard_trigger_compressed_bytes": TABLE_SHARD_TRIGGER_BYTES,
+                "max_shard_compressed_bytes": TABLE_SHARD_MAX_BYTES,
+                "shard_bound": "each compressed part is strictly smaller than max_shard_compressed_bytes",
+            },
             "indexed_dense_array_fields": sorted(DENSE_ARRAY_FIELDS),
             "vector_index": table_files["vector-index.csv"],
             "indexed_arrays": vectors.count,
