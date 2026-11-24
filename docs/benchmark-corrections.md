@@ -130,6 +130,15 @@ os horários de início e término de cada job abrangem também finalização e 
 O sampler de sistema acompanha o processo durante a avaliação e a finalização, com
 seu escopo compartilhado registrado no relatório.
 
+Após a conclusão integral, `publish_corrective_execution_times.py` valida os recibos
+e deriva `corrective_campaign/job_body_wall_seconds` desses horários. O intervalo
+inclui materialização, avaliação, diagnósticos e publicação dentro de `execute_job`.
+Ficam fora a inicialização do processo, as importações anteriores ao início registrado,
+a verificação inicial do código, o hash do artefato e a escrita final do recibo.
+Os 60 casos da matriz recebem um ponto cada no tracking. Nos oito jobs UPF, o tempo
+corresponde às três seeds em conjunto e não é dividido entre os ensaios. O campo
+legado `pipeline_elapsed_seconds` permanece com seu significado original.
+
 ## Execução portátil
 
 No MLflow, os runs identificam dataset, modelo, política, detector, modo, protocolo
@@ -163,6 +172,9 @@ uv run --frozen python scripts/run_corrective_benchmarks.py \
 
 uv run --frozen python scripts/export_corrective_evidence.py \
   --state state/corrective-full --output state/corrective-evidence --require-complete
+
+uv run --frozen python scripts/publish_corrective_execution_times.py \
+  --state state/corrective-full --output state/corrective-times --tracking
 ```
 
 Defina `MLFLOW_TRACKING_URI` e a autenticação exigida pelo serviço antes de usar
