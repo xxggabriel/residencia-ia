@@ -87,7 +87,14 @@ def fit_contract(fit):
     }
 
 
-@pytest.mark.parametrize("seed", [42, 43, 44])
+@pytest.mark.parametrize(
+    "seed",
+    [
+        42,
+        pytest.param(43, marks=pytest.mark.zia_extended_seeds),
+        pytest.param(44, marks=pytest.mark.zia_extended_seeds),
+    ],
+)
 @pytest.mark.parametrize("dataset", ["fraud", "social"])
 @pytest.mark.parametrize("policy", ["cara", "upf", "oracle"])
 def test_future_holdout_labels_do_not_change_learning_or_decisions(ordered_fixture, dataset, policy, seed):

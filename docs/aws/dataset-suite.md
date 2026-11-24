@@ -137,6 +137,15 @@ O contrato `contract.requests` é obrigatório, contém os quatro pedidos e prec
 coincidir com os pedidos base registrados. Estados antigos de sete streams são
 rejeitados sem alteração; a seleção atual exige outro diretório de estado.
 
+O contrato planejado contém os quatro pedidos desde o início. Os registros de
+campanhas podem representar uma submissão parcial, inclusive antes da primeira
+resposta bem-sucedida. Nesse caso, `status` consulta as campanhas já registradas e
+seus jobs, mantendo os denominadores de 132 unidades e oito campanhas e
+`complete=false`. Essa consulta não submete campanhas. Repetir `start-base` com o
+mesmo contrato retoma as bases ausentes, usando os nomes determinísticos para
+conciliar respostas incertas. `advance` continua limitado às fases cached de bases
+registradas com três caches CARA verificados.
+
 Uma resposta de submissão sem novo job identificado consome o orçamento global
 `NoJob` da unidade. Após as quatro primeiras falhas, o workflow espera 30, 60, 120 e
 240 segundos antes de conciliar novamente e tentar reenviar. A quinta falha encerra
