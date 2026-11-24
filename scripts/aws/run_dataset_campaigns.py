@@ -683,24 +683,26 @@ def batch_snapshot(client, queue, campaign_ids):
 
 
 def selected_state(state):
-    """Reject a different historical suite before changing its coordination receipts."""
-    if set(state.get("datasets", {})) != set(DATASET_ROWS):
-        raise ValueError(
-            "suite state must contain exactly the selected datasets; use a separate state directory"
-        )
+    """Validate the whole planned suite and its possibly partial submission receipts."""
+    registered = state.get("datasets")
+    if not isinstance(registered, dict) or not set(registered) <= set(DATASET_ROWS):
+        raise ValueError("suite state contains an unselected dataset; use a separate state directory")
     requests = state.get("contract", {}).get("requests") or {}
-    if set(requests) != set(DATASET_ROWS) or any(
-        state["datasets"][dataset].get("base", {}).get("request") != request
-        for dataset, request in requests.items()
-    ):
+    if set(requests) != set(DATASET_ROWS):
         raise ValueError("suite state differs from its selected request contract")
     campaigns = []
-    for dataset, stages in state["datasets"].items():
+    for dataset, request in requests.items():
+        validate_request(request, dataset, state["release"], "base")
+        campaigns.append(request["campaign_id"])
+    for dataset, stages in registered.items():
         if "base" not in stages or not set(stages) <= set(STAGE_POLICIES):
             raise ValueError("suite state has missing or unexpected campaign stages")
+        if stages["base"].get("request") != requests[dataset]:
+            raise ValueError("suite state differs from its selected request contract")
         for stage, record in stages.items():
             validate_request(record["request"], dataset, state["release"], stage)
-            campaigns.append(record["request"]["campaign_id"])
+            if stage == "cached":
+                campaigns.append(record["request"]["campaign_id"])
     if len(campaigns) != len(set(campaigns)):
         raise ValueError("suite campaign identities must be distinct")
     return tuple(DATASET_ROWS)
@@ -771,8 +773,6 @@ def main(argv=None):
             smoke, deployment = read_json(args.smoke_receipt), read_json(args.deployment_receipt)
             validate_smoke(smoke, deployment, args.release)
             requests = read_requests(args.requests_dir, args.release)
-            workflow = verify_workflow(deployment)
-            runtime = preflight(client, args.bucket, args.project, args.release)
             contract = {
                 "requests": requests,
                 "release": args.release,
@@ -781,11 +781,14 @@ def main(argv=None):
                 "smoke_sha256": digest(smoke),
                 "deployment_sha256": digest(deployment),
             }
-            if state_path.exists():
-                state = read_json(state_path)
+            state = read_json(state_path) if state_path.exists() else None
+            if state is not None:
                 if state["contract"] != contract:
                     raise ValueError("the state directory already describes a different suite")
-            else:
+                selected_state(state)
+            workflow = verify_workflow(deployment)
+            runtime = preflight(client, args.bucket, args.project, args.release)
+            if state is None:
                 state = {
                     "schema": "aws-ordered-dataset-suite-v1",
                     "contract": contract,
@@ -823,7 +826,10 @@ def main(argv=None):
         display = result
         if "batch" in result:
             display = {
-                **{key: result[key] for key in ("complete", "verified_units", "expected_units")},
+                **{
+                    key: result[key]
+                    for key in ("complete", "verified_units", "expected_units", "expected_campaigns")
+                },
                 "campaigns": {
                     key: {k: v for k, v in value.items() if k != "matrix_caches"}
                     for key, value in result["campaigns"].items()

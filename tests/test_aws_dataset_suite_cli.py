@@ -693,3 +693,247 @@ def test_start_base_reports_only_the_selected_84_base_and_48_deferred_units(tmp_
     assert {request["dataset"] for request in starts} == set(suite.DATASET_ROWS)
     state = suite.read_json(tmp_path / "state" / "suite-state.json")
     assert set(state["datasets"]) == set(state["contract"]["requests"]) == set(suite.DATASET_ROWS)
+
+
+class PartialSubmissionClient:
+    """Service protocol fixture with real coordinator calls and no benchmark output."""
+
+    def __init__(self, *, fail_submission=None):
+        self.fail_submission = fail_submission
+        self.executions, self.submissions, self.calls = {}, [], []
+
+    def record_execution(self, request):
+        arn = suite.execution_arn(MACHINE, request["campaign_id"])
+        self.executions[arn] = {
+            "executionArn": arn,
+            "input": suite.canonical({"request": request}),
+            "status": "RUNNING",
+        }
+        return arn
+
+    def call(self, service, operation, params):
+        self.calls.append((service, operation, copy.deepcopy(params)))
+        if operation == "describe-execution":
+            if params["executionArn"] not in self.executions:
+                raise RuntimeError("ExecutionDoesNotExist")
+            return self.executions[params["executionArn"]]
+        if operation == "start-execution":
+            request = json.loads(params["input"])["request"]
+            self.submissions.append(request)
+            if len(self.submissions) == self.fail_submission:
+                raise RuntimeError("submission unavailable before acceptance")
+            return {"executionArn": self.record_execution(request)}
+        if operation == "list-jobs":
+            name = params["filters"][0]["values"][0]
+            return {
+                "jobSummaryList": [
+                    {"jobId": arn, "jobName": name.removesuffix("*") + "0" * 20}
+                    for arn, execution in self.executions.items()
+                    if name == "cb-" + json.loads(execution["input"])["request"]["campaign_id"] + "-*"
+                ]
+            }
+        if operation == "describe-jobs":
+            return {
+                "jobs": [
+                    {
+                        "jobId": arn,
+                        "jobName": "cb-"
+                        + json.loads(self.executions[arn]["input"])["request"]["campaign_id"]
+                        + "-"
+                        + "0" * 20,
+                        "status": "RUNNING",
+                        "container": {
+                            "resourceRequirements": [
+                                {"type": "VCPU", "value": "2"},
+                                {"type": "MEMORY", "value": "4096"},
+                            ],
+                        },
+                    }
+                    for arn in params["jobs"]
+                ]
+            }
+        if operation == "describe-job-queues":
+            return RuntimeClient().call(service, operation, params)
+        raise AssertionError((service, operation, params))
+
+    def optional_json(self, bucket, key):
+        self.calls.append(("s3", "optional-json", {"bucket": bucket, "key": key}))
+        assert key.endswith("/plan.json")
+        return None  # The running fixture jobs have not published their plans yet.
+
+
+def test_cli_monitors_and_resumes_after_the_second_base_submission_fails(tmp_path, monkeypatch, capsys):
+    requests_dir, state_dir = tmp_path / "requests", tmp_path / "state"
+    write_request_index(requests_dir)
+    smoke, deployment = receipts()
+    suite.save_json(tmp_path / "smoke.json", smoke)
+    suite.save_json(tmp_path / "deployment.json", deployment)
+    client = PartialSubmissionClient(fail_submission=2)
+    monkeypatch.setattr(suite, "AwsCli", lambda _region: client)
+    monkeypatch.setattr(suite, "verify_workflow", lambda value: value["workflow"])
+    monkeypatch.setattr(suite, "preflight", lambda *args: {"queue": "queue", "state_machine": MACHINE})
+    arguments = [
+        "start-base",
+        "--state-dir",
+        str(state_dir),
+        "--requests-dir",
+        str(requests_dir),
+        "--smoke-receipt",
+        str(tmp_path / "smoke.json"),
+        "--deployment-receipt",
+        str(tmp_path / "deployment.json"),
+        "--release",
+        SHA,
+        "--bucket",
+        BUCKET,
+    ]
+    with pytest.raises(RuntimeError, match="ExecutionDoesNotExist"):
+        suite.main(arguments)
+    saved = suite.read_json(state_dir / "suite-state.json")
+    assert len(saved["datasets"]) == len(client.executions) == 1
+    assert len(saved["contract"]["requests"]) == 4
+    first = next(iter(saved["datasets"]))
+    original_contract = copy.deepcopy(saved["contract"])
+    calls_before_status, submissions_before_status = len(client.calls), len(client.submissions)
+
+    suite.main(["status", "--state-dir", str(state_dir)])
+    display = json.loads(capsys.readouterr().out)
+    latest = suite.read_json(state_dir / "latest-status.json")
+    assert display["complete"] is latest["complete"] is False
+    assert display["expected_units"] == 132 and display["expected_campaigns"] == 8
+    assert latest["expected_units"] == 132 and latest["expected_campaigns"] == 8
+    assert len(latest["campaigns"]) == latest["batch"]["active"] == 1
+    assert latest["batch"]["reserved_vcpus_running_or_starting"] == 2
+    assert latest["batch"]["jobs"][0]["resources"] == {"VCPU": "2", "MEMORY": "4096"}
+    assert len(client.submissions) == submissions_before_status
+    assert [operation for _, operation, _ in client.calls[calls_before_status:]] == [
+        "describe-execution",
+        "optional-json",
+        "list-jobs",
+        "describe-jobs",
+    ]
+
+    suite.main(arguments)
+    resumed = suite.read_json(state_dir / "suite-state.json")
+    assert resumed["contract"] == original_contract
+    assert set(resumed["datasets"]) == set(suite.DATASET_ROWS)
+    assert len(client.executions) == 4 and len(client.submissions) == 5
+    assert sum(request["dataset"] == first for request in client.submissions) == 1
+    assert {request["dataset"] for request in client.submissions[submissions_before_status:]} == set(
+        suite.DATASET_ROWS
+    ) - {first}
+    suite.main(arguments)
+    assert len(client.executions) == 4 and len(client.submissions) == 5
+
+
+@pytest.mark.parametrize("registered", [0, 1, 3])
+def test_partial_status_uses_the_whole_contract_and_only_queries_registered_campaigns(registered):
+    state = base_state()
+    state["datasets"] = dict(list(state["datasets"].items())[:registered])
+    client = PartialSubmissionClient()
+    for records in state["datasets"].values():
+        records["base"]["executionArn"] = client.record_execution(records["base"]["request"])
+    result = suite.status(client, state)
+    assert result["complete"] is False
+    assert result["expected_units"] == 132 and result["expected_campaigns"] == 8
+    assert len(result["campaigns"]) == result["batch"]["active"] == registered
+    assert result["batch"]["reserved_vcpus_running_or_starting"] == registered * 2
+    assert (
+        len([operation for _, operation, _ in client.calls if operation == "describe-execution"])
+        == registered
+    )
+    assert client.submissions == []
+
+
+@pytest.mark.parametrize("registered", [0, 1, 3])
+def test_partial_advance_can_start_only_cached_stages_of_registered_bases(monkeypatch, registered):
+    state = base_state()
+    state["datasets"] = dict(list(state["datasets"].items())[:registered])
+    client = PartialSubmissionClient()
+    for records in state["datasets"].values():
+        records["base"]["executionArn"] = client.record_execution(records["base"]["request"])
+    monkeypatch.setattr(
+        suite,
+        "inspect_campaign",
+        lambda *args: {
+            "matrix_caches": {
+                str(seed): {"uri": f"s3://{BUCKET}/cache/{seed}", "sha256": HASH} for seed in suite.SEEDS
+            },
+            "complete": False,
+            "expected_units": 21,
+            "verified_units": 3,
+        },
+    )
+    result = suite.status(client, state, advance=True)
+    assert (
+        result["complete"] is False and result["expected_units"] == 132 and result["expected_campaigns"] == 8
+    )
+    assert len(client.submissions) == registered
+    assert {request["dataset"] for request in client.submissions} == set(state["datasets"])
+    assert all(request["matrix"]["policies"] == list(suite.CACHED_POLICIES) for request in client.submissions)
+    assert all(set(records) == {"base", "cached"} for records in state["datasets"].values())
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["release", "scope", "seed", "policy", "epochs", "artifact_mode", "kind", "dataset", "duplicate_id"],
+)
+def test_invalid_unregistered_planned_request_fails_before_aws_or_state_changes(mutation):
+    state = base_state()
+    state["datasets"] = dict(list(state["datasets"].items())[:1])
+    missing = next(dataset for dataset in suite.DATASET_ROWS if dataset not in state["datasets"])
+    request = state["contract"]["requests"][missing]
+    if mutation == "release":
+        request["release"] = "c" * 40
+    elif mutation == "scope":
+        request["scope"] = "smoke"
+    elif mutation == "seed":
+        request["matrix"]["seeds"] = [42, 43]
+    elif mutation == "policy":
+        request["matrix"]["policies"].pop()
+    elif mutation == "epochs":
+        request["matrix"]["iterative_training"]["max_epochs"] = 3
+    elif mutation == "artifact_mode":
+        request["matrix"]["artifact_mode"] = "full"
+    elif mutation == "kind":
+        request["matrix"]["kind"] = "zia"
+    elif mutation == "dataset":
+        request["dataset"] = "fraud"
+    else:
+        request["campaign_id"] = next(iter(state["datasets"].values()))["base"]["request"]["campaign_id"]
+    before = copy.deepcopy(state)
+    client = PartialSubmissionClient()
+    with pytest.raises(ValueError):
+        suite.status(client, state, advance=True)
+    assert state == before and client.calls == [] and client.submissions == []
+
+
+@pytest.mark.parametrize(
+    "mutation", ["empty", "stage", "altered_base", "duplicate_cached", "missing_planned"]
+)
+def test_partial_submission_state_keeps_registered_and_planned_identity_guards(mutation):
+    state = base_state()
+    state["contract"] = copy.deepcopy(state["contract"])
+    state["datasets"] = dict(list(state["datasets"].items())[:1])
+    dataset, stages = next(iter(state["datasets"].items()))
+    unregistered = next(name for name in suite.DATASET_ROWS if name not in state["datasets"])
+    if mutation == "empty":
+        state["datasets"][dataset] = {}
+    elif mutation == "stage":
+        stages["unexpected"] = copy.deepcopy(stages["base"])
+    elif mutation == "altered_base":
+        stages["base"]["request"]["max_parallel"] = 16
+    elif mutation == "duplicate_cached":
+        request = suite.cached_request(
+            stages["base"]["request"],
+            {str(seed): {"uri": f"s3://{BUCKET}/cache/{seed}", "sha256": HASH} for seed in suite.SEEDS},
+        )
+        request["campaign_id"] = state["contract"]["requests"][unregistered]["campaign_id"]
+        stages["cached"] = {"request": request, "executionArn": "cached"}
+    else:
+        state["contract"]["requests"].pop(unregistered)
+    before = copy.deepcopy(state)
+    client = PartialSubmissionClient()
+    with pytest.raises(ValueError):
+        suite.status(client, state, advance=True)
+    assert state == before and client.calls == [] and client.submissions == []
