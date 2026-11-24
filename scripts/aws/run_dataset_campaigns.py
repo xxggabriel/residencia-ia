@@ -24,14 +24,13 @@ DATASET_ROWS = {
     "airlines": 539_383,
     "insects_abrupt_imbalanced": 355_275,
     "insects_incremental_abrupt_reoccurring_imbalanced": 452_044,
-    "fraud": 50_000_000,
-    "ecommerce": 50_000_000,
-    "social": 100_000_000,
 }
+QA_DATASETS = frozenset((*DATASET_ROWS, "fraud", "ecommerce", "social"))
 SEEDS = (42, 43, 44)
 BASE_POLICIES = ("frozen", "drift", "drift_adwin", "drift_ddm", "incremental", "periodic", "cara")
 CACHED_POLICIES = ("cara_cumulative", "cara_periodic", "upf", "oracle")
 POLICIES = BASE_POLICIES + CACHED_POLICIES
+STAGE_POLICIES = {"base": BASE_POLICIES, "cached": CACHED_POLICIES}
 ACTIVE = {"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"}
 PROTOCOL = "ordered-stream-batch-prequential-metrics-v2"
 QUEUE_WAIT_SECONDS = 86_400
@@ -174,24 +173,39 @@ def all_items(
 
 def validate_smoke(smoke, deployment, release):
     coverage, checks = smoke.get("coverage", {}), smoke.get("checks", {})
+    datasets = coverage.get("datasets", [])
+    expected = {(dataset, policy, seed) for dataset in datasets for policy in POLICIES for seed in SEEDS}
+    cases = smoke.get("cases", [])
+    coordinates = [(case.get("dataset"), case.get("policy"), case.get("seed")) for case in cases]
     required = (
         "prediction_integrity",
         "metrics_reconstructed",
         "no_model_files",
         "tracking_receipts_complete",
         "native_tracking_catalog_verified",
+        "native_publication_markers_verified",
+        "fit_seeds_verified",
     )
     if not (
         smoke.get("schema") == "ordered-dataset-suite-qa-v1"
         and smoke.get("complete") is True
         and smoke.get("scope") == "smoke"
-        and coverage.get("expected_cases") == coverage.get("passed_cases") == 231
-        and set(coverage.get("datasets", [])) == set(DATASET_ROWS)
+        and set(DATASET_ROWS) <= set(datasets) <= QA_DATASETS
+        and len(datasets) == len(set(datasets))
+        and coverage.get("expected_cases") == coverage.get("passed_cases") == len(expected)
+        and len(cases) == len(expected)
+        and set(coordinates) == expected
+        and len({case.get("case_id") for case in cases}) == len(expected)
+        and all(
+            case.get("complete") is True and case.get("native_tracking", {}).get("complete") is True
+            for case in cases
+        )
         and set(coverage.get("policies", [])) == set(POLICIES)
+        and len(coverage.get("policies", [])) == len(POLICIES)
         and coverage.get("seeds") == list(SEEDS)
         and all(checks.get(key) is True for key in required)
     ):
-        raise ValueError("all 231 smoke cases and native metric checks must be complete")
+        raise ValueError("all declared smoke cases and native metric checks must be complete")
     workflow = deployment.get("workflow", {})
     if not (
         re.fullmatch(r"[a-f0-9]{40}", release)
@@ -207,6 +221,30 @@ def validate_smoke(smoke, deployment, release):
         raise ValueError("deployment receipt must bind the successful release to the smoke source hash")
 
 
+def validate_request(request, dataset, release, stage):
+    matrix = request.get("matrix", {})
+    policies = STAGE_POLICIES[stage]
+    caches = matrix.get("metric_cache_sources") or {}
+    if not (
+        dataset in DATASET_ROWS
+        and request.get("dataset") == dataset
+        and request.get("release") == release
+        and request.get("scope") == "full"
+        and not request.get("snapshot")
+        and matrix.get("kind") == "stream"
+        and matrix.get("artifact_mode") == "metrics_only"
+        and matrix.get("seeds") == list(SEEDS)
+        and matrix.get("iterative_training", {}).get("max_epochs") == 100
+        and set(matrix.get("policies", [])) == set(policies)
+        and len(matrix.get("policies", [])) == len(policies)
+        and request.get("max_parallel") == 32
+        and request.get("queue_timeout_seconds") == QUEUE_WAIT_SECONDS
+        and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", request.get("campaign_id", ""))
+        and (not caches if stage == "base" else set(caches) == {str(seed) for seed in SEEDS})
+    ):
+        raise ValueError(f"invalid full {stage} request for {dataset}")
+
+
 def read_requests(directory, release):
     directory = Path(directory).resolve()
     index = read_json(directory / "index.json")
@@ -219,28 +257,14 @@ def read_requests(directory, release):
             raise ValueError("request file escapes its directory")
         request = read_json(path)["request"]
         dataset = entry["dataset"]
-        matrix = request.get("matrix", {})
-        if not (
-            dataset in DATASET_ROWS
-            and dataset not in requests
-            and request.get("dataset", request.get("snapshot", {}).get("dataset")) == dataset
-            and request.get("release") == release
-            and request.get("scope", request.get("snapshot", {}).get("scope")) == "full"
-            and matrix.get("artifact_mode") == "metrics_only"
-            and matrix.get("seeds") == list(SEEDS)
-            and matrix.get("iterative_training", {}).get("max_epochs") == 100
-            and set(matrix.get("policies", [])) == set(BASE_POLICIES)
-            and len(matrix.get("policies", [])) == len(BASE_POLICIES)
-            and request.get("max_parallel") == 32
-            and request.get("queue_timeout_seconds") == 86_400
-            and request["campaign_id"] == entry["campaign_id"]
-            and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", request["campaign_id"])
-            and not matrix.get("metric_cache_sources")
-        ):
+        validate_request(request, dataset, release, "base")
+        if dataset in requests or request["campaign_id"] != entry["campaign_id"]:
             raise ValueError(f"invalid full base request for {dataset}")
         requests[dataset] = request
-    if set(requests) != set(DATASET_ROWS) or len({r["campaign_id"] for r in requests.values()}) != 7:
-        raise ValueError("exactly seven distinct complete stream requests are required")
+    if set(requests) != set(DATASET_ROWS) or len({r["campaign_id"] for r in requests.values()}) != len(
+        DATASET_ROWS
+    ):
+        raise ValueError("exactly the selected complete stream requests are required")
     return requests
 
 
@@ -405,6 +429,8 @@ def execution_arn(state_machine, name):
 
 def start_request(client, request, state_machine):
     """Re-read on uncertain submissions; never invent a second execution name."""
+    stage = "base" if set(request["matrix"]["policies"]) == set(BASE_POLICIES) else "cached"
+    validate_request(request, request.get("dataset"), request.get("release"), stage)
     name = request["campaign_id"]
     expected_input = {"request": request}
     arn = execution_arn(state_machine, name)
@@ -440,6 +466,13 @@ def start_request(client, request, state_machine):
 
 def verify_final(client, bucket, unit, final, dataset):
     params = unit["params"]
+    if (
+        dataset not in DATASET_ROWS
+        or params.get("dataset") != dataset
+        or params.get("seed") not in SEEDS
+        or params.get("policy") not in POLICIES
+    ):
+        raise ValueError("final manifest is outside the selected dataset/policy/seed matrix")
     source_sha = (unit["contract"].get("stream_source") or unit["contract"].get("snapshot") or {}).get(
         "prepared_sha256"
     )
@@ -464,6 +497,8 @@ def verify_final(client, bucket, unit, final, dataset):
         and contract["input"]["sha256"] == source_sha
         and metrics["initial_train_rows"] + metrics["n"] + report["holdout"]["n"] == DATASET_ROWS[dataset]
         and contract["iterative_training"]["seed"] == params["seed"]
+        and contract["iterative_training"]["max_epochs"] == 100
+        and contract["iterative_training"] == params["iterative_training"]
         and contract.get("artifact_mode") == "metrics_only"
         and metrics["model_storage_bytes"] == 0
         and all(v.get("file") is None for v in report["model_versions"])
@@ -548,6 +583,12 @@ def inspect_campaign(client, bucket, record, dataset, verified):
                 verified[unit["run_id"]] = previous
             elif previous["final_sha256"] != final_hash:
                 raise ValueError("a previously verified final manifest changed")
+            if (previous["dataset"], previous["policy"], previous["seed"]) != (
+                dataset,
+                unit["params"]["policy"],
+                unit["params"]["seed"],
+            ):
+                raise ValueError("verified final coordinates differ from the published plan")
             count += 1
             if unit["params"]["policy"] == "cara":
                 if "matrix_cache" not in previous:
@@ -578,6 +619,7 @@ def inspect_campaign(client, bucket, record, dataset, verified):
 
 
 def cached_request(base, caches):
+    validate_request(base, base.get("dataset"), base.get("release"), "base")
     if set(caches) != {str(seed) for seed in SEEDS}:
         raise ValueError("all three independently seeded CARA matrix caches are required")
     request = copy.deepcopy(base)
@@ -640,7 +682,38 @@ def batch_snapshot(client, queue, campaign_ids):
     }
 
 
+def selected_state(state):
+    """Reject a different historical suite before changing its coordination receipts."""
+    if set(state.get("datasets", {})) != set(DATASET_ROWS):
+        raise ValueError(
+            "suite state must contain exactly the selected datasets; use a separate state directory"
+        )
+    requests = state.get("contract", {}).get("requests") or {}
+    if set(requests) != set(DATASET_ROWS) or any(
+        state["datasets"][dataset].get("base", {}).get("request") != request
+        for dataset, request in requests.items()
+    ):
+        raise ValueError("suite state differs from its selected request contract")
+    campaigns = []
+    for dataset, stages in state["datasets"].items():
+        if "base" not in stages or not set(stages) <= set(STAGE_POLICIES):
+            raise ValueError("suite state has missing or unexpected campaign stages")
+        for stage, record in stages.items():
+            validate_request(record["request"], dataset, state["release"], stage)
+            campaigns.append(record["request"]["campaign_id"])
+    if len(campaigns) != len(set(campaigns)):
+        raise ValueError("suite campaign identities must be distinct")
+    return tuple(DATASET_ROWS)
+
+
 def status(client, state, *, advance=False):
+    datasets = selected_state(state)
+    expected = {(dataset, policy, seed) for dataset in datasets for policy in POLICIES for seed in SEEDS}
+    coordinates = [
+        (item["dataset"], item["policy"], item["seed"]) for item in state.get("verified_finals", {}).values()
+    ]
+    if not set(coordinates) <= expected or len(coordinates) != len(set(coordinates)):
+        raise ValueError("verified final receipts are outside the selected matrix or duplicated")
     result = {"at_epoch_seconds": time.time(), "campaigns": {}}
     if advance:
         queue = client.call("batch", "describe-job-queues", {"jobQueues": [state["queue"]]})["jobQueues"][0]
@@ -664,10 +737,11 @@ def status(client, state, *, advance=False):
     ids = [r["request"]["campaign_id"] for stages in state["datasets"].values() for r in stages.values()]
     result["batch"] = batch_snapshot(client, state["queue"], ids)
     result["verified_units"] = len(verified)
-    result["expected_units"] = 231
+    result["expected_units"] = len(expected)
+    result["expected_campaigns"] = len(datasets) * len(STAGE_POLICIES)
     result["complete"] = (
-        len(verified) == 231
-        and len(result["campaigns"]) == 14
+        len(verified) == len(expected)
+        and len(result["campaigns"]) == result["expected_campaigns"]
         and all(r["complete"] for r in result["campaigns"].values())
         and result["batch"]["active"] == 0
     )
@@ -735,8 +809,8 @@ def main(argv=None):
                 save_json(state_path, state)
             result = {
                 "submitted_base_campaigns": len(state["datasets"]),
-                "base_units": 147,
-                "cached_units_deferred": 84,
+                "base_units": len(requests) * len(BASE_POLICIES) * len(SEEDS),
+                "cached_units_deferred": len(requests) * len(CACHED_POLICIES) * len(SEEDS),
                 "complete": False,
             }
         else:

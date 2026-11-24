@@ -102,6 +102,8 @@ def test_live_metrics_use_mlflow_native_async_logging_and_flush(tmp_path, monkey
     client = MlflowClient(tracking_uri=uri)
     experiment = client.create_experiment("async")
     run_id = client.create_run(experiment).info.run_id
+    # FileStore's async writers race when creating the shared metric namespace.
+    (tmp_path / "mlruns" / experiment / run_id / "metrics" / "progress").mkdir(exist_ok=True)
 
     tracker = SageMakerMlflowTracker(
         tracking_uri=uri, dataset="sea", policy="periodic", model_name="xgboost", run_id="unit"
@@ -116,8 +118,10 @@ def test_live_metrics_use_mlflow_native_async_logging_and_flush(tmp_path, monkey
     assert tracker.flush()
     assert rest_calls == []  # Live points never took the synchronous REST path.
     rows = client.get_metric_history(run_id, "progress/rows")
-    assert sorted(m.step for m in rows) == list(range(1, 51))
-    assert [m.value for m in client.get_metric_history(run_id, "loss")] == [0.25]
+    assert sorted((m.step, m.value) for m in rows) == [(step, float(step)) for step in range(1, 51)]
+    accuracy = client.get_metric_history(run_id, "progress/accuracy")
+    assert sorted((m.step, m.value) for m in accuracy) == [(step, step / 100) for step in range(1, 51)]
+    assert [(m.step, m.value) for m in client.get_metric_history(run_id, "loss")] == [(1, 0.25)]
 
 
 def test_without_async_logging_the_rest_transport_is_kept(monkeypatch):

@@ -112,7 +112,12 @@
       "MaxConcurrencyPath": "$.planned.plan.concurrency",
       "ItemSelector": {
         "item.$": "$$.Map.Item.Value",
-        "control.$": "$.planned.plan.control_function"
+        "control.$": "$.planned.plan.control_function",
+        "submission": {
+          "failures": 0,
+          "wait_seconds": 30,
+          "next_job_attempt": 0
+        }
       },
       "ItemProcessor": {
         "ProcessorConfig": {
@@ -132,7 +137,8 @@
             },
             "ResultSelector": {
               "decision.$": "$.Payload.decision",
-              "job_id.$": "$.Payload.job_id"
+              "job_id.$": "$.Payload.job_id",
+              "details.$": "$.Payload"
             },
             "ResultPath": "$.reconciled",
             "Retry": [
@@ -171,7 +177,7 @@
               {
                 "Variable": "$.reconciled.decision",
                 "StringEquals": "wait",
-                "Next": "WaitForExistingJob"
+                "Next": "ResetForExistingJob"
               },
               {
                 "Variable": "$.reconciled.decision",
@@ -179,7 +185,7 @@
                 "Next": "UnitFailed"
               }
             ],
-            "Default": "Submit"
+            "Default": "RememberSubmission"
           },
           "Submit": {
             "Type": "Task",
@@ -323,7 +329,7 @@
                 "Next": "UnitSucceeded"
               }
             ],
-            "Default": "Reconcile"
+            "Default": "ResetAfterRecordedJob"
           },
           "RecordFailure": {
             "Type": "Task",
@@ -360,7 +366,7 @@
                 "Next": "UnitFailed"
               }
             ],
-            "Next": "Reconcile"
+            "Next": "ReconcileSubmissionFailure"
           },
           "Reused": {
             "Type": "Pass",
@@ -386,6 +392,162 @@
               "status": "FAILED"
             },
             "End": true
+          },
+          "RememberSubmission": {
+            "Type": "Pass",
+            "Comment": "Record the next real-job ordinal before submitting; API rejections do not advance it.",
+            "Parameters": {
+              "failures.$": "$.submission.failures",
+              "wait_seconds.$": "$.submission.wait_seconds",
+              "next_job_attempt.$": "$.reconciled.details.attempt"
+            },
+            "ResultPath": "$.submission",
+            "Next": "Submit"
+          },
+          "ResetForExistingJob": {
+            "Type": "Pass",
+            "ResultPath": "$.submission",
+            "Next": "WaitForExistingJob",
+            "Comment": "Discard only the prior job ordinal. Preserve the unit-wide no-job count and backoff across real jobs.",
+            "Parameters": {
+              "failures.$": "$.submission.failures",
+              "wait_seconds.$": "$.submission.wait_seconds",
+              "next_job_attempt": 0
+            }
+          },
+          "ResetAfterRecordedJob": {
+            "Type": "Pass",
+            "ResultPath": "$.submission",
+            "Next": "Reconcile",
+            "Comment": "Discard only the prior job ordinal. Preserve the unit-wide no-job count and backoff across real jobs.",
+            "Parameters": {
+              "failures.$": "$.submission.failures",
+              "wait_seconds.$": "$.submission.wait_seconds",
+              "next_job_attempt": 0
+            }
+          },
+          "ReconcileSubmissionFailure": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.control",
+              "Payload": {
+                "action": "reconcile_unit",
+                "item.$": "$.item"
+              }
+            },
+            "ResultSelector": {
+              "decision.$": "$.Payload.decision",
+              "job_id.$": "$.Payload.job_id",
+              "details.$": "$.Payload"
+            },
+            "ResultPath": "$.reconciled",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "UnitFailed"
+              }
+            ],
+            "Next": "RouteSubmissionFailure"
+          },
+          "RouteSubmissionFailure": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "skip",
+                "Next": "Reused"
+              },
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "wait",
+                "Next": "ResetForExistingJob"
+              },
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "exhausted",
+                "Next": "UnitFailed"
+              }
+            ],
+            "Default": "SubmissionMadeProgress"
+          },
+          "SubmissionMadeProgress": {
+            "Type": "Choice",
+            "Comment": "A newer Batch job advances the real-job budget while preserving the unit-wide submission-failure budget. An unchanged ordinal consumes only the latter.",
+            "Choices": [
+              {
+                "Variable": "$.reconciled.details.attempt",
+                "NumericGreaterThanPath": "$.submission.next_job_attempt",
+                "Next": "ResetForRetry"
+              }
+            ],
+            "Default": "CountSubmissionFailure"
+          },
+          "ResetForRetry": {
+            "Type": "Pass",
+            "ResultPath": "$.submission",
+            "Next": "RememberSubmission",
+            "Comment": "Discard only the prior job ordinal. Preserve the unit-wide no-job count and backoff across real jobs.",
+            "Parameters": {
+              "failures.$": "$.submission.failures",
+              "wait_seconds.$": "$.submission.wait_seconds",
+              "next_job_attempt": 0
+            }
+          },
+          "CountSubmissionFailure": {
+            "Type": "Pass",
+            "Parameters": {
+              "failures.$": "States.MathAdd($.submission.failures, 1)",
+              "wait_seconds.$": "$.submission.wait_seconds",
+              "next_job_attempt.$": "$.submission.next_job_attempt"
+            },
+            "ResultPath": "$.submission",
+            "Next": "SubmissionBudgetAvailable"
+          },
+          "SubmissionBudgetAvailable": {
+            "Type": "Choice",
+            "Comment": "Five failed submissions without a new job across the entire unit terminate only this unit. Real jobs do not reset this budget; item.max_attempts remains independent.",
+            "Choices": [
+              {
+                "Variable": "$.submission.failures",
+                "NumericGreaterThanEquals": 5,
+                "Next": "UnitFailed"
+              }
+            ],
+            "Default": "WaitToResubmit"
+          },
+          "WaitToResubmit": {
+            "Type": "Wait",
+            "SecondsPath": "$.submission.wait_seconds",
+            "Next": "AdvanceSubmissionBackoff"
+          },
+          "AdvanceSubmissionBackoff": {
+            "Type": "Pass",
+            "Comment": "The four permitted resubmission delays are 30, 60, 120 and 240 seconds. Reconcile again after waiting to discover late submissions.",
+            "Parameters": {
+              "failures.$": "$.submission.failures",
+              "wait_seconds.$": "States.MathAdd($.submission.wait_seconds, $.submission.wait_seconds)",
+              "next_job_attempt.$": "$.submission.next_job_attempt"
+            },
+            "ResultPath": "$.submission",
+            "Next": "Reconcile"
           }
         }
       },
@@ -408,7 +570,12 @@
       "ToleratedFailurePercentage": 100,
       "ItemSelector": {
         "item.$": "$$.Map.Item.Value",
-        "control.$": "$.planned.plan.control_function"
+        "control.$": "$.planned.plan.control_function",
+        "submission": {
+          "failures": 0,
+          "wait_seconds": 30,
+          "next_job_attempt": 0
+        }
       },
       "ItemProcessor": {
         "ProcessorConfig": {
@@ -429,7 +596,8 @@
             },
             "ResultSelector": {
               "decision.$": "$.Payload.decision",
-              "job_id.$": "$.Payload.job_id"
+              "job_id.$": "$.Payload.job_id",
+              "details.$": "$.Payload"
             },
             "ResultPath": "$.reconciled",
             "Retry": [
@@ -468,7 +636,7 @@
               {
                 "Variable": "$.reconciled.decision",
                 "StringEquals": "wait",
-                "Next": "DistributedWaitForExistingJob"
+                "Next": "DistributedResetForExistingJob"
               },
               {
                 "Variable": "$.reconciled.decision",
@@ -476,7 +644,7 @@
                 "Next": "DistributedUnitFailed"
               }
             ],
-            "Default": "DistributedSubmit"
+            "Default": "DistributedRememberSubmission"
           },
           "DistributedSubmit": {
             "Type": "Task",
@@ -620,7 +788,7 @@
                 "Next": "DistributedUnitSucceeded"
               }
             ],
-            "Default": "DistributedReconcile"
+            "Default": "DistributedResetAfterRecordedJob"
           },
           "DistributedRecordFailure": {
             "Type": "Task",
@@ -657,7 +825,7 @@
                 "Next": "DistributedUnitFailed"
               }
             ],
-            "Next": "DistributedReconcile"
+            "Next": "DistributedReconcileSubmissionFailure"
           },
           "DistributedReused": {
             "Type": "Pass",
@@ -683,6 +851,162 @@
               "status": "FAILED"
             },
             "End": true
+          },
+          "DistributedRememberSubmission": {
+            "Type": "Pass",
+            "Comment": "Record the next real-job ordinal before submitting; API rejections do not advance it.",
+            "Parameters": {
+              "failures.$": "$.submission.failures",
+              "wait_seconds.$": "$.submission.wait_seconds",
+              "next_job_attempt.$": "$.reconciled.details.attempt"
+            },
+            "ResultPath": "$.submission",
+            "Next": "DistributedSubmit"
+          },
+          "DistributedResetForExistingJob": {
+            "Type": "Pass",
+            "ResultPath": "$.submission",
+            "Next": "DistributedWaitForExistingJob",
+            "Comment": "Discard only the prior job ordinal. Preserve the unit-wide no-job count and backoff across real jobs.",
+            "Parameters": {
+              "failures.$": "$.submission.failures",
+              "wait_seconds.$": "$.submission.wait_seconds",
+              "next_job_attempt": 0
+            }
+          },
+          "DistributedResetAfterRecordedJob": {
+            "Type": "Pass",
+            "ResultPath": "$.submission",
+            "Next": "DistributedReconcile",
+            "Comment": "Discard only the prior job ordinal. Preserve the unit-wide no-job count and backoff across real jobs.",
+            "Parameters": {
+              "failures.$": "$.submission.failures",
+              "wait_seconds.$": "$.submission.wait_seconds",
+              "next_job_attempt": 0
+            }
+          },
+          "DistributedReconcileSubmissionFailure": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.control",
+              "Payload": {
+                "action": "reconcile_unit",
+                "item.$": "$.item"
+              }
+            },
+            "ResultSelector": {
+              "decision.$": "$.Payload.decision",
+              "job_id.$": "$.Payload.job_id",
+              "details.$": "$.Payload"
+            },
+            "ResultPath": "$.reconciled",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "DistributedUnitFailed"
+              }
+            ],
+            "Next": "DistributedRouteSubmissionFailure"
+          },
+          "DistributedRouteSubmissionFailure": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "skip",
+                "Next": "DistributedReused"
+              },
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "wait",
+                "Next": "DistributedResetForExistingJob"
+              },
+              {
+                "Variable": "$.reconciled.decision",
+                "StringEquals": "exhausted",
+                "Next": "DistributedUnitFailed"
+              }
+            ],
+            "Default": "DistributedSubmissionMadeProgress"
+          },
+          "DistributedSubmissionMadeProgress": {
+            "Type": "Choice",
+            "Comment": "A newer Batch job advances the real-job budget while preserving the unit-wide submission-failure budget. An unchanged ordinal consumes only the latter.",
+            "Choices": [
+              {
+                "Variable": "$.reconciled.details.attempt",
+                "NumericGreaterThanPath": "$.submission.next_job_attempt",
+                "Next": "DistributedResetForRetry"
+              }
+            ],
+            "Default": "DistributedCountSubmissionFailure"
+          },
+          "DistributedResetForRetry": {
+            "Type": "Pass",
+            "ResultPath": "$.submission",
+            "Next": "DistributedRememberSubmission",
+            "Comment": "Discard only the prior job ordinal. Preserve the unit-wide no-job count and backoff across real jobs.",
+            "Parameters": {
+              "failures.$": "$.submission.failures",
+              "wait_seconds.$": "$.submission.wait_seconds",
+              "next_job_attempt": 0
+            }
+          },
+          "DistributedCountSubmissionFailure": {
+            "Type": "Pass",
+            "Parameters": {
+              "failures.$": "States.MathAdd($.submission.failures, 1)",
+              "wait_seconds.$": "$.submission.wait_seconds",
+              "next_job_attempt.$": "$.submission.next_job_attempt"
+            },
+            "ResultPath": "$.submission",
+            "Next": "DistributedSubmissionBudgetAvailable"
+          },
+          "DistributedSubmissionBudgetAvailable": {
+            "Type": "Choice",
+            "Comment": "Five failed submissions without a new job across the entire unit terminate only this unit. Real jobs do not reset this budget; item.max_attempts remains independent.",
+            "Choices": [
+              {
+                "Variable": "$.submission.failures",
+                "NumericGreaterThanEquals": 5,
+                "Next": "DistributedUnitFailed"
+              }
+            ],
+            "Default": "DistributedWaitToResubmit"
+          },
+          "DistributedWaitToResubmit": {
+            "Type": "Wait",
+            "SecondsPath": "$.submission.wait_seconds",
+            "Next": "DistributedAdvanceSubmissionBackoff"
+          },
+          "DistributedAdvanceSubmissionBackoff": {
+            "Type": "Pass",
+            "Comment": "The four permitted resubmission delays are 30, 60, 120 and 240 seconds. Reconcile again after waiting to discover late submissions.",
+            "Parameters": {
+              "failures.$": "$.submission.failures",
+              "wait_seconds.$": "States.MathAdd($.submission.wait_seconds, $.submission.wait_seconds)",
+              "next_job_attempt.$": "$.submission.next_job_attempt"
+            },
+            "ResultPath": "$.submission",
+            "Next": "DistributedReconcile"
           }
         }
       },

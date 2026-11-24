@@ -1,7 +1,8 @@
 # Suíte integral de streams ordenados
 
-A suíte usa o protocolo `ordered-stream-batch-prequential-metrics-v2` para Electricity,
-Airlines, as duas variantes binárias INSECTS e os streams Fraud, E-commerce e Social.
+A seleção AWS usa o protocolo `ordered-stream-batch-prequential-metrics-v2` para
+exatamente quatro streams: `electricity`, `airlines`, `insects_abrupt_imbalanced` e
+`insects_incremental_abrupt_reoccurring_imbalanced`.
 Cada política é executada com as seeds 42, 43 e 44. A ordem publicada de um stream real
 permanece fixa entre seeds, portanto essas repetições não representam três populações
 independentes.
@@ -12,9 +13,11 @@ independentes.
 | Airlines | 539.383 |
 | INSECTS abrupt imbalanced | 355.275 |
 | INSECTS incremental abrupt reoccurring imbalanced | 452.044 |
-| Fraud | 50.000.000 |
-| E-commerce | 50.000.000 |
-| Social | 100.000.000 |
+| Total das quatro fontes | 1.392.014 |
+
+Fraud, E-commerce e Social permanecem no suporte local e nas evidências históricas,
+fora desta seleção AWS. O [guia geral da suíte](../dataset-suite.md) descreve esse
+suporte e o preflight local ampliado.
 
 Todos os exemplos participam das fases definidas pelo protocolo. O treino inicial,
 a avaliação prequential e o holdout temporal final têm denominadores próprios. O
@@ -22,32 +25,24 @@ protocolo pressupõe rótulos disponíveis ao final do bloco e não substitui o 
 binário histórico com atraso simulado. Os tamanhos de bloco, o replay, a calibração,
 os modelos e as definições das métricas constam nos relatórios de cada execução.
 
-A comparação principal usa a coorte comum posterior à calibração das políticas.
-Social preserva suas quatro classes. AP positiva binária e AP macro multiclasse têm
-escopos distintos; a interpretação de Brier também deve considerar a normalização
-registrada. Os estimadores de ranking desta suíte usam os mesmos 4.096 bins, sem
-misturar seus resultados com curvas exatas dos experimentos históricos.
-
-No Social, `source_in`, `source_out`, `target_in` e `target_out` são recalculados
-com arestas de datas estritamente anteriores. A preparação não usa os totais finais
-`follower_count` e `following_count` da tabela de usuários. `source_age` e
-`target_age` são divididos por 3.650 dias, e cadastros posteriores à data da aresta
-são rejeitados. O atributo sintético `region_id` é tratado como estático e conhecido;
-como sua disponibilidade histórica não é informada, essa parte do contrato tem
-interpretação de snapshot offline. A implementação está em
-[`datasets/zia.py`](../../src/continual_bench/datasets/zia.py), e a descrição da
-fonte consta no [README da revisão fixada](https://huggingface.co/datasets/ziadatalabs/FreeSocialNetwork100M/blob/8518bf04c105df75ab72c13bbec1e12b270eb92f/README.md).
+A comparação principal usa a coorte comum posterior à calibração das políticas,
+com uma única identidade de fonte por stream em todas as políticas e seeds. As
+quatro tarefas são binárias. Os estimadores de ranking usam os mesmos 4.096 bins,
+sem misturar seus resultados com curvas exatas dos experimentos históricos. A
+interpretação de Brier considera a normalização registrada no contrato.
 
 ## Execução em duas fases
 
 A primeira fase contém `frozen`, `drift`, `drift_adwin`, `drift_ddm`, `incremental`,
-`periodic` e `cara`: 147 unidades, considerando sete streams e três seeds. Cada
+`periodic` e `cara`: 84 unidades, considerando quatro streams e três seeds. Cada
 execução CARA produz uma matriz de métricas verificada. Após os três resultados
 CARA de um stream serem publicados, a segunda fase pode executar `cara_cumulative`,
-`cara_periodic`, `upf` e `oracle`, acrescentando 84 unidades à suíte.
+`cara_periodic`, `upf` e `oracle`, acrescentando 48 unidades à suíte.
 
-O total é de 231 unidades lógicas. A matriz compartilhada contém medidas e
-proveniência, sem pesos ou estado de treino. O relatório distingue a construção
+O total é de 132 unidades lógicas em oito campanhas, uma base e uma cached por
+stream. Cada unidade declara até 100 épocas e `artifact_mode=metrics_only`. A
+matriz compartilhada contém medidas e proveniência, sem pesos ou estado de treino.
+O relatório distingue a construção
 original da matriz, seu reúso e os ajustes adicionais necessários para materializar
 modelos em memória. Isso evita atribuir a cada política o mesmo trabalho físico de
 construção. Oracle permanece uma referência retrospectiva do objetivo formal da
@@ -70,6 +65,14 @@ antes de começar a geração do próximo. O histórico científico e as amostra
 sistema continuam integrais. Se um ajuste posterior for inválido, filhos anteriores
 podem estar concluídos; a repetição reutiliza esses registros sem duplicar pontos.
 
+O recibo de artefatos soma os arquivos e bytes enviados ao run pai e aos child
+runs. As parcelas permanecem separadas, com `fit_id`, `run_id` e URI para cada
+filho. A publicação confere o número de arquivos e os bytes previstos por ajuste;
+um diretório ausente, um recibo incompleto ou uma falha de upload impede a
+conclusão. O guard de publicação usa esse total, preservando o vínculo dos filhos
+com o histórico de treino. A implementação está no
+[`publisher MLflow`](../../src/continual_bench/infrastructure/aws/mlflow_tracking.py).
+
 ## Condições antes da submissão
 
 O comando de coordenação é
@@ -78,9 +81,12 @@ Ele recebe pedidos novos e uma release SHA explícita. Não realiza deploy.
 
 Antes da primeira submissão, o comando verifica:
 
-- QA completo dos 231 smoke tests, incluindo três seeds, métricas reconstruídas,
+- QA completo da matriz declarada, incluindo três seeds, métricas reconstruídas,
   integridade das predições, ausência de arquivos de modelo e conferência do catálogo
-  de métricas no rastreamento nativo;
+  de métricas e dos marcadores de publicação no rastreamento nativo. O QA local pode
+  abranger os sete streams e seus 231 casos, desde que todos estejam completos e
+  os quatro streams selecionados estejam incluídos. O comando verifica cada
+  coordenada dataset/política/seed e seu recibo nativo, além dos totais;
 - vínculo do hash de código do smoke ao recibo da release e sucesso atual do workflow
   `Build and deploy`, consultado pela CLI do GitHub;
 - stack concluída, release publicada e imagem por digest compatíveis;
@@ -101,14 +107,24 @@ de merge pode ter SHA diferente da revisão avaliada, sem autorizar a substitui�
 do código usado no smoke.
 
 O índice dos pedidos, gerado por `run_dataset_suite.py --write-requests`, deve ter
-`stage=base`, os sete streams integrais, três seeds e `artifact_mode=metrics_only`.
+`stage=base`, exatamente os quatro streams integrais, três seeds e
+`artifact_mode=metrics_only`. Cada pedido declara `dataset` explicitamente e
+`matrix.kind=stream`. Pedidos Zia são rejeitados antes da submissão.
 Os pedidos integrais mantêm 100 épocas máximas e registram a configuração completa.
 Um smoke reduzido é uma validação funcional, não uma execução integral antecipada.
 
 ```bash
+python scripts/run_dataset_suite.py \
+  --root /inputs/prepared --output state/four-stream-full-plan \
+  --datasets electricity airlines insects_abrupt_imbalanced \
+    insects_incremental_abrupt_reoccurring_imbalanced \
+  --scope full --max-epochs 100 --tracking --plan-only \
+  --write-requests state/dataset-requests-four-streams --request-stage base \
+  --release "$RELEASE_SHA"
+
 python scripts/aws/run_dataset_campaigns.py start-base \
-  --state-dir state/aws-dataset-suite \
-  --requests-dir state/dataset-requests \
+  --state-dir state/aws-four-stream-suite \
+  --requests-dir state/dataset-requests-four-streams \
   --smoke-receipt state/dataset-smoke/suite-qa.json \
   --deployment-receipt state/deployment-receipt.json \
   --release "$RELEASE_SHA" --bucket "$DATA_BUCKET" --region us-east-1
@@ -117,6 +133,18 @@ python scripts/aws/run_dataset_campaigns.py start-base \
 O estado local registra exatamente os pedidos e as identidades retornadas. Uma
 submissão com resposta incerta é conciliada pelo nome determinístico e pelo conteúdo
 do pedido. O comando não cria outro nome para contornar uma identidade existente.
+O contrato `contract.requests` é obrigatório, contém os quatro pedidos e precisa
+coincidir com os pedidos base registrados. Estados antigos de sete streams são
+rejeitados sem alteração; a seleção atual exige outro diretório de estado.
+
+Uma resposta de submissão sem novo job identificado consome o orçamento global
+`NoJob` da unidade. Após as quatro primeiras falhas, o workflow espera 30, 60, 120 e
+240 segundos antes de conciliar novamente e tentar reenviar. A quinta falha encerra
+a unidade. Esse contador não é zerado quando um job real aparece. O limite
+`max_attempts` conta as tentativas com jobs reais e permanece independente desse
+orçamento de submissão. A regra está no
+[`workflow Step Functions`](../../infra/statemachines/benchmark.asl.json), com
+[testes dos dois processadores](../../tests/test_aws_submission_retry_workflow.py).
 
 ## Acompanhamento e conferência
 
@@ -126,10 +154,10 @@ resultados CARA e inicia apenas as segundas fases que já tenham seus três cach
 
 ```bash
 python scripts/aws/run_dataset_campaigns.py status \
-  --state-dir state/aws-dataset-suite --region us-east-1
+  --state-dir state/aws-four-stream-suite --region us-east-1
 
 python scripts/aws/run_dataset_campaigns.py advance \
-  --state-dir state/aws-dataset-suite --region us-east-1
+  --state-dir state/aws-four-stream-suite --region us-east-1
 ```
 
 Os recibos incluem estados do Step Functions, reservas dos jobs Batch, ARNs das
@@ -145,14 +173,15 @@ timestamp do ledger; pontos já recebidos conservam o timestamp nativo, inclusiv
 nas repetições. A cronologia científica permanece vinculada à sequência dos
 exemplos, às janelas e aos passos de cada ajuste.
 
-A conclusão da suíte exige 231 unidades verificadas, 14 campanhas concluídas com
+A conclusão da suíte exige 132 unidades verificadas, oito campanhas concluídas com
 resumos completos e nenhuma tarefa ativa da suíte. Um código de saída zero ou um
 estado `SUCCEEDED` isolado não comprova essa conclusão. A conferência dos recibos de
 publicação não substitui a auditoria independente das séries nativas finais.
 
 As interrupções Spot preservam evidências por tentativa. A avaliação incompleta
 reinicia sem restaurar treino; apenas a publicação de métricas já concluídas pode
-ser recuperada. As métricas temporais e os custos das tentativas permanecem
+ser recuperada, sob o mesmo contrato, release e imagem do plano original. As métricas
+temporais e os custos das tentativas permanecem
 separados. Uma estimativa de reserva computacional não é apresentada como
 faturamento Spot real.
 
@@ -167,8 +196,8 @@ e não remove dados remotos.
 
 ```bash
 python scripts/aws/export_dataset_evidence.py \
-  --state-dir state/aws-dataset-suite \
-  --output docs/evidencias/aws-dataset-suite \
+  --state-dir state/aws-four-stream-suite \
+  --output docs/evidencias/aws-four-stream-suite \
   --scratch-root state/aws-evidence-scratch \
   --scratch-gib 20 --max-file-mib 64
 ```
@@ -180,7 +209,9 @@ Primeiro são lidos os planos e os manifestos finais, que precisam coincidir com
 identidades já verificadas pelo coordenador. Os relatórios completos são baixados
 e conferidos por SHA-256. A coorte principal é determinada depois de examinar
 todas as políticas e seeds de cada fonte: seu início sucede a maior fase de
-calibração e seu fim antecede o holdout comum.
+calibração e seu fim antecede o holdout comum. O exportador exige os quatro streams,
+as oito campanhas e a matriz completa de 132 coordenadas, com os três comprovantes
+de cache CARA por stream e uma única identidade de fonte em cada coorte.
 
 As predições são tratadas um caso de cada vez. O exportador confere seus manifestos,
 fixa a versão S3 ou condiciona a leitura ao ETag, valida os bytes e o SHA-256 de

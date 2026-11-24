@@ -18,16 +18,30 @@ BUCKET = "test-bucket"
 MACHINE = "arn:aws:states:us-east-1:123456789012:stateMachine:benchmark"
 
 
-def receipts():
+def receipts(datasets=None):
+    datasets = list(suite.DATASET_ROWS) if datasets is None else list(datasets)
+    cases = [
+        {
+            "case_id": f"{dataset}/{policy}/{seed}",
+            "dataset": dataset,
+            "policy": policy,
+            "seed": seed,
+            "complete": True,
+            "native_tracking": {"complete": True},
+        }
+        for dataset in datasets
+        for policy in suite.POLICIES
+        for seed in suite.SEEDS
+    ]
     smoke = {
         "schema": "ordered-dataset-suite-qa-v1",
         "complete": True,
         "scope": "smoke",
         "code": {"code_sha256": HASH},
         "coverage": {
-            "expected_cases": 231,
-            "passed_cases": 231,
-            "datasets": list(suite.DATASET_ROWS),
+            "expected_cases": len(cases),
+            "passed_cases": len(cases),
+            "datasets": datasets,
             "policies": list(suite.POLICIES),
             "seeds": [42, 43, 44],
         },
@@ -39,8 +53,11 @@ def receipts():
                 "no_model_files",
                 "tracking_receipts_complete",
                 "native_tracking_catalog_verified",
+                "native_publication_markers_verified",
+                "fit_seeds_verified",
             )
         },
+        "cases": cases,
     }
     deployment = {
         "complete": True,
@@ -69,11 +86,39 @@ def base_request(dataset="electricity"):
     }
 
 
+def base_state():
+    state = {
+        "bucket": BUCKET,
+        "release": SHA,
+        "queue": "queue",
+        "state_machine": MACHINE,
+        "datasets": {
+            dataset: {"base": {"request": base_request(dataset), "executionArn": "arn-" + dataset}}
+            for dataset in suite.DATASET_ROWS
+        },
+    }
+    state["contract"] = {
+        "requests": {dataset: stages["base"]["request"] for dataset, stages in state["datasets"].items()}
+    }
+    return state
+
+
+def write_request_index(directory, datasets=None):
+    directory.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for dataset in suite.DATASET_ROWS if datasets is None else datasets:
+        request = base_request(dataset)
+        path = directory / f"{dataset}.json"
+        suite.save_json(path, {"request": request})
+        entries.append({"dataset": dataset, "campaign_id": request["campaign_id"], "file": path.name})
+    suite.save_json(directory / "index.json", {"release": SHA, "stage": "base", "requests": entries})
+
+
 @pytest.mark.parametrize("field", ["passed_cases", "seeds", "policies", "datasets"])
 def test_smoke_gate_rejects_partial_matrix(field):
     smoke, deployment = receipts()
     smoke["coverage"][field] = 230 if field == "passed_cases" else []
-    with pytest.raises(ValueError, match="231 smoke"):
+    with pytest.raises(ValueError, match="declared smoke"):
         suite.validate_smoke(smoke, deployment, SHA)
 
 
@@ -97,6 +142,64 @@ def test_smoke_gate_rejects_missing_code_hash_even_if_both_receipts_omit_it():
         suite.validate_smoke(smoke, deployment, SHA)
 
 
+def test_complete_seven_dataset_smoke_is_a_valid_superset_of_the_four_dataset_aws_suite():
+    smoke, deployment = receipts(sorted(suite.QA_DATASETS))
+    assert len(smoke["cases"]) == 231
+    suite.validate_smoke(smoke, deployment, SHA)
+    assert len(suite.DATASET_ROWS) * len(suite.POLICIES) * len(suite.SEEDS) == 132
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "incomplete", "native", "selection"])
+def test_superset_smoke_requires_every_declared_coordinate_and_native_receipt(mutation):
+    smoke, deployment = receipts(sorted(suite.QA_DATASETS))
+    if mutation == "missing":
+        smoke["cases"].pop()
+    elif mutation == "duplicate":
+        smoke["cases"][-1] = copy.deepcopy(smoke["cases"][0])
+    elif mutation == "incomplete":
+        smoke["cases"][0]["complete"] = False
+    elif mutation == "native":
+        smoke["cases"][0]["native_tracking"]["complete"] = False
+    else:
+        smoke, deployment = receipts([dataset for dataset in suite.QA_DATASETS if dataset != "airlines"])
+    with pytest.raises(ValueError, match="declared smoke"):
+        suite.validate_smoke(smoke, deployment, SHA)
+
+
+@pytest.mark.parametrize("dataset", ["fraud", "ecommerce", "social"])
+def test_zia_requests_cannot_be_admitted_or_submitted(tmp_path, dataset):
+    write_request_index(tmp_path, [*suite.DATASET_ROWS, dataset])
+    with pytest.raises(ValueError, match="invalid full base"):
+        suite.read_requests(tmp_path, SHA)
+    client = ExecutionClient(base_request(dataset))
+    with pytest.raises(ValueError, match="invalid full base"):
+        suite.start_request(client, base_request(dataset), MACHINE)
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "implicit_dataset", "zia_kind", "policy"])
+def test_request_index_requires_exact_explicit_stream_selection(tmp_path, mutation):
+    write_request_index(tmp_path)
+    index = suite.read_json(tmp_path / "index.json")
+    request_path = tmp_path / "electricity.json"
+    document = suite.read_json(request_path)
+    if mutation == "missing":
+        index["requests"].pop()
+    elif mutation == "duplicate":
+        index["requests"].append(index["requests"][0])
+    elif mutation == "implicit_dataset":
+        document["request"].pop("dataset")
+        document["request"]["snapshot"] = {"dataset": "electricity", "scope": "full"}
+    elif mutation == "zia_kind":
+        document["request"]["matrix"]["kind"] = "zia"
+    else:
+        document["request"]["matrix"]["policies"].pop()
+    suite.save_json(tmp_path / "index.json", index)
+    suite.save_json(request_path, document)
+    with pytest.raises(ValueError):
+        suite.read_requests(tmp_path, SHA)
+
+
 @pytest.mark.parametrize("mutation", ["online", "seed", "epochs", "scope", "escape"])
 def test_request_reader_admits_only_full_three_seed_non_online_suite(tmp_path, mutation):
     entries = []
@@ -106,7 +209,7 @@ def test_request_reader_admits_only_full_three_seed_non_online_suite(tmp_path, m
         path.write_text(json.dumps({"request": request}))
         entries.append({"dataset": dataset, "campaign_id": request["campaign_id"], "file": path.name})
     (tmp_path / "index.json").write_text(json.dumps({"release": SHA, "stage": "base", "requests": entries}))
-    assert len(suite.read_requests(tmp_path, SHA)) == 7
+    assert len(suite.read_requests(tmp_path, SHA)) == len(suite.DATASET_ROWS) == 4
     path = tmp_path / "electricity.json"
     request = json.loads(path.read_text())
     if mutation == "online":
@@ -183,7 +286,12 @@ def valid_run():
     unit = {
         "run_id": run_id,
         "contract_sha256": HASH,
-        "params": {"policy": "frozen", "seed": 42},
+        "params": {
+            "dataset": "electricity",
+            "policy": "frozen",
+            "seed": 42,
+            "iterative_training": {"seed": 42, "max_epochs": 100},
+        },
         "contract": {"stream_source": {"prepared_sha256": HASH}},
     }
     uri = f"s3://{BUCKET}/campaigns/suite/runs/{run_id}/attempts/local-0"
@@ -204,7 +312,7 @@ def valid_run():
         "policy": "frozen",
         "contract": {
             "input": {"rows": 45_312, "sha256": HASH},
-            "iterative_training": {"seed": 42},
+            "iterative_training": {"seed": 42, "max_epochs": 100},
             "artifact_mode": "metrics_only",
         },
         "metrics": {
@@ -403,19 +511,13 @@ def test_preflight_checks_physical_resources_quota_image_and_regional_usage(muta
 
 
 def test_status_does_not_start_cached_stage_without_all_three_cara_caches(monkeypatch):
-    base = base_request()
-    state = {
-        "bucket": BUCKET,
-        "queue": "queue",
-        "state_machine": MACHINE,
-        "datasets": {"electricity": {"base": {"request": base, "executionArn": "arn"}}},
-    }
+    state = base_state()
     caches = {"42": {"uri": "uri", "sha256": HASH}, "43": {"uri": "uri2", "sha256": HASH}}
     monkeypatch.setattr(
         suite,
         "inspect_campaign",
-        lambda *args: {
-            "matrix_caches": caches,
+        lambda _client, _bucket, _record, dataset, _verified: {
+            "matrix_caches": caches if dataset == "electricity" else {},
             "complete": False,
             "expected_units": 21,
             "verified_units": 2,
@@ -478,9 +580,116 @@ def test_queue_time_limit_contract_fails_closed_for_missing_or_ambiguous_actions
 def test_advance_rechecks_live_queue_before_starting_any_campaign(monkeypatch):
     client = RuntimeClient()
     client.queue_actions[0]["maxTimeSeconds"] = 3600
-    state = {"queue": "queue", "datasets": {}}
+    state = base_state()
     starts = []
     monkeypatch.setattr(suite, "start_request", lambda *args: starts.append(args))
     with pytest.raises(ValueError, match="at least 86400"):
         suite.status(client, state, advance=True)
     assert starts == []
+
+
+def test_historical_seven_dataset_state_is_rejected_without_changes_or_aws_calls():
+    state = base_state()
+    for dataset in sorted(suite.QA_DATASETS - set(suite.DATASET_ROWS)):
+        state["datasets"][dataset] = {"base": {"request": base_request(dataset)}}
+    before = copy.deepcopy(state)
+    client = ExecutionClient(base_request())
+    with pytest.raises(ValueError, match="separate state directory"):
+        suite.status(client, state, advance=True)
+    assert state == before and client.calls == []
+
+
+@pytest.mark.parametrize("missing", ["contract", "requests"])
+def test_selected_state_requires_request_contract_before_any_changes_or_aws_calls(missing):
+    state = base_state()
+    if missing == "contract":
+        state.pop("contract")
+    else:
+        state["contract"].pop("requests")
+    before = copy.deepcopy(state)
+    client = ExecutionClient(base_request())
+    with pytest.raises(ValueError, match="request contract"):
+        suite.status(client, state, advance=True)
+    assert state == before and client.calls == []
+
+
+@pytest.mark.parametrize("active", [0, 1])
+def test_complete_selected_suite_requires_eight_campaigns_132_units_and_zero_active_jobs(monkeypatch, active):
+    state = base_state()
+    for stages in state["datasets"].values():
+        request = suite.cached_request(
+            stages["base"]["request"],
+            {str(seed): {"uri": f"s3://{BUCKET}/cache/{seed}", "sha256": HASH} for seed in suite.SEEDS},
+        )
+        stages["cached"] = {"request": request, "executionArn": "cached"}
+
+    def inspect(_client, _bucket, record, dataset, verified):
+        policies = record["request"]["matrix"]["policies"]
+        for policy in policies:
+            for seed in suite.SEEDS:
+                run_id = f"{dataset}/{policy}/{seed}"
+                verified[run_id] = {"dataset": dataset, "policy": policy, "seed": seed}
+        return {
+            "complete": True,
+            "matrix_caches": {},
+            "expected_units": len(policies) * len(suite.SEEDS),
+            "verified_units": len(policies) * len(suite.SEEDS),
+        }
+
+    monkeypatch.setattr(suite, "inspect_campaign", inspect)
+    monkeypatch.setattr(suite, "batch_snapshot", lambda *args: {"active": active})
+    result = suite.status(None, state)
+    assert result["complete"] is (active == 0)
+    assert result["verified_units"] == result["expected_units"] == 132
+    assert len(result["campaigns"]) == result["expected_campaigns"] == 8
+    assert sum(r["expected_units"] for r in result["campaigns"].values()) == 84 + 48
+    for dataset in suite.DATASET_ROWS:
+        assert {
+            row["seed"]
+            for row in state["verified_finals"].values()
+            if row["dataset"] == dataset and row["policy"] == "cara"
+        } == set(suite.SEEDS)
+
+
+def test_start_base_reports_only_the_selected_84_base_and_48_deferred_units(tmp_path, monkeypatch, capsys):
+    requests_dir = tmp_path / "requests"
+    write_request_index(requests_dir)
+    smoke, deployment = receipts(sorted(suite.QA_DATASETS))
+    suite.save_json(tmp_path / "smoke.json", smoke)
+    suite.save_json(tmp_path / "deployment.json", deployment)
+    monkeypatch.setattr(suite, "AwsCli", lambda _region: None)
+    monkeypatch.setattr(suite, "verify_workflow", lambda value: value["workflow"])
+    monkeypatch.setattr(suite, "preflight", lambda *args: {"queue": "queue", "state_machine": MACHINE})
+    starts = []
+    monkeypatch.setattr(
+        suite,
+        "start_request",
+        lambda _client, request, _machine: starts.append(request) or {"executionArn": "arn"},
+    )
+    suite.main(
+        [
+            "start-base",
+            "--state-dir",
+            str(tmp_path / "state"),
+            "--requests-dir",
+            str(requests_dir),
+            "--smoke-receipt",
+            str(tmp_path / "smoke.json"),
+            "--deployment-receipt",
+            str(tmp_path / "deployment.json"),
+            "--release",
+            SHA,
+            "--bucket",
+            BUCKET,
+        ]
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result == {
+        "submitted_base_campaigns": 4,
+        "base_units": 84,
+        "cached_units_deferred": 48,
+        "complete": False,
+    }
+    assert {request["dataset"] for request in starts} == set(suite.DATASET_ROWS)
+    state = suite.read_json(tmp_path / "state" / "suite-state.json")
+    assert set(state["datasets"]) == set(state["contract"]["requests"]) == set(suite.DATASET_ROWS)

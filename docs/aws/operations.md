@@ -165,7 +165,7 @@ pode concluir a publicação desse conjunto de resultados.
 
 As métricas ao vivo usam o logging assíncrono nativo do MLflow (`MLFLOW_ENABLE_ASYNC_LOGGING=true`,
 `mlflow.config.enable_async_logging`). O treino só enfileira os pontos; o pool do MLflow
-(`MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE=4`, lotes a cada `MLFLOW_ASYNC_LOGGING_BUFFERING_SECONDS=5`)
+(`MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE=1`, lotes a cada `MLFLOW_ASYNC_LOGGING_BUFFERING_SECONDS=5`)
 os envia ao MLflow App. A fila é drenada no aviso Spot, antes da publicação final e ao encerrar
 a run. Sem o pacote MLflow, o worker usa o transporte REST/SigV4.
 
@@ -174,14 +174,17 @@ ID se mudar o plano ou se a campanha anterior foi explicitamente cancelada.
 
 ### Suíte integral sem checkpoints
 
-Para comparar Electricity, Airlines, INSECTS, Fraud, E-commerce e Social, siga o
-[runbook da suíte integral](dataset-suite.md). Ele utiliza fontes completas, três
-seeds, `metrics_only`, onze políticas sem Online e duas fases de execução. O deploy
+Para a seleção AWS de Electricity, Airlines e das duas variantes INSECTS, siga o
+[runbook da suíte integral](dataset-suite.md). São quatro fontes completas, três
+seeds, `metrics_only` e onze políticas sem Online, totalizando 132 unidades em oito
+campanhas. As duas fases contêm 84 unidades base e 48 que reutilizam as matrizes CARA. O deploy
 deve terminar antes da submissão, e a reserva de cada tarefa é de 2 vCPU e 4 GiB,
 com teto compartilhado de 64 vCPU. O modo não restaura treino após interrupções;
 somente a publicação de métricas concluídas pode ser recuperada.
 
 ### Exemplos anteriores dos três datasets Zia
+
+Esses exemplos permanecem como histórico e estão fora da seleção AWS atual.
 
 Os exemplos `dataset-{fraud,social,ecommerce}-full.json` preparam 50, 100 e 50 milhões
 de eventos, respectivamente. Aguarde os três marcadores `_SUCCESS.json` no escopo `full`

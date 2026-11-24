@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import subprocess
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -132,6 +133,104 @@ def test_worker_roles_reach_s3_only_through_the_gateway_endpoint():
                     "Ref": "S3GatewayEndpointId"
                 }
             assert "iam:PassRole" not in actions
+
+
+REAL_FULL_STREAMS = (
+    "electricity",
+    "airlines",
+    "insects_abrupt_imbalanced",
+    "insects_incremental_abrupt_reoccurring_imbalanced",
+)
+PREPARED_STREAM_FILES = ("manifest.json", "prepared.parquet")
+
+
+def benchmark_input_read_statement():
+    role = template("modules/execution.yaml")["Resources"]["BenchmarkJobRole"]
+    return next(s for s in statements(role) if s.get("Sid") == "ReadVerifiedSnapshotsAndUnits")
+
+
+def rendered_object_resources(statement, bucket="arn:aws:s3:::fixture-data"):
+    resources = statement["Resource"]
+    resources = resources if isinstance(resources, list) else [resources]
+    return [entry["Fn::Sub"].replace("${DataBucketArn}", bucket) for entry in resources]
+
+
+@pytest.mark.parametrize("dataset", REAL_FULL_STREAMS)
+@pytest.mark.parametrize("filename", PREPARED_STREAM_FILES)
+def test_benchmark_job_reads_manifest_and_parquet_for_each_real_full_stream(dataset, filename):
+    statement = benchmark_input_read_statement()
+    arn = f"arn:aws:s3:::fixture-data/datasets/stream-sources/{dataset}/full/{'a' * 64}/{filename}"
+    assert statement["Effect"] == "Allow"
+    assert statement["Action"] == ["s3:GetObject", "s3:GetObjectVersion"]
+    assert any(fnmatchcase(arn, resource) for resource in rendered_object_resources(statement))
+
+
+def test_prepared_stream_read_grant_is_exactly_four_full_streams_and_two_files():
+    statement = benchmark_input_read_statement()
+    actual = {
+        entry["Fn::Sub"] for entry in statement["Resource"] if "/datasets/stream-sources/" in entry["Fn::Sub"]
+    }
+    expected = {
+        f"${{DataBucketArn}}/datasets/stream-sources/{dataset}/full/*/{filename}"
+        for dataset in REAL_FULL_STREAMS
+        for filename in PREPARED_STREAM_FILES
+    }
+    assert actual == expected
+    assert statement["Condition"] == {"StringEquals": {"aws:SourceVpce": {"Ref": "S3GatewayEndpointId"}}}
+
+
+@pytest.mark.parametrize("dataset", ("fraud", "ecommerce", "social"))
+@pytest.mark.parametrize("filename", PREPARED_STREAM_FILES)
+def test_new_stream_source_read_grant_does_not_admit_zia(dataset, filename):
+    arn = f"arn:aws:s3:::fixture-data/datasets/stream-sources/{dataset}/full/{'a' * 64}/{filename}"
+    assert not any(
+        fnmatchcase(arn, resource) for resource in rendered_object_resources(benchmark_input_read_statement())
+    )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "datasets/stream-sources/electricity/smoke/hash/manifest.json",
+        "datasets/stream-sources/airlines/full/hash/raw.csv",
+        "datasets/stream-sources/airlines/full/hash/model.tar.gz",
+        "datasets/stream-sources/airlines/full/hash/manifest.json.tmp",
+        "datasets/stream-sources/airlines/full/hash/prepared.parquet.tmp",
+        "datasets/stream-sources/airlines-extra/full/hash/manifest.json",
+        "datasets/stream-sources/insects_abrupt_imbalanced_binary/full/hash/manifest.json",
+        "datasets/stream-sources-extra/airlines/full/hash/manifest.json",
+    ],
+)
+def test_prepared_stream_read_grant_rejects_other_scopes_files_and_prefixes(key):
+    arn = f"arn:aws:s3:::fixture-data/{key}"
+    assert not any(
+        fnmatchcase(arn, resource) for resource in rendered_object_resources(benchmark_input_read_statement())
+    )
+
+
+def test_prepared_stream_read_grant_does_not_match_another_bucket():
+    arn = f"arn:aws:s3:::other-data/datasets/stream-sources/airlines/full/{'a' * 64}/manifest.json"
+    assert not any(
+        fnmatchcase(arn, resource) for resource in rendered_object_resources(benchmark_input_read_statement())
+    )
+
+
+@pytest.mark.parametrize("dataset", REAL_FULL_STREAMS)
+@pytest.mark.parametrize("filename", PREPARED_STREAM_FILES)
+def test_benchmark_job_has_no_write_permission_to_prepared_real_sources(dataset, filename):
+    role = template("modules/execution.yaml")["Resources"]["BenchmarkJobRole"]
+    arn = f"arn:aws:s3:::fixture-data/datasets/stream-sources/{dataset}/full/{'a' * 64}/{filename}"
+    for statement in statements(role):
+        if statement.get("Effect") != "Allow":
+            continue
+        actions = statement["Action"]
+        actions = actions if isinstance(actions, list) else [actions]
+        if any(
+            fnmatchcase(action, allowed)
+            for action in ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload")
+            for allowed in actions
+        ):
+            assert not any(fnmatchcase(arn, resource) for resource in rendered_object_resources(statement))
 
 
 def test_gateway_serves_all_worker_subnets_independent_of_interface_endpoint_placement():

@@ -268,12 +268,16 @@ make lint    # ruff
 ## Documentação
 
 A [suíte de comparação entre datasets](docs/dataset-suite.md) usa um novo protocolo
-comum para Electricity, Airlines, duas variantes INSECTS, Fraud, E-commerce e Social.
-São 231 casos com três seeds e onze políticas, preservando as fontes completas e
-somente métricas. O [runbook Fargate Spot](docs/aws/dataset-suite.md) descreve os
-smoke tests, o deploy e a submissão em duas fases, com 2 vCPU e 4 GiB por tarefa e
-teto de 64 vCPU. Online fica fora dos pedidos AWS. A conclusão dessa campanha exige
-os recibos e as verificações descritos no runbook.
+comum. A seleção AWS atual contém Electricity, Airlines e duas variantes INSECTS:
+1.392.014 exemplos nas fontes completas, 132 unidades com três seeds e onze políticas,
+até 100 épocas e retenção exclusiva de métricas. São oito campanhas, com 84 unidades
+base e 48 que reutilizam as matrizes CARA. O [runbook Fargate Spot](docs/aws/dataset-suite.md)
+descreve a admissão, o deploy e as duas fases, com 2 vCPU e 4 GiB por tarefa e teto
+de 64 vCPU. O preflight local pode cobrir os sete streams e seus 231 casos; Fraud,
+E-commerce e Social permanecem fora desta seleção AWS, e suas evidências históricas
+são preservadas. Online possui uma rodada separada. A conclusão exige os contratos,
+recibos e verificações do runbook, com todas as unidades conferidas e nenhum job
+ativo da suíte.
 
 O [protocolo corretivo e a campanha de avaliação](docs/benchmark-corrections.md)
 descrevem disponibilidade de rótulos, separação treino/teste, retenção exclusiva de

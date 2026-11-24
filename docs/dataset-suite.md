@@ -1,9 +1,11 @@
 # Suíte de streams ordenados
 
-A suíte executa um protocolo comum de teste antes do treino por bloco em Electricity,
-Airlines, duas variantes binárias de INSECTS, Fraud, E-commerce e Social. Trata-se de
-uma campanha nova. Seus resultados não substituem os registros das campanhas
-anteriores, que utilizavam outros modelos, atrasos de rótulos e estimadores de
+O avaliador possui um protocolo comum de teste antes do treino por bloco em
+Electricity, Airlines, duas variantes binárias de INSECTS, Fraud, E-commerce e
+Social. A seleção AWS atual contém Electricity, Airlines e as duas variantes
+INSECTS, totalizando 1.392.014 exemplos nas quatro fontes integrais. O suporte local
+continua abrangendo os sete streams. As evidências históricas permanecem
+preservadas, com seus próprios modelos, atrasos de rótulos e estimadores de
 ranqueamento.
 
 ## Dados e protocolo
@@ -19,6 +21,17 @@ Os nomes canônicos são `electricity`, `airlines`, `insects_abrupt_imbalanced`,
 As variantes INSECTS preservam a tarefa binária já definida por seu provider.
 Social mantém suas quatro classes. Não se transforma esse problema em uma tarefa
 binária para forçar uma comparação.
+
+No suporte local de Social, `source_in`, `source_out`, `target_in` e `target_out`
+são recalculados com arestas de datas estritamente anteriores. A preparação não
+usa os totais finais `follower_count` e `following_count` da tabela de usuários.
+`source_age` e `target_age` são divididos por 3.650 dias, e cadastros posteriores à
+data da aresta são rejeitados. O atributo sintético `region_id` é estático e
+conhecido; como sua disponibilidade histórica não é informada, essa parte do
+contrato tem interpretação de snapshot offline. A implementação está em
+[`datasets/zia.py`](../src/continual_bench/datasets/zia.py), e a descrição da fonte
+consta no [README da revisão fixada](https://huggingface.co/datasets/ziadatalabs/FreeSocialNetwork100M/blob/8518bf04c105df75ab72c13bbec1e12b270eb92f/README.md).
+Fraud, E-commerce e Social ficam fora dos pedidos AWS atuais.
 
 O primeiro bloco é usado para aquecimento. Os blocos seguintes são previstos antes
 que seus rótulos sejam entregues ao treino e à decisão de atualização. Os rótulos
@@ -57,8 +70,10 @@ não representam três populações independentes.
 A matriz AWS contém `frozen`, `drift`, `drift_adwin`, `drift_ddm`, `incremental`,
 `periodic`, `cara`, `cara_cumulative`, `cara_periodic`, `upf` e `oracle`. A política
 `online` possui uma rodada separada. As duas variantes INSECTS são executadas
-individualmente. Assim, sete streams, onze políticas e três seeds totalizam 231
-casos na matriz AWS.
+individualmente. Os quatro streams selecionados, onze políticas e três seeds
+totalizam 132 unidades na matriz AWS, distribuídas em oito campanhas. A fase base
+tem 84 unidades; a fase que reutiliza as matrizes CARA tem 48. Os pedidos integrais
+declaram até 100 épocas e retêm somente métricas, com `artifact_mode=metrics_only`.
 
 O perfil `configs/base/tracking-dataset-suite.yaml` utiliza custos de erro de
 classificação iguais a um. A regra binária é `p_1 >= 0.5`. Os pesos de classe do
@@ -109,6 +124,11 @@ uv run python scripts/verify_dataset_suite.py \
   --output /evidence/suite-smoke --native-tracking
 ```
 
+O exemplo local usa os sete streams e seus 231 casos. Esse preflight ampliado pode
+validar a seleção AWS de quatro streams quando a matriz inteira declarada estiver
+completa, incluindo todos os casos nativos e o vínculo do hash de código com a
+release. A presença de sete streams no QA não amplia a seleção dos pedidos AWS.
+
 O processo que fornece `/inputs` e `/evidence` deve reservar os recursos do
 container. `--workers` controla o paralelismo interno, não cria uma reserva de CPU
 ou RAM. Para conferir um controle com o orçamento de treinamento final, use outro
@@ -131,7 +151,9 @@ confere sequência, checksums, limites das classes, soma das probabilidades e re
 de decisão. Também confere seeds por fit e ausência de arquivos de modelos. Com
 `--native-tracking`, lê os históricos completos de todos os pontos finitos do
 catálogo `tracking_v1` do run pai no MLflow, preservando no artefato os valores
-indefinidos que não são números válidos para publicação nativa.
+indefinidos que não são números válidos para publicação nativa. A conferência
+também exige o run concluído e os marcadores de publicação completos antes e
+depois da leitura dos históricos.
 
 Esse readback tem escopo declarado. Ele não substitui a conferência independente
 dos child runs de treino nem de outras famílias de observações publicadas fora do
@@ -145,8 +167,10 @@ O runner apenas escreve pedidos. Ele não faz deploy nem inicia campanhas:
 ```bash
 uv run python scripts/run_dataset_suite.py \
   --root /inputs/prepared --output /evidence/suite-full-plan \
+  --datasets electricity airlines insects_abrupt_imbalanced \
+    insects_incremental_abrupt_reoccurring_imbalanced \
   --scope full --max-epochs 100 --tracking --plan-only \
-  --write-requests /evidence/aws-requests-base --request-stage base \
+  --write-requests /evidence/aws-requests-four-streams-base --request-stage base \
   --release "$RELEASE_SHA"
 ```
 
@@ -156,6 +180,20 @@ políticas de referência e CARA, com três seeds por stream. A segunda fase con
 aos caches de métricas produzidos pela primeira fase. Os pedidos conservam 32
 como limite de concorrência, fila de até 24 horas e limite explícito por tentativa.
 A capacidade efetiva depende da quota, dos demais consumidores e da oferta Spot.
+
+O coordenador exige `dataset` explícito e `matrix.kind=stream`, com exatamente os
+quatro nomes selecionados no índice. O estado exige `contract.requests` com os
+mesmos quatro pedidos base; estados de uma seleção anterior de sete streams são
+preservados e rejeitados para a nova execução. Use outro diretório de estado.
+
+O recibo de upload nativo soma arquivos e bytes do run pai e de todos os filhos,
+mantendo as parcelas identificadas por fit e URI. Um filho sem evidência ou com
+upload incompleto impede a conclusão. Falhas de submissão sem novo job têm um
+orçamento `NoJob` global de cinco por unidade, com esperas de 30, 60, 120 e 240
+segundos antes dos reenvios. Esse orçamento permanece separado de `max_attempts`,
+que limita tentativas com jobs reais. A conclusão exige as 132 unidades verificadas,
+oito campanhas completas e nenhum job ativo da suíte. O
+[runbook AWS](aws/dataset-suite.md) detalha os guards e a exportação.
 
 O conjunto de pedidos da segunda fase pode ser escrito com `--request-stage cached`
 e `--metric-cache-sources <arquivo.json>`. Esse arquivo mapeia cada nome de dataset
