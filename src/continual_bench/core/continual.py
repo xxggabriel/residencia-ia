@@ -201,6 +201,17 @@ class ContinualEvaluation:
             name: {"available": values[name] is not None, "reason": reasons[name]} for name in METRICS
         }
 
+    def release_training_examples(self):
+        """Release the reference-training prefix only after every episode is complete.
+
+        Reports, fitted references and their metadata remain available. An unfinished
+        evaluation retains its examples because later joint-prefix references need them.
+        """
+        if self.next_seq != self.task_ends[-1] or len(self.matrix) != len(self.task_ends):
+            return False
+        self.examples.clear()
+        return True
+
     def report(self):
         """Return JSON-compatible evidence; trained reference objects remain on the instance."""
         values = self.matrix[-1]["metrics"] if self.matrix else dict.fromkeys(METRICS)

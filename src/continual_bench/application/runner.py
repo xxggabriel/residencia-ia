@@ -188,6 +188,9 @@ def finalize(outcome, run, protocol, contract, env, started) -> dict:
     """Attach versions, provenance, tracking and supplemental metrics to a finished outcome."""
     config, directory, settings = run.config, run.versions.directory, run.settings
     report = outcome.report
+    continual = getattr(outcome.observer, "continual", None)
+    if config.artifact_mode == "metrics_only" and continual is not None:
+        continual.release_training_examples()
     probe = next(read_events(run.events_path)).x
     report["model_versions"] = outcome.versions.finish(outcome.model, probe)
     report.update(
