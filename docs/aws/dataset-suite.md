@@ -63,6 +63,13 @@ assíncrono. A concorrência de treino e a de publicação são limites diferent
 esse ajuste reduz a pressão simultânea sobre o rastreador sem remover pontos das
 séries. Os valores efetivos acompanham os metadados do ambiente.
 
+Os pontos de cada ajuste são gerados conforme há vagas de publicação. A fila de
+payloads submetidos fica limitada à concorrência configurada, além do espaço
+temporário de construção do gerador. Com um worker, o envio de um ajuste termina
+antes de começar a geração do próximo. O histórico científico e as amostras de
+sistema continuam integrais. Se um ajuste posterior for inválido, filhos anteriores
+podem estar concluídos; a repetição reutiliza esses registros sem duplicar pontos.
+
 ## Condições antes da submissão
 
 O comando de coordenação é
@@ -130,6 +137,13 @@ tasks, tentativas e resultados verificados. A aceitação de cada unidade exige
 manifesto final compatível com o plano, relatório com SHA-256 conferido, cobertura
 integral, seed correspondente, rastreamento obrigatório concluído e inventário dos
 objetos publicados sem pesos ou checkpoints. As listagens são paginadas por completo.
+
+No progresso ao vivo, o ledger guarda o instante da observação, e `progress` atribui
+ao ponto nativo o instante de sua criação. A conferência preserva ambos os tempos e
+verifica as coordenadas e os valores. Um ponto ausente pode ser recuperado com o
+timestamp do ledger; pontos já recebidos conservam o timestamp nativo, inclusive
+nas repetições. A cronologia científica permanece vinculada à sequência dos
+exemplos, às janelas e aos passos de cada ajuste.
 
 A conclusão da suíte exige 231 unidades verificadas, 14 campanhas concluídas com
 resumos completos e nenhuma tarefa ativa da suíte. Um código de saída zero ou um
