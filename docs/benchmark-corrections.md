@@ -147,6 +147,11 @@ separa os casos da matriz, o diagnóstico dos candidatos e a comparação de pol
 Os nomes legíveis e os artefatos completos permitem filtrar e comparar os mesmos
 recortes sem depender de um identificador opaco.
 
+Nos recibos de políticas UPF, `recorded_metric_points` conta entradas do catálogo,
+inclusive valores nulos. Esse campo não representa a quantidade de pontos finitos
+persistidos no MLflow. A conferência nativa compara as coordenadas e os valores
+finitos; as indisponibilidades continuam documentadas nos relatórios.
+
 Use Python 3.12 com as dependências fixadas e credenciais de tracking fornecidas pelo
 ambiente. O entrypoint não contém endereço de servidor nem credenciais.
 

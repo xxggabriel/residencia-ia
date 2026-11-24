@@ -27,6 +27,14 @@ def save(path, value):
 def tracking_report(state, job, seed, role):
     key = hashlib.sha256(f"{job}-{seed}-{role}".encode()).hexdigest()[:24]
     report = {"run_key": key, "complete": True, "contract": {"seed": seed, "environment": ENVIRONMENT}}
+    if role == "policy":
+        report["contract"]["candidate_run_keys"] = [
+            hashlib.sha256(f"{job}-{seed}-candidate".encode()).hexdigest()[:24]
+        ]
+        report["tracking"] = {
+            "metrics": {"cost": 0.25, "unavailable": None},
+            "series": {"policy/curve": [{"step": 0, "value": 0.25}, {"step": 1, "value": None}]},
+        }
     directory = "retraining-replication" if role == "candidate" else "retraining-policy-results"
     path = state / "replications" / "tracking" / directory / key / "report.json"
     save(path, report)
@@ -35,6 +43,15 @@ def tracking_report(state, job, seed, role):
         "mlflow_run_id": hashlib.sha256(key.encode()).hexdigest()[:32],
         "report_sha256": times.digest(path),
     }
+    save(path.parent / "benchmark-receipt.json", receipt)
+    if role == "policy":
+        # Production policy_report returns this reference, not its full native report.
+        return {
+            "run_key": key,
+            "contract": report["contract"],
+            "recorded_metric_points": 4,
+            "mlflow": receipt,
+        }
     return {**report, "mlflow": receipt}
 
 
@@ -114,7 +131,13 @@ def campaign(tmp_path):
                 tracking_report(state, job["job_id"], seed, "candidate") for seed in seeds
             ],
             "trials_detail": [
-                {"seed": seed, "policy_tracking": tracking_report(state, job["job_id"], seed, "policy")}
+                {
+                    "seed": seed,
+                    "candidate_run_key": hashlib.sha256(
+                        f"{job['job_id']}-{seed}-candidate".encode()
+                    ).hexdigest()[:24],
+                    "policy_tracking": tracking_report(state, job["job_id"], seed, "policy"),
+                }
                 for seed in seeds
             ],
         }
@@ -158,6 +181,92 @@ def replace_result(state, job_id, change):
 
 def first_job(state):
     return "matrix-" + times.read(state / "campaign-plan.json")["matrix"]["cases"][0]["case_key"]
+
+
+def test_production_policy_reference_validates_native_report_and_counts_nulls(tmp_path):
+    reference = tracking_report(tmp_path, "upf-gauss", 42, "policy")
+    assert set(reference) == {"run_key", "contract", "recorded_metric_points", "mlflow"}
+    assert reference["recorded_metric_points"] == 4
+    times.validate_tracking_report(tmp_path.resolve(), reference, "retraining-policy-results", CODE)
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "native_incomplete",
+        "native_identity",
+        "native_contract",
+        "native_code",
+        "native_catalog_missing",
+        "native_series_not_array",
+        "reference_count",
+        "reference_boolean_count",
+        "reference_incomplete",
+        "native_hash",
+        "archived_receipt",
+        "receipt_incomplete",
+        "receipt_parent",
+    ],
+)
+def test_policy_reference_never_bypasses_native_evidence_guards(tmp_path, problem):
+    reference = copy.deepcopy(tracking_report(tmp_path, "upf-gauss", 42, "policy"))
+    native = (
+        tmp_path / "replications/tracking/retraining-policy-results" / reference["run_key"] / "report.json"
+    )
+    report = times.read(native)
+    if problem == "native_incomplete":
+        report["complete"] = False
+    elif problem == "native_identity":
+        report["run_key"] = "f" * 24
+    elif problem == "native_contract":
+        report["contract"]["seed"] = 43
+    elif problem == "native_code":
+        report["contract"]["environment"]["git_revision"] = "f" * 40
+        reference["contract"] = copy.deepcopy(report["contract"])
+    elif problem == "native_catalog_missing":
+        report["tracking"].pop("metrics")
+    elif problem == "native_series_not_array":
+        report["tracking"]["series"]["policy/curve"] = {"0": 0.25, "1": None}
+    elif problem == "reference_count":
+        reference["recorded_metric_points"] = 2  # Filtering nulls disagrees with the source catalog.
+    elif problem == "reference_boolean_count":
+        reference["recorded_metric_points"] = True
+    elif problem == "reference_incomplete":
+        reference["complete"] = False
+    elif problem == "native_hash":
+        reference["mlflow"]["report_sha256"] = "f" * 64
+    elif problem == "receipt_incomplete":
+        reference["mlflow"]["complete"] = False
+    elif problem == "receipt_parent":
+        reference["mlflow"]["mlflow_run_id"] = "invalid"
+    if problem.startswith("native_") and problem != "native_hash":
+        save(native, report)
+        reference["mlflow"]["report_sha256"] = times.digest(native)
+        save(native.parent / "benchmark-receipt.json", reference["mlflow"])
+    if problem == "archived_receipt":
+        receipt = copy.deepcopy(reference["mlflow"])
+        receipt["mlflow_run_id"] = "f" * 32
+        save(native.parent / "benchmark-receipt.json", receipt)
+    with pytest.raises(ValueError):
+        times.validate_tracking_report(tmp_path.resolve(), reference, "retraining-policy-results", CODE)
+
+
+@pytest.mark.parametrize("problem", ["trial_identity", "candidate_seed", "policy_seed", "policy_candidate"])
+def test_replication_reference_retains_trial_seed_and_candidate_lineage(campaign, problem):
+    plan = times.read(campaign / "campaign-plan.json")
+    job = plan["replications"]["jobs"][0]
+    payload = times.read(campaign / "replications" / (job["job_id"] + ".json"))
+    trial, candidate = payload[0]["trials_detail"][0], payload[0]["candidate_tracking"][0]
+    if problem == "trial_identity":
+        trial["candidate_run_key"] = "f" * 24
+    elif problem == "candidate_seed":
+        candidate["contract"]["seed"] = 43
+    elif problem == "policy_seed":
+        trial["policy_tracking"]["contract"]["seed"] = 43
+    else:
+        trial["policy_tracking"]["contract"]["candidate_run_keys"] = ["f" * 24]
+    with pytest.raises(ValueError, match="seed|identity|lineage"):
+        times.validate_replication(campaign.resolve(), payload, job, plan["replications"]["seeds"], CODE)
 
 
 def test_complete_wall_time_sidecar_has_real_grains_and_preserves_every_source(campaign, tmp_path):

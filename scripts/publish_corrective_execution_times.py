@@ -115,8 +115,13 @@ def validate_report_code(report, code):
 
 
 def validate_tracking_report(state, value, directory, code):
-    if value.get("complete") is not True or not re.fullmatch(r"[a-f0-9]{24}", str(value.get("run_key", ""))):
+    if not isinstance(value, dict) or not re.fullmatch(r"[a-f0-9]{24}", str(value.get("run_key", ""))):
         raise ValueError("replication tracking report is incomplete")
+    policy_reference = directory == "retraining-policy-results"
+    if not policy_reference and value.get("complete") is not True:
+        raise ValueError("replication candidate report is incomplete")
+    if "complete" in value and value["complete"] is not True:
+        raise ValueError("replication tracking wrapper declares incomplete publication")
     validate_report_code(value, code)
     receipt = value.get("mlflow")
     if not isinstance(receipt, dict) or receipt.get("complete") is not True:
@@ -127,6 +132,31 @@ def validate_tracking_report(state, value, directory, code):
     native = contained(state, relative)
     if digest(native) != receipt.get("report_sha256"):
         raise ValueError("replication native report hash differs from its receipt")
+    report = read(native)
+    if report.get("complete") is not True or report.get("run_key") != value["run_key"]:
+        raise ValueError("replication native report is incomplete or has a different identity")
+    if report.get("contract") != value.get("contract"):
+        raise ValueError("replication reference contract differs from its native report")
+    validate_report_code(report, code)
+    archived_receipt = contained(
+        state, (native.parent / "benchmark-receipt.json").relative_to(state).as_posix()
+    )
+    if read(archived_receipt) != receipt:
+        raise ValueError("replication tracking receipt differs from its archived receipt")
+    if policy_reference:
+        # policy_report deliberately returns only this reference and publication receipt;
+        # completion and scientific content belong to the hash-verified native report.
+        tracking = report.get("tracking") or {}
+        series, metrics = tracking.get("series"), tracking.get("metrics")
+        if not isinstance(series, dict) or not isinstance(metrics, dict):
+            raise ValueError("native policy report has no recorded metric catalog")
+        if any(not isinstance(points, list) for points in series.values()):
+            raise ValueError("native policy metric series are not materialized arrays")
+        # Match policy_report's catalog count, including entries whose value is None.
+        # This is not the number of finite points sent to the native metric store.
+        count = sum(len(points) for points in series.values()) + len(metrics)
+        if type(value.get("recorded_metric_points")) is not int or value["recorded_metric_points"] != count:
+            raise ValueError("policy reference metric count differs from its native report")
 
 
 def validate_replication(state, payload, job, seeds, code):
@@ -141,8 +171,15 @@ def validate_replication(state, payload, job, seeds, code):
     for candidate, trial in zip(candidates, trials, strict=True):
         if candidate.get("contract", {}).get("seed") != trial["seed"]:
             raise ValueError("candidate seed differs from its trial")
+        if trial.get("candidate_run_key") != candidate.get("run_key"):
+            raise ValueError("trial candidate identity differs from its recorded candidate")
+        policy = trial["policy_tracking"]
+        if policy.get("contract", {}).get("seed") != trial["seed"] or policy.get("contract", {}).get(
+            "candidate_run_keys"
+        ) != [candidate["run_key"]]:
+            raise ValueError("policy reference has a different seed or candidate lineage")
         validate_tracking_report(state, candidate, "retraining-replication", code)
-        validate_tracking_report(state, trial["policy_tracking"], "retraining-policy-results", code)
+        validate_tracking_report(state, policy, "retraining-policy-results", code)
 
 
 def build_execution_times(state):
