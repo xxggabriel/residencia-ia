@@ -47,14 +47,14 @@ pontuadas, linhas treinadas, cortes e observações realmente disponíveis. Esse
 e o limite exato do replay diferem dos arquivos históricos da Semana 10.
 Veja [protocolo corretivo e execução](benchmark-corrections.md).
 
-A matriz histórica da Semana 10 planejou 72 runs e arquivou 66 concluídos. A
-[matriz corretiva em andamento](../configs/matrices/insects-corrected.yaml) tem outro
+A matriz histórica da Semana 10 planejou 72 runs e arquivou 66 concluídos. A campanha da
+[matriz corretiva](../configs/matrices/insects-corrected.yaml) concluiu os 60 runs de outro
 recorte: duas fontes INSECTS integrais, dois modelos, cinco políticas e as seeds 42,
-43 e 44, totalizando 60 runs. Inclui Congelado, ADWIN, CARA, UPF e Oracle. Online ficou
+43 e 44. Inclui Congelado, ADWIN, CARA, UPF e Oracle. Online ficou
 para a próxima rodada, com quatro combinações de fonte e modelo e 12 runs; isso não
 completa as seis pendências históricas de Online com Hoeffding. O
-[registro da campanha corretiva](evidencias/benchmark-corrigido/README.md) reunirá o
-estado e os artefatos observados, sem substituir os resultados anteriores.
+[registro da campanha corretiva](evidencias/benchmark-corrigido/README.md) identifica o
+estado da execução e da conferência dos artefatos, sem substituir os resultados anteriores.
 
 Nos baselines binários prequential, o relatório também pode construir essa matriz
 depois da avaliação para publicar referências CARA, UPF e Oracle, desde que haja
@@ -68,8 +68,8 @@ pode vir de `policy.params.custo_retreino_usd` ou do cenário Fargate On-Demand.
 4 GiB e 50 GiB de disco efêmero, com modo `dedicated_task` e mínimo de 60 s. A
 [matriz histórica](../configs/matrices/insects-72.yaml) configura λ = 10 para CARA, UPF e
 Oracle; a [matriz corretiva de 60 runs](../configs/matrices/insects-corrected.yaml) herda
-esse cenário de preço. O perfil normaliza a comparação e fica separado dos recursos Spot da execução
-e da fatura. Consulte [contabilidade de custos](cost-accounting.md).
+esse cenário de preço. O perfil normaliza a comparação e fica separado dos recursos
+observados em cada execução e da fatura. Consulte [contabilidade de custos](cost-accounting.md).
 
 ## Algoritmos
 
@@ -84,11 +84,11 @@ A otimização offline busca candidatos para `τ` entre os valores observados e 
 
 **UPF**. O `ElasticNetCV` do scikit-learn prevê o erro médio usando `[i, j, j−i, z_shift]`.
 O termo `z_shift` é a distância L1 entre as médias dos atributos dos dois últimos lotes observados.
-A média e a escala residual definem uma distribuição Beta (eq. 58–60). A cada decisão, o UPF amostra
+A média e a escala residual definem uma distribuição Beta (eq. 58 a 60). A cada decisão, o UPF amostra
 `samples` (100) realizações dos erros futuros. De trás para frente, cada estado escolhe uma
 continuação compartilhada por todas as amostras, comparando os quantis de custo de retreinar e
 manter. O UPF retreina quando o quantil `δ` (0,95) do primeiro ramo é estritamente menor
-(eq. 16–22). Com `δ = 0,5`, a comparação usa as medianas (ablação PF).
+(eq. 16 a 22). Com `δ = 0,5`, a comparação usa as medianas (ablação PF).
 
 **Oracle**. A programação dinâmica calcula em `O(B²)` o cronograma ótimo para `err` (`oracle`, objetivo usado pela campanha Zia) ou `Ψ̄` (`oracle_staleness`, referência para a análise de obsolescência). Os testes comparam com busca exaustiva.
 
@@ -108,8 +108,8 @@ No `report.json`/MLflow (`tracking_v1/summary/<nome>`), para os protocolos e esc
 | `performance_forecast_mae`, `performance_forecast_bias` | UPF §A.7 | erro e viés do previsor frente às entradas realizadas (só `upf`) |
 | `retraining_lipschitz_L`, `retraining_retrain_upper_bound` | UPF Prop. 3.1 | `L` empírico e `r* ≤ T − √(α/L)` |
 | `retraining_offline_seconds`, `retraining_online_decision_seconds` | UPF Tab. 6 | tempo offline e de uma decisão online |
-| `retraining_matrix_fit_seconds` | — | custo de medir a matriz (não entra em `train_seconds`) |
-| `retraining_offline_batches`, `retraining_online_batches` | — | `w` e `T` |
+| `retraining_matrix_fit_seconds` | Diagnóstico local | custo de medir a matriz (não entra em `train_seconds`) |
+| `retraining_offline_batches`, `retraining_online_batches` | Diagnóstico local | `w` e `T` |
 
 Séries (passo = índice da grade de `α`, ou lote online): `retraining/{cost,retrains,average_accuracy,scpe,strategy_cost}_vs_alpha/<política>` e `retraining/cumulative_strategy_cost/<política>`. O relatório traz ainda `retraining` com a matriz de desempenho, a de obsolescência, as curvas por política, a tabela `α` baixo/alto (0,1 e 0,9 de `α_max`), a robustez a `α` errado e os pares previsto×realizado do UPF. As definições estão em `configs/contracts/metric-definitions.json`.
 
@@ -153,14 +153,14 @@ Configuração opcional (ausente por padrão) em `tracking.retraining`: `offline
 
 Instale o extra `large-datasets` para o XGBoost.
 
-Esta seção descreve o caminho de janela, separado da campanha integral em andamento.
+Esta seção descreve o caminho de janela, separado da campanha integral corretiva.
 O exemplo com dez sementes conserva esse modo de comparação; a rodada integral usa
 as três seeds indicadas abaixo.
 
 ```bash
 python scripts/replicate_upf.py gauss circles electricity airlines \
-  --electricity ~/Downloads/electricity-normalized.arff \
-  --airlines /path/to/airlines.csv --output /path/to/upf.json
+  --trials 10 --electricity /caminho/entradas/electricity.arff \
+  --airlines /caminho/entradas/airlines.csv --output /caminho/resultados/upf-janela.json
 ```
 
 O benchmark divide cada lote em treino e teste. O UPF decide antes de cada um dos oito lotes
@@ -192,27 +192,39 @@ O identificador distingue essa variante dos números publicados e dos resultados
 individuais históricos. O JSON agora conserva cada ensaio e ponto da grade, além dos
 agregados com `n` e `ddof=0`.
 
-A [campanha integral corretiva](benchmark-corrections.md), em andamento, usa a família
+A [campanha integral corretiva](benchmark-corrections.md) concluiu a avaliação com a família
 `UPF-train-reference-v3-full-source`, com sufixos de comparação e temporização.
-Electricity e Airlines usam todos os exemplos dos ARFFs admitidos, incluindo a cauda,
-distribuídos em 15 blocos contíguos: sete offline e oito online, com holdout interno de
-20% fixado pela seed. São três ensaios por dataset individual, nas seeds 42, 43 e 44,
-nos quatro conjuntos Gauss, Circles, Electricity e Airlines. Os pares
-Electricity/Airlines usam três ensaios por dataset em cada timing, somando 24 ensaios
-nessas duas famílias.
+Electricity e Airlines usaram todas as 45.312 e 539.383 linhas dos ARFFs admitidos,
+incluindo a cauda. Cada arquivo foi distribuído em 15 blocos contíguos: sete offline e oito online, com holdout interno de
+20% fixado pela seed. Foram três ensaios por dataset individual, nas seeds 42, 43 e 44,
+nos quatro conjuntos Gauss, Circles, Electricity e Airlines. Gauss e Circles usaram
+75.000 exemplos gerados por ensaio. Os pares Electricity/Airlines usaram três ensaios
+por dataset em cada timing, somando 24 ensaios concluídos em oito jobs nessas duas famílias.
+
+Para uma nova execução individual com o mesmo perfil de cobertura e retenção:
+
+```bash
+out=state/upf-integral
+mkdir -p "$out"
+uv run --frozen --extra large-datasets --extra services python scripts/replicate_upf.py \
+  gauss circles electricity airlines --full-source --seeds 42 43 44 --metrics-only \
+  --electricity /caminho/entradas/electricity.arff \
+  --airlines /caminho/entradas/airlines.arff --samples 100 --output "$out/upf.json"
+```
 
 Os blocos integrais têm tamanhos efetivos próprios e deixam de selecionar as janelas
 parciais anteriores. A grade de custo permanece identificada, mas a AUC publicada no
-artigo não é tratada como comparação equivalente desse protocolo. Os resultados e a
-cobertura efetivamente concluída serão registrados no
-[pacote da campanha corretiva](evidencias/benchmark-corrigido/README.md); a execução
-iniciada não comprova que todos os ensaios terminaram. Online ficou adiado para a
-rodada seguinte da matriz INSECTS.
+artigo não é tratada como comparação equivalente desse protocolo. O
+[pacote da campanha corretiva](evidencias/benchmark-corrigido/README.md) registra a execução
+e a situação da conferência das métricas, dos hashes e dos escopos. A conclusão das
+execuções não equivale à aprovação desses artefatos. O custo de cenário permanece
+separado de uma fatura; a portabilidade do código não comprova execução na AWS.
+Online ficou adiado para a rodada seguinte da matriz INSECTS.
 
 ## Comparação pareada de CARA, UPF e os dois Oracles em Electricity e Airlines
 
 O exemplo abaixo preserva o caminho de janela com dez ensaios. Na campanha integral
-em andamento, o launcher aplica a cobertura e as três seeds descritas na seção
+concluída, o launcher aplicou a cobertura e as três seeds descritas na seção
 anterior; os dois modos não compartilham o mesmo identificador de protocolo.
 
 ```bash
@@ -264,7 +276,7 @@ commit `80f86c2`. Para gerar resultados do código atual, execute os comandos de
 | Código dos autores | Implementação do benchmark |
 |---|---|
 | `datasets/*.py`, `config/dataset/` | Geradores com seed zero fixa, CSVs originais de Electricity e Airlines, e Covertype binário escalado do LIBSVM. Airlines usa *one-hot* esparso e MaxAbsScaler. |
-| `utils.get_online_offline_data_dict`, `qdm.py` | Fases de 25 e 75 lotes com modelos independentes, split de 10% por lote com seed zero, perda 0–1 e obsolescência relativa somada nas queries. RBF com `gamma=20` ou `1/n_features` em Airlines. |
+| `utils.get_online_offline_data_dict`, `qdm.py` | Fases de 25 e 75 lotes com modelos independentes, split de 10% por lote com seed zero, perda 0-1 e obsolescência relativa somada nas queries. RBF com `gamma=20` ou `1/n_features` em Airlines. |
 | `algorithms/threshold.py`, `cum_threshold.py`, `markov.py` | Comparação estrita `>`. CARA-T e CARA-CT usam os limites dos autores no *dual annealing*. O benchmark fixa a seed do otimizador à do Random Forest. |
 | `algorithms/periodic.py`, `dp.py` | Períodos inteiros, menor período em empate e fase preservada no início online. Oracle por programação dinâmica, com decisão também no último lote. |
 | `find_max_retraining_cost.py`, `analyse.py` | Grade de 100 custos sobre o menor limite do Oracle **offline** entre as seeds, elevado ao próximo inteiro. A busca local delimita a fronteira por bisseção, pois a função usada com `fsolve` no original tem um platô. |
@@ -295,6 +307,6 @@ python scripts/plot_replication.py /path/to/cara.json /path/to/upf.json --output
 Os resultados e as limitações das rodadas da Semana 10 estão nos arquivos
 [Electricity e Airlines](evidencias/semana-10/cara-upf/README.md) e
 [INSECTS](evidencias/semana-10/insects/README.md). Cada conjunto de arquivos preserva o
-protocolo que gerou seus números. A [campanha corretiva em andamento](evidencias/benchmark-corrigido/README.md)
-tem recorte e identificadores próprios; seus resultados serão registrados conforme
-as unidades forem concluídas, sem reescrever o histórico.
+protocolo que gerou seus números. A [campanha corretiva](evidencias/benchmark-corrigido/README.md)
+tem recorte e identificadores próprios; a execução concluiu 60 runs INSECTS e 24 ensaios UPF.
+Os resultados posteriores não reescrevem o histórico.

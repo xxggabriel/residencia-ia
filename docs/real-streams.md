@@ -69,11 +69,11 @@ quando a pergunta exigir comparar os mesmos eventos em todas as execuções; as 
 do recorte original de cada run podem ter denominadores diferentes. Consulte F1 macro,
 recall por classe e o baseline majoritário além da acurácia.
 
-### Campanha corretiva em andamento
+### Campanha corretiva integral
 
 A [matriz corretiva](../configs/matrices/insects-corrected.yaml) mantém as duas fontes
 integrais da tabela, com 355.275 e 452.044 registros, e os dois modelos. Com Congelado,
-ADWIN, CARA, UPF e Oracle nas seeds 42, 43 e 44, são 60 runs. Online está fora desta
+ADWIN, CARA, UPF e Oracle nas seeds 42, 43 e 44, foram concluídos os 60 runs. Online está fora desta
 rodada: suas quatro combinações de fonte e modelo, equivalentes a 12 runs, ficaram
 para a próxima. Essa exclusão é um novo recorte e não completa as seis pendências
 históricas de Online com Hoeffding.
@@ -84,14 +84,19 @@ da entrada não significa usar todas as linhas como teste independente. O protoc
 blocos filtra treino e observações das decisões pela disponibilidade dos rótulos e
 registra o replay efetivo. Veja o [contrato e os comandos da campanha](benchmark-corrections.md).
 
-Na mesma rodada, as comparações UPF individuais usam três seeds nos quatro datasets.
-Os pares Electricity/Airlines usam as mesmas três seeds nos modos `same-batch` e
-`next-batch`, totalizando 24 ensaios. Para Electricity e Airlines, todo o ARFF é
+Na mesma rodada, foram concluídos 24 ensaios UPF em oito jobs. As comparações individuais
+usaram três seeds nos quatro datasets, e os pares Electricity/Airlines usaram as mesmas
+três seeds nos modos `same-batch` e `next-batch`. Electricity e Airlines incluíram,
+respectivamente, todas as 45.312 e 539.383 linhas dos ARFFs admitidos. Cada arquivo foi
 dividido em 15 blocos contíguos, sete offline e oito online, com holdout interno de 20%.
+Gauss e Circles usaram 75.000 exemplos gerados por ensaio, sem seleção de uma janela
+parcial. As três seeds não transformam o mesmo fluxo real em três fontes independentes.
 O protocolo integral tem identidade própria e não é equivalente ao artigo nem às
 janelas históricas. Em `same-batch`, CARA e UPF têm informações distintas no momento
 da decisão; `next-batch` usa implantação no lote seguinte.
 
-O [registro da campanha corretiva](evidencias/benchmark-corrigido/README.md) reunirá a
-cobertura observada, os resultados e as limitações após a execução. Os arquivos da
-Semana 10 permanecem preservados e não são substituídos por resultados ainda pendentes.
+O [registro da campanha corretiva](evidencias/benchmark-corrigido/README.md) identifica a
+cobertura observada, os artefatos e a situação de sua conferência. A conclusão das
+execuções não substitui essa verificação. Os arquivos da Semana 10 permanecem
+preservados. Custos do cenário não representam faturamento real, e o suporte do código
+à AWS não comprova que essa campanha tenha sido executada naquele ambiente.

@@ -1,0 +1,625 @@
+{
+  "schema_version": 1,
+  "evidence_type": "static_source_audit",
+  "source_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+  "scope": {
+    "matrix": "configs/matrices/insects-corrected.yaml",
+    "policies": [
+      "none",
+      "drift/ADWIN",
+      "cara",
+      "upf",
+      "oracle"
+    ],
+    "models": [
+      "logistic",
+      "hoeffding"
+    ],
+    "source_access": "immutable_git_objects",
+    "benchmarks_executed_for_this_audit": false,
+    "database_or_tracking_api_accessed": false,
+    "repository_files_modified": false
+  },
+  "resource_profiles": {
+    "provenance": "Context supplied for this audit; no resource measurements or container inspection performed here.",
+    "auxiliary": {
+      "workers": 2,
+      "cpu_quota_per_worker": 2,
+      "memory_limit_gib_per_worker": 8
+    },
+    "controller": {
+      "workers": 4,
+      "cpu_quota_per_worker": 8,
+      "memory_limit_gib_per_worker": 12
+    },
+    "comparison_assumptions": [
+      "Same execution image and package versions",
+      "Same input bytes and configuration",
+      "Same seeds",
+      "BLAS and related numeric thread limits set to one"
+    ],
+    "assumptions_independently_revalidated_here": false
+  },
+  "conclusion": {
+    "actual_cpu_quota_is_policy_input": false,
+    "actual_container_memory_limit_is_policy_input": false,
+    "measured_wall_or_training_time_is_predictive_policy_input": false,
+    "interpretation": "The inspected matrix has no intentional adaptation of its predictive schedule to CPU quota, cgroup memory ceilings or measured elapsed time. Fixed configured monetary costs and the tree model-size budget are algorithmic inputs; they are distinct from the resources actually allocated.",
+    "static_inspection_proves_numerical_equality_across_profiles": false
+  },
+  "policy_inputs": [
+    {
+      "policies": [
+        "cara",
+        "upf",
+        "oracle"
+      ],
+      "inputs": [
+        "Released-label matrix view",
+        "Admissible candidate indices",
+        "Batch horizon",
+        "Configured nominal alpha",
+        "Configured policy parameters and seeded UPF Monte Carlo draws"
+      ],
+      "locators": [
+        "src/continual_bench/retraining/policies.py:40-80",
+        "src/continual_bench/retraining/rules.py:119-131",
+        "src/continual_bench/retraining/rules.py:255-289",
+        "src/continual_bench/retraining/rules.py:345-400"
+      ]
+    },
+    {
+      "policies": [
+        "drift/ADWIN"
+      ],
+      "inputs": [
+        "Binary prediction error for each released label",
+        "Detector state",
+        "Label and replay counters",
+        "Alarm"
+      ],
+      "explanation": "Monitoring perf_counter readings accumulate telemetry after the decision. ADWIN clock denotes an observation-count interval, not elapsed wall time.",
+      "locators": [
+        "src/continual_bench/core/engine.py:206-225",
+        "src/continual_bench/core/contracts.py:62-79",
+        "src/continual_bench/detectors/river.py:38-44"
+      ]
+    }
+  ],
+  "nominal_decision_cost": {
+    "scope": "Configured Fargate reference used to derive alpha; neither measured resource allocation nor actual billing.",
+    "vcpus": 2,
+    "memory_gb": 4,
+    "duration_seconds": 60,
+    "billed_seconds": 60,
+    "billing_mode": "dedicated_task",
+    "ephemeral_storage_gb": 50,
+    "ephemeral_free_gb": 20,
+    "lambda": 10.0,
+    "hourly_reference_rate_usd": 0.10207000000000001,
+    "reference_cost_per_action_usd": 0.0017011666666666668,
+    "alpha": 0.017011666666666668,
+    "formula": "alpha = lambda * (vcpus*vcpu_hour_usd + memory_gb*memory_gb_hour_usd + billable_ephemeral_gb*ephemeral_gb_hour_usd) * (billed_seconds/3600)",
+    "observed_duration_parameter_supported_by_helper": true,
+    "explicit_observed_duration_keyword_call_sites_in_src": [],
+    "real_resource_profiles_override_reference_configuration": false,
+    "locators": [
+      "configs/matrices/insects-corrected.yaml:8-10",
+      "configs/base/tracking-fargate.yaml:4-21",
+      "src/continual_bench/retraining/pricing.py:128-183",
+      "src/continual_bench/evaluation/binary_retraining.py:481-488",
+      "src/continual_bench/retraining/policies.py:40-43"
+    ]
+  },
+  "tree_memory_budget": {
+    "model": "HoeffdingTreeModel",
+    "max_size_mib": 8.0,
+    "memory_estimate_period_examples": 100,
+    "scope": "Fixed configured model-size budget, not available process RAM or the cgroup memory ceiling.",
+    "effect": "River estimates model object size and may deactivate or reactivate leaves to satisfy the fixed model budget. This can affect predictions but is not an adaptation to 8 GiB versus 12 GiB of container memory.",
+    "source_locator": "src/continual_bench/models/tree.py:18-43",
+    "supplementary_dependency_inspection": {
+      "package": "river",
+      "version": "0.26.1",
+      "origin": "Installed package source, explanatory inspection only; not a new execution-image verification.",
+      "locators": [
+        "river/tree/hoeffding_tree.py:67-69",
+        "river/tree/hoeffding_tree.py:236-310",
+        "river/tree/hoeffding_tree_classifier.py:61-64",
+        "river/tree/hoeffding_tree_classifier.py:401-402",
+        "river/drift/adwin.py:23-25"
+      ]
+    }
+  },
+  "telemetry_and_cost_reporting": {
+    "resource_limits": "Recorded as environment metadata, without a policy feedback path in the inspected routes.",
+    "measured_durations": "Collected as training, inference, decision and instrumentation telemetry; used in downstream cost estimates after decisions.",
+    "scenario_train_second_coefficient": 0.0,
+    "scenario_predict_second_coefficient": 0.0,
+    "separate_comparison_by_profile": [
+      "Wall time",
+      "Throughput",
+      "CPU time or utilization",
+      "Memory measurements",
+      "Time-derived monetary estimates",
+      "Contention and concurrent workload context"
+    ],
+    "do_not_pool_as_equivalent_efficiency_conditions": true,
+    "locators": [
+      "src/continual_bench/evaluation/environment.py:16-63",
+      "src/continual_bench/evaluation/binary_retraining.py:631-657",
+      "src/continual_bench/evaluation/tracking.py:534-573",
+      "configs/base/tracking.yaml:7-14",
+      "docs/benchmark-corrections.md:93-97"
+    ]
+  },
+  "time_limit_contract_review": {
+    "matrix_max_seconds": 86400,
+    "schema_field": "Config.max_seconds is a root-level constrained integer, default 600, range 10..86400, without a description promising enforcement across every route or whole-case phase.",
+    "schema_locator": "src/continual_bench/config/benchmark.py:205-225",
+    "sequential_route": "none and drift/ADWIN compare monotonic elapsed time to max_seconds before each primary evaluation batch and raise TimeoutError when exceeded.",
+    "sequential_route_locators": [
+      "src/continual_bench/evaluation/prequential.py:86-88"
+    ],
+    "batch_route": "CARA, UPF and Oracle return through run_batch_retraining before that sequential loop. The batch function does not read max_seconds.",
+    "batch_route_locators": [
+      "src/continual_bench/evaluation/prequential.py:55-60",
+      "src/continual_bench/evaluation/binary_retraining.py:465-503"
+    ],
+    "additional_case_phases": "Even sequential-policy cases can perform supplementary matrix analysis after primary evaluation; the located deadline check is not a whole-case timeout.",
+    "additional_case_phase_locator": "src/continual_bench/application/runner.py:209-234",
+    "corrective_launcher": "The corrective launcher invokes subprocess.run without a timeout parameter. Its completed-case validation is separate from deadline enforcement.",
+    "launcher_locators": [
+      "scripts/run_corrective_benchmarks.py:175-181",
+      "scripts/run_corrective_benchmarks.py:273-303"
+    ],
+    "documentation_review": [
+      {
+        "path": "docs/task-report.md",
+        "lines": [
+          95,
+          95
+        ],
+        "finding": "Explicitly states that per-case max_seconds does not cover every service call and an external process timeout remains necessary; historical campaign context."
+      },
+      {
+        "path": "docs/benchmark-operations.md",
+        "lines": [
+          123,
+          125
+        ],
+        "finding": "Assigns timeout and retry control to the DAGs; no guarantee that the batch evaluator enforces Config.max_seconds globally."
+      },
+      {
+        "path": "docs/reliability.md",
+        "lines": [
+          15,
+          15
+        ],
+        "finding": "Discusses explicit transport/service/task limits and OOM termination, without a batch-wide max_seconds guarantee."
+      },
+      {
+        "path": "docs/dataset-catalog.md",
+        "lines": [
+          56,
+          66
+        ],
+        "finding": "The 600-second documented limit refers to the typed evaluator, not these binary batch routes."
+      },
+      {
+        "path": "docs/aws/operations.md",
+        "lines": [
+          181,
+          186
+        ],
+        "finding": "AWS attempt and queue deadlines are separate infrastructure contracts, not proof of internal batch max_seconds enforcement."
+      },
+      {
+        "path": "docs/benchmark-corrections.md",
+        "lines": [
+          99,
+          128
+        ],
+        "finding": "Corrective execution guide contains no global batch deadline promise."
+      },
+      {
+        "path": "docs/cost-aware-retraining.md",
+        "lines": [
+          130,
+          134
+        ],
+        "finding": "Batch-method limitations do not promise enforcement of Config.max_seconds as a global wall-time budget."
+      }
+    ],
+    "explicit_global_batch_deadline_promise_found": false,
+    "confirmed_documented_contract_violation": false,
+    "classification": "explicit_operational_limitation",
+    "limitation": "Do not represent max_seconds as a universal case deadline. External supervision is needed to bound the entire process, including batch evaluation, supplemental analysis and publication.",
+    "new_github_task_required_by_confirmed_contract_violation": false,
+    "github_task_created": false
+  },
+  "completion_and_scientific_limits": {
+    "resource_shortage_can_change_completion": true,
+    "failure_modes": [
+      "Primary sequential evaluation wall-time deadline",
+      "OOM or external termination",
+      "Publication failure after completed scientific computation"
+    ],
+    "completed_unit_gate": "The corrective campaign requires complete=True and observed equal to the configured number of examples before accepting the scientific result; required publication is validated separately.",
+    "gate_locators": [
+      "scripts/run_corrective_benchmarks.py:175-190"
+    ],
+    "numerical_equivalence_requires_empirical_checks": [
+      "Identical prediction digests",
+      "Identical retraining schedules",
+      "Identical scientific metric scalars and ledgers",
+      "Same complete example counts"
+    ],
+    "static_limit": "This audit does not execute a cross-resource-profile invariance experiment and cannot establish bitwise equality or attribute performance differences causally."
+  },
+  "static_checks": {
+    "immutable_source_files_hashed": 25,
+    "batch_function_reads_max_seconds": false,
+    "src_explicit_observed_duration_keyword_calls": 0,
+    "benchmark_or_test_runs_performed": 0
+  },
+  "source_files": [
+    {
+      "path": "configs/matrices/insects-corrected.yaml",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "2f34dbfe7e83c8e091d2d46333262e3a772812c3673519f084bc9054e606710f",
+      "line_count": 15,
+      "relevant_line_ranges": [
+        [
+          4,
+          15
+        ]
+      ]
+    },
+    {
+      "path": "configs/base/tracking-corrective.yaml",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "fade082240a18cbc7545e73183530b3c15ea8ed68887fab1fdb3b583b63680a7",
+      "line_count": 6,
+      "relevant_line_ranges": [
+        [
+          1,
+          6
+        ]
+      ]
+    },
+    {
+      "path": "configs/base/tracking-fargate.yaml",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "ff7ad3289fbb351548af30f201ef869dc854a2a0f12799fe9548c6e02a70a922",
+      "line_count": 22,
+      "relevant_line_ranges": [
+        [
+          1,
+          22
+        ]
+      ]
+    },
+    {
+      "path": "configs/base/tracking.yaml",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "d7c4bbaa44fe3354bb78b1770889334fec0b6d669ad22e7b1b8040dc9faa0800",
+      "line_count": 29,
+      "relevant_line_ranges": [
+        [
+          7,
+          14
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/config/benchmark.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "739acb676904d2012ee92c40106ea22387e25e9cbabdf182eda7bf337e04edb7",
+      "line_count": 315,
+      "relevant_line_ranges": [
+        [
+          205,
+          225
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/retraining/pricing.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "f568af81a01d9593e7965c78dd9580a44b531594caae68d29241d5304035e182",
+      "line_count": 249,
+      "relevant_line_ranges": [
+        [
+          73,
+          125
+        ],
+        [
+          128,
+          183
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/retraining/policies.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "ce112940f622d7c2658031ae974be6b52cc8facbd97dd75b84cfe42df16a2b16",
+      "line_count": 145,
+      "relevant_line_ranges": [
+        [
+          40,
+          43
+        ],
+        [
+          56,
+          80
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/retraining/rules.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "dcd45fcacb40df51c3d21028adfa4297d1a2aa57f01989d2f6d06c8de81f17f8",
+      "line_count": 415,
+      "relevant_line_ranges": [
+        [
+          119,
+          131
+        ],
+        [
+          255,
+          289
+        ],
+        [
+          345,
+          400
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/evaluation/binary_retraining.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "0477537d74b944a1a8a7410b7f516d49cae8c5839bf141b381f2f97c4815f18c",
+      "line_count": 751,
+      "relevant_line_ranges": [
+        [
+          465,
+          503
+        ],
+        [
+          631,
+          657
+        ],
+        [
+          708,
+          711
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/evaluation/prequential.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "589d4965adad830a53e014e630856e99a8a581f4946fd97ca7d6ebc339f4e61a",
+      "line_count": 114,
+      "relevant_line_ranges": [
+        [
+          50,
+          60
+        ],
+        [
+          86,
+          109
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/application/runner.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "1c33a8e45e7bb553598f270a2410cca9a34ca2378cc3b9096fae9798af4216db",
+      "line_count": 308,
+      "relevant_line_ranges": [
+        [
+          209,
+          234
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/core/engine.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "be5de643df98091c054dc6d66a70ca90a17cd4783f6467cd0478c688933cf611",
+      "line_count": 507,
+      "relevant_line_ranges": [
+        [
+          135,
+          159
+        ],
+        [
+          206,
+          257
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/core/contracts.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "322d9466180b2cc255dee6ced0eebd9cd9f0dbdb46fb6ae7a538e52d1b6a37fb",
+      "line_count": 111,
+      "relevant_line_ranges": [
+        [
+          62,
+          79
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/detectors/river.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "46963a067e730fc84d3f539f69ab08e041ef02018498f0fa310bd5ba89cbd68d",
+      "line_count": 44,
+      "relevant_line_ranges": [
+        [
+          38,
+          44
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/models/tree.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "2c5baa0207854edd0261d0518b401dbb3b5f6734d1ed033d86e53d5d021a301f",
+      "line_count": 95,
+      "relevant_line_ranges": [
+        [
+          18,
+          43
+        ],
+        [
+          74,
+          75
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/evaluation/environment.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "216edf61d483bcef99fec68a6280ff7a1e1c73178668433a49302854b9cd8e02",
+      "line_count": 148,
+      "relevant_line_ranges": [
+        [
+          16,
+          63
+        ]
+      ]
+    },
+    {
+      "path": "src/continual_bench/evaluation/tracking.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "ff1e09b627a8c09bbcdb4b30db46603eca620cf4c006d21db84ed9da50ab1865",
+      "line_count": 940,
+      "relevant_line_ranges": [
+        [
+          534,
+          573
+        ]
+      ]
+    },
+    {
+      "path": "scripts/run_corrective_benchmarks.py",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "cebd2a7c9130a5f18aa3f79ccb4951731901ccc54fd4684948b0138380d7e00b",
+      "line_count": 393,
+      "relevant_line_ranges": [
+        [
+          175,
+          190
+        ],
+        [
+          273,
+          309
+        ]
+      ]
+    },
+    {
+      "path": "docs/benchmark-corrections.md",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "464ded314374cc9023d7a65b86e2f9ad5c47da91945cc702377f209ca484b821",
+      "line_count": 178,
+      "relevant_line_ranges": [
+        [
+          93,
+          97
+        ],
+        [
+          99,
+          128
+        ]
+      ]
+    },
+    {
+      "path": "docs/cost-aware-retraining.md",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "70f166a5a964bfff260effe3cb31b121150f79e081e38906fe50cc173331f732",
+      "line_count": 262,
+      "relevant_line_ranges": [
+        [
+          130,
+          134
+        ]
+      ]
+    },
+    {
+      "path": "docs/task-report.md",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "168c86e6e9dfb8e8f31b48676d64f969e75f4bc13bc776f23a34f80f95bd3f71",
+      "line_count": 113,
+      "relevant_line_ranges": [
+        [
+          89,
+          95
+        ]
+      ]
+    },
+    {
+      "path": "docs/reliability.md",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "036c71c13e722b2f853c8e72fe6297bdc9f3d3892c01b8bb6fd8666c29909ecf",
+      "line_count": 38,
+      "relevant_line_ranges": [
+        [
+          13,
+          15
+        ]
+      ]
+    },
+    {
+      "path": "docs/benchmark-operations.md",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "2a97ce4195c417d75f97996a0c3bb5d480757384398665d57991815071315b0b",
+      "line_count": 365,
+      "relevant_line_ranges": [
+        [
+          66,
+          76
+        ],
+        [
+          123,
+          125
+        ]
+      ]
+    },
+    {
+      "path": "docs/dataset-catalog.md",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "9568829f9f0e82c81a6f288a7ee1ca3d19317ff685ff8c39062c54c6d945c485",
+      "line_count": 74,
+      "relevant_line_ranges": [
+        [
+          56,
+          66
+        ]
+      ]
+    },
+    {
+      "path": "docs/aws/operations.md",
+      "git_revision": "98a6dd5a676f46bf1df337de82b33fd0e554c085",
+      "sha256": "47b5280f4fc9bd526b85d6cfd42fe2863518d7fa6f37a2b78a702ce7e14ff545",
+      "line_count": 503,
+      "relevant_line_ranges": [
+        [
+          181,
+          186
+        ]
+      ]
+    }
+  ],
+  "sanitization": {
+    "personal_absolute_paths_in_artifact": false,
+    "hostnames_or_private_network_addresses_in_artifact": false,
+    "credentials_in_artifact": false,
+    "source_locators_are_repository_or_package_relative": true
+  },
+  "packaging": {
+    "index_and_existing_checksum_manifest_intentionally_not_updated": true
+  }
+}

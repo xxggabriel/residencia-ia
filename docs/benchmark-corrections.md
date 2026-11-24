@@ -226,11 +226,12 @@ de código e testes de integração não constituem prova de uma execução AWS.
 
 ## Evidência da execução
 
-O resultado da campanha e suas limitações serão registrados após a conclusão das
-unidades. O plano ou a aprovação dos testes não substitui métricas efetivamente
-produzidas. O exportador conserva relatórios e ledgers derivados em gzip, CSVs por
-run, janela e repetição, gráficos e manifesto SHA-256. As fontes históricas não são
-reescritas.
+A campanha da revisão `98a6dd5a676f46bf1df337de82b33fd0e554c085` concluiu os 60 casos
+INSECTS e os 24 ensaios UPF previstos. O [dossiê da campanha](evidencias/benchmark-corrigido/README.md)
+reúne os resultados, a cobertura e os limites das verificações. O plano e os testes
+de implementação permanecem separados das evidências de execução e de publicação.
+O exportador conserva relatórios e ledgers derivados em gzip, CSVs por run, janela e
+repetição, gráficos e manifesto SHA-256. As fontes históricas não foram reescritas.
 
 `manifest.table_files` resolve cada tabela lógica para um arquivo ou para um
 descritor `csv+gzip-shards`. As partes desse descritor têm ordem explícita, intervalos

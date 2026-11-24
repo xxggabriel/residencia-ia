@@ -20,20 +20,23 @@ incrementais; o recorte arquivado da Semana 10 contém 66 resultados concluídos
 A [matriz piloto](matrices/insects-pilot.yaml) inclui streaming e incremental; o planejador aplica
 CARA, UPF e Oracle apenas no incremental (9 casos no total). Veja [aquisição e interpretação](../docs/real-streams.md#benchmark-binário-da-semana-10).
 
-A campanha em andamento usa a [matriz corretiva INSECTS](matrices/insects-corrected.yaml):
-duas fontes integrais, dois modelos, cinco políticas e as seeds 42, 43 e 44, totalizando
-60 runs. Online ficou para a próxima rodada, com quatro combinações de fonte e modelo
+A campanha concluiu os 60 runs da [matriz corretiva INSECTS](matrices/insects-corrected.yaml):
+duas fontes integrais, dois modelos, cinco políticas e as seeds 42, 43 e 44.
+Online ficou para a próxima rodada, com quatro combinações de fonte e modelo
 e 12 runs nas três seeds. A [matriz curta](matrices/corrective-smoke.yaml) também exclui
 Online e usa as três seeds. Esses arquivos não substituem a matriz nem os resultados
 históricos.
 
-O [launcher corretivo](../docs/benchmark-corrections.md) organiza ainda 24 ensaios UPF:
-três por dataset nos quatro conjuntos individuais e três por dataset e timing nos
-pares Electricity/Airlines. Nas fontes reais, o protocolo integral distribui todo o
+O [launcher corretivo](../docs/benchmark-corrections.md) também concluiu 24 ensaios UPF
+em oito jobs: três por dataset nos quatro conjuntos individuais e três por dataset
+e timing nos pares Electricity/Airlines. Nas fontes reais, o protocolo integral distribui todo o
 ARFF em 15 blocos contíguos, com sete offline, oito online e holdout interno de 20%.
 Essa seleção difere das janelas e dos tamanhos de lote das comparações anteriores e
 não equivale ao protocolo do artigo. O [registro da campanha corretiva](../docs/evidencias/benchmark-corrigido/README.md)
-reunirá o estado observado e os artefatos; o planejamento não comprova sua conclusão.
+identifica a execução e a situação da conferência dos artefatos. Os casos usam
+`artifact_mode: metrics_only`; o launcher passa `--full-source --seeds 42 43 44`
+e `--metrics-only` ao CLI UPF. A estimativa do cenário de preço não é uma fatura,
+e a execução portátil não constitui prova de execução na AWS.
 
 ## Herança com `extends`
 

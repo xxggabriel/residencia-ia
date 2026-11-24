@@ -269,8 +269,18 @@ make lint    # ruff
 
 O [protocolo corretivo e a campanha de avaliação](docs/benchmark-corrections.md)
 descrevem disponibilidade de rótulos, separação treino/teste, retenção exclusiva de
-métricas e execução com o mesmo código em ambiente local ou AWS. Os resultados
-históricos da Semana 10 permanecem preservados.
+métricas e execução com o mesmo código em ambiente local ou AWS. A campanha concluiu
+60 de 60 runs INSECTS e 24 ensaios UPF em oito jobs, nas seeds 42, 43 e 44, com
+cobertura integral das fontes admitidas. Online ficou adiado para a próxima rodada,
+com quatro configurações e 12 runs. Os resultados históricos da Semana 10 permanecem
+preservados.
+
+O [dossiê da campanha corretiva](docs/evidencias/benchmark-corrigido/README.md) reúne
+o registro da execução e da conferência dos artefatos. Conclusão de execução não
+substitui essa conferência. O protocolo UPF integral difere das janelas e da baseline
+do artigo; sua AUC não representa uma reprodução equivalente dos números publicados.
+Custos de cenário permanecem separados de faturamento real. A portabilidade do código
+não comprova, por si só, que esses resultados tenham sido executados na AWS.
 
 | Para | Consulte |
 |---|---|
@@ -278,7 +288,7 @@ históricos da Semana 10 permanecem preservados.
 | Selecionar dados e comparar métodos | [Catálogo](docs/dataset-catalog.md), [fluxos INSECTS e Gas](docs/real-streams.md), [Zia](docs/zia-benchmarks.md), [políticas por custo](docs/cost-aware-retraining.md), [referências de pesquisa](docs/research.md) |
 | Operar o laboratório | [Docker Compose e Airflow](docs/benchmark-operations.md), [AWS](docs/aws/README.md), [recuperação](docs/reliability.md) |
 | Interpretar métricas e artefatos | [Contrato de métricas](docs/tracking-metrics.md), [observações por ajuste](docs/benchmark-observations.md), [MLflow](docs/mlflow-tracking.md), [custos](docs/cost-accounting.md) |
-| Consultar resultados arquivados | [Semana 09](docs/task-report.md), [Semana 10: CARA/UPF](docs/evidencias/semana-10/cara-upf/README.md), [Semana 10: INSECTS](docs/evidencias/semana-10/insects/README.md), [validações AWS](docs/aws/validation.md) |
+| Consultar resultados arquivados | [Semana 09](docs/task-report.md), [Semana 10: CARA/UPF](docs/evidencias/semana-10/cara-upf/README.md), [Semana 10: INSECTS](docs/evidencias/semana-10/insects/README.md), [campanha corretiva](docs/evidencias/benchmark-corrigido/README.md), [validações AWS](docs/aws/validation.md) |
 
 A campanha INSECTS da Semana 10 arquivou **66 de 72 unidades concluídas**; o comparativo de
 Electricity/Airlines arquivou o protocolo pareado local e experimentos de referência dos artigos.
