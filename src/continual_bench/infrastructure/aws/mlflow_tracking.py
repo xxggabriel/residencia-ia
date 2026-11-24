@@ -1271,24 +1271,32 @@ class SageMakerMlflowTracker:
         )
 
     def stage_observation_artifacts(self, directory, report, children, store):
+        """Return verified upload receipts for the evidence owned by each fit."""
         root = write_observation_evidence(directory, report, self.mlflow_run_id, children)
         if root is None:
-            return
+            return []
+        receipts = []
         for child in children:
             fit_root = root / "fits" / child["fit_id"]
             if not fit_root.is_dir():
-                continue
+                raise RuntimeError(f"Missing observation artifacts for fit {child['fit_id']}")
             target = child.get("artifact_uri")
             if not target:
                 raise RuntimeError("MLflow child did not provide an artifact URI")
+            expected = artifact_plan(fit_root)
+            expected_bytes = sum(path.stat().st_size for path, _ in expected)
             uploaded = upload_directory_to_mlflow_artifacts(
                 store,
                 fit_root,
                 f"{target.rstrip('/')}/{ARTIFACT_ROOT}",
                 immutable=self.spot,
             )
-            if not uploaded["files"]:
-                raise RuntimeError("MLflow did not publish fit observation artifacts")
+            if not expected or uploaded["files"] != len(expected) or uploaded["bytes"] != expected_bytes:
+                raise RuntimeError(
+                    f"MLflow did not publish all observation artifacts for fit {child['fit_id']}"
+                )
+            receipts.append({"fit_id": child["fit_id"], "run_id": child["run_id"], **uploaded})
+        return receipts
 
     def publish_run_report(
         self,
@@ -1421,16 +1429,23 @@ class SageMakerMlflowTracker:
                 return {"published": False, "errors": list(self.api_errors)}
             child_runs = self.publish_training_rounds(report)
             if output_dir is not None:
-                self.stage_observation_artifacts(output_dir, report, child_runs, store)
-                uploaded = upload_directory_to_mlflow_artifacts(
+                child_uploads = self.stage_observation_artifacts(output_dir, report, child_runs, store)
+                parent_upload = upload_directory_to_mlflow_artifacts(
                     store,
                     output_dir,
                     self.artifact_uri,
                     immutable=self.spot,
                     exclude=child_artifact_prefixes(child_runs),
                 )
-                if not uploaded["files"]:
+                if not parent_upload["files"]:
                     raise ValueError("MLflow run has no uploaded artifacts")
+                uploaded = {
+                    **parent_upload,
+                    "files": parent_upload["files"] + sum(child["files"] for child in child_uploads),
+                    "bytes": parent_upload["bytes"] + sum(child["bytes"] for child in child_uploads),
+                    "parent": parent_upload,
+                    "children": child_uploads,
+                }
         except Exception as err:
             self._record_error("publish_evidence", err)
             return {"published": False, "errors": list(self.api_errors)}

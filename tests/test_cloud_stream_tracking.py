@@ -56,7 +56,7 @@ def test_metrics_only_publishes_uncapped_system_and_retained_progress_without_mo
     monkeypatch.setattr(tracker, "log_batch", lambda **kwargs: True)
     monkeypatch.setattr(tracker, "log_completed_metrics", lambda points: collected.extend(points) or True)
     monkeypatch.setattr(tracker, "publish_training_rounds", lambda report: [])
-    monkeypatch.setattr(tracker, "stage_observation_artifacts", lambda *args: None)
+    monkeypatch.setattr(tracker, "stage_observation_artifacts", lambda *args: [])
     monkeypatch.setattr(tracker, "finish", lambda status: True)
     monkeypatch.setattr(
         mlflow_tracking,
