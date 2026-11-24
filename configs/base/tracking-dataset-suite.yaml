@@ -1,0 +1,47 @@
+# Common ordered-stream suite. Binary decision threshold is 0.5.
+# AWS prices below are a declared On-Demand reference, not measured Spot billing.
+# This is a standalone profile: cloud workers validate the complete mapping.
+version: residency-metrics-v1
+fading_factor: 0.99
+detection_window: 500
+recovery_tolerance: 0.05
+recovery_windows: 2
+target_accuracy: 0.9
+probe_samples: 64
+continual_references: true
+reference_budget: null
+adaptation_shadows: true
+costs:
+  aws:
+    region: us-east-1
+    price_date: '2026-11-08'
+    compute_service: fargate-linux-x86
+    storage_class: s3-standard
+    vcpus: 2.0
+    memory_gb: 4.0
+    vcpu_hour_usd: 0.04048
+    memory_gb_hour_usd: 0.004445
+    storage_gb_month_usd: 0.023
+    retention_days: 30.0
+    billing_month_days: 30.0
+    minimum_compute_seconds: 60
+    compute_source: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECS/current/us-east-1/index.json
+    storage_source: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.json
+  unit: scenario_error_units
+  false_positive: 1.0
+  false_negative: 1.0
+  classification_error: 1.0
+  regression_error: 1.0
+  regression_scale: 1.0
+  train_sample: 0.001
+  update: 0.05
+  train_second: 0.0
+  predict_second: 0.0
+upf_alpha: 1.0
+upf_alphas:
+- 0.0
+- 0.1
+- 1.0
+- 10.0
+fargate_billing_mode: dedicated_task
+reference: null
