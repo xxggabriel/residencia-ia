@@ -38,7 +38,7 @@ def prepare(config: Config, root: str, *, source=None) -> dict:
     directory = Path(root) / config.identity()
     directory.mkdir(parents=True, exist_ok=True)
     data_path = directory / "events.jsonl"
-    # Deterministic materialization is bounded by validated samples <= 100k.
+    # Bound the materialized numeric array before allocating it.
     payload = "".join(event_json(e) + "\n" for e in source.events()).encode()
     if len(payload) > MATERIALIZATION_BUDGET:
         raise ValueError("dataset exceeds 512 MiB materialization budget")
