@@ -28,6 +28,16 @@ escopos distintos; a interpretação de Brier também deve considerar a normaliz
 registrada. Os estimadores de ranking desta suíte usam os mesmos 4.096 bins, sem
 misturar seus resultados com curvas exatas dos experimentos históricos.
 
+No Social, `source_in`, `source_out`, `target_in` e `target_out` são recalculados
+com arestas de datas estritamente anteriores. A preparação não usa os totais finais
+`follower_count` e `following_count` da tabela de usuários. `source_age` e
+`target_age` são divididos por 3.650 dias, e cadastros posteriores à data da aresta
+são rejeitados. O atributo sintético `region_id` é tratado como estático e conhecido;
+como sua disponibilidade histórica não é informada, essa parte do contrato tem
+interpretação de snapshot offline. A implementação está em
+[`datasets/zia.py`](../../src/continual_bench/datasets/zia.py), e a descrição da
+fonte consta no [README da revisão fixada](https://huggingface.co/datasets/ziadatalabs/FreeSocialNetwork100M/blob/8518bf04c105df75ab72c13bbec1e12b270eb92f/README.md).
+
 ## Execução em duas fases
 
 A primeira fase contém `frozen`, `drift`, `drift_adwin`, `drift_ddm`, `incremental`,
