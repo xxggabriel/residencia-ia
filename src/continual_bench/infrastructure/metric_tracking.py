@@ -194,7 +194,10 @@ def publish_tracking(
         raise ValueError("immutable local tracking sidecar differs")
     if not sidecar.exists():
         atomic_write(sidecar, payload)
-    client.set_tag(run_id, "tracking_v1_status", "publishing")
+    from .tracking import as_backend
+
+    # The initial status must precede completion even with global async logging enabled.
+    as_backend(client).log_batch(run_id, tags={"tracking_v1_status": "publishing"})
     uris = {}
     artifacts = [(sidecar, "payload.json", _sha(payload))]
     artifacts.extend((directory / item["path"], item["path"], item["sha256"]) for item in files)
@@ -208,8 +211,6 @@ def publish_tracking(
         client.log_artifact(run_id, str(path), artifact_path=destination)
     # Explicitly synchronous: a completion tag must never precede queued writes.
     _log_verified_points(client, run_id, missing)
-    from .tracking import as_backend
-
     completion = {"tracking_v1_settings_sha256": envelope["settings_sha256"]}
     if tracking.get("definitions_sha256"):
         completion["tracking_v1_definitions_sha256"] = tracking["definitions_sha256"]

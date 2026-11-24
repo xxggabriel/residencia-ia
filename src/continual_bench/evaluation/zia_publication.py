@@ -244,6 +244,8 @@ def publish_artifacts(client, directory, run_id, report, root, *, derived=False,
 def _publish_artifacts(client, directory, run_id, report, root, derived=False, elapsed_seconds=None):
     from mlflow.entities import RunTag
 
+    from continual_bench.infrastructure.tracking import as_backend
+
     directory = Path(directory)
     run = client.get_run(run_id)
     if run.data.tags.get("zia_run_key") != directory.name:
@@ -262,7 +264,8 @@ def _publish_artifacts(client, directory, run_id, report, root, derived=False, e
     if "training_history" in report:
         if json.loads(history.read_bytes()) != {"version": 1, "fits": report["training_history"]}:
             raise ValueError("retained training history differs from the Zia report")
-    client.set_tag(run_id, "zia_artifacts_status", "publishing")
+    backend = as_backend(client)
+    backend.log_batch(run_id, tags={"zia_artifacts_status": "publishing"})
     evidence = publish_predictions(client, run, directory, report, root)
     adapted = tracking_report(report, evidence)
     if elapsed_seconds is not None:
@@ -305,13 +308,12 @@ def _publish_artifacts(client, directory, run_id, report, root, derived=False, e
         **({"max_points_per_key": None} if only_metrics else {}),
     )
     training_rounds = artifacts.get("training_rounds", [])
-    client.log_batch(
+    backend.log_batch(
         run_id,
-        tags=[
-            RunTag("cb-training-round-count", str(len(training_rounds))),
-            RunTag("zia_artifacts_status", "complete"),
-        ],
-        synchronous=True,
+        tags={
+            "cb-training-round-count": str(len(training_rounds)),
+            "zia_artifacts_status": "complete",
+        },
     )
     return {
         "run_artifacts": artifacts,
@@ -324,12 +326,15 @@ def _publish_artifacts(client, directory, run_id, report, root, derived=False, e
 
 
 def publish(client, directory, run_id, experiment_id, report, root):
+    from continual_bench.infrastructure.tracking import as_backend
+
     directory = Path(directory)
     with publication_lock(directory.parent, f"zia-run-{run_id}"):
-        client.set_tag(run_id, "benchmark_complete", "false")
+        backend = as_backend(client)
+        backend.log_batch(run_id, tags={"benchmark_complete": "false"})
         publish_run_metrics(client, directory, run_id, report)
         artifacts = _publish_artifacts(client, directory, run_id, report, root)
-        client.set_tag(run_id, "benchmark_complete", "true")
+        backend.log_batch(run_id, tags={"benchmark_complete": "true"})
         client.set_terminated(run_id, "FINISHED")
         receipt = {
             "mlflow_run_id": run_id,
