@@ -1,752 +1,683 @@
-"""Render the INSECTS figures from validated benchmark evidence."""
+"""Readable historical INSECTS figures, calculated from the archived paired evidence."""
+
+from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
 from benchmark_figure_data import included_policies
-from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.colors import LinearSegmentedColormap, Normalize, TwoSlopeNorm
+from benchmark_plot_style import (
+    BLUE,
+    GRID,
+    INK,
+    MUTED,
+    ORANGE,
+    TEAL,
+    apply_style,
+    decorate,
+    export_bundle,
+)
+from benchmark_plot_style import (
+    POLICY_COLORS as CANONICAL_COLORS,
+)
+from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 from matplotlib.lines import Line2D
-from matplotlib.patches import Patch, Rectangle
-from matplotlib.ticker import FuncFormatter, MaxNLocator, MultipleLocator
+from matplotlib.ticker import FixedLocator, FuncFormatter, MaxNLocator, NullFormatter
 
-INK = "#172737"
-MUTED = "#485D6E"
-GRID = "#E3EBEF"
-PENDING = "#EEF2F5"
-TEAL = "#12675E"
-ORANGE = "#9D472D"
-BLUE = "#265C8A"
-NAVY = "#24435A"
 POLICIES = included_policies("Logística")
 MODELS = ("Hoeffding", "Logística")
 DATASETS = ("Abrupto", "Recorrente")
-TITLES = {"Abrupto": "Abrupt Imbalanced", "Recorrente": "Incremental-Abrupt-Reoccurring Imbalanced"}
-POLICY_COLORS = dict(zip(POLICIES, ("#70828F", BLUE, "#996348", "#5361A1", TEAL, "#8E4C76")))
-DELTA = LinearSegmentedColormap.from_list("delta", [ORANGE, "#F8F9F7", TEAL])
-ACCURACY = LinearSegmentedColormap.from_list("accuracy", ["#FACEAE", "#FEF8E9", "#90C8B8", "#124E51"])
-COUNTS = LinearSegmentedColormap.from_list("counts", ["#F3F6F8", "#AFC7D9", "#24435A"])
-
-plt.rcParams.update(
-    {
-        "font.family": "DejaVu Sans",
-        "font.size": 10,
-        "text.color": INK,
-        "axes.labelcolor": MUTED,
-        "axes.edgecolor": GRID,
-        "xtick.color": MUTED,
-        "ytick.color": MUTED,
-        "figure.facecolor": "white",
-        "axes.facecolor": "white",
-        "hatch.color": "#9CAEBB",
-        "hatch.linewidth": 0.7,
-        "pdf.fonttype": 42,
-    }
+POLICY_COLORS = dict(
+    zip(
+        POLICIES,
+        (CANONICAL_COLORS[p] for p in ("frozen", "cara", "upf", "oracle", "adwin", "online")),
+        strict=True,
+    )
 )
+MARKERS = {"Hoeffding": "o", "Logística": "D"}
+DELTA = LinearSegmentedColormap.from_list("historical_delta", [ORANGE, "#FAFBFC", TEAL])
+SCOPE = "Histórico INSECTS: 66 runs completos, 22 configurações e seeds 42, 43 e 44. "
+PAIR = "F1 macro e acurácia usam os mesmos eventos pareados por fluxo. "
 
 
 def number(value, decimals=0):
     return f"{value:,.{decimals}f}".replace(",", "_").replace(".", ",").replace("_", ".")
 
 
-def signed(value, decimals=1):
-    value = 0 if abs(value) < 0.5 * 10**-decimals else value
-    return ("+" if value > 0 else "") + number(value, decimals)
-
-
-def seed_label(evidence):
-    if isinstance(evidence.seed, tuple):
-        return "Média das seeds " + ", ".join(str(seed) for seed in evidence.seed)
-    return f"Seed {evidence.seed}"
-
-
-def framed(title, subtitle, footnote, height=8.1):
-    fig = plt.figure(figsize=(13.2, height))
-    fig.text(0.065, 0.955, title, fontsize=24, fontweight="bold", va="top")
-    fig.text(0.065, 0.882, subtitle, fontsize=11, color=MUTED, va="top")
-    fig.text(0.065, 0.039, footnote, fontsize=9, color=MUTED, va="bottom", linespacing=1.55)
-    return fig
-
-
-def flat_axis(ax):
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-    ax.tick_params(length=0)
-
-
-def tile(ax, bottom_left, width, height):
-    ax.add_patch(
-        Rectangle(
-            bottom_left, width, height, facecolor=PENDING, edgecolor="#C1CCD4", hatch="//", linewidth=0.45
-        )
+def _layout(show_title, show_footer, *, height=6.5, left=0.16, right=0.96, bottom=None):
+    apply_style()
+    fig, axes = plt.subplots(2, 1, figsize=(6.2, height))
+    fig.subplots_adjust(
+        left=left,
+        right=right,
+        top=0.83 if show_title else 0.95,
+        bottom=(0.24 if show_footer else 0.18) if bottom is None else bottom,
+        hspace=0.68,
     )
-
-
-def missing_label(evidence, dataset, model, policy):
-    pending = evidence.pending
-    match = pending.dataset.eq(dataset) & pending.modelo.eq(model) & pending.politica.eq(policy)
-    return "Pendente" if match.any() else "Sem run"
-
-
-def absent_panel(ax, title, message):
-    flat_axis(ax)
-    ax.set_title(title, loc="left", fontweight="bold", fontsize=12, pad=9)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center", va="center", color=MUTED)
-
-
-def regime_map(evidence):
-    regimes = evidence.regimes
-    fig = framed(
-        "F1 macro por regime em relação ao Congelado",
-        f"INSECTS na AWS  /  Eventos pareados  /  {seed_label(evidence)}",
-        "Fonte: predições do MLflow e marcos dos manifestos.\n"
-        "Congelado mostra F1 absoluto. As demais linhas mostram a diferença em p.p.\n"
-        "Sob cada regime, o percentual indica a proporção de positivos nos eventos pareados.",
-    )
-    outer = fig.add_gridspec(
-        2, 2, left=0.16, right=0.87, top=0.80, bottom=0.20, width_ratios=[5, 2], wspace=0.32, hspace=0.57
-    )
-    refs = regimes.loc[regimes.politica.eq("Congelado"), ["dataset", "modelo", "regime", "f1"]]
-    gaps = regimes.merge(refs, on=["dataset", "modelo", "regime"], suffixes=("", "_ref"))
-    max_delta = (gaps.f1 - gaps.f1_ref).abs().max() * 100 if not gaps.empty else 0
-    limit = max(45, 15 * np.ceil(max_delta / 15))
-    scale = TwoSlopeNorm(vmin=-limit, vcenter=0, vmax=limit)
-    for i, model in enumerate(MODELS):
-        policies = included_policies(model)
-        for j, dataset in enumerate(DATASETS):
-            ax = fig.add_subplot(outer[i, j])
-            data = regimes[regimes.modelo.eq(model) & regimes.dataset.eq(dataset)]
-            ref = data[data.politica.eq("Congelado")].set_index("regime").sort_index()
-            if ref.empty:
-                absent_panel(ax, f"{dataset}  /  {model}", "Sem referência Congelado")
-                continue
-            for _, part in data.groupby("regime"):
-                if part.avaliados.nunique() != 1 or part.positivos.nunique() != 1:
-                    raise ValueError("As políticas de um regime devem usar a mesma base de avaliação.")
-            scores = data.pivot(index="politica", columns="regime", values="f1")
-            values = (scores.reindex(index=policies, columns=ref.index) - ref["f1"]) * 100
-            for r, policy in enumerate(policies):
-                for c, regime in enumerate(ref.index):
-                    value = values.loc[policy, regime]
-                    if np.isnan(value):
-                        tile(ax, (c, r), 1, 1)
-                        ax.text(
-                            c + 0.5,
-                            r + 0.5,
-                            missing_label(evidence, dataset, model, policy),
-                            ha="center",
-                            va="center",
-                            color=MUTED,
-                            fontsize=8,
-                        )
-                    else:
-                        ax.add_patch(Rectangle((c, r), 1, 1, fc=DELTA(scale(value)), ec="white", lw=1.4))
-                        label = number(ref.loc[regime, "f1"] * 100, 1) + "% ref." if r == 0 else signed(value)
-                        ax.text(
-                            c + 0.5,
-                            r + 0.5,
-                            label,
-                            ha="center",
-                            va="center",
-                            fontsize=9.7,
-                            color="white" if abs(value) >= 0.64 * limit else INK,
-                            fontweight="normal",
-                        )
-            ax.set(xlim=(0, len(ref)), ylim=(len(policies), 0))
-            ax.set_title(f"{dataset}  /  {model}", loc="left", fontweight="bold", fontsize=12, pad=9)
-            ax.set_xticks(
-                np.arange(len(ref)) + 0.5,
-                [f"R{k}  ·  {number(row.positivos / row.avaliados * 100, 1)}%" for k, row in ref.iterrows()],
-                fontsize=9,
-            )
-            ax.set_yticks(np.arange(len(policies)) + 0.5, policies if not j else [])
-            flat_axis(ax)
-    cax = fig.add_axes([0.19, 0.126, 0.52, 0.019])
-    cb = fig.colorbar(
-        plt.cm.ScalarMappable(norm=scale, cmap=DELTA),
-        cax=cax,
-        orientation="horizontal",
-        ticks=np.linspace(-limit, limit, 7),
-    )
-    cb.outline.set_visible(False)
-    cb.ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: signed(x, 0)))
-    cb.ax.tick_params(length=0, labelsize=8)
-    fig.text(0.74, 0.126, "p.p. de F1 macro", fontsize=9, color=MUTED)
-    return fig
-
-
-def detector_timeline(evidence):
-    detector_runs = evidence.detector.groupby(["dataset", "modelo"])
-    manifest = evidence.manifests
-    costs = evidence.drift_artifacts
-    fig = framed(
-        "Acurácia, alarmes e atualizações por posição no fluxo",
-        f"INSECTS  /  ADWIN  /  Acurácia por janela e contagens por bloco  /  {seed_label(evidence)}",
-        "Fonte: artefatos de drift do MLflow. Uma faixa cinza no início indica ausência de janela "
-        "registrada em todas as seeds.\n"
-        "Os regimes usam as fronteiras anotadas pelos autores. No Recorrente, também há drift "
-        "incremental dentro de cada ciclo.",
-        height=8.6,
-    )
-    outer = fig.add_gridspec(2, 1, left=0.218, right=0.875, bottom=0.205, top=0.805, hspace=0.49)
-    accnorm = TwoSlopeNorm(vmin=0, vcenter=72, vmax=100)
-    bins_by_dataset = {
-        dataset: np.r_[np.arange(0, m["samples"], 5000), m["samples"]] for dataset, m in manifest.items()
-    }
-    event_counts = {}
-    for row in evidence.detector.itertuples():
-        markers = costs[row.run]["detection_timeline"]["markers"]
-        block = bins_by_dataset[row.dataset]
-        for event in ("alarm", "update"):
-            event_counts[row.run, event] = np.histogram(
-                [point["x"] for point in markers if point["kind"] == event], block
-            )[0]
-    max_events = max((values.max() for values in event_counts.values()), default=0)
-    countnorm = Normalize(0, max(5, max_events))
-    for i, dataset in enumerate(DATASETS):
-        ax = fig.add_subplot(outer[i, 0])
-        if dataset not in manifest:
-            absent_panel(ax, TITLES[dataset], "Sem dados do fluxo")
-            continue
-        m = manifest[dataset]
-        ends = m["samples"]
-        block = bins_by_dataset[dataset]
-        for r, regime in enumerate(m["binary_distribution_per_regime"]):
-            start, end = regime["start"], regime["end"]
-            ax.add_patch(Rectangle((start, 0), end - start, 0.72, fc=["#D4E5E9", "#B3CED4"][r % 2]))
-            ax.text((start + end) / 2, 0.36, f"R{regime['regime']}", ha="center", va="center", fontsize=9)
-        ylabels = ["Regimes anotados"]
-        for j, model in enumerate(MODELS):
-            y = 1.05 + j * 2.8
-            ylabels.extend([f"{model}  ·  Acurácia", "Alarmes", "Atualizações"])
-            if (dataset, model) not in detector_runs.groups:
-                tile(ax, (0, y), ends, 2.4)
-                ax.text(ends / 2, y + 1.2, "Sem run ADWIN", ha="center", va="center", color=MUTED)
-                continue
-            data = detector_runs.get_group((dataset, model))
-            series_by_run = []
-            for row in data.itertuples():
-                timeline = costs[row.run]["detection_timeline"]
-                points = next(item["points"] for item in timeline["series"] if item["name"] == "accuracy")
-                series_by_run.append(dict(points))
-                if [p["x"] for p in timeline["markers"] if p["kind"] == "changepoint"] != m["changepoints"]:
-                    raise ValueError(f"Marcos do ADWIN divergentes do manifesto em {row.run}.")
-            ax.add_patch(Rectangle((0, y), ends, 0.74, fc=PENDING))
-            seq = np.array(sorted(set.intersection(*(set(points) for points in series_by_run))))
-            if seq.size:
-                scores = np.mean([[points[x] for x in seq] for points in series_by_run], axis=0)
-                width = seq[1] - seq[0] if len(seq) > 1 else 1
-                edges = np.r_[max(0, seq[0] - width), seq]
-                ax.pcolormesh(edges, [y, y + 0.74], [scores * 100], cmap=ACCURACY, norm=accnorm)
-            for k, event in enumerate(("alarm", "update"), start=1):
-                counts = np.mean([event_counts[run, event] for run in data.run], axis=0)
-                ax.pcolormesh(
-                    block, [y + 0.83 * k, y + 0.83 * k + 0.74], [counts], cmap=COUNTS, norm=countnorm
-                )
-                ax.text(
-                    1.012,
-                    y + 0.83 * k + 0.37,
-                    number(counts.sum(), 0 if np.isclose(counts.sum() % 1, 0) else 1),
-                    transform=ax.get_yaxis_transform(),
-                    ha="left",
-                    va="center",
-                    fontsize=9,
-                    fontweight="bold",
-                )
-        for point in m["changepoints"]:
-            ax.axvline(point, color="#2A3C45", linewidth=0.8, alpha=0.85)
-        ax.text(
-            1.012,
-            -0.52,
-            "Total médio" if isinstance(evidence.seed, tuple) else "Total",
-            transform=ax.get_yaxis_transform(),
-            fontsize=8,
-            color=MUTED,
-        )
-        ax.set_xlim(0, ends)
-        ax.set_ylim(6.3, -0.08)
-        ax.set_yticks([0.36, 1.42, 2.25, 3.08, 4.22, 5.05, 5.88], ylabels, fontsize=9)
-        ticks = np.arange(0, ends, 50000)
-        ax.set_xticks(ticks, [number(t / 1000) for t in ticks], fontsize=9)
-        ax.set_title(TITLES[dataset], loc="left", fontweight="bold", fontsize=12, pad=10)
-        flat_axis(ax)
-    fig.text(0.565, 0.161, "Posição no fluxo (mil exemplos)", ha="center", color=MUTED, fontsize=9)
-    for x, cmap, norm, ticks, caption in (
-        (0.22, ACCURACY, accnorm, [0, 25, 50, 75, 100], "Acurácia (%)"),
-        (0.60, COUNTS, countnorm, MaxNLocator(nbins=5, integer=True), "Eventos por bloco de 5 mil exemplos"),
-    ):
-        cb = fig.colorbar(
-            plt.cm.ScalarMappable(norm=norm, cmap=cmap),
-            cax=fig.add_axes([x, 0.105, 0.25, 0.015]),
-            orientation="horizontal",
-            ticks=ticks,
-        )
-        cb.outline.set_visible(False)
-        cb.ax.tick_params(length=0, labelsize=8)
-        fig.text(x, 0.127, caption, fontsize=8.7, color=MUTED)
-    return fig
-
-
-def recovery_bars(evidence):
-    detector_runs = evidence.detector.groupby(["dataset", "modelo"])
-    costs = evidence.drift_artifacts
-    manifest = evidence.manifests
-    fig = framed(
-        "Exemplos até recuperar a acurácia",
-        f"ADWIN  /  {seed_label(evidence)}  /  Somente runs que atingiram o alvo",
-        "Recuperação: duas janelas elegíveis consecutivas com acurácia ≥ a da última janela "
-        "pré-mudança menos 5 p.p.\n"
-        "A contagem começa no drift anotado. O alvo pode ser atingido mesmo sem queda inicial "
-        "ou alarme pareado.",
-        height=6.6,
-    )
-    outer = fig.add_gridspec(
-        1, 2, left=0.098, right=0.948, top=0.76, bottom=0.225, width_ratios=[5, 2], wspace=0.16
-    )
-    colors = [NAVY, "#A7542C"]
-    max_delay = max(
-        (
-            value
-            for a in costs.values()
-            if "recovery" in a
-            for value in a["recovery"]["values"]
-            if value is not None
-        ),
-        default=0,
-    )
-    limit = max(24500, max_delay * 1.12)
-    for i, dataset in enumerate(DATASETS):
-        ax = fig.add_subplot(outer[0, i])
-        title = f"{dataset}  /  versão desbalanceada"
-        if dataset not in manifest:
-            absent_panel(ax, title, "Sem dados do fluxo")
-            continue
-        change = manifest[dataset]["changepoints"]
-        for j, model in enumerate(MODELS):
-            values = {point: [] for point in change}
-            if (dataset, model) in detector_runs.groups:
-                for run in detector_runs.get_group((dataset, model)).run:
-                    series = costs[run]["recovery"]
-                    points = [int(label.split("@")[1]) for label in series["labels"]]
-                    if points != change:
-                        raise ValueError(f"Marcos de recuperação divergentes no run {run}.")
-                    for point, value in zip(points, series["values"], strict=True):
-                        if value is not None:
-                            values[point].append(value)
-            pos = np.arange(len(change)) + (j - 0.5) * 0.39
-            for x, delays in zip(pos, values.values(), strict=True):
-                value = float(np.mean(delays)) if delays else None
-                if value is None:
-                    tile(ax, (x - 0.175, 0), 0.35, limit * 0.045)
-                else:
-                    bars = ax.bar(x, value, width=0.35, color=colors[j])
-                    label = number(value, 0 if value.is_integer() else 1)
-                    if isinstance(evidence.seed, tuple) and len(delays) < len(evidence.seed):
-                        label += f" ({len(delays)}/{len(evidence.seed)})"
-                    ax.bar_label(bars, labels=[label], padding=4, fontsize=8.5)
-        ax.set_title(title, loc="left", fontweight="bold", fontsize=11, pad=9)
-        ax.set_ylim(0, limit)
-        ax.set_xticks(np.arange(len(change)), [number(v) for v in change], fontsize=9)
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=5, integer=True))
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{number(x / 1000)} mil" if x else "0"))
-        ax.tick_params(axis="y", labelleft=not i)
-        flat_axis(ax)
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        ax.set_title(dataset, loc="left", fontweight="bold", pad=8)
+        ax.grid(axis="x", color=GRID, linewidth=0.6)
         ax.set_axisbelow(True)
-        ax.yaxis.grid(color=GRID, linewidth=0.8)
-    fig.text(
-        0.515,
-        0.165,
-        "Posição exata do drift anotado (índice do exemplo)",
-        ha="center",
-        color=MUTED,
-        fontsize=9,
-    )
-    handles = [Patch(fc=c, label=m) for c, m in zip(colors, MODELS, strict=True)]
-    if len(detector_runs) < 4 or any(
-        None in a["recovery"]["values"] for a in costs.values() if "recovery" in a
-    ):
-        handles.append(Patch(fc=PENDING, ec="#C1CCD4", hatch="//", label="Sem valor registrado"))
+    return fig, axes
+
+
+def _policy_legend(fig, *, models=False, bottom=0.08):
+    handles = [Line2D([], [], color=POLICY_COLORS[p], marker="o", linestyle="", label=p) for p in POLICIES]
+    if models:
+        handles += [Line2D([], [], color=INK, marker=MARKERS[m], linestyle="", label=m) for m in MODELS]
     fig.legend(
         handles=handles,
+        loc="lower center",
+        bbox_to_anchor=(0.52, bottom),
+        ncol=3,
         frameon=False,
-        ncol=len(handles),
-        loc="lower right",
-        bbox_to_anchor=(0.95, 0.10),
-        fontsize=9,
+        columnspacing=1,
+        handletextpad=0.4,
+        labelspacing=0.45,
     )
-    return fig
 
 
-def quality_cost(evidence):
-    runs, paired = evidence.runs, evidence.paired
-    max_cost = runs.custo_registrado.max()
-    cost_limit = max(21, np.ceil(max_cost * 1100)) if np.isfinite(max_cost) else 21
-    fig = framed(
-        "F1 macro, custo e número de atualizações",
-        f"INSECTS  /  Eventos pareados e custo do run integral  /  {seed_label(evidence)}",
-        "O custo é a estimativa de infraestrutura registrada (CPU, RAM e armazenamento), em "
-        "milésimos de US$.\n"
-        "O número ao lado da barra de custo indica atualizações. O Online atualiza por exemplo e as "
-        "demais políticas registram retreinamentos.",
-        height=9.8,
+def _model_legend(fig, bottom):
+    fig.legend(
+        handles=[
+            Line2D([], [], color=c, marker=MARKERS[m], label=m)
+            for m, c in zip(MODELS, (BLUE, ORANGE), strict=True)
+        ],
+        loc="lower center",
+        bbox_to_anchor=(0.53, bottom),
+        ncol=2,
+        frameon=False,
     )
-    outer = fig.add_gridspec(2, 2, left=0.145, right=0.945, top=0.80, bottom=0.155, hspace=0.54, wspace=0.37)
-    for i, (dataset, model) in enumerate((d, m) for d in DATASETS for m in MODELS):
-        policies = included_policies(model)
-        grid = outer[i // 2, i % 2].subgridspec(1, 2, width_ratios=[1.12, 1], wspace=0.19)
-        ax, cost_ax = [fig.add_subplot(grid[0, j]) for j in range(2)]
-        pair = (
-            paired[paired.dataset.eq(dataset) & paired.modelo.eq(model)]
-            .merge(runs[["run", "custo_registrado", "atualizacoes"]], on="run", validate="one_to_one")
-            .set_index("politica")
+
+
+DEFINITIONS = {
+    "regime_map": {
+        "F1 macro": "Média do F1 das duas classes; maior é melhor.",
+        "p.p.": "Diferença absoluta entre percentuais em relação ao Congelado do mesmo modelo.",
+    },
+    "detector_timeline": {
+        "Acurácia": "Proporção de previsões corretas em cada janela; maior é melhor.",
+        "Alarme": "Evento registrado pelo detector, sem equivalência automática com uma mudança real.",
+        "Atualização": "Ação de atualização registrada; não é uma contagem de alarmes.",
+    },
+    "recovery_bars": {
+        "Recuperação": (
+            "Exemplos desde a fronteira anotada até duas janelas elegíveis consecutivas atingirem "
+            "o alvo de acurácia."
+        ),
+        "n/N": (
+            "Seeds que atingiram o alvo divididas pelas seeds avaliadas; valores não recuperados "
+            "permanecem indisponíveis."
+        ),
+    },
+    "quality_cost": {
+        "F1 macro": "Média do F1 das duas classes nos eventos pareados; maior é melhor.",
+        "Custo registrado": (
+            "Estimativa registrada de CPU, RAM e armazenamento do run integral em milésimos de "
+            "dólar, sem equivalência a fatura."
+        ),
+        "Atualizações": (
+            "Online atualiza por exemplo; as demais políticas contam retreinamentos no run integral."
+        ),
+    },
+    "paired_f1": {
+        "F1 macro": "Média do F1 das duas classes na mesma coorte pareada; maior é melhor.",
+        "Desvio padrão": (
+            "Dispersão amostral entre as três seeds, com divisor n menos 1; não é intervalo de confiança."
+        ),
+    },
+    "logistic_trajectories": {
+        "F1 por janela": (
+            "F1 macro recalculado em cada janela pareada e agregado entre seeds; não equivale ao "
+            "F1 do fluxo inteiro."
         )
-        for j, policy in enumerate(policies):
-            if policy not in pair.index:
-                for a, width in ((ax, 100), (cost_ax, cost_limit)):
-                    tile(a, (0, j - 0.27), width, 0.54)
-                ax.text(
-                    50,
-                    j,
-                    missing_label(evidence, dataset, model, policy),
-                    ha="center",
-                    va="center",
-                    fontsize=8,
-                )
-                continue
-            row = pair.loc[policy]
-            cost = row.custo_registrado * 1000
-            color = POLICY_COLORS[policy]
-            ax.barh(j, row.f1 * 100, color=color, height=0.52)
-            if row.f1 > 0.92:
-                ax.text(
-                    row.f1 * 100 - 1.4,
-                    j,
-                    number(row.f1 * 100, 1),
-                    ha="right",
-                    va="center",
-                    color="white",
-                    fontsize=8,
-                )
-            else:
-                ax.text(row.f1 * 100 + 1.6, j, number(row.f1 * 100, 1), va="center", fontsize=8)
-            count_label = number(row.atualizacoes, 0 if float(row.atualizacoes).is_integer() else 1)
-            if np.isfinite(cost):
-                cost_ax.barh(j, cost, color=color, height=0.52)
-                label = f"{number(cost, 3)}  ·  {count_label}"
-                margin = cost_limit * 0.017
-                if cost > 0.57 * cost_limit:
-                    cost_ax.text(cost - margin, j, label, ha="right", va="center", color="white", fontsize=8)
-                else:
-                    cost_ax.text(cost + margin, j, label, va="center", fontsize=8)
-            else:
-                cost_ax.text(
-                    0.02 * cost_limit,
-                    j,
-                    f"Sem custo  ·  {count_label}",
-                    va="center",
-                    fontsize=8,
-                )
-        ax.text(
-            0,
-            1.135,
-            f"{dataset}  /  {model}",
-            transform=ax.transAxes,
-            fontsize=12,
-            fontweight="bold",
-            va="bottom",
+    },
+    "quality_retention": {
+        "F1 macro": "Média do F1 das duas classes nos eventos pareados; maior é melhor.",
+        "Retenção": (
+            "Acurácia média final nos probes de regimes anteriores do run integral; não é uma "
+            "porcentagem de conhecimento preservado."
+        ),
+    },
+    "paired_accuracy_f1": {
+        "Acurácia": "Proporção de previsões corretas na coorte pareada.",
+        "F1 macro": "Média do F1 das duas classes na mesma coorte; a diferença para acurácia é descritiva.",
+    },
+    "upf_class_recall": {
+        "Recall": "Fração dos exemplos de uma classe classificados corretamente; maior é melhor.",
+        "Recall negativo": (
+            "Valor derivado de acurácia, prevalência e recall positivo da mesma coorte, sem "
+            "reconstruir dispersão por seed."
+        ),
+    },
+}
+
+
+def _finish(fig, title, caption, slot, show_title, show_footer, **extra):
+    descriptions = extra.pop("metric_descriptions", DEFINITIONS[slot])
+    return decorate(
+        fig,
+        title,
+        SCOPE + caption,
+        show_title=show_title,
+        show_footer=show_footer,
+        footer="Três seeds históricas. Escopos e definições completos na legenda.",
+        source_slot_id=slot,
+        source_family="historical-insects",
+        metric_descriptions=descriptions,
+        **extra,
+    )
+
+
+def _dataset_rows(frame, dataset):
+    return frame.loc[frame.dataset.eq(dataset)]
+
+
+def regime_map(evidence, *, show_title=True, show_footer=True, dataset="Abrupto"):
+    """A full-size heatmap for one stream, retaining model-specific configurations."""
+    apply_style()
+    fig, ax = plt.subplots(figsize=(6.2, 6.5))
+    fig.subplots_adjust(
+        left=0.31, right=0.89, top=0.82 if show_title else 0.95, bottom=0.17 if show_footer else 0.13
+    )
+    rows = _dataset_rows(evidence.regimes, dataset)
+    labels = [(m, p) for m in MODELS for p in included_policies(m)]
+    regimes = sorted(rows.regime.unique())
+    values = np.full((len(labels), len(regimes)), np.nan)
+    absolute = values.copy()
+    for i, (model, policy) in enumerate(labels):
+        ref = rows.loc[rows.modelo.eq(model) & rows.politica.eq("Congelado")].set_index("regime")
+        part = rows.loc[rows.modelo.eq(model) & rows.politica.eq(policy)].set_index("regime")
+        for j, regime in enumerate(regimes):
+            if regime in part.index and regime in ref.index:
+                absolute[i, j] = part.loc[regime, "f1"] * 100
+                values[i, j] = absolute[i, j] - ref.loc[regime, "f1"] * 100
+    norm = TwoSlopeNorm(vmin=-60, vcenter=0, vmax=60)
+    image = ax.imshow(values, aspect="auto", cmap=DELTA, norm=norm)
+    for i, (_, policy) in enumerate(labels):
+        for j in range(len(regimes)):
+            v = absolute[i, j] if policy == "Congelado" else values[i, j]
+            text = "ND" if not np.isfinite(v) else number(v, 1) + ("%" if policy == "Congelado" else "")
+            ax.text(j, i, text, ha="center", va="center", color="white" if abs(values[i, j]) > 42 else INK)
+    ax.set_yticks(range(len(labels)), [f"{'H' if m == 'Hoeffding' else 'Log'} · {p}" for m, p in labels])
+    ax.set_xticks(range(len(regimes)), [f"R{x}" for x in regimes])
+    ax.set_xlabel("Regime anotado")
+    ax.set_title(dataset, loc="left", fontweight="bold")
+    cb = fig.colorbar(image, cax=fig.add_axes([0.915, 0.22, 0.022, 0.44]), ticks=[-60, 0, 60])
+    cb.ax.set_title("p.p.", fontsize=11, pad=10)
+    fractions = rows.groupby("regime")[["positivos", "avaliados"]].first()
+    prevalence = "; ".join(
+        f"R{r}: {number(v.positivos / v.avaliados * 100, 2)}%" for r, v in fractions.iterrows()
+    )
+    caption = (
+        PAIR
+        + (
+            f"{dataset}. Congelado mostra F1 absoluto; as outras células mostram a diferença em pontos "
+            "percentuais para o Congelado do mesmo modelo. H identifica Hoeffding e Log identifica "
+            "regressão logística. Regimes com bases pareadas incompletas permanecem ND. "
         )
-        ax.set_title("F1 macro (%)", loc="left", fontsize=9, color=MUTED, pad=7)
-        cost_ax.set_title("mUSD  ·  atualizações", loc="left", fontsize=9, color=MUTED, pad=7)
-        for a, limit, ticks, labels in [
-            (ax, 100, [0, 25, 50, 75, 100], policies),
-            (cost_ax, cost_limit, None, []),
-        ]:
-            a.set(xlim=(0, limit), ylim=(len(policies) - 0.5, -0.5))
-            if ticks is None:
-                a.xaxis.set_major_locator(MaxNLocator(nbins=5))
-            else:
-                a.set_xticks(ticks)
-            a.set_yticks(np.arange(len(policies)), labels, fontsize=9)
-            flat_axis(a)
-            a.tick_params(axis="x", labelsize=8)
-            a.set_axisbelow(True)
-            a.xaxis.grid(color=GRID, linewidth=0.8)
-    return fig
-
-
-def paired_f1(evidence):
-    fig, axes = plt.subplots(2, 2, figsize=(12.4, 7.5), layout="constrained")
-    fig.suptitle(
-        f"INSECTS · F1 macro nos eventos comuns · {seed_label(evidence)}", fontsize=19, fontweight="bold"
+        + "Proporção positiva na coorte por regime: "
+        + prevalence
+        + "."
     )
-    for i, dataset in enumerate(DATASETS):
-        source = evidence.paired.loc[evidence.paired.dataset.eq(dataset)]
-        if source.empty:
-            for ax in axes[i]:
-                absent_panel(ax, dataset, "Sem eventos pareados")
-            continue
-        if source.avaliados.nunique() != 1:
-            raise ValueError(f"Cardinalidades diferentes no pareamento de {dataset}.")
-        for ax, model in zip(axes[i], MODELS, strict=True):
-            rows = source.loc[source.modelo.eq(model)].set_index("politica")
-            policies = included_policies(model)
-            rows = rows.reindex(policies).dropna(subset=["f1"])
-
-            spread = rows.get("f1_dp")
-            bars = ax.barh(
-                rows.index,
-                100 * rows.f1,
-                color=[POLICY_COLORS[p] for p in rows.index],
-                xerr=None if spread is None else 100 * spread.fillna(0),
-                capsize=3,
-            )
-            ax.bar_label(bars, labels=[number(v * 100, 2) + "%" for v in rows.f1], padding=5)
-            ax.set_title(
-                f"{dataset} · {model} · {number(source.avaliados.iloc[0])} eventos",
-                loc="left",
-                fontweight="bold",
-                fontsize=11,
-            )
-            ax.set(xlim=(0, 100), xlabel="F1 macro (%)" if spread is None else "F1 macro (%) · média ± DP")
-            ax.invert_yaxis()
-            ax.set_axisbelow(True)
-            ax.grid(axis="x", color=GRID)
-            flat_axis(ax)
-    return fig
-
-
-def logistic_trajectories(evidence):
-    fig, axes = plt.subplots(2, 2, figsize=(12.4, 7), layout="constrained", sharey=True)
-    fig.suptitle(
-        f"INSECTS · F1 macro por janela da regressão logística · {seed_label(evidence)}",
-        fontsize=17,
-        fontweight="bold",
+    return _finish(
+        fig,
+        "F1 por regime em relação ao Congelado",
+        caption,
+        "regime_map",
+        show_title,
+        show_footer,
+        metric_descriptions={
+            "F1 macro": "Média do F1 das duas classes; maior é melhor.",
+            "p.p.": "Diferença absoluta entre percentuais, sem dividir pela referência.",
+        },
     )
-    data = evidence.windows.loc[evidence.windows.modelo.eq("Logística")]
-    routes = (("Por evento", ("Congelado", "Online", "ADWIN")), ("Por bloco", ("CARA", "UPF", "Oracle")))
-    for i, dataset in enumerate(DATASETS):
-        manifest = evidence.manifests.get(dataset)
-        for ax, (route, policies) in zip(axes[i], routes, strict=True):
-            if manifest is None:
-                absent_panel(ax, f"{dataset} · {route}", "Sem dados do fluxo")
-                continue
-            series = data.loc[data.dataset.eq(dataset)]
-            spacings = []
-            for policy in policies:
-                points = series.loc[series.politica.eq(policy)].sort_values("passo")
-                if points.empty:
-                    continue
-                if points.passo.duplicated().any():
-                    raise ValueError(f"Janelas duplicadas em {dataset}, {policy}.")
-                if len(points) > 1:
-                    spacings.append(np.median(np.diff(points.passo)))
-                if "dp" in points and points.dp.notna().any():
-                    ax.fill_between(
-                        points.passo / 1000,
-                        100 * (points.f1 - points.dp).clip(0, 1),
-                        100 * (points.f1 + points.dp).clip(0, 1),
-                        color=POLICY_COLORS[policy],
-                        alpha=0.15,
-                        linewidth=0,
+
+
+def detector_timeline(evidence, *, show_title=True, show_footer=True):
+    fig, axes = _layout(show_title, show_footer, bottom=0.20 if show_footer else 0.14)
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        for model, color in zip(MODELS, (BLUE, ORANGE), strict=True):
+            records = evidence.detector.loc[
+                evidence.detector.dataset.eq(dataset) & evidence.detector.modelo.eq(model)
+            ]
+            series = []
+            for run in records.run:
+                timeline = evidence.drift_artifacts[run]["detection_timeline"]
+                markers = [p["x"] for p in timeline["markers"] if p["kind"] == "changepoint"]
+                if markers != evidence.manifests[dataset]["changepoints"]:
+                    raise ValueError("Marcos históricos divergentes do manifesto.")
+                series.append(dict(next(s["points"] for s in timeline["series"] if s["name"] == "accuracy")))
+            common = sorted(set.intersection(*(set(s) for s in series)))
+            matrix = np.array([[s[x] for x in common] for s in series]) * 100
+            mean = matrix.mean(axis=0)
+            sd = matrix.std(axis=0, ddof=1) if len(series) > 1 else np.zeros(len(common))
+            ax.plot(np.array(common) / 1000, mean, color=color, lw=1.6, label=model)
+            ax.fill_between(np.array(common) / 1000, mean - sd, mean + sd, color=color, alpha=0.12)
+        for change in evidence.manifests[dataset]["changepoints"]:
+            ax.axvline(change / 1000, color=MUTED, lw=0.7, ls=":")
+        ax.set(ylabel="Acurácia (%)", xlabel="Posição no fluxo (mil exemplos)", ylim=(0, 103))
+        ax.yaxis.set_major_locator(MaxNLocator(4))
+    _model_legend(fig, 0.075 if show_footer else 0.015)
+    return _finish(
+        fig,
+        "Acurácia ao longo do fluxo com ADWIN",
+        (
+            "A linha é a média e a faixa indica um desvio padrão amostral nas posições presentes "
+            "nas três seeds. Linhas verticais marcam fronteiras anotadas. A janela avalia a "
+            "acurácia; não representa uma coorte de teste independente."
+        ),
+        "detector_timeline",
+        show_title,
+        show_footer,
+    )
+
+
+def detector_events(evidence, *, show_title=True, show_footer=True):
+    fig, axes = _layout(show_title, show_footer, bottom=0.24 if show_footer else 0.18)
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        manifest = evidence.manifests[dataset]
+        bins = np.r_[np.arange(0, manifest["samples"], 5000), manifest["samples"]]
+        for model, color in zip(MODELS, (BLUE, ORANGE), strict=True):
+            runs = evidence.detector.loc[
+                evidence.detector.dataset.eq(dataset) & evidence.detector.modelo.eq(model), "run"
+            ]
+            for event, style in (("alarm", "-"), ("update", "--")):
+                counts = [
+                    np.histogram(
+                        [
+                            x["x"]
+                            for x in evidence.drift_artifacts[run]["detection_timeline"]["markers"]
+                            if x["kind"] == event
+                        ],
+                        bins,
+                    )[0]
+                    for run in runs
+                ]
+                ax.step(bins[1:] / 1000, np.mean(counts, axis=0), where="pre", color=color, ls=style, lw=1.5)
+        ax.set(xlabel="Posição no fluxo (mil exemplos)", ylabel="Eventos por 5 mil")
+        ax.yaxis.set_major_locator(MaxNLocator(4, integer=True))
+    handles = [Line2D([], [], color=c, label=m) for m, c in zip(MODELS, (BLUE, ORANGE), strict=True)] + [
+        Line2D([], [], color=INK, ls=s, label=label) for label, s in (("Alarme", "-"), ("Atualização", "--"))
+    ]
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        bbox_to_anchor=(0.52, 0.075 if show_footer else 0.015),
+        ncol=2,
+        frameon=False,
+    )
+    return _finish(
+        fig,
+        "Alarmes e atualizações registrados pelo ADWIN",
+        (
+            "Contagem média das três seeds por bloco de 5 mil exemplos. O último bloco pode conter "
+            "menos exemplos. Um alarme é um evento do detector e uma atualização é uma ação "
+            "registrada. Neste histórico, posições e contagens de alarmes e atualizações coincidem, "
+            "então as curvas se sobrepõem apesar do significado distinto dos eventos."
+        ),
+        "detector_timeline",
+        show_title,
+        show_footer,
+    )
+
+
+def recovery_bars(evidence, *, show_title=True, show_footer=True):
+    fig, axes = _layout(show_title, show_footer, bottom=0.22 if show_footer else 0.16)
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        changes = evidence.manifests[dataset]["changepoints"]
+        for j, (model, color) in enumerate(zip(MODELS, (BLUE, ORANGE), strict=True)):
+            runs = evidence.detector.loc[
+                evidence.detector.dataset.eq(dataset) & evidence.detector.modelo.eq(model), "run"
+            ]
+            values = {p: [] for p in changes}
+            for run in runs:
+                recovery = evidence.drift_artifacts[run]["recovery"]
+                points = [int(label.split("@")[1]) for label in recovery["labels"]]
+                if points != changes:
+                    raise ValueError("Fronteiras de recuperação divergentes.")
+                for point, value in zip(points, recovery["values"], strict=True):
+                    if value is not None:
+                        values[point].append(value)
+            for i, point in enumerate(changes):
+                vals = values[point]
+                y = i + (j - 0.5) * 0.28
+                if vals:
+                    ax.plot(np.mean(vals) / 1000, y, marker=MARKERS[model], color=color, ms=6)
+                    ax.annotate(
+                        f"{len(vals)}/{len(runs)}",
+                        (np.mean(vals) / 1000, y),
+                        xytext=(6, 0),
+                        textcoords="offset points",
+                        va="center",
                     )
-                ax.plot(
-                    points.passo / 1000,
-                    points.f1 * 100,
-                    color=POLICY_COLORS[policy],
-                    lw=1.3,
-                    marker="o" if route == "Por bloco" else None,
-                    ms=3,
-                    label=policy,
+                else:
+                    ax.text(0, y, "ND", va="center")
+        ax.set_yticks(range(len(changes)), [number(v) for v in changes])
+        ax.invert_yaxis()
+        ax.set(xlabel="Exemplos até recuperar (mil)", ylabel="Fronteira anotada")
+        ax.set_xlim(0, max(ax.get_xlim()[1] * 1.28, 1))
+    _model_legend(fig, 0.075 if show_footer else 0.015)
+    return _finish(
+        fig,
+        "Recuperação da acurácia após fronteiras anotadas",
+        (
+            "Somente ADWIN. Alvo: duas janelas elegíveis consecutivas com acurácia pelo menos "
+            "igual à última janela pré-mudança menos 5 p.p. O ponto é a média dos atrasos "
+            "disponíveis e n/N explicita quantas seeds atingiram o alvo. O início da contagem é a "
+            "fronteira anotada, sem exigir queda inicial ou alarme pareado."
+        ),
+        "recovery_bars",
+        show_title,
+        show_footer,
+    )
+
+
+def _scatter(evidence, kind, show_title, show_footer):
+    fig, axes = _layout(show_title, show_footer, left=0.17, bottom=0.29 if show_footer else 0.23)
+    merged = evidence.paired.merge(evidence.runs, on=["dataset", "modelo", "politica"], suffixes=("", "_run"))
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        for row in _dataset_rows(merged, dataset).itertuples():
+            y = row.custo_registrado * 1000 if kind == "cost" else row.retencao * 100
+            if np.isfinite(y):
+                if np.isfinite(row.f1_dp):
+                    ax.errorbar(
+                        row.f1 * 100,
+                        y,
+                        xerr=row.f1_dp * 100,
+                        fmt="none",
+                        color=POLICY_COLORS[row.politica],
+                        capsize=2,
+                        linewidth=1.1,
+                        zorder=2,
+                    )
+                ax.scatter(
+                    row.f1 * 100,
+                    y,
+                    c=POLICY_COLORS[row.politica],
+                    marker=MARKERS[row.modelo],
+                    s=49,
+                    edgecolors="white",
+                    linewidths=0.4,
+                    zorder=3,
                 )
-            for position in manifest["changepoints"]:
-                ax.axvline(position / 1000, color="#74828A", ls=":", lw=1)
-            spacing = (
-                f" · intervalo típico de {number(np.median(spacings) / 1000, 1)} mil" if spacings else ""
-            )
-            ax.set_title(f"{dataset} · {route}{spacing}", loc="left", fontweight="bold", fontsize=10)
-            ax.set(
-                xlim=(0, manifest["samples"] / 1000),
-                ylim=(0, 100),
-                xlabel=(
-                    "Posição no fluxo (mil exemplos) · faixa ±1 DP"
-                    if isinstance(evidence.seed, tuple)
-                    else "Posição no fluxo (mil exemplos) · pontilhado marca drift"
-                ),
-            )
-            if ax in axes[:, 0]:
-                ax.set_ylabel("F1 macro da janela (%)")
-            ax.yaxis.set_major_locator(MultipleLocator(20))
-            if ax.lines and spacings:
-                ax.legend(loc="lower right", ncols=3, fontsize=8, frameon=False)
-            ax.set_axisbelow(True)
-            ax.grid(axis="y", color=GRID)
-            flat_axis(ax)
-    return fig
-
-
-def quality_retention(evidence):
-    fig, axes = plt.subplots(1, 2, figsize=(12.4, 5.1), layout="constrained", sharex=True, sharey=True)
-    fig.suptitle(
-        f"INSECTS · F1 no fluxo e retenção histórica · {seed_label(evidence)}", fontsize=18, fontweight="bold"
+        ax.set_xlabel("F1 macro pareado (%)")
+        if kind == "cost":
+            ax.set_ylabel("Custo registrado (mUS$)")
+            ax.set_yscale("log")
+            ax.yaxis.set_major_locator(FixedLocator([1, 1.5, 2, 5, 10, 20, 50]))
+            ax.yaxis.set_minor_formatter(NullFormatter())
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: number(v, 1)))
+        else:
+            ax.set_ylabel("Retenção final (%)")
+            ax.yaxis.set_major_locator(MaxNLocator(4))
+        ax.xaxis.set_major_locator(MaxNLocator(5))
+        ax.grid(axis="y", color=GRID, lw=0.6)
+    _policy_legend(fig, models=True, bottom=0.065 if show_footer else 0.005)
+    title = (
+        "Qualidade preditiva e custo registrado" if kind == "cost" else "Qualidade preditiva e retenção final"
     )
-    data = evidence.paired.merge(evidence.runs[["run", "retencao"]], on="run", validate="one_to_one")
-    marks = {"Hoeffding": "^", "Logística": "o"}
-    for ax, dataset in zip(axes, DATASETS, strict=True):
-        rows = data.loc[data.dataset.eq(dataset)].dropna(subset=["retencao"])
-        for r in rows.itertuples():
-            ax.scatter(
-                r.f1 * 100,
-                r.retencao * 100,
-                marker=marks[r.modelo],
-                color=POLICY_COLORS[r.politica],
-                s=65,
-                edgecolors="white",
-                linewidths=0.6,
-                zorder=3,
+    caption = (
+        PAIR
+        + "Barras horizontais mostram um desvio padrão amostral do F1 entre três seeds. "
+        + (
+            (
+                "O custo do run integral é a estimativa de CPU, RAM e armazenamento registrada em "
+                "milésimos de US$. Escala vertical logarítmica. Valores de custo não são estimativas "
+                "causais de uma única operação."
             )
-        ax.set_title(dataset, loc="left", fontweight="bold")
-        ax.set_xlabel("F1 macro nos eventos comuns (%)")
-        ax.grid(color=GRID)
-        flat_axis(ax)
-    axes[0].set_ylabel("Acurácia nos probes de regimes anteriores (%)")
+            if kind == "cost"
+            else (
+                "A retenção é a média final de acurácia nos probes dos regimes anteriores do run "
+                "integral. Não representa a proporção de conhecimento preservado nem uma medição na "
+                "coorte pareada."
+            )
+        )
+    )
+    return _finish(
+        fig,
+        title,
+        caption,
+        "quality_cost" if kind == "cost" else "quality_retention",
+        show_title,
+        show_footer,
+    )
+
+
+def quality_cost(evidence, *, show_title=True, show_footer=True):
+    return _scatter(evidence, "cost", show_title, show_footer)
+
+
+def quality_retention(evidence, *, show_title=True, show_footer=True):
+    return _scatter(evidence, "retention", show_title, show_footer)
+
+
+def update_counts(evidence, *, show_title=True, show_footer=True):
+    fig, axes = _layout(show_title, show_footer, left=0.23, bottom=0.22 if show_footer else 0.16)
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        for j, model in enumerate(MODELS):
+            part = _dataset_rows(evidence.runs, dataset)
+            part = part.loc[part.modelo.eq(model)].set_index("politica")
+            for i, policy in enumerate(POLICIES):
+                if policy in part.index:
+                    ax.plot(
+                        part.loc[policy, "atualizacoes"],
+                        i + (j - 0.5) * 0.22,
+                        marker=MARKERS[model],
+                        color=POLICY_COLORS[policy],
+                        ms=6,
+                    )
+        ax.set_yticks(range(len(POLICIES)), POLICIES)
+        ax.invert_yaxis()
+        ax.set_xscale("symlog", linthresh=1)
+        maximum = _dataset_rows(evidence.runs, dataset).atualizacoes.max()
+        ax.set_xlim(-0.15, maximum * 2)
+        ax.xaxis.set_major_locator(FixedLocator([0, 1, 10, 1000, 100000]))
+        ax.xaxis.set_major_formatter(
+            FuncFormatter(lambda v, _: number(v / 1000) + " mil" if v >= 1000 else number(v))
+        )
+        ax.xaxis.set_minor_formatter(NullFormatter())
+        ax.set_xlabel("Atualizações no run integral (log simétrica)")
+    _model_legend(fig, 0.075 if show_footer else 0.015)
+    return _finish(
+        fig,
+        "Número de atualizações por política",
+        (
+            "O Online atualiza por exemplo e só integra a regressão logística histórica. As demais "
+            "políticas registram retreinamentos. Escala logarítmica simétrica preserva a contagem "
+            "zero. A figura não inclui o Online na campanha F109."
+        ),
+        "quality_cost",
+        show_title,
+        show_footer,
+    )
+
+
+def paired_f1(evidence, *, show_title=True, show_footer=True):
+    fig, axes = _layout(show_title, show_footer, left=0.23, bottom=0.22 if show_footer else 0.16)
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        for j, model in enumerate(MODELS):
+            part = _dataset_rows(evidence.paired, dataset)
+            part = part.loc[part.modelo.eq(model)].set_index("politica")
+            for i, policy in enumerate(POLICIES):
+                if policy in part.index:
+                    row = part.loc[policy]
+                    sd = row.f1_dp
+                    ax.errorbar(
+                        row.f1 * 100,
+                        i + (j - 0.5) * 0.22,
+                        xerr=sd * 100 if np.isfinite(sd) else None,
+                        fmt=MARKERS[model],
+                        color=POLICY_COLORS[policy],
+                        ms=5,
+                        capsize=2,
+                        lw=1.2,
+                    )
+        ax.set_yticks(range(len(POLICIES)), POLICIES)
+        ax.invert_yaxis()
+        ax.set_xlabel("F1 macro pareado (%)")
+        ax.xaxis.set_major_locator(MaxNLocator(5))
+    _model_legend(fig, 0.075 if show_footer else 0.015)
+    return _finish(
+        fig,
+        "F1 macro nos mesmos eventos de avaliação",
+        PAIR
+        + (
+            "Pontos são médias e barras representam um desvio padrão amostral entre três seeds, "
+            "quando disponível. Ausência de Online/Hoeffding é mantida. Barra de comprimento zero "
+            "significa desvio zero observado."
+        ),
+        "paired_f1",
+        show_title,
+        show_footer,
+    )
+
+
+def logistic_trajectories(evidence, *, show_title=True, show_footer=True):
+    fig, axes = _layout(show_title, show_footer, bottom=0.26 if show_footer else 0.20)
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        rows = _dataset_rows(evidence.windows, dataset)
+        rows = rows.loc[rows.modelo.eq("Logística")]
+        for policy in POLICIES:
+            part = rows.loc[rows.politica.eq(policy)].sort_values("passo")
+            ax.plot(part.passo / 1000, part.f1 * 100, color=POLICY_COLORS[policy], lw=1.5, label=policy)
+            ax.fill_between(
+                part.passo / 1000,
+                np.clip((part.f1 - part.dp) * 100, 0, 100),
+                np.clip((part.f1 + part.dp) * 100, 0, 100),
+                color=POLICY_COLORS[policy],
+                alpha=0.13,
+                linewidth=0,
+            )
+        for change in evidence.manifests[dataset]["changepoints"]:
+            ax.axvline(change / 1000, color=MUTED, lw=0.7, ls=":")
+        ax.set(xlabel="Posição no fluxo (mil exemplos)", ylabel="F1 macro por janela (%)", ylim=(0, 103))
+        ax.yaxis.set_major_locator(MaxNLocator(4))
+    _policy_legend(fig, bottom=0.07 if show_footer else 0.01)
+    return _finish(
+        fig,
+        "Trajetórias de F1 na regressão logística",
+        (
+            "Curvas de F1 macro calculadas nas janelas de cada política, nas posições comuns às três seeds. "
+            "Faixas mostram um desvio padrão amostral, limitado ao intervalo de 0 a 100%. "
+            "As linhas verticais indicam fronteiras anotadas, sem resumir todo o drift "
+            "incremental do fluxo recorrente. O Online pertence apenas a este escopo histórico."
+        ),
+        "logistic_trajectories",
+        show_title,
+        show_footer,
+    )
+
+
+def paired_accuracy_f1(evidence, *, show_title=True, show_footer=True, dataset="Abrupto"):
+    apply_style()
+    fig, ax = plt.subplots(figsize=(6.2, 6.5))
+    fig.subplots_adjust(
+        left=0.32, right=0.96, top=0.82 if show_title else 0.95, bottom=0.22 if show_footer else 0.16
+    )
+    part = _dataset_rows(evidence.paired, dataset)
+    for i, row in enumerate(part.sort_values(["modelo", "politica"]).itertuples()):
+        ax.plot([row.f1 * 100, row.acuracia * 100], [i, i], color=GRID, lw=3, zorder=1)
+        ax.scatter(row.acuracia * 100, i, color=BLUE, marker="o", s=38, zorder=2)
+        ax.scatter(row.f1 * 100, i, color=ORANGE, marker="D", s=35, zorder=2)
+    labels = [
+        f"{'H' if r.modelo == 'Hoeffding' else 'Log'} · {r.politica}"
+        for r in part.sort_values(["modelo", "politica"]).itertuples()
+    ]
+    prevalence = part.positivos.iloc[0] / part.avaliados.iloc[0]
+    majority = max(prevalence, 1 - prevalence) * 100
+    ax.axvline(majority, color=MUTED, linestyle=":", linewidth=1.4)
+    ax.set_yticks(range(len(labels)), labels)
+    ax.invert_yaxis()
+    ax.set_xlabel("Resultado pareado (%)")
+    ax.set_title(dataset, loc="left", fontweight="bold")
+    ax.grid(axis="x", color=GRID, lw=0.6)
     fig.legend(
         handles=[
-            *[Patch(facecolor=POLICY_COLORS[p], label=p) for p in POLICIES],
-            *[Line2D([], [], marker=marks[m], color=INK, linestyle="none", label=m) for m in MODELS],
+            Line2D([], [], color=BLUE, marker="o", ls="", label="Acurácia"),
+            Line2D([], [], color=ORANGE, marker="D", ls="", label="F1 macro"),
+            Line2D([], [], color=MUTED, ls=":", label="Classe majoritária"),
         ],
-        loc="outside lower center",
-        ncol=4,
+        loc="lower center",
+        bbox_to_anchor=(0.55, 0.075 if show_footer else 0.015),
+        ncol=2,
         frameon=False,
-        fontsize=9,
     )
-    return fig
-
-
-def paired_accuracy_f1(evidence):
-    fig = framed(
+    return _finish(
+        fig,
         "Acurácia e F1 macro nos mesmos eventos",
-        f"INSECTS  /  {seed_label(evidence)}  /  Uma linha por combinação de política e modelo",
-        "Fonte: métricas das predições pareadas do MLflow. As diferenças são dadas em pontos percentuais.\n"
-        "A linha tracejada indica a acurácia de prever sempre a classe majoritária de cada fluxo.",
-        height=7.6,
+        PAIR
+        + (
+            f"{dataset}. Cada segmento liga as duas métricas da mesma configuração. H significa "
+            "Hoeffding e Log significa regressão logística. A distância entre pontos descreve a "
+            "diferença entre acurácia e F1 macro, sem servir como teste estatístico. "
+        )
+        + f"A referência majoritária da mesma coorte é {number(majority, 6)}% de acurácia.",
+        "paired_accuracy_f1",
+        show_title,
+        show_footer,
     )
-    axes = fig.subplots(1, 2)
-    fig.subplots_adjust(left=0.19, right=0.957, top=0.739, bottom=0.145, wspace=0.53)
+
+
+def upf_class_recall(evidence, *, show_title=True, show_footer=True):
+    fig, axes = _layout(show_title, show_footer, left=0.20, bottom=0.22 if show_footer else 0.16)
+    for ax, dataset in zip(axes, DATASETS, strict=True):
+        part = _dataset_rows(evidence.paired, dataset)
+        part = part.loc[part.politica.eq("UPF")]
+        for j, row in enumerate(part.itertuples()):
+            p = row.positivos / row.avaliados
+            negative = (row.acuracia - p * row.recall) / (1 - p)
+            ax.plot([row.recall * 100, negative * 100], [j, j], color=GRID, lw=3)
+            ax.scatter(row.recall * 100, j, color=ORANGE, s=48, marker="D")
+            ax.scatter(negative * 100, j, color=BLUE, s=48, marker="o")
+        ax.set_yticks(range(len(part)), part.modelo)
+        ax.invert_yaxis()
+        ax.set_xlabel("Recall por classe (%)")
+        ax.set_xlim(-3, 103)
     fig.legend(
         handles=[
-            Line2D([], [], marker="o", color=BLUE, ls="none", label="Acurácia", markersize=7),
-            Line2D([], [], marker="s", color=ORANGE, ls="none", label="F1 macro", markersize=6),
+            Line2D([], [], color=ORANGE, marker="D", ls="", label="Positiva"),
+            Line2D([], [], color=BLUE, marker="o", ls="", label="Negativa"),
         ],
-        ncols=2,
-        loc="upper left",
-        bbox_to_anchor=(0.059, 0.852),
+        loc="lower center",
+        bbox_to_anchor=(0.54, 0.075 if show_footer else 0.015),
+        ncol=2,
         frameon=False,
     )
-    for ax, dataset in zip(axes, DATASETS, strict=True):
-        rows = evidence.paired.loc[evidence.paired.dataset.eq(dataset)].copy()
-        if rows.empty:
-            absent_panel(ax, dataset, "Sem eventos pareados")
-            continue
-
-        rows["gap"] = rows.acuracia - rows.f1
-        rows = rows.sort_values(["gap", "modelo", "politica"], ascending=[False, True, True])
-        positions = np.arange(len(rows))
-        f1, accuracy = rows.f1 * 100, rows.acuracia * 100
-        positive = rows.positivos.iloc[0] / rows.avaliados.iloc[0]
-        majority = max(positive, 1 - positive)
-        ax.set_title(
-            f"{dataset}\n{number(rows.avaliados.iloc[0])} eventos / maioria {number(100 * majority, 2)}%",
-            loc="left",
-            fontsize=11,
-            fontweight="bold",
-            pad=12,
-            linespacing=1.5,
-        )
-        ax.axvline(100 * majority, color=MUTED, linestyle="--", linewidth=1.1)
-        ax.hlines(positions, f1, accuracy, color="#AEBBC6", linewidth=2.3, zorder=2)
-        ax.scatter(f1, positions, marker="s", color=ORANGE, s=34, zorder=3)
-        ax.scatter(accuracy, positions, color=BLUE, s=42, zorder=4)
-        for position, gap in zip(positions, rows.gap, strict=True):
-            ax.text(107, position, signed(gap * 100, 2), ha="right", va="center", fontsize=9, color=INK)
-        ax.text(107, -0.64, "Dif. (p.p.)", ha="right", va="bottom", fontsize=8, color=MUTED)
-        ax.set(
-            xlim=(0, 100),
-            ylim=(len(rows) - 0.45, -0.72),
-            xticks=[0, 25, 50, 75, 100],
-            xlabel="Resultado (%)",
-        )
-        ax.set_yticks(positions, [f"{r.modelo} / {r.politica}" for r in rows.itertuples()], fontsize=9)
-        ax.xaxis.grid(color=GRID, linewidth=0.8)
-        ax.set_axisbelow(True)
-        flat_axis(ax)
-    return fig
-
-
-def upf_class_recall(evidence):
-    fig = framed(
-        "Com UPF, o recall variou entre as duas classes",
-        f"INSECTS  /  {seed_label(evidence)}  /  Eventos pareados",
-        "Fonte: métricas das predições pareadas do MLflow. O recall de cada classe é a proporção de acertos\n"
-        "entre os eventos daquela classe. Calculei o recall negativo pela acurácia, pelo recall positivo e\n"
-        "pela proporção de positivos no recorte comum.",
-        height=5.7,
+    return _finish(
+        fig,
+        "Recall por classe da política UPF",
+        PAIR
+        + (
+            "Recall positivo é o valor arquivado. Recall negativo é derivado da identidade "
+            "acurácia = prevalência × recall positivo + (1 − prevalência) × recall negativo, "
+            "usando a prevalência da mesma coorte. Pontos descrevem classes diferentes, sem desvio "
+            "padrão reconstruído."
+        ),
+        "upf_class_recall",
+        show_title,
+        show_footer,
     )
-    axes = fig.subplots(1, 2)
-    fig.subplots_adjust(left=0.16, right=0.91, top=0.69, bottom=0.23, wspace=0.47)
-    fig.legend(
-        handles=[
-            Patch(facecolor=ORANGE, label="Classe positiva"),
-            Patch(facecolor=TEAL, label="Classe negativa"),
-        ],
-        ncols=2,
-        loc="upper left",
-        bbox_to_anchor=(0.059, 0.836),
-        frameon=False,
-    )
-    for ax, dataset in zip(axes, DATASETS, strict=True):
-        rows = (
-            evidence.paired.loc[evidence.paired.dataset.eq(dataset) & evidence.paired.politica.eq("UPF")]
-            .set_index("modelo")
-            .reindex(MODELS)
-            .dropna(subset=["acuracia"])
-        )
-        if rows.empty:
-            absent_panel(ax, dataset, "Sem resultados pareados de UPF")
-            continue
-        positive = rows.positivos.iloc[0] / rows.avaliados.iloc[0]
-        if not 0 < positive < 1:
-            absent_panel(ax, dataset, "O recorte pareado tem uma única classe")
-            continue
-        negative_recall = (rows.acuracia - positive * rows.recall) / (1 - positive)
-        positions = np.arange(len(rows))
-        for offset, values, color in ((-0.16, rows.recall, ORANGE), (0.16, negative_recall, TEAL)):
-            bars = ax.barh(positions + offset, values * 100, height=0.24, color=color)
-            ax.bar_label(bars, labels=[number(v * 100, 2) + "%" for v in values], padding=4, fontsize=10)
-        ax.set_title(
-            f"{dataset}\n{number(positive * 100, 2)}% dos eventos são positivos",
-            loc="left",
-            fontsize=11,
-            fontweight="bold",
-            pad=12,
-            linespacing=1.5,
-        )
-        ax.set(xlim=(0, 100), ylim=(len(rows) - 0.53, -0.52), xlabel="Recall (%)")
-        ax.set_xticks([0, 25, 50, 75, 100])
-        ax.set_yticks(positions, rows.index)
-        ax.xaxis.grid(color=GRID, linewidth=0.8)
-        ax.set_axisbelow(True)
-        flat_axis(ax)
-    return fig
+
+
+def build_historical_figures(evidence, *, show_title=True, show_footer=True):
+    flags = {"show_title": show_title, "show_footer": show_footer}
+    figures = {"historico-regimes-" + d.lower(): regime_map(evidence, dataset=d, **flags) for d in DATASETS}
+    for name, function in (
+        ("adwin-acuracia", detector_timeline),
+        ("adwin-eventos", detector_events),
+        ("adwin-recuperacao", recovery_bars),
+        ("qualidade-custo", quality_cost),
+        ("atualizacoes", update_counts),
+        ("f1-pareado", paired_f1),
+        ("trajetorias-logistica", logistic_trajectories),
+        ("qualidade-retencao", quality_retention),
+        ("upf-recall", upf_class_recall),
+    ):
+        figures["historico-" + name] = function(evidence, **flags)
+    for d in DATASETS:
+        figures["historico-acuracia-f1-" + d.lower()] = paired_accuracy_f1(evidence, dataset=d, **flags)
+    return figures
 
 
 def export_figures(figures, output):
-    """Save individual PNGs and a single multipage PDF, keeping figures available for Jupyter."""
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "figuras").mkdir(exist_ok=True)
-    pdf_path = output / "figuras-finais-insects.pdf"
-    with PdfPages(pdf_path, metadata={"Title": "Figuras finais do INSECTS na Semana 10"}) as pdf:
-        for name, fig in figures.items():
-            fig.savefig(output / "figuras" / f"{name}.png", dpi=205)
-            pdf.savefig(fig)
-    return pdf_path
+    return export_bundle(figures, output)
