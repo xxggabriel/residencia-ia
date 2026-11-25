@@ -1,0 +1,335 @@
+{
+  "schema": "benchmark-tables-v1",
+  "contract": {
+    "release": "f1092ee0232a6d16504b3a2211a037c41a02068a",
+    "protocol": "ordered-stream-batch-prequential-metrics-v2",
+    "model": "xgboost",
+    "datasets": [
+      {
+        "name": "electricity",
+        "source_rows": 45312,
+        "common_start": 13599,
+        "common_end": 40781,
+        "holdout_start": 40781,
+        "source_sha256": "9d0091b03ba5b3ba6bee24b0b10ec4d49099e1683e8b9b62848bc63db18be500"
+      },
+      {
+        "name": "airlines",
+        "source_rows": 539383,
+        "common_start": 161815,
+        "common_end": 485445,
+        "holdout_start": 485445,
+        "source_sha256": "3c80a172bd84b11f4d187e8d0c76c0c47913a475a7159f877d0c6153a745374a"
+      },
+      {
+        "name": "insects_abrupt_imbalanced",
+        "source_rows": 355275,
+        "common_start": 106583,
+        "common_end": 319748,
+        "holdout_start": 319748,
+        "source_sha256": "66d2ba7761322b43c39025216a30617fddda65ee10953da9e57acf16f11995c9"
+      },
+      {
+        "name": "insects_incremental_abrupt_reoccurring_imbalanced",
+        "source_rows": 452044,
+        "common_start": 135615,
+        "common_end": 406840,
+        "holdout_start": 406840,
+        "source_sha256": "744469bf84e301c35a8e517ff095b9eb28aeec092c2e4c3e436436ccb8d80067"
+      }
+    ],
+    "policies": [
+      "frozen",
+      "drift",
+      "drift_adwin",
+      "drift_ddm",
+      "incremental",
+      "periodic",
+      "cara",
+      "cara_cumulative",
+      "cara_periodic",
+      "upf",
+      "oracle"
+    ],
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "sd_ddof": 1,
+    "windows_per_run": 16,
+    "primary_metrics": [
+      "accuracy",
+      "average_precision",
+      "balanced_accuracy",
+      "brier",
+      "brier_half_sum",
+      "cohen_kappa",
+      "ece",
+      "error_rate",
+      "errors",
+      "f1",
+      "f1_weighted",
+      "false_negative_rate",
+      "false_positive_rate",
+      "fn",
+      "fp",
+      "log_loss",
+      "macro_f1",
+      "macro_pr_auc",
+      "macro_precision",
+      "macro_roc_auc",
+      "mae_probability",
+      "mcc",
+      "mce",
+      "negative_predictive_value",
+      "positive_rate",
+      "pr_auc",
+      "precision",
+      "predicted_positive_rate",
+      "recall",
+      "recall_at_fpr_0_01",
+      "roc_auc",
+      "specificity",
+      "tn",
+      "tp"
+    ],
+    "resource_metrics": [
+      "actual_total_fit_count",
+      "actual_total_fit_seconds",
+      "actual_total_training_presentations",
+      "aws_cost_cpu_usd",
+      "aws_cost_model_storage_usd",
+      "aws_cost_ram_usd",
+      "aws_cost_total_usd",
+      "aws_evaluation_cost_cpu_usd",
+      "aws_evaluation_cost_model_storage_usd",
+      "aws_evaluation_cost_ram_usd",
+      "aws_evaluation_cost_total_usd",
+      "cost_prediction_errors",
+      "cost_prediction_time",
+      "cost_training_presentations",
+      "cost_training_time",
+      "cost_update_events",
+      "dataset_rows",
+      "diagnostic_source_rows_read",
+      "drift_alarm_count",
+      "evaluation_attempt_wall_seconds",
+      "evaluation_compute_seconds",
+      "holdout_rows",
+      "initial_train_rows",
+      "initial_train_seconds",
+      "logical_model_serialized_bytes",
+      "materialization_fit_count",
+      "materialization_train_seconds",
+      "materialization_training_presentations",
+      "model_versions_count",
+      "persisted_model_storage_bytes",
+      "postwarmup_train_samples_per_second",
+      "prediction_latency_mean_seconds",
+      "prediction_seconds",
+      "prediction_throughput_per_second",
+      "process_peak_rss_bytes",
+      "retrain_count",
+      "retraining_matrix_fit_seconds",
+      "retraining_matrix_training_presentations",
+      "reused_matrix_candidate_fit_count",
+      "sampled_rss_byte_seconds",
+      "scenario_total_cost",
+      "train_seconds",
+      "training_presentations",
+      "training_repeated_presentations",
+      "training_unique_examples",
+      "update_count",
+      "update_train_seconds",
+      "updates_per_1000_evaluated"
+    ],
+    "temporal_metrics": [
+      "accuracy",
+      "macro_f1",
+      "pr_auc",
+      "error_rate"
+    ]
+  },
+  "tables": {
+    "cases": {
+      "path": "cases.csv",
+      "rows": 132,
+      "sha256": "91ee702ca8077d1c05eb29414aaf9a56f239e8198b77cabacaf50201a2f59866"
+    },
+    "primary": {
+      "path": "quality-by-seed.csv",
+      "rows": 4488,
+      "sha256": "c69df544a63fd893694fb769fba1cd58bf59df145ab18473defc79f5f77edc70"
+    },
+    "resource_values": {
+      "path": "resources-by-seed.csv",
+      "rows": 6336,
+      "sha256": "6a4aec8ab7cb19ff81e343c36839967c3c106ef40fecfa0a93525acaf92afbaa"
+    },
+    "windows": {
+      "path": "windows-by-seed.csv",
+      "rows": 2112,
+      "sha256": "b4e2b8ee7686aad98af3fb21c94615c71648da59b50af478bb1f5293e3b20ff4"
+    },
+    "reported_metrics": {
+      "path": "metrics-by-seed.csv",
+      "rows": 23121,
+      "sha256": "2c0378331a355ab3d47eaa03660fb4413744ffcb9dd3c980677fa01734a24f33"
+    }
+  },
+  "files": [
+    {
+      "path": "59db7383-f7d9-4030-9b68-c2ccef89ae1a.csv",
+      "bytes": 420567,
+      "sha256": "875dd1bce48666e5847c4b35487d1fd58485a89280e807b8687b512e4e8de376"
+    },
+    {
+      "path": "README.md",
+      "bytes": 9747,
+      "sha256": "bd3f4dd23620145c51125d89ffa029148bfe21115835a8dade862bf8995b2a48"
+    },
+    {
+      "path": "a97023a9-f737-471f-b724-d4cf5e4da0f3.csv",
+      "bytes": 97449,
+      "sha256": "c8b3e2a1a8cb90108885d8914c3dea32c5e998c4610d6c85f822682036040a8d"
+    },
+    {
+      "path": "cases.csv",
+      "bytes": 35282,
+      "sha256": "91ee702ca8077d1c05eb29414aaf9a56f239e8198b77cabacaf50201a2f59866"
+    },
+    {
+      "path": "d5acb9d0-962b-440d-8050-3f66ecb12069.csv",
+      "bytes": 1512472,
+      "sha256": "a44a4e57c2d78eaf45b4f68e9dfcf06e6e7e9b0aba63784d946de083f7a1455a"
+    },
+    {
+      "path": "e931f10b-82ca-41b7-9f35-fee2b662b30e.csv",
+      "bytes": 2888742,
+      "sha256": "28a3b6089aab035fabec9d83229193f327ce0f57478f1997531f2946232986e7"
+    },
+    {
+      "path": "hardware.csv",
+      "bytes": 293,
+      "sha256": "9f5b7b728a7195393eed191a2178da211f97e06fbec0ee0a171e42287ffd7fba"
+    },
+    {
+      "path": "holdout-summary.csv",
+      "bytes": 8752,
+      "sha256": "3c483fae6998d1c67bafa5371a56e9e0e0aac30cae25be05760d7482ca15857c"
+    },
+    {
+      "path": "metric-dictionary.csv",
+      "bytes": 74558,
+      "sha256": "f1fe59539af6c0a9ddb25014725389081d771e4ede23e751f7f2deb757ab260a"
+    },
+    {
+      "path": "metrics-by-seed.csv",
+      "bytes": 2618344,
+      "sha256": "2c0378331a355ab3d47eaa03660fb4413744ffcb9dd3c980677fa01734a24f33"
+    },
+    {
+      "path": "papers/README.md",
+      "bytes": 3236,
+      "sha256": "09e83109361d47168b4590ce79862dbef27dc4f4cec55a19a58b130e3c95b57b"
+    },
+    {
+      "path": "papers/comparison-parameters.csv",
+      "bytes": 1137,
+      "sha256": "8484212b41783237ef3dc3d9528e26b4be06551f019221c3e84564922f9c681c"
+    },
+    {
+      "path": "papers/historical-harness-uncertainty-proof.json",
+      "bytes": 1167,
+      "sha256": "609e3010903cf6ca3ee9e79c9e83272daec2fc34bfbf4662a187a7baf173c961"
+    },
+    {
+      "path": "papers/limitations.json",
+      "bytes": 2459,
+      "sha256": "ca5e1cc7ead0e69aa37cee764bbe62f7b388552ea0a699595588b0df3cc11cb9"
+    },
+    {
+      "path": "papers/paper-data-provenance.json",
+      "bytes": 4000,
+      "sha256": "d863599976e1270a204f2ab9e9e53f47689a9fa2d241329cd21408a0aaebb35b"
+    },
+    {
+      "path": "papers/paper-local-comparisons.csv",
+      "bytes": 97863,
+      "sha256": "136a402a2c196ad1491881f13dc76d39868915f7db29c71fd60ac4f0f2607ba2"
+    },
+    {
+      "path": "papers/paper-metrics.csv",
+      "bytes": 1503,
+      "sha256": "1c8d7bc05b0d5e8cedd3d55fd010f1e1abad889a40bf385e899f161a071c159d"
+    },
+    {
+      "path": "papers/protocol-comparability.csv",
+      "bytes": 5187,
+      "sha256": "8b779b9d63161cb54f8eb5261743f96d9f20a102a79bd7309d829e304b13eeff"
+    },
+    {
+      "path": "papers/published-reference-values.csv",
+      "bytes": 55184,
+      "sha256": "f2b448cd973e883d63cf9c32cdec068c05aeb7a7b604e8c3055afc3f18eef53d"
+    },
+    {
+      "path": "policy-summary.csv",
+      "bytes": 17574,
+      "sha256": "1a006381967596c6c872070c65326a8ee51aa319a301a97951749ccc9662e383"
+    },
+    {
+      "path": "provenance.json",
+      "bytes": 4304,
+      "sha256": "2009ed5d2d6bd910a98026679860a36fa251cf34a8adeb3e3b759945653a6035"
+    },
+    {
+      "path": "quality-by-seed.csv",
+      "bytes": 418969,
+      "sha256": "c69df544a63fd893694fb769fba1cd58bf59df145ab18473defc79f5f77edc70"
+    },
+    {
+      "path": "quality-summary.csv",
+      "bytes": 111376,
+      "sha256": "f13849d7bbcfd8bd1b0f2c5a7e78da487fa62730952ef7f332ebce4bab30ba31"
+    },
+    {
+      "path": "resources-by-seed.csv",
+      "bytes": 626631,
+      "sha256": "6a4aec8ab7cb19ff81e343c36839967c3c106ef40fecfa0a93525acaf92afbaa"
+    },
+    {
+      "path": "resources-summary.csv",
+      "bytes": 200562,
+      "sha256": "3850db50cacba8aeb9ce37a4e6267730e53e35208a715c975a3e85f2d922d28f"
+    },
+    {
+      "path": "training-inventory.csv",
+      "bytes": 33450,
+      "sha256": "4ab560b9a5eee902ec4042e4057024e8aeda96b0944f608c5ffad2ef76e98966"
+    },
+    {
+      "path": "validation.json",
+      "bytes": 3956,
+      "sha256": "bf27d58bf0e5d5886bb83f2ba9573f6c1391d066212686ed376448a3b9dae852"
+    },
+    {
+      "path": "windows-by-seed.csv",
+      "bytes": 328565,
+      "sha256": "b4e2b8ee7686aad98af3fb21c94615c71648da59b50af478bb1f5293e3b20ff4"
+    },
+    {
+      "path": "windows-summary.csv",
+      "bytes": 212014,
+      "sha256": "7f9633e4bde1e120f416b3768a6309ab5ca5967a032eb0bcc190c061ffee81b8"
+    }
+  ],
+  "papers": {
+    "path": "papers/paper-data-provenance.json",
+    "sha256": "d863599976e1270a204f2ab9e9e53f47689a9fa2d241329cd21408a0aaebb35b",
+    "reference_facts": 110,
+    "historical_pairs": 74,
+    "F109_numerically_pooled_with_papers": false
+  }
+}
