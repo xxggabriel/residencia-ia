@@ -152,3 +152,109 @@ def test_load_campaign_yaml_and_paper_comparison_svg(tmp_path: Path, monkeypatch
         svg_path = Path(result.artifacts[svg_key])
         assert svg_path.exists()
         assert "<svg" in svg_path.read_text(encoding="utf-8")
+
+
+def _synthetic_multiclass_sparse_stream(spec: StreamDatasetSpec):
+    from scipy.sparse import csr_matrix
+
+    rng = np.random.default_rng(spec.seed)
+    n_rows = 1500
+    X_dense = rng.normal(size=(n_rows, 6))
+    shift = np.linspace(-1.0, 1.0, n_rows)
+    score = X_dense[:, 0] + 0.8 * shift * X_dense[:, 1]
+    y = np.where(score < -0.4, 0, np.where(score > 0.4, 2, 1)).astype(np.int64)
+    return csr_matrix(X_dense), y
+
+
+def test_upf_and_cara_generic_multiclass_sparse_and_benchmark_reports(tmp_path: Path):
+    import json
+
+    register_stream_source("insects_synth_sparse", _synthetic_multiclass_sparse_stream)
+
+    upf_cfg = CampaignConfig(
+        name="generic_upf_sparse",
+        protocol="upf",
+        dataset=StreamDatasetSpec(
+            name="insects_synth_sparse",
+            protocol="upf",
+            batch_size=80,
+            seed=19,
+        ),
+        model=ModelConfig(name="random_forest", params={"n_estimators": 8, "n_jobs": 1}, seed=0),
+        seeds=[0, 1],
+        policies=["upf", "cara", "oracle", "adwin_5"],
+        upf_mc_samples=10,
+        output_dir=str(tmp_path / "upf_out"),
+    )
+    upf_res = run_campaign(upf_cfg, platform="local", save_model_checkpoints=False)
+    upf_meta = json.loads(Path(upf_res.artifacts["metadata.json"]).read_text(encoding="utf-8"))
+    alpha_max = upf_meta["alpha_max"]
+    assert alpha_max > 0.0
+    assert upf_meta["alpha_grid"][0] == 0.0
+    assert upf_meta["alpha_grid"][-1] == alpha_max
+    assert len(upf_meta["alpha_grid"]) == 10
+    assert upf_meta["regimes"] == {
+        "low": round(0.1 * alpha_max, 6),
+        "high": round(0.9 * alpha_max, 6),
+    }
+
+    # Verify Oracle yields 0 retrains at alpha_max on price_grid
+    oracle_at_max = [
+        r["retrains"]
+        for r in upf_res.regime_records
+        if r["policy"] == "oracle"
+        and r["regime"] == "price_grid"
+        and np.isclose(r["alpha"], alpha_max)
+    ]
+    assert oracle_at_max == [0.0, 0.0]
+
+    # Generic benchmark artifacts present, paper_comparison omitted
+    for key in (
+        "benchmark_summary.csv",
+        "benchmark_summary.json",
+        "benchmark_summary.md",
+        "benchmark_combined_cost_auc.svg",
+        "benchmark_cost.svg",
+        "benchmark_retrains.svg",
+        "benchmark_average_accuracy.svg",
+        "benchmark_tradeoff.svg",
+    ):
+        assert key in upf_res.artifacts
+        assert Path(upf_res.artifacts[key]).exists()
+    assert not any(k.startswith("paper_comparison") for k in upf_res.artifacts)
+
+    cara_cfg = CampaignConfig(
+        name="generic_cara_sparse",
+        protocol="cara",
+        dataset=StreamDatasetSpec(
+            name="insects_synth_sparse",
+            protocol="cara",
+            num_batches=10,
+            offline_batches=4,
+            online_batches=6,
+            split_ratio=0.8,
+            query_ratio=0.15,
+            seed=23,
+        ),
+        model=ModelConfig(name="random_forest", params={"n_estimators": 8, "n_jobs": 1}, seed=0),
+        seeds=[0],
+        policies=["cara", "oracle_staleness", "frozen", "adwin"],
+        output_dir=str(tmp_path / "cara_out"),
+    )
+    cara_res = run_campaign(cara_cfg, platform="local", save_model_checkpoints=False)
+    cara_meta = json.loads(Path(cara_res.artifacts["metadata.json"]).read_text(encoding="utf-8"))
+    assert "gamma" in cara_meta and cara_meta["gamma"] > 0.0
+    assert cara_meta["kappa_max"] >= cara_meta["kappa_min"] > 0.0
+    for key in (
+        "benchmark_summary.csv",
+        "benchmark_summary.json",
+        "benchmark_summary.md",
+        "benchmark_strategy_scpe.svg",
+        "benchmark_average_accuracy.svg",
+        "benchmark_retrains.svg",
+        "benchmark_strategy_cost.svg",
+        "benchmark_tradeoff.svg",
+    ):
+        assert key in cara_res.artifacts
+        assert Path(cara_res.artifacts[key]).exists()
+    assert not any(k.startswith("paper_comparison") for k in cara_res.artifacts)
