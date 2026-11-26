@@ -55,7 +55,12 @@ def build_batch_accuracy_plot(
     block_sizes: dict[tuple[str, int], int],
     decisions: dict,
 ) -> plt.Figure:
-    mat_data = json.load(open(V2_DIR / f"s3-reports/retraining_matrices/{dataset}__{policy_key}__accuracy_matrix.json", encoding="utf-8"))
+    mat_data = json.load(
+        open(
+            V2_DIR / f"s3-reports/retraining_matrices/{dataset}__{policy_key}__accuracy_matrix.json",
+            encoding="utf-8",
+        )
+    )
     mat = mat_data["matrix"]  # 24 x 24
     dep = decisions[f"{dataset}__{policy_key}"]
     served_by = dep["served_by"]  # 16 values for online blocks 8..23
@@ -91,7 +96,15 @@ def build_batch_accuracy_plot(
             y_min = min(y_min, min(lo_ys) / 100.0)
             y_max = max(y_max, max(hi_ys) / 100.0)
             ax.fill_between(xs, lo_ys, hi_ys, color=colors[idx], alpha=0.10, linewidth=0)
-            ax.plot(xs, ys, marker="o", markersize=3.3, linewidth=1.35, color=colors[idx], label=f"Modelo D{m_idx}")
+            ax.plot(
+                xs,
+                ys,
+                marker="o",
+                markersize=3.3,
+                linewidth=1.35,
+                color=colors[idx],
+                label=f"Modelo D{m_idx}",
+            )
 
     # Deployed "Em uso" trajectory: D7 served by M7 (or M0 on D7 -> M7 from D8..D23; include D7=mat[0][7] or mat[7][8])
     dep_xs = list(range(8, 24))
@@ -129,7 +142,9 @@ def build_batch_accuracy_plot(
 
     ax.set_xticks(batches, x_labels, fontsize=8.4)
     ax.set_ylabel("Acurácia (%)", fontsize=9.4, color=INK)
-    ax.set_xlabel("Lote avaliado · intervalos de Wilson de 95% para a acurácia em cada lote", fontsize=8.8, color=MUTED)
+    ax.set_xlabel(
+        "Lote avaliado · intervalos de Wilson de 95% para a acurácia em cada lote", fontsize=8.8, color=MUTED
+    )
     ax.yaxis.set_major_formatter(lambda v, _: f"{v:.0f}%")
     ax.grid(True, axis="y", linestyle="-", alpha=0.22, color="#94a3b8")
     ax.spines["top"].set_visible(False)
@@ -145,11 +160,21 @@ def build_batch_accuracy_plot(
     )
 
     n_med = int(statistics.median([block_sizes.get((dataset, b), 0) for b in batches]))
-    fig.suptitle(f"{title_prefix} · acurácia por lote e retreinamento", x=0.08, y=0.95, ha="left", fontsize=13.5, fontweight="bold", color=INK)
+    fig.suptitle(
+        f"{title_prefix} · acurácia por lote e retreinamento",
+        x=0.08,
+        y=0.95,
+        ha="left",
+        fontsize=13.5,
+        fontweight="bold",
+        color=INK,
+    )
     fig.text(
         0.08,
         0.875,
-        f"Matriz 24 x 24 da campanha na AWS · blocos D7 a D23 · mediana de ~{n_med:,} registros por lote".replace(",", "."),
+        f"Matriz 24 x 24 da campanha na AWS · blocos D7 a D23 · mediana de ~{n_med:,} registros por lote".replace(
+            ",", "."
+        ),
         fontsize=9.0,
         color=MUTED,
     )
@@ -164,7 +189,10 @@ def build_insects_strip_heatmap() -> plt.Figure:
         rows = list(csv.DictReader(f))
 
     for ds in ("insects_abrupt_imbalanced", "insects_incremental_abrupt_reoccurring_imbalanced"):
-        sub_f = sorted([r for r in rows if r["dataset"] == ds and r["policy"] == "frozen" and r["seed"] == "42"], key=lambda x: int(x["block"]))
+        sub_f = sorted(
+            [r for r in rows if r["dataset"] == ds and r["policy"] == "frozen" and r["seed"] == "42"],
+            key=lambda x: int(x["block"]),
+        )
         prev_end = 0
         for r in sub_f:
             b = int(r["block"])
@@ -180,14 +208,21 @@ def build_insects_strip_heatmap() -> plt.Figure:
     alarms: dict[tuple[str, str, str], list[int]] = defaultdict(list)
     with open(V2_DIR / "s3-reports/alarms_by_run.csv", encoding="utf-8") as f:
         for r in csv.DictReader(f):
-            if r["dataset"] in ("insects_abrupt_imbalanced", "insects_incremental_abrupt_reoccurring_imbalanced"):
+            if r["dataset"] in (
+                "insects_abrupt_imbalanced",
+                "insects_incremental_abrupt_reoccurring_imbalanced",
+            ):
                 alarms[(r["dataset"], r["policy"], r["seed"])].append(int(r["seq"]))
 
     # Load updates from f109_model_versions.csv (exclude initial v0)
     updates: dict[tuple[str, str, str], list[int]] = defaultdict(list)
     with open(V2_DIR / "athena/f109_model_versions.csv", encoding="utf-8") as f:
         for r in csv.DictReader(f):
-            if r["dataset"] in ("insects_abrupt_imbalanced", "insects_incremental_abrupt_reoccurring_imbalanced") and r["action"] != "initial":
+            if (
+                r["dataset"]
+                in ("insects_abrupt_imbalanced", "insects_incremental_abrupt_reoccurring_imbalanced")
+                and r["action"] != "initial"
+            ):
                 updates[(r["dataset"], r["policy"], r["run_id"])].append(int(r["end_seq"]))
 
     # Map run_id -> seed using f109_runs_uris.csv
@@ -202,18 +237,31 @@ def build_insects_strip_heatmap() -> plt.Figure:
         updates_by_seed[(ds, pol, s)].extend(seqs)
 
     # Custom diverging colormap (orange -> pale -> teal) matching Image 3
-    cmap_acc = mcolors.LinearSegmentedColormap.from_list("acc_div", ["#f4a582", "#f7f7f7", "#92c5de", "#01665e"])
-    cmap_evt = mcolors.LinearSegmentedColormap.from_list("evt_seq", ["#f1f5f9", "#94a3b8", "#334155", "#0f172a"])
+    cmap_acc = mcolors.LinearSegmentedColormap.from_list(
+        "acc_div", ["#f4a582", "#f7f7f7", "#92c5de", "#01665e"]
+    )
+    cmap_evt = mcolors.LinearSegmentedColormap.from_list(
+        "evt_seq", ["#f1f5f9", "#94a3b8", "#334155", "#0f172a"]
+    )
 
     fig = plt.figure(figsize=(10.0, 6.8), dpi=300)
-    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], hspace=0.42, left=0.17, right=0.92, top=0.83, bottom=0.14)
+    gs = fig.add_gridspec(
+        2, 1, height_ratios=[1, 1], hspace=0.42, left=0.17, right=0.92, top=0.83, bottom=0.14
+    )
 
     configs = [
         (
             "insects_abrupt_imbalanced",
             "Abrupt Imbalanced",
             355275,
-            [("R1", 0, 83859), ("R2", 83859, 128651), ("R3", 128651, 182320), ("R4", 182320, 242883), ("R5", 242883, 268380), ("R6", 268380, 355275)],
+            [
+                ("R1", 0, 83859),
+                ("R2", 83859, 128651),
+                ("R3", 128651, 182320),
+                ("R4", 182320, 242883),
+                ("R5", 242883, 268380),
+                ("R6", 268380, 355275),
+            ],
             [("ADWIN", "drift_adwin"), ("DDM", "drift_ddm"), ("Incremental", "incremental")],
         ),
         (
@@ -241,9 +289,20 @@ def build_insects_strip_heatmap() -> plt.Figure:
         y_top = total_rows - 1
         for r_lbl, r_s, r_e in regimes:
             x0, x1 = r_s / 1000.0, r_e / 1000.0
-            rect = mpatches.Rectangle((x0, y_top + 0.12), x1 - x0, 0.76, facecolor="#cbd5e1", edgecolor="white", linewidth=1.0)
+            rect = mpatches.Rectangle(
+                (x0, y_top + 0.12), x1 - x0, 0.76, facecolor="#cbd5e1", edgecolor="white", linewidth=1.0
+            )
             ax.add_patch(rect)
-            ax.text((x0 + x1) / 2.0, y_top + 0.50, r_lbl, ha="center", va="center", fontsize=8.2, fontweight="bold", color=INK)
+            ax.text(
+                (x0 + x1) / 2.0,
+                y_top + 0.50,
+                r_lbl,
+                ha="center",
+                va="center",
+                fontsize=8.2,
+                fontweight="bold",
+                color=INK,
+            )
 
         # Boundary lines
         for _, r_s, _ in regimes[1:]:
@@ -256,7 +315,13 @@ def build_insects_strip_heatmap() -> plt.Figure:
                 s_seq, e_seq = win_bounds[(ds, b)]
                 vals = win_acc[(ds, p_key, b)]
                 acc_m = statistics.mean(vals) if vals else 50.0
-                rect = mpatches.Rectangle((s_seq / 1000.0, cur_y + 0.08), max(0.8, (e_seq - s_seq) / 1000.0), 0.84, facecolor=cmap_acc(acc_m / 100.0), edgecolor="none")
+                rect = mpatches.Rectangle(
+                    (s_seq / 1000.0, cur_y + 0.08),
+                    max(0.8, (e_seq - s_seq) / 1000.0),
+                    0.84,
+                    facecolor=cmap_acc(acc_m / 100.0),
+                    edgecolor="none",
+                )
                 ax.add_patch(rect)
             row_labels.append(f"{p_lbl} · Acurácia")
             row_totals.append("")
@@ -272,7 +337,13 @@ def build_insects_strip_heatmap() -> plt.Figure:
                     bi = min(n_bins - 1, int((s / 1000.0) // bin_w))
                     al_bins[bi] += 1.0 / 3.0
             for bi in range(n_bins):
-                rect = mpatches.Rectangle((bi * bin_w, cur_y + 0.08), bin_w, 0.84, facecolor=cmap_evt(min(1.0, al_bins[bi] / 5.0)), edgecolor="none")
+                rect = mpatches.Rectangle(
+                    (bi * bin_w, cur_y + 0.08),
+                    bin_w,
+                    0.84,
+                    facecolor=cmap_evt(min(1.0, al_bins[bi] / 5.0)),
+                    edgecolor="none",
+                )
                 ax.add_patch(rect)
             row_labels.append("Alarmes")
             row_totals.append(f"{statistics.mean(al_counts):.0f}" if sum(al_counts) > 0 else "0")
@@ -288,7 +359,13 @@ def build_insects_strip_heatmap() -> plt.Figure:
                     bi = min(n_bins - 1, int((s / 1000.0) // bin_w))
                     up_bins[bi] += 1.0 / 3.0
             for bi in range(n_bins):
-                rect = mpatches.Rectangle((bi * bin_w, cur_y + 0.08), bin_w, 0.84, facecolor=cmap_evt(min(1.0, up_bins[bi] / 5.0)), edgecolor="none")
+                rect = mpatches.Rectangle(
+                    (bi * bin_w, cur_y + 0.08),
+                    bin_w,
+                    0.84,
+                    facecolor=cmap_evt(min(1.0, up_bins[bi] / 5.0)),
+                    edgecolor="none",
+                )
                 ax.add_patch(rect)
             row_labels.append("Atualizações")
             row_totals.append(f"{statistics.mean(up_counts):.0f}")
@@ -300,8 +377,25 @@ def build_insects_strip_heatmap() -> plt.Figure:
         ax.set_yticks(yticks, row_labels, fontsize=8.0, color=INK)
         for i_t, tot in enumerate(row_totals):
             if tot:
-                ax.text(max_k + max_k * 0.015, yticks[i_t], tot, va="center", ha="left", fontsize=8.2, fontweight="bold", color=INK)
-        ax.text(max_k + max_k * 0.015, total_rows + 0.15, "Total médio", ha="left", va="bottom", fontsize=7.8, color=MUTED)
+                ax.text(
+                    max_k + max_k * 0.015,
+                    yticks[i_t],
+                    tot,
+                    va="center",
+                    ha="left",
+                    fontsize=8.2,
+                    fontweight="bold",
+                    color=INK,
+                )
+        ax.text(
+            max_k + max_k * 0.015,
+            total_rows + 0.15,
+            "Total médio",
+            ha="left",
+            va="bottom",
+            fontsize=7.8,
+            color=MUTED,
+        )
         ax.set_title(ds_title, loc="left", fontsize=10.5, fontweight="bold", color=INK, pad=6)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
@@ -311,19 +405,39 @@ def build_insects_strip_heatmap() -> plt.Figure:
 
     # Colorbars at bottom
     cax1 = fig.add_axes([0.17, 0.06, 0.25, 0.018])
-    cb1 = fig.colorbar(plt.cm.ScalarMappable(norm=mcolors.Normalize(0, 100), cmap=cmap_acc), cax=cax1, orientation="horizontal")
+    cb1 = fig.colorbar(
+        plt.cm.ScalarMappable(norm=mcolors.Normalize(0, 100), cmap=cmap_acc),
+        cax=cax1,
+        orientation="horizontal",
+    )
     cb1.set_ticks([0, 25, 50, 75, 100])
     cb1.ax.tick_params(labelsize=7.5)
     cax1.set_title("Acurácia (%)", fontsize=8.0, color=INK, loc="left", pad=3)
 
     cax2 = fig.add_axes([0.55, 0.06, 0.25, 0.018])
-    cb2 = fig.colorbar(plt.cm.ScalarMappable(norm=mcolors.Normalize(0, 5), cmap=cmap_evt), cax=cax2, orientation="horizontal")
+    cb2 = fig.colorbar(
+        plt.cm.ScalarMappable(norm=mcolors.Normalize(0, 5), cmap=cmap_evt), cax=cax2, orientation="horizontal"
+    )
     cb2.set_ticks([0, 1, 2, 3, 4, 5])
     cb2.ax.tick_params(labelsize=7.5)
     cax2.set_title("Eventos por bloco de 5 mil exemplos", fontsize=8.0, color=INK, loc="left", pad=3)
 
-    fig.suptitle("Acurácia, alarmes e atualizações por posição no fluxo", x=0.17, y=0.955, ha="left", fontsize=13.5, fontweight="bold", color=INK)
-    fig.text(0.17, 0.905, "INSECTS / ADWIN, DDM, Incremental e UPF / Média das seeds 42, 43 e 44", fontsize=9.0, color=MUTED)
+    fig.suptitle(
+        "Acurácia, alarmes e atualizações por posição no fluxo",
+        x=0.17,
+        y=0.955,
+        ha="left",
+        fontsize=13.5,
+        fontweight="bold",
+        color=INK,
+    )
+    fig.text(
+        0.17,
+        0.905,
+        "INSECTS / ADWIN, DDM, Incremental e UPF / Média das seeds 42, 43 e 44",
+        fontsize=9.0,
+        color=MUTED,
+    )
     fig.text(
         0.17,
         0.008,
@@ -345,8 +459,22 @@ def main() -> None:
     specs = [
         ("airlines", "Airlines", "cara", "CARA", [7], "aws-acuracia-por-lote-modelos-airlines.svg"),
         ("electricity", "Electricity", "upf", "UPF", [7], "aws-acuracia-por-lote-modelos-electricity.svg"),
-        ("insects_abrupt_imbalanced", "INSECTS Abrupto", "cara", "CARA", [7], "aws-acuracia-por-lote-modelos-insects-abrupto.svg"),
-        ("insects_incremental_abrupt_reoccurring_imbalanced", "INSECTS Recorrente", "upf", "UPF", [7, 16], "aws-acuracia-por-lote-modelos-insects-recorrente.svg"),
+        (
+            "insects_abrupt_imbalanced",
+            "INSECTS Abrupto",
+            "cara",
+            "CARA",
+            [7],
+            "aws-acuracia-por-lote-modelos-insects-abrupto.svg",
+        ),
+        (
+            "insects_incremental_abrupt_reoccurring_imbalanced",
+            "INSECTS Recorrente",
+            "upf",
+            "UPF",
+            [7, 16],
+            "aws-acuracia-por-lote-modelos-insects-recorrente.svg",
+        ),
     ]
     for ds, title, pol, lbl, rbs, fname in specs:
         fig = build_batch_accuracy_plot(ds, title, pol, lbl, rbs, block_sizes, decisions)

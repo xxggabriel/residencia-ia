@@ -29,8 +29,13 @@ CHANGEPOINTS = {
 
 def build_aws_regime_heatmap(ds: str, title: str) -> plt.Figure:
     """Heatmap of frozen F1 (%) baseline and p.p. gain/loss by annotated regime from windows_full_28blocks.csv."""
-    rows = [r for r in csv.DictReader(open(EV2 / "s3-reports/windows_full_28blocks.csv", encoding="utf-8")) if r["dataset"] == ds]
+    rows = [
+        r
+        for r in csv.DictReader(open(EV2 / "s3-reports/windows_full_28blocks.csv", encoding="utf-8"))
+        if r["dataset"] == ds
+    ]
     cps = CHANGEPOINTS[ds]
+
     # Assign each block to a regime R1..R{len(cps)+1} based on block midpoint/end_seq
     def regime_of(end_seq: int) -> int:
         for idx, cp in enumerate(cps, 1):
@@ -71,7 +76,16 @@ def build_aws_regime_heatmap(ds: str, title: str) -> plt.Figure:
     for i in range(len(policies)):
         for j in range(len(regimes)):
             txt_col = "white" if abs(mat[i, j]) > 26 else INK
-            ax.text(j, i, ann[i][j].replace(".", ","), ha="center", va="center", fontsize=9.5, fontweight="bold" if policies[i] == "frozen" else "normal", color=txt_col)
+            ax.text(
+                j,
+                i,
+                ann[i][j].replace(".", ","),
+                ha="center",
+                va="center",
+                fontsize=9.5,
+                fontweight="bold" if policies[i] == "frozen" else "normal",
+                color=txt_col,
+            )
 
     ax.set_xticks(range(len(regimes)), [f"R{r}" for r in regimes], fontsize=10)
     ax.set_yticks(range(len(policies)), [SHORT.get(p, p) for p in policies], fontsize=9.8)
@@ -82,35 +96,68 @@ def build_aws_regime_heatmap(ds: str, title: str) -> plt.Figure:
     cbar.set_label("Diferença vs. Congelado (p.p.)", fontsize=9.5, color=INK)
 
     fig.text(
-        0.20, 0.02,
+        0.20,
+        0.02,
         "Fonte: evidencias/aws-benchmarks-v2/s3-reports/windows_full_28blocks.csv (XGBoost).\n"
         "A linha Congelado mostra o F1 macro absoluto (%) no regime; as demais mostram a diferença em pontos percentuais (p.p.).",
-        fontsize=8.8, color=MUTED, va="bottom",
+        fontsize=8.8,
+        color=MUTED,
+        va="bottom",
     )
     return fig
 
 
 def build_aws_matrix_and_trace(ds: str, pol: str, title: str, color: str) -> plt.Figure:
     """Plot 24x24 candidate accuracy matrix from S3 + deployed accuracy trace and retrain markers."""
-    m = json.loads((EV2 / f"s3-reports/retraining_matrices/{ds}__{pol}__accuracy_matrix.json").read_text(encoding="utf-8"))
+    m = json.loads(
+        (EV2 / f"s3-reports/retraining_matrices/{ds}__{pol}__accuracy_matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
     mat = np.array([[np.nan if v is None else float(v) * 100.0 for v in row] for row in m["matrix"]])
 
     # Get model_versions retrains for (ds, pol, seed=42)
-    seed42_runs = {r["run_id"] for r in csv.DictReader(open(EV2 / "athena/f109_runs_uris.csv", encoding="utf-8")) if r["seed"] == "42"}
-    mvs = [r for r in csv.DictReader(open(EV2 / "athena/f109_model_versions.csv", encoding="utf-8")) if r["run_id"] in seed42_runs and r["dataset"] == ds and r["policy"] == pol]
+    seed42_runs = {
+        r["run_id"]
+        for r in csv.DictReader(open(EV2 / "athena/f109_runs_uris.csv", encoding="utf-8"))
+        if r["seed"] == "42"
+    }
+    mvs = [
+        r
+        for r in csv.DictReader(open(EV2 / "athena/f109_model_versions.csv", encoding="utf-8"))
+        if r["run_id"] in seed42_runs and r["dataset"] == ds and r["policy"] == pol
+    ]
     retrain_seqs = {int(r["end_seq"]) for r in mvs if r["action"] == "reset_retrain"}
 
     # Get 27 evaluation blocks (B1..B27) accuracy from windows_full_28blocks.csv
-    wins = sorted([r for r in csv.DictReader(open(EV2 / "s3-reports/windows_full_28blocks.csv", encoding="utf-8")) if r["dataset"] == ds and r["policy"] == pol], key=lambda x: int(x["block"]))
+    wins = sorted(
+        [
+            r
+            for r in csv.DictReader(open(EV2 / "s3-reports/windows_full_28blocks.csv", encoding="utf-8"))
+            if r["dataset"] == ds and r["policy"] == pol
+        ],
+        key=lambda x: int(x["block"]),
+    )
     xs = [int(w["block"]) for w in wins]
     ys = [float(w["accuracy"]) * 100.0 for w in wins]
-    ret_pts = [(int(w["block"]), float(w["accuracy"]) * 100.0) for w in wins if int(w["end_seq"]) in retrain_seqs]
+    ret_pts = [
+        (int(w["block"]), float(w["accuracy"]) * 100.0) for w in wins if int(w["end_seq"]) in retrain_seqs
+    ]
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8.2, 6.8), dpi=300, gridspec_kw={"height_ratios": [1.35, 1.0]})
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(8.2, 6.8), dpi=300, gridspec_kw={"height_ratios": [1.35, 1.0]}
+    )
     fig.subplots_adjust(left=0.11, right=0.90, top=0.84, bottom=0.14, hspace=0.38)
 
     im = ax1.imshow(mat, cmap="Blues", vmin=40, vmax=95, aspect="auto")
-    ax1.set_title("Matriz de acurácia: modelo candidato (linha) × lote avaliado (coluna)", fontsize=10.5, fontweight="bold", color=INK, loc="left", pad=6)
+    ax1.set_title(
+        "Matriz de acurácia: modelo candidato (linha) × lote avaliado (coluna)",
+        fontsize=10.5,
+        fontweight="bold",
+        color=INK,
+        loc="left",
+        pad=6,
+    )
     ax1.set_ylabel("Modelo candidato (M0..M23)", fontsize=9.5, color=INK)
     ax1.set_xlabel("Lote avaliado na matriz (D0..D23)", fontsize=9.5, color=INK)
     ax1.set_xticks([0, 7, 15, 23], ["D0", "D7", "D15", "D23"], fontsize=8.8)
@@ -118,10 +165,29 @@ def build_aws_matrix_and_trace(ds: str, pol: str, title: str, color: str) -> plt
     cbar = fig.colorbar(im, ax=ax1, fraction=0.03, pad=0.02)
     cbar.set_label("Acurácia (%)", fontsize=9, color=INK)
 
-    ax2.plot(xs, ys, color=color, lw=2.0, marker="o", ms=3.8, label=f"{SHORT.get(pol, pol)} (acurácia por bloco)")
+    ax2.plot(
+        xs, ys, color=color, lw=2.0, marker="o", ms=3.8, label=f"{SHORT.get(pol, pol)} (acurácia por bloco)"
+    )
     if ret_pts:
-        ax2.scatter([p[0] for p in ret_pts], [p[1] for p in ret_pts], facecolors="white", edgecolors=color, marker="s", s=65, linewidths=2.0, zorder=5, label="Retreinamento (reset_retrain)")
-    ax2.set_title("Acurácia em uso ao longo dos blocos e pontos de retreinamento", fontsize=10.5, fontweight="bold", color=INK, loc="left", pad=6)
+        ax2.scatter(
+            [p[0] for p in ret_pts],
+            [p[1] for p in ret_pts],
+            facecolors="white",
+            edgecolors=color,
+            marker="s",
+            s=65,
+            linewidths=2.0,
+            zorder=5,
+            label="Retreinamento (reset_retrain)",
+        )
+    ax2.set_title(
+        "Acurácia em uso ao longo dos blocos e pontos de retreinamento",
+        fontsize=10.5,
+        fontweight="bold",
+        color=INK,
+        loc="left",
+        pad=6,
+    )
     ax2.set_xlabel("Bloco do stream", fontsize=9.5, color=INK)
     ax2.set_ylabel("Acurácia (%)", fontsize=9.5, color=INK)
     ax2.legend(frameon=False, fontsize=9.2, loc="lower left")
@@ -131,10 +197,13 @@ def build_aws_matrix_and_trace(ds: str, pol: str, title: str, color: str) -> plt
 
     fig.suptitle(title, x=0.11, y=0.95, ha="left", fontsize=13.2, fontweight="bold", color=INK)
     fig.text(
-        0.11, 0.02,
+        0.11,
+        0.02,
         "Fonte: evidencias/aws-benchmarks-v2/s3-reports/retraining_matrices/ e windows_full_28blocks.csv.\n"
         "Quadrados vazados na curva inferior marcam os blocos onde o modelo foi retreinado do zero.",
-        fontsize=8.8, color=MUTED, va="bottom",
+        fontsize=8.8,
+        color=MUTED,
+        va="bottom",
     )
     return fig
 
@@ -159,10 +228,34 @@ def main():
     dest.mkdir(parents=True, exist_ok=True)
 
     plots = [
-        ("aws-regimes-insects-abrupto.svg", lambda: build_aws_regime_heatmap("insects_abrupt_imbalanced", "Ganho por regime anotado · INSECTS Abrupto")),
-        ("aws-regimes-insects-recorrente.svg", lambda: build_aws_regime_heatmap("insects_incremental_abrupt_reoccurring_imbalanced", "Ganho por regime anotado · INSECTS Incr. Abr. Recorrente")),
-        ("aws-matriz-trajetoria-electricity.svg", lambda: build_aws_matrix_and_trace("electricity", "upf", "Matriz de decisão (24×24) e trajetória em uso · Electricity (UPF)", ORANGE)),
-        ("aws-matriz-trajetoria-airlines.svg", lambda: build_aws_matrix_and_trace("airlines", "cara", "Matriz de decisão (24×24) e trajetória em uso · Airlines (CARA)", BLUE)),
+        (
+            "aws-regimes-insects-abrupto.svg",
+            lambda: build_aws_regime_heatmap(
+                "insects_abrupt_imbalanced", "Ganho por regime anotado · INSECTS Abrupto"
+            ),
+        ),
+        (
+            "aws-regimes-insects-recorrente.svg",
+            lambda: build_aws_regime_heatmap(
+                "insects_incremental_abrupt_reoccurring_imbalanced",
+                "Ganho por regime anotado · INSECTS Incr. Abr. Recorrente",
+            ),
+        ),
+        (
+            "aws-matriz-trajetoria-electricity.svg",
+            lambda: build_aws_matrix_and_trace(
+                "electricity",
+                "upf",
+                "Matriz de decisão (24×24) e trajetória em uso · Electricity (UPF)",
+                ORANGE,
+            ),
+        ),
+        (
+            "aws-matriz-trajetoria-airlines.svg",
+            lambda: build_aws_matrix_and_trace(
+                "airlines", "cara", "Matriz de decisão (24×24) e trajetória em uso · Airlines (CARA)", BLUE
+            ),
+        ),
     ]
     for fname, fn in plots:
         fig = fn()

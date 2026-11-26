@@ -45,7 +45,11 @@ def save_svg(fig: plt.Figure, rel_path: str):
 # 1. Fixed aws-versoes-e-retreinos-timeline.svg: clean discrete block-action grid (28 blocks x 8 policies)
 def build_versoes_timeline_v2() -> plt.Figure:
     mvs = list(csv.DictReader(open(EV2 / "athena/f109_model_versions.csv", encoding="utf-8")))
-    seed42_runs = {r["run_id"] for r in csv.DictReader(open(EV2 / "athena/f109_runs_uris.csv", encoding="utf-8")) if r["seed"] == "42"}
+    seed42_runs = {
+        r["run_id"]
+        for r in csv.DictReader(open(EV2 / "athena/f109_runs_uris.csv", encoding="utf-8"))
+        if r["seed"] == "42"
+    }
     mvs42 = [r for r in mvs if r["run_id"] in seed42_runs]
 
     # Get exact block end_seqs per dataset from windows_full_28blocks.csv
@@ -68,11 +72,15 @@ def build_versoes_timeline_v2() -> plt.Figure:
 
         grid = np.zeros((len(policies), n_blk, 3))
         for y_idx, pol in enumerate(policies):
-            pol_map = {end_to_idx[int(r["end_seq"])]: act_code[r["action"]] for r in mvs42 if r["dataset"] == ds and r["policy"] == pol}
+            pol_map = {
+                end_to_idx[int(r["end_seq"])]: act_code[r["action"]]
+                for r in mvs42
+                if r["dataset"] == ds and r["policy"] == pol
+            }
             for x_idx in range(n_blk):
                 code = pol_map.get(x_idx, 0)
                 hex_c = act_colors[code].lstrip("#")
-                grid[y_idx, x_idx] = [int(hex_c[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+                grid[y_idx, x_idx] = [int(hex_c[i : i + 2], 16) / 255.0 for i in (0, 2, 4)]
 
         ax.imshow(grid, aspect="auto", interpolation="nearest")
         # Subtle white grid lines between cells
@@ -99,27 +107,97 @@ def build_versoes_timeline_v2() -> plt.Figure:
         Patch(facecolor="#E2E8F0", edgecolor="#cbd5e1", label="Sem atualização"),
         Patch(facecolor="none", edgecolor=RED, linestyle="--", linewidth=1.5, label="Drift real (INSECTS)"),
     ]
-    fig.legend(handles=legend_items, loc="upper left", bbox_to_anchor=(0.13, 0.90), ncol=3, frameon=False, fontsize=9.2)
-    fig.suptitle("Mapa de ações por bloco: treino inicial, retreino do zero e incremental (F109)", x=0.14, y=0.965, ha="left", fontsize=13.2, fontweight="bold", color=INK)
+    fig.legend(
+        handles=legend_items,
+        loc="upper left",
+        bbox_to_anchor=(0.13, 0.90),
+        ncol=3,
+        frameon=False,
+        fontsize=9.2,
+    )
+    fig.suptitle(
+        "Mapa de ações por bloco: treino inicial, retreino do zero e incremental (F109)",
+        x=0.14,
+        y=0.965,
+        ha="left",
+        fontsize=13.2,
+        fontweight="bold",
+        color=INK,
+    )
     fig.text(
-        0.14, 0.02,
+        0.14,
+        0.02,
         "Fonte: Athena continual_bench.model_versions (885 versões promovidas na F109; seed 42).\n"
         "Cada célula representa um bloco do stream; linhas tracejadas vermelhas marcam blocos com fronteiras reais de drift nos INSECTS.",
-        fontsize=9, color=MUTED, va="bottom",
+        fontsize=9,
+        color=MUTED,
+        va="bottom",
     )
     return fig
 
 
 # 2. Fixed papers-valores-publicados-referencia.svg: add exact value labels at the end of every bar
 def build_papers_ref_v2() -> plt.Figure:
-    rows = list(csv.DictReader(open(ROOT / "evidencias/aws-benchmarks/papers/published-reference-values.csv", encoding="utf-8")))
+    rows = list(
+        csv.DictReader(
+            open(ROOT / "evidencias/aws-benchmarks/papers/published-reference-values.csv", encoding="utf-8")
+        )
+    )
     cara_pols = ["CARA-T", "CARA-CT", "CARA-P", "Markov", "Congelado"]
-    elec_scpe = [float([r["published_value"] for r in rows if r["paper_id"] == "cara_2024" and r["metric"] == "strategy_scpe" and r["dataset"] == "electricity" and r["policy_label"] == p][0]) for p in cara_pols]
-    air_scpe = [float([r["published_value"] for r in rows if r["paper_id"] == "cara_2024" and r["metric"] == "strategy_scpe" and r["dataset"] == "airlines" and r["policy_label"] == p][0]) for p in cara_pols]
+    elec_scpe = [
+        float(
+            [
+                r["published_value"]
+                for r in rows
+                if r["paper_id"] == "cara_2024"
+                and r["metric"] == "strategy_scpe"
+                and r["dataset"] == "electricity"
+                and r["policy_label"] == p
+            ][0]
+        )
+        for p in cara_pols
+    ]
+    air_scpe = [
+        float(
+            [
+                r["published_value"]
+                for r in rows
+                if r["paper_id"] == "cara_2024"
+                and r["metric"] == "strategy_scpe"
+                and r["dataset"] == "airlines"
+                and r["policy_label"] == p
+            ][0]
+        )
+        for p in cara_pols
+    ]
 
     upf_pols = ["UPF", "CARA-T", "CARA-CT", "CARA-P", "Oracle de erro"]
-    elec_auc = [float([r["published_value"] for r in rows if r["paper_id"] == "upf_2025" and r["metric"] == "combined_cost_auc" and r["dataset"] == "electricity" and r["policy_label"] == p][0]) for p in upf_pols]
-    air_auc = [float([r["published_value"] for r in rows if r["paper_id"] == "upf_2025" and r["metric"] == "combined_cost_auc" and r["dataset"] == "airlines" and r["policy_label"] == p][0]) for p in upf_pols]
+    elec_auc = [
+        float(
+            [
+                r["published_value"]
+                for r in rows
+                if r["paper_id"] == "upf_2025"
+                and r["metric"] == "combined_cost_auc"
+                and r["dataset"] == "electricity"
+                and r["policy_label"] == p
+            ][0]
+        )
+        for p in upf_pols
+    ]
+    air_auc = [
+        float(
+            [
+                r["published_value"]
+                for r in rows
+                if r["paper_id"] == "upf_2025"
+                and r["metric"] == "combined_cost_auc"
+                and r["dataset"] == "airlines"
+                and r["policy_label"] == p
+            ][0]
+        )
+        for p in upf_pols
+    ]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9.0, 4.8), dpi=300)
     fig.subplots_adjust(left=0.11, right=0.97, top=0.76, bottom=0.22, wspace=0.34)
@@ -129,7 +207,15 @@ def build_papers_ref_v2() -> plt.Figure:
     b1e = ax1.barh(y1 - h / 2, elec_scpe, height=h, color=BLUE, label="Electricity")
     b1a = ax1.barh(y1 + h / 2, air_scpe, height=h, color=ORANGE, label="Airlines")
     for b, v in list(zip(b1e, elec_scpe, strict=True)) + list(zip(b1a, air_scpe, strict=True)):
-        ax1.text(v * 1.12, b.get_y() + b.get_height() / 2, f"{v:.2f}%".replace(".", ","), va="center", ha="left", fontsize=8.5, color=INK)
+        ax1.text(
+            v * 1.12,
+            b.get_y() + b.get_height() / 2,
+            f"{v:.2f}%".replace(".", ","),
+            va="center",
+            ha="left",
+            fontsize=8.5,
+            color=INK,
+        )
     ax1.set_yticks(y1, cara_pols, fontsize=9.2)
     ax1.invert_yaxis()
     ax1.set_xscale("log")
@@ -145,23 +231,44 @@ def build_papers_ref_v2() -> plt.Figure:
     b2e = ax2.barh(y2 - h / 2, elec_auc, height=h, color=BLUE, label="Electricity")
     b2a = ax2.barh(y2 + h / 2, air_auc, height=h, color=ORANGE, label="Airlines")
     for b, v in list(zip(b2e, elec_auc, strict=True)) + list(zip(b2a, air_auc, strict=True)):
-        ax2.text(v + 0.015, b.get_y() + b.get_height() / 2, f"{v:.3f}".replace(".", ","), va="center", ha="left", fontsize=8.5, color=INK)
+        ax2.text(
+            v + 0.015,
+            b.get_y() + b.get_height() / 2,
+            f"{v:.3f}".replace(".", ","),
+            va="center",
+            ha="left",
+            fontsize=8.5,
+            color=INK,
+        )
     ax2.set_yticks(y2, upf_pols, fontsize=9.2)
     ax2.invert_yaxis()
     ax2.set_xlim(2.0, 3.18)
-    ax2.set_title("UPF (2025) · AUC de custo publicado (↓)", fontsize=11, fontweight="bold", color=INK, loc="left")
+    ax2.set_title(
+        "UPF (2025) · AUC de custo publicado (↓)", fontsize=11, fontweight="bold", color=INK, loc="left"
+    )
     ax2.set_xlabel("AUC do custo combinado", fontsize=9.2, color=INK)
     ax2.legend(frameon=False, fontsize=9, loc="lower right")
     ax2.grid(True, axis="x", linestyle="--", alpha=0.35, lw=0.6)
     ax2.spines["top"].set_visible(False)
     ax2.spines["right"].set_visible(False)
 
-    fig.suptitle("Valores publicados de referência nos artigos base (CARA 2024 e UPF 2025)", x=0.11, y=0.93, ha="left", fontsize=13, fontweight="bold", color=INK)
+    fig.suptitle(
+        "Valores publicados de referência nos artigos base (CARA 2024 e UPF 2025)",
+        x=0.11,
+        y=0.93,
+        ha="left",
+        fontsize=13,
+        fontweight="bold",
+        color=INK,
+    )
     fig.text(
-        0.11, 0.02,
+        0.11,
+        0.02,
         "Fonte: evidencias/aws-benchmarks/papers/published-reference-values.csv. Métricas e protocolos próprios dos artigos\n"
         "(Random Forest no CARA; XGBoost eta=0,3 em 15 lotes no UPF), não comparáveis numericamente à campanha AWS F109.",
-        fontsize=8.8, color=MUTED, va="bottom",
+        fontsize=8.8,
+        color=MUTED,
+        va="bottom",
     )
     return fig
 
@@ -169,7 +276,8 @@ def build_papers_ref_v2() -> plt.Figure:
 # 3. Confusion matrices (prequential and holdout) across 4 streams x 4 key policies
 def build_confusion_grid(scope: str, title: str, subtitle: str) -> plt.Figure:
     rows = [
-        r for r in csv.DictReader(open(EV2 / "s3-reports/confusion_matrices.csv", encoding="utf-8"))
+        r
+        for r in csv.DictReader(open(EV2 / "s3-reports/confusion_matrices.csv", encoding="utf-8"))
         if r["seed"] == "42" and r["scope"] == scope
     ]
     cm_map = {(r["dataset"], r["policy"]): r for r in rows}
@@ -193,7 +301,16 @@ def build_confusion_grid(scope: str, title: str, subtitle: str) -> plt.Figure:
                     val_cnt = int(mat[r_i, c_i])
                     val_pct = pct[r_i, c_i]
                     txt_col = "white" if val_pct > 55 else INK
-                    ax.text(c_i, r_i, f"{val_pct:.1f}%\n({val_cnt:,})".replace(",", "."), ha="center", va="center", fontsize=8.0, color=txt_col, fontweight="bold")
+                    ax.text(
+                        c_i,
+                        r_i,
+                        f"{val_pct:.1f}%\n({val_cnt:,})".replace(",", "."),
+                        ha="center",
+                        va="center",
+                        fontsize=8.0,
+                        color=txt_col,
+                        fontweight="bold",
+                    )
             ax.set_xticks([0, 1], ["Pred 0", "Pred 1"] if i == 3 else ["", ""], fontsize=8.2)
             ax.set_yticks([0, 1], ["Real 0", "Real 1"] if j == 0 else ["", ""], fontsize=8.2)
             if i == 0:
@@ -209,7 +326,8 @@ def build_confusion_grid(scope: str, title: str, subtitle: str) -> plt.Figure:
 # 4. Per-class precision, recall, F1 (Class 0 vs Class 1)
 def build_class_metrics_figure() -> plt.Figure:
     rows = [
-        r for r in csv.DictReader(open(EV2 / "s3-reports/class_metrics.csv", encoding="utf-8"))
+        r
+        for r in csv.DictReader(open(EV2 / "s3-reports/class_metrics.csv", encoding="utf-8"))
         if r["seed"] == "42" and r["scope"] == "prequential"
     ]
     cmap = {(r["dataset"], r["policy"], r["class_label"]): r for r in rows}
@@ -238,13 +356,26 @@ def build_class_metrics_figure() -> plt.Figure:
         ax.spines["right"].set_visible(False)
 
     handles, labels = axes.flat[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(0.13, 0.90), ncol=3, frameon=False, fontsize=9.3)
-    fig.suptitle("Desempenho por classe (F1 Classe 0 vs. F1 e Revocação Classe 1 · F109)", x=0.14, y=0.96, ha="left", fontsize=13.2, fontweight="bold", color=INK)
+    fig.legend(
+        handles, labels, loc="upper left", bbox_to_anchor=(0.13, 0.90), ncol=3, frameon=False, fontsize=9.3
+    )
+    fig.suptitle(
+        "Desempenho por classe (F1 Classe 0 vs. F1 e Revocação Classe 1 · F109)",
+        x=0.14,
+        y=0.96,
+        ha="left",
+        fontsize=13.2,
+        fontweight="bold",
+        color=INK,
+    )
     fig.text(
-        0.14, 0.02,
+        0.14,
+        0.02,
         "Fonte: evidencias/aws-benchmarks-v2/s3-reports/class_metrics.csv (escopo prequencial completo).\n"
         "Em streams desbalanceados (Airlines e INSECTS), a classe positiva (1) concentra a maior sensibilidade às atualizações.",
-        fontsize=9, color=MUTED, va="bottom",
+        fontsize=9,
+        color=MUTED,
+        va="bottom",
     )
     return fig
 
@@ -253,12 +384,16 @@ def build_class_metrics_figure() -> plt.Figure:
 def build_roc_vs_pr_auc() -> plt.Figure:
     roc = {
         (r["dataset"], r["policy"]): float(r["mean"])
-        for r in csv.DictReader(open(ROOT / "evidencias/aws-benchmarks/quality-summary.csv", encoding="utf-8"))
+        for r in csv.DictReader(
+            open(ROOT / "evidencias/aws-benchmarks/quality-summary.csv", encoding="utf-8")
+        )
         if r["metric"] == "roc_auc"
     }
     pr = {
         (r["dataset"], r["policy"]): float(r["mean"])
-        for r in csv.DictReader(open(ROOT / "evidencias/aws-benchmarks/quality-summary.csv", encoding="utf-8"))
+        for r in csv.DictReader(
+            open(ROOT / "evidencias/aws-benchmarks/quality-summary.csv", encoding="utf-8")
+        )
         if r["metric"] == "pr_auc"
     }
     policies = ["frozen", "periodic", "drift_ddm", "drift_adwin", "incremental", "cara", "upf", "oracle"]
@@ -278,13 +413,26 @@ def build_roc_vs_pr_auc() -> plt.Figure:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
     handles, labels = axes.flat[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(0.13, 0.90), ncol=2, frameon=False, fontsize=10)
-    fig.suptitle("ROC-AUC vs. PR-AUC na coorte comum pós-calibração (F109)", x=0.14, y=0.96, ha="left", fontsize=13.5, fontweight="bold", color=INK)
+    fig.legend(
+        handles, labels, loc="upper left", bbox_to_anchor=(0.13, 0.90), ncol=2, frameon=False, fontsize=10
+    )
+    fig.suptitle(
+        "ROC-AUC vs. PR-AUC na coorte comum pós-calibração (F109)",
+        x=0.14,
+        y=0.96,
+        ha="left",
+        fontsize=13.5,
+        fontweight="bold",
+        color=INK,
+    )
     fig.text(
-        0.14, 0.02,
+        0.14,
+        0.02,
         "Fonte: evidencias/aws-benchmarks/quality-summary.csv. Em INSECTS Incr. Abr. Recorr.,\n"
         "a PR-AUC cai fortemente no Congelado (0,279) mesmo quando a ROC-AUC permanece acima de 0,58.",
-        fontsize=9, color=MUTED, va="bottom",
+        fontsize=9,
+        color=MUTED,
+        va="bottom",
     )
     return fig
 
@@ -307,7 +455,14 @@ def build_model_size_and_train_time() -> plt.Figure:
 
         ax.barh(y, kb_means, height=0.58, color=PURPLE, alpha=0.82, label="Tamanho médio por versão (KB)")
         for idx, (kb, ts) in enumerate(zip(kb_means, ts_means, strict=True)):
-            ax.text(kb + max(kb_means) * 0.02, idx, f"{kb:.0f} KB ({ts:.1f}s/ver)", va="center", fontsize=8.4, color=INK)
+            ax.text(
+                kb + max(kb_means) * 0.02,
+                idx,
+                f"{kb:.0f} KB ({ts:.1f}s/ver)",
+                va="center",
+                fontsize=8.4,
+                color=INK,
+            )
         ax.set_yticks(y, [SHORT.get(p, p) for p in policies], fontsize=9.2)
         ax.invert_yaxis()
         ax.set_xlim(0, max(kb_means) * 1.48)
@@ -317,12 +472,23 @@ def build_model_size_and_train_time() -> plt.Figure:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
 
-    fig.suptitle("Tamanho serializado por versão e tempo médio de ajuste (Athena F109)", x=0.14, y=0.95, ha="left", fontsize=13.2, fontweight="bold", color=INK)
+    fig.suptitle(
+        "Tamanho serializado por versão e tempo médio de ajuste (Athena F109)",
+        x=0.14,
+        y=0.95,
+        ha="left",
+        fontsize=13.2,
+        fontweight="bold",
+        color=INK,
+    )
     fig.text(
-        0.14, 0.02,
+        0.14,
+        0.02,
         "Fonte: Athena continual_bench.model_versions (885 versões promovidas). Em Incremental, o modelo XGBoost\n"
         "acumula rodadas de boosting ao longo dos 23 ajustes, crescendo de ~200 KB para mais de 4 MB na versão final.",
-        fontsize=9, color=MUTED, va="bottom",
+        fontsize=9,
+        color=MUTED,
+        va="bottom",
     )
     return fig
 
