@@ -208,9 +208,20 @@ class CaraP(_CaraRule):
     name = "cara_periodic"
     label = "CARA-P"
 
-    def __init__(self, period: float | None = None, offset: int = 0, same_batch: bool = False):
+    def __init__(
+        self,
+        period: float | None = None,
+        offset: int = 0,
+        same_batch: bool = False,
+        allow_never: bool = True,
+        max_period: int | None = None,
+        phase_offset: int = 0,
+    ):
         super().__init__(same_batch)
         self.period, self.offset, self._fixed = period, offset, period is not None
+        self.allow_never = allow_never
+        self.max_period = max_period
+        self.phase_offset = phase_offset
 
     @staticmethod
     def _due(t, period, offset):
@@ -220,7 +231,12 @@ class CaraP(_CaraRule):
         if self._fixed:
             return
         best = None
-        candidates = [(p, a) for p in range(1, max(2, last)) for a in range(p)] + [(math.inf, 0)]
+        upper = (self.max_period + 1) if self.max_period is not None else last
+        candidates: list[tuple[float, int]] = [
+            (p, a) for p in range(1, max(2, upper)) for a in range(p)
+        ]
+        if self.allow_never:
+            candidates.append((math.inf, 0))
         for period, offset in candidates:
             cost = self._replay(psi, last, lambda t, stale, state, p=period, a=offset: self._due(t, p, a))
             if best is None or cost < best[0] - 1e-12 or (abs(cost - best[0]) <= 1e-12 and period > best[1]):
@@ -228,7 +244,7 @@ class CaraP(_CaraRule):
         self.period, self.offset = best[1], best[2]
 
     def decide(self, t, deployed, view):
-        return self._due(t, self.period, self.offset)
+        return self._due(t - self.phase_offset, self.period, self.offset)
 
     def parameters(self):
         return {

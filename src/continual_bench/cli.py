@@ -388,6 +388,40 @@ def matrix_command(args):
     )
 
 
+def _benchmark_options(parser):
+    parser.add_argument("config", help="YAML or JSON CampaignConfig")
+    parser.add_argument("--platform", choices=("local", "homelab", "aws"), default=None)
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--tracking-uri", default=None)
+    parser.add_argument(
+        "--save-checkpoints",
+        action="store_true",
+        default=None,
+        help="allow saving model checkpoints (default: disabled)",
+    )
+
+
+@command("benchmark", _benchmark_options)
+def benchmark_command(args):
+    from .protocols.campaign import run_campaign
+
+    result = run_campaign(
+        args.config,
+        platform=args.platform,
+        output_dir=args.output_dir,
+        tracking_uri=args.tracking_uri,
+        save_model_checkpoints=args.save_checkpoints,
+    )
+    emit(
+        {
+            "protocol": result.protocol,
+            "dataset": result.dataset,
+            "aggregate_summary": result.aggregate_summary,
+            "artifacts": result.artifacts,
+        }
+    )
+
+
 def _aws_options(parser):
     from .orchestration.aws_cli import configure
 
