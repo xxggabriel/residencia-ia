@@ -12,7 +12,10 @@ import yaml
 from continual_bench.backends import RuntimeSettings, resolve_backend
 from continual_bench.protocols.base import BenchmarkProtocol, CampaignConfig, ProtocolResult
 from continual_bench.protocols.cara import CaraProtocol
-from continual_bench.protocols.report import compare_with_published_reference
+from continual_bench.protocols.report import (
+    compare_with_published_reference,
+    generate_campaign_report,
+)
 from continual_bench.protocols.upf import UpfProtocol
 from continual_bench.tracking.tracker import BenchmarkTracker
 
@@ -98,6 +101,32 @@ def run_campaign(
     protocol = protocol_cls()
     result = protocol.run(config, backend, tracker)
 
+    meta = tracker._metadata
+    report_regimes = (
+        {str(k): float(v) for k, v in meta["regimes"].items()}
+        if isinstance(meta.get("regimes"), dict)
+        else (dict(config.regimes) if config.regimes is not None else None)
+    )
+    grid_bounds: tuple[float, float] | None = None
+    if isinstance(meta.get("alpha_grid"), list) and meta["alpha_grid"]:
+        vals = [float(v) for v in meta["alpha_grid"]]
+        grid_bounds = (min(vals), max(vals))
+    elif meta.get("kappa_min") is not None and meta.get("kappa_max") is not None:
+        grid_bounds = (float(meta["kappa_min"]), float(meta["kappa_max"]))
+    elif config.alpha_grid:
+        vals = [float(v) for v in config.alpha_grid]
+        grid_bounds = (min(vals), max(vals))
+    elif config.kappa_grid:
+        vals = [float(v) for v in config.kappa_grid]
+        grid_bounds = (min(vals), max(vals))
+
+    report = generate_campaign_report(
+        result,
+        backend,
+        run_id=run_id,
+        regimes=report_regimes,
+        grid_bounds=grid_bounds,
+    )
     comparison = compare_with_published_reference(
         result.aggregate_summary,
         paper_id=_PAPER_IDS[config.protocol],
@@ -108,6 +137,7 @@ def run_campaign(
     )
     flushed = tracker.flush()
     result.artifacts.update(flushed)
+    result.artifacts.update(report.get("artifacts", {}))
     result.artifacts.update(comparison.get("artifacts", {}))
 
     tracker.assert_no_checkpoints()

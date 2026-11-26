@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 import numpy as np
+from scipy.sparse import issparse
 
 from continual_bench.backends.base import ExecutionBackend
 from continual_bench.datasets.streams_unified import BatchSplit, load_stream_batches
@@ -21,6 +23,7 @@ from continual_bench.protocols.common import (
 )
 from continual_bench.retraining.matrix import PerformanceMatrix, build_paper_matrix
 from continual_bench.retraining.rules import UPF, CaraCT, CaraP, CaraT, Oracle
+from continual_bench.retraining.schedule import alpha_max_same_batch
 from continual_bench.tracking.tracker import BenchmarkTracker
 
 logger = logging.getLogger(__name__)
@@ -49,11 +52,47 @@ _DETECTOR_SPECS: dict[str, tuple[str, dict[str, Any]]] = {
 }
 
 
-def _default_alpha_grid(dataset_name: str) -> list[float]:
-    canonical = canonical_dataset_name(dataset_name)
-    if canonical == "airlines":
-        return [float(v) for v in np.linspace(0.0, 0.7, 10)]
-    return [float(v) for v in np.linspace(0.0, 1.0, 10)]
+def _to_dense_float64(x: Any) -> np.ndarray:
+    if issparse(x):
+        return np.asarray(x.toarray(), dtype=np.float64)
+    return np.asarray(x, dtype=np.float64)
+
+
+def _dynamic_alpha_max(
+    seed_matrices: list[tuple[int, PerformanceMatrix, dict[str, list[int]]]],
+) -> float:
+    """Compute smallest ``alpha_max`` where ``Oracle(objective='error')`` yields 0 retrains across seeds."""
+    bounds: list[float] = []
+    for _, mat, _ in seed_matrices:
+        bound = alpha_max_same_batch(
+            np.nan_to_num(mat.err.T, nan=0.0),
+            mat.initial,
+            mat.offline,
+            mat.batches - 1,
+            retrain_errors=np.nan_to_num(mat.err.diagonal(), nan=0.0),
+            allowed_retrains=mat.admissible_retrains,
+        )
+        if math.isfinite(bound) and bound > 0.0:
+            bounds.append(float(bound))
+    if not bounds:
+        return 1.0
+    alpha_max = max(bounds)
+    if alpha_max <= 0.0:
+        return 1.0
+
+    def _any_seed_retrains(alpha_val: float) -> bool:
+        for _, mat, _ in seed_matrices:
+            oracle_rule = Oracle(objective="error", same_batch=False)
+            oracle_rule.fit_future(mat, alpha_val)
+            if oracle_rule.schedule:
+                return True
+        return False
+
+    for _ in range(10):
+        if not _any_seed_retrains(alpha_max):
+            break
+        alpha_max *= 1.05
+    return float(alpha_max)
 
 
 class _AbsoluteStalenessMatrix(PerformanceMatrix):
@@ -221,35 +260,46 @@ class UpfProtocol(BenchmarkProtocol):
     ) -> ProtocolResult:
         seeds = list(config.seeds) if config.seeds else list(range(10))
         policies = list(config.policies) if config.policies else list(_DEFAULT_UPF_POLICIES)
-        alpha_grid = (
-            list(config.alpha_grid) if config.alpha_grid else _default_alpha_grid(config.dataset.name)
-        )
-        regimes = dict(config.regimes) if config.regimes is not None else {"low": 0.1, "high": 0.9}
+        dataset_canonical = canonical_dataset_name(config.dataset.name)
 
         # UPF default staleness mode is "absolute" per Appendix A.12 p. 32 unless overridden.
         staleness_mode = config.staleness_mode
         if "staleness_mode" not in config.model_fields_set:
             staleness_mode = "absolute"
 
-        def _run_seed(seed: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-            spec = config.dataset.model_copy(
-                update={
-                    "protocol": "upf",
-                    "offline_batches": 7,
-                    "online_batches": 8,
-                    "num_batches": 15,
-                    "split_ratio": 0.8,
-                    "seed": config.dataset.seed + seed,
-                }
-            )
+        def _build_seed_matrix(
+            seed: int,
+        ) -> tuple[int, PerformanceMatrix, dict[str, list[int]]]:
+            ds_fields = config.dataset.model_fields_set
+            ds_updates: dict[str, Any] = {
+                "protocol": "upf",
+                "seed": config.dataset.seed + seed,
+            }
+            if "offline_batches" not in ds_fields:
+                ds_updates["offline_batches"] = 7
+            if "online_batches" not in ds_fields:
+                ds_updates["online_batches"] = 8
+            if "num_batches" not in ds_fields:
+                off_val = ds_updates.get("offline_batches", config.dataset.offline_batches)
+                on_val = ds_updates.get("online_batches", config.dataset.online_batches)
+                ds_updates["num_batches"] = (
+                    off_val + on_val
+                    if ("offline_batches" in ds_fields or "online_batches" in ds_fields)
+                    else 15
+                )
+            if "split_ratio" not in ds_fields:
+                ds_updates["split_ratio"] = 0.8
+            spec = config.dataset.model_copy(update=ds_updates)
             batches = load_stream_batches(spec)
-            offline = 7
+            offline = sum(1 for b in batches if b.is_offline)
+            if offline < 2 or offline > len(batches) - 2:
+                offline = min(max(2, spec.offline_batches), max(2, len(batches) - 2))
             raw_batches = [
                 (
-                    np.asarray(b.X_train, dtype=np.float64),
-                    b.y_train,
-                    np.asarray(b.X_test, dtype=np.float64),
-                    b.y_test,
+                    _to_dense_float64(b.X_train),
+                    np.asarray(b.y_train),
+                    _to_dense_float64(b.X_test),
+                    np.asarray(b.y_test),
                 )
                 for b in batches
             ]
@@ -266,6 +316,46 @@ class UpfProtocol(BenchmarkProtocol):
                 if pol in _DETECTOR_SPECS:
                     detector_schedules[pol] = _detector_retrains(pol, batches, states, offline, seed=seed)
 
+            return seed, matrix, detector_schedules
+
+        seed_matrices = backend.run_tasks(
+            [lambda s=s: _build_seed_matrix(s) for s in seeds],
+            max_workers=config.max_workers,
+        )
+
+        if config.alpha_grid:
+            alpha_grid = [float(v) for v in config.alpha_grid]
+        elif dataset_canonical == "electricity":
+            alpha_grid = [float(v) for v in np.linspace(0.0, 1.0, 10)]
+        elif dataset_canonical == "airlines":
+            alpha_grid = [float(v) for v in np.linspace(0.0, 0.7, 10)]
+        else:
+            alpha_max = _dynamic_alpha_max(seed_matrices)
+            alpha_grid = [float(v) for v in np.linspace(0.0, alpha_max, 10)]
+
+        alpha_max_val = float(alpha_grid[-1]) if alpha_grid else 1.0
+        if config.regimes is not None:
+            regimes = {str(k): float(v) for k, v in config.regimes.items()}
+        elif dataset_canonical in {"electricity", "airlines"}:
+            regimes = {"low": 0.1, "high": 0.9}
+        else:
+            regimes = {
+                "low": round(0.1 * alpha_max_val, 6),
+                "high": round(0.9 * alpha_max_val, 6),
+            }
+
+        tracker.log_metadata(
+            {
+                "alpha_max": alpha_max_val,
+                "alpha_grid": list(alpha_grid),
+                "regimes": dict(regimes),
+            }
+        )
+
+        def _score_seed(
+            seed_data: tuple[int, PerformanceMatrix, dict[str, list[int]]],
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+            seed, matrix, detector_schedules = seed_data
             seed_regime_rows: list[dict[str, Any]] = []
             seed_summary_rows: list[dict[str, Any]] = []
 
@@ -336,7 +426,7 @@ class UpfProtocol(BenchmarkProtocol):
 
             return seed_regime_rows, seed_summary_rows
 
-        tasks = [lambda s=s: _run_seed(s) for s in seeds]
+        tasks = [lambda sd=sd: _score_seed(sd) for sd in seed_matrices]
         seed_outputs = backend.run_tasks(tasks, max_workers=config.max_workers)
 
         all_regime_records: list[dict[str, Any]] = []
@@ -347,7 +437,6 @@ class UpfProtocol(BenchmarkProtocol):
 
         log_protocol_outputs(tracker, all_seed_summaries, all_regime_records)
 
-        dataset_canonical = canonical_dataset_name(config.dataset.name)
         aggregate_rows: list[dict[str, Any]] = aggregate_seed_summary(
             all_seed_summaries,
             protocol="upf",

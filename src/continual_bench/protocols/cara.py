@@ -177,8 +177,8 @@ class CaraProtocol(BenchmarkProtocol):
                             else:
                                 psi_matrix[tp, t] = psi_t
 
-            offline_cost = psi_matrix[:offline, :offline]
-            online_cost = psi_matrix[offline:, offline:]
+            offline_cost = np.nan_to_num(psi_matrix[:offline, :offline], nan=0.0)
+            online_cost = np.nan_to_num(psi_matrix[offline:, offline:], nan=0.0)
             accuracy_online = acc_matrix[offline:, offline:]
 
             detector_retrains: dict[str, list[int]] = {}
@@ -204,50 +204,62 @@ class CaraProtocol(BenchmarkProtocol):
         )
 
         if config.kappa_grid:
-            kappa_grid = list(config.kappa_grid)
+            kappa_grid = [float(v) for v in config.kappa_grid]
         else:
             tops: list[int] = []
             for _, offline_cost, _, _, _ in seed_matrices:
                 if offline_cost.shape[0] >= 2:
+                    safe_offline = np.nan_to_num(offline_cost, nan=0.0)
                     bound = alpha_max_same_batch(
-                        offline_cost.T, 0, 1, len(offline_cost) - 1
+                        safe_offline.T, 0, 1, len(safe_offline) - 1
                     )
                     if math.isfinite(bound) and bound > 0:
                         tops.append(math.floor(bound) + 1)
-            if tops:
-                top = min(tops)
+            positive_tops = [t for t in tops if t > 0]
+            if positive_tops:
+                top = min(positive_tops)
                 kappa_grid = [float(v) for v in np.linspace(0.0, float(top), 100)[1:]]
             else:
                 kappa_grid = _default_kappa_grid(config.dataset.name)
+
+        tracker.log_metadata(
+            {
+                "gamma": float(gamma),
+                "kappa_min": float(min(kappa_grid)) if kappa_grid else 0.0,
+                "kappa_max": float(max(kappa_grid)) if kappa_grid else 0.0,
+            }
+        )
 
         def _score_seed(
             seed_data: tuple[int, np.ndarray, np.ndarray, np.ndarray, dict[str, list[int]]],
         ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
             seed, offline_cost, online_cost, accuracy_online, detector_retrains = seed_data
-            online_count = len(online_cost)
+            safe_offline = np.nan_to_num(offline_cost, nan=0.0)
+            safe_online = np.nan_to_num(online_cost, nan=0.0)
+            online_count = len(safe_online)
             seed_regime_rows: list[dict[str, Any]] = []
             policy_metrics: dict[str, list[dict[str, float]]] = defaultdict(list)
 
             for kappa in kappa_grid:
-                oracle_sched = oracle_schedule(online_cost, kappa)
-                oracle_cost = strategy_cost(online_cost, oracle_sched, kappa)
+                oracle_sched = oracle_schedule(safe_online, kappa)
+                oracle_cost = strategy_cost(safe_online, oracle_sched, kappa)
 
                 for pol in policies:
                     if pol == "cara":
-                        tau = fit_threshold(offline_cost, kappa, cumulative=False, seed=seed)
-                        retrains = threshold_schedule(online_cost, tau, cumulative=False)
+                        tau = fit_threshold(safe_offline, kappa, cumulative=False, seed=seed)
+                        retrains = threshold_schedule(safe_online, tau, cumulative=False)
                     elif pol == "cara_cumulative":
-                        tau_cum = fit_threshold(offline_cost, kappa, cumulative=True, seed=seed)
-                        retrains = threshold_schedule(online_cost, tau_cum, cumulative=True)
+                        tau_cum = fit_threshold(safe_offline, kappa, cumulative=True, seed=seed)
+                        retrains = threshold_schedule(safe_online, tau_cum, cumulative=True)
                     elif pol == "cara_periodic":
-                        period, offset = fit_period(offline_cost, kappa)
+                        period, offset = fit_period(safe_offline, kappa)
                         retrains = periodic_schedule(online_count, period, offset=offset)
                     elif pol == "oracle_staleness":
                         retrains = oracle_sched
                     elif pol == "frozen":
                         retrains = [0]
                     elif pol == "markov":
-                        retrains = threshold_schedule(online_cost, kappa, cumulative=False)
+                        retrains = threshold_schedule(safe_online, kappa, cumulative=False)
                     elif pol == "always_retrain":
                         retrains = list(range(online_count))
                     elif pol in detector_retrains:
@@ -255,7 +267,7 @@ class CaraProtocol(BenchmarkProtocol):
                     else:
                         raise ValueError(f"Unsupported CARA policy: {pol!r}")
 
-                    cost_val = strategy_cost(online_cost, retrains, kappa)
+                    cost_val = strategy_cost(safe_online, retrains, kappa)
                     scpe_val = strategy_scpe(cost_val, oracle_cost)
                     avg_acc = _average_accuracy_for_schedule(
                         accuracy_online,
