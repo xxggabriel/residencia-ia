@@ -220,10 +220,10 @@ def _dots(ax, records, visible, *, unit, upper=None, expected_n=3):
             )
             if unit == "score":
                 text = _decimal(mean)
-            elif unit == "count" and abs(mean - round(mean)) < 1e-10:
-                text = str(round(mean))
             elif mean >= 1000:
                 text = f"{mean:,.0f}".replace(",", ".")
+            elif unit == "count" and abs(mean - round(mean)) < 1e-10:
+                text = str(round(mean))
             else:
                 text = _decimal(mean, 2 if mean < 10 else 1)
             if int(row["n_defined"]) != expected_n:

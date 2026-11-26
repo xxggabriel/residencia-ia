@@ -99,6 +99,10 @@ DEFINITIONS = {
         "Alarme": "Evento registrado pelo detector, sem equivalência automática com uma mudança real.",
         "Atualização": "Ação de atualização registrada; não é uma contagem de alarmes.",
     },
+    "detector_events": {
+        "Alarme": "Evento registrado pelo detector, sem equivalência automática com uma mudança real.",
+        "Atualização": "Ação de atualização registrada; não é uma contagem de alarmes.",
+    },
     "recovery_bars": {
         "Recuperação": (
             "Exemplos desde a fronteira anotada até duas janelas elegíveis consecutivas atingirem "
@@ -115,6 +119,11 @@ DEFINITIONS = {
             "Estimativa registrada de CPU, RAM e armazenamento do run integral em milésimos de "
             "dólar, sem equivalência a fatura."
         ),
+        "Atualizações": (
+            "Online atualiza por exemplo; as demais políticas contam retreinamentos no run integral."
+        ),
+    },
+    "update_counts": {
         "Atualizações": (
             "Online atualiza por exemplo; as demais políticas contam retreinamentos no run integral."
         ),
@@ -315,7 +324,7 @@ def detector_events(evidence, *, show_title=True, show_footer=True):
             "registrada. Neste histórico, posições e contagens de alarmes e atualizações coincidem, "
             "então as curvas se sobrepõem apesar do significado distinto dos eventos."
         ),
-        "detector_timeline",
+        "detector_events",
         show_title,
         show_footer,
     )
@@ -486,7 +495,7 @@ def update_counts(evidence, *, show_title=True, show_footer=True):
             "políticas registram retreinamentos. Escala logarítmica simétrica preserva a contagem "
             "zero. A figura não inclui o Online na campanha F109."
         ),
-        "quality_cost",
+        "update_counts",
         show_title,
         show_footer,
     )

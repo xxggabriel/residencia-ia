@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import PercentFormatter
 
-DEFAULT = Path(__file__).resolve().parents[1] / "docs/evidencias/semana-10/cara-upf"
+DEFAULT = Path(__file__).resolve().parents[1] / "evidencias/semana-10/cara-upf"
 LABELS = {
     "cara": "CARA-T",
     "cara_cumulative": "CARA-CT",
