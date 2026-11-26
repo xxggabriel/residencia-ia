@@ -7,6 +7,12 @@ class NullDetector:
     def update(self, error: int) -> bool:
         return False
 
+    def reset(self) -> None:
+        return None
+
+    def warm_start(self, values) -> None:
+        return None
+
 
 class RiverDetector:
     signal = "released_label_binary_prediction_error"
@@ -42,3 +48,15 @@ class RiverDetector:
             raise ValueError("detector expects binary prediction error, not raw features")
         self.inner.update(error)
         return bool(self.inner.drift_detected)
+
+    def reset(self) -> None:
+        """Reset internal River detector state cleanly."""
+        self.inner = self.inner.clone()
+
+    def warm_start(self, values) -> None:
+        """Reset and pre-populate the detector with historical binary prediction errors."""
+        self.reset()
+        for error in values:
+            if error not in (0, 1):
+                raise ValueError("detector expects binary prediction error, not raw features")
+            self.inner.update(int(error))
