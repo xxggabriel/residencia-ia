@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -31,7 +32,7 @@ from continual_bench.retraining.cara_reference import (
     threshold_schedule,
 )
 from continual_bench.retraining.schedule import alpha_max_same_batch
-from continual_bench.tracking.tracker import BenchmarkTracker
+from continual_bench.tracking.tracker import BenchmarkTracker, SeedRows
 
 logger = logging.getLogger(__name__)
 
@@ -142,13 +143,16 @@ class CaraProtocol(BenchmarkProtocol):
 
         def _build_seed_matrices(
             seed: int,
-        ) -> tuple[int, np.ndarray, np.ndarray, np.ndarray, dict[str, list[int]]]:
+        ) -> tuple[int, np.ndarray, np.ndarray, np.ndarray, dict[str, list[int]], list[float]]:
             model_cfg = config.model.model_copy(update={"seed": seed})
             learner = AdapterLearner(model_cfg)
             models: list[ModelAdapter] = []
             train_losses: list[np.ndarray] = []
+            fit_times: list[float] = []
             for b in batches:
+                start = time.perf_counter()
                 adapter = learner.fit(b.batch_index, b.X_train, b.y_train)
+                fit_times.append(time.perf_counter() - start)
                 models.append(adapter)
                 train_losses.append(learner.losses(adapter, b.X_train, b.y_train))
 
@@ -196,10 +200,13 @@ class CaraProtocol(BenchmarkProtocol):
                         eval_split="train",
                         include_offline_in_schedule=False,
                     )
-            return seed, offline_cost, online_cost, accuracy_online, detector_retrains
+            return seed, offline_cost, online_cost, accuracy_online, detector_retrains, fit_times
 
         seed_matrices = backend.run_tasks(
-            [lambda s=s: _build_seed_matrices(s) for s in seeds],
+            [
+                lambda s=s: tracker.run_matrix(s, lambda: _build_seed_matrices(s), lambda result: result[5])
+                for s in seeds
+            ],
             max_workers=config.max_workers,
         )
 
@@ -207,7 +214,7 @@ class CaraProtocol(BenchmarkProtocol):
             kappa_grid = [float(v) for v in config.kappa_grid]
         else:
             tops: list[int] = []
-            for _, offline_cost, _, _, _ in seed_matrices:
+            for _, offline_cost, _, _, _, _ in seed_matrices:
                 if offline_cost.shape[0] >= 2:
                     safe_offline = np.nan_to_num(offline_cost, nan=0.0)
                     bound = alpha_max_same_batch(
@@ -231,9 +238,9 @@ class CaraProtocol(BenchmarkProtocol):
         )
 
         def _score_seed(
-            seed_data: tuple[int, np.ndarray, np.ndarray, np.ndarray, dict[str, list[int]]],
-        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-            seed, offline_cost, online_cost, accuracy_online, detector_retrains = seed_data
+            seed_data: tuple[int, np.ndarray, np.ndarray, np.ndarray, dict[str, list[int]], list[float]],
+        ) -> SeedRows:
+            seed, offline_cost, online_cost, accuracy_online, detector_retrains, _ = seed_data
             safe_offline = np.nan_to_num(offline_cost, nan=0.0)
             safe_online = np.nan_to_num(online_cost, nan=0.0)
             online_count = len(safe_online)
@@ -309,14 +316,17 @@ class CaraProtocol(BenchmarkProtocol):
                     }
                 )
 
-            return seed_regime_rows, seed_summary_rows
+            return seed_regime_rows, seed_summary_rows, [], []
 
-        tasks = [lambda sd=sd: _score_seed(sd) for sd in seed_matrices]
+        tasks = [
+            lambda sd=sd: tracker.run_seed_scoring(sd[0], policies, lambda: _score_seed(sd))
+            for sd in seed_matrices
+        ]
         seed_outputs = backend.run_tasks(tasks, max_workers=config.max_workers)
 
         all_regime_records: list[dict[str, Any]] = []
         all_seed_summaries: list[dict[str, Any]] = []
-        for reg_rows, sum_rows in seed_outputs:
+        for reg_rows, sum_rows, _, _ in seed_outputs:
             all_regime_records.extend(reg_rows)
             all_seed_summaries.extend(sum_rows)
 

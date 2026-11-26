@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import yaml
 
@@ -81,7 +82,7 @@ def run_campaign(
     backend = resolve_backend(platform=settings.platform, settings=settings)
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_id = f"{config.name}_{timestamp}"
+    run_id = f"{config.name}_{timestamp}_{uuid4().hex[:8]}"
     tracker = BenchmarkTracker(backend=backend, run_id=run_id, settings=settings)
     tracker.log_metadata(
         {
@@ -89,6 +90,7 @@ def run_campaign(
             "protocol": config.protocol,
             "dataset": config.dataset.name,
             "model": config.model.name,
+            "model_params": dict(config.model.params),
             "seeds": config.seeds,
             "policies": config.policies,
             "staleness_mode": config.staleness_mode,
@@ -99,46 +101,55 @@ def run_campaign(
     if protocol_cls is None:
         raise ValueError(f"Unsupported protocol {config.protocol!r}")
     protocol = protocol_cls()
-    result = protocol.run(config, backend, tracker)
+    tracker.start_campaign()
+    try:
+        result = protocol.run(config, backend, tracker)
 
-    meta = tracker._metadata
-    report_regimes = (
-        {str(k): float(v) for k, v in meta["regimes"].items()}
-        if isinstance(meta.get("regimes"), dict)
-        else (dict(config.regimes) if config.regimes is not None else None)
-    )
-    grid_bounds: tuple[float, float] | None = None
-    if isinstance(meta.get("alpha_grid"), list) and meta["alpha_grid"]:
-        vals = [float(v) for v in meta["alpha_grid"]]
-        grid_bounds = (min(vals), max(vals))
-    elif meta.get("kappa_min") is not None and meta.get("kappa_max") is not None:
-        grid_bounds = (float(meta["kappa_min"]), float(meta["kappa_max"]))
-    elif config.alpha_grid:
-        vals = [float(v) for v in config.alpha_grid]
-        grid_bounds = (min(vals), max(vals))
-    elif config.kappa_grid:
-        vals = [float(v) for v in config.kappa_grid]
-        grid_bounds = (min(vals), max(vals))
+        meta = tracker._metadata
+        report_regimes = (
+            {str(k): float(v) for k, v in meta["regimes"].items()}
+            if isinstance(meta.get("regimes"), dict)
+            else (dict(config.regimes) if config.regimes is not None else None)
+        )
+        grid_bounds: tuple[float, float] | None = None
+        if isinstance(meta.get("alpha_grid"), list) and meta["alpha_grid"]:
+            vals = [float(v) for v in meta["alpha_grid"]]
+            grid_bounds = (min(vals), max(vals))
+        elif meta.get("kappa_min") is not None and meta.get("kappa_max") is not None:
+            grid_bounds = (float(meta["kappa_min"]), float(meta["kappa_max"]))
+        elif config.alpha_grid:
+            vals = [float(v) for v in config.alpha_grid]
+            grid_bounds = (min(vals), max(vals))
+        elif config.kappa_grid:
+            vals = [float(v) for v in config.kappa_grid]
+            grid_bounds = (min(vals), max(vals))
 
-    report = generate_campaign_report(
-        result,
-        backend,
-        run_id=run_id,
-        regimes=report_regimes,
-        grid_bounds=grid_bounds,
-    )
-    comparison = compare_with_published_reference(
-        result.aggregate_summary,
-        paper_id=_PAPER_IDS[config.protocol],
-        dataset=result.dataset,
-        reference_csv=config.reference_csv,
-        backend=backend,
-        run_id=run_id,
-    )
-    flushed = tracker.flush()
-    result.artifacts.update(flushed)
-    result.artifacts.update(report.get("artifacts", {}))
-    result.artifacts.update(comparison.get("artifacts", {}))
+        report = generate_campaign_report(
+            result,
+            backend,
+            run_id=run_id,
+            regimes=report_regimes,
+            grid_bounds=grid_bounds,
+        )
+        comparison = compare_with_published_reference(
+            result.aggregate_summary,
+            paper_id=_PAPER_IDS[config.protocol],
+            dataset=result.dataset,
+            reference_csv=config.reference_csv,
+            backend=backend,
+            run_id=run_id,
+        )
+        tracker.assert_no_checkpoints()
+        tracker.log_paper_comparison(comparison.get("rows", []))
+        tracker.register_external_artifacts(report.get("artifacts", {}))
+        tracker.register_external_artifacts(comparison.get("artifacts", {}))
+        flushed = tracker.flush()
+        result.artifacts.update(flushed)
+        result.artifacts.update(report.get("artifacts", {}))
+        result.artifacts.update(comparison.get("artifacts", {}))
 
-    tracker.assert_no_checkpoints()
-    return result
+        result.mlflow_receipt = tracker.mlflow_receipt
+        return result
+    except BaseException:
+        tracker.fail_campaign()
+        raise

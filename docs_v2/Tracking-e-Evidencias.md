@@ -32,6 +32,14 @@ No modo `metrics_only`, a publicação passa por `publish_local_benchmark` (`src
 
 A publicação é idempotente: antes de acrescentar pontos, o publicador compara o histórico existente de cada métrica (`missing_metric_points` em `src/continual_bench/infrastructure/tracking/reconcile.py`) e não duplica pontos já gravados. Conflitos de valor falham, sem atalho pelo último valor.
 
+## Campanhas CARA e UPF
+
+Com o tracking habilitado e uma URI do MLflow configurada, a campanha cria ou recupera a run principal antes de construir as matrizes. Cada seed abre uma run filha `matrix-seed-<seed>` em `RUNNING` quando começa a construir a matriz. Ao concluir, a run recebe a duração, o tempo de ajuste por lote e o artefato `matrix_summary.json` antes de mudar para `FINISHED`.
+
+A avaliação abre runs por política e seed. Cada avaliação de seed publica as métricas, os arquivos de resumo, regimes e linha do tempo, e os eventos de retreino disponíveis antes do encerramento. A grade de avaliação calculada a partir do conjunto das matrizes continua aguardando todas as seeds. Os agregados por campanha e política, junto da comparação com os artigos, são publicados na consolidação.
+
+Falhas de execução capturadas encerram as runs afetadas com `FAILED`.
+
 ## MLflow gerenciado no SageMaker
 
 Na AWS, os workers publicam no MLflow gerenciado do SageMaker. Há dois caminhos em `src/continual_bench/infrastructure/aws/mlflow_tracking.py`:

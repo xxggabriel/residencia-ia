@@ -48,6 +48,7 @@ class ProtocolResult:
     regime_records: list[dict[str, Any]] = field(default_factory=list)
     aggregate_summary: list[dict[str, Any]] = field(default_factory=list)
     artifacts: dict[str, str] = field(default_factory=dict)
+    mlflow_receipt: dict[str, Any] | None = None
 
 
 class BenchmarkProtocol(ABC):

@@ -5,9 +5,22 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from typing import Any
+import time
+from collections.abc import Callable, Iterable
+from typing import Any, TypeVar
 
 from continual_bench.backends.base import ExecutionBackend, RuntimeSettings
+from continual_bench.tracking.mlflow_publisher import (
+    TRACKING_URI_PREFIXES,
+    CampaignRuns,
+    publish_campaign_to_mlflow,
+)
+
+T = TypeVar("T")
+SeedRows = tuple[
+    list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]
+]
+
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +81,106 @@ class BenchmarkTracker:
         self._regime_rows: list[dict[str, Any]] = []
         self._seed_summaries: list[dict[str, Any]] = []
         self._aggregate_rows: list[dict[str, Any]] = []
+        self._retrain_events: list[dict[str, Any]] = []
+        self._paper_comparison_rows: list[dict[str, Any]] = []
+        self._system_metrics: list[dict[str, Any]] = []
+        self._artifact_paths: dict[str, str] = {}
+        self.mlflow_receipt: dict[str, Any] | None = None
+        self._active_runs: CampaignRuns | None = None
+        self._seed_artifacts: dict[tuple[str, int], dict[str, str]] = {}
+
+    def start_campaign(self, *, resume: bool = False, recover_evaluations: bool = False) -> None:
+        if self.settings.tracking_enabled and self.settings.tracking_uri.startswith(TRACKING_URI_PREFIXES):
+            self._active_runs = self._try_mlflow(
+                lambda: CampaignRuns(
+                    self.settings, self.run_id, self._metadata,
+                    resume=resume, recover_evaluations=recover_evaluations,
+                )
+            )
+
+    def fail_campaign(self) -> None:
+        if self._active_runs is not None:
+            self._active_runs.fail_campaign()
+
+    def _try_mlflow(self, operation: Callable[[], T]) -> T | None:
+        try:
+            return operation()
+        except Exception:
+            logger.warning("MLflow tracking failed for campaign %s", self.run_id, exc_info=True)
+            return None
+
+    def run_matrix(
+        self,
+        seed: int,
+        build: Callable[[], T],
+        fit_times: Callable[[T], Iterable[float]],
+    ) -> T:
+        tracking = self._active_runs
+        if tracking is None:
+            return build()
+        run_id = self._try_mlflow(lambda: tracking.start_matrix(seed))
+        started = time.perf_counter()
+        try:
+            result = build()
+        except BaseException:
+            if run_id is not None:
+                tracking.fail(run_id)
+            raise
+        if run_id is not None:
+            elapsed = time.perf_counter() - started
+
+            def publish() -> bool:
+                with tracking.publication_slots:
+                    tracking.finish_matrix(run_id, seed, elapsed, fit_times(result))
+                return True
+
+            if not self._try_mlflow(publish):
+                tracking.fail(run_id)
+        return result
+
+    def run_seed_scoring(
+        self, seed: int, policies: list[str], score: Callable[[], SeedRows]
+    ) -> SeedRows:
+        tracking = self._active_runs
+        if tracking is None:
+            return score()
+        started = {
+            pol: run_id
+            for pol in dict.fromkeys(policies)
+            if (run_id := self._try_mlflow(lambda: tracking.start_seed(pol, seed))) is not None
+        }
+        try:
+            rows = score()
+            for pol, run_id in started.items():
+                if (pol, seed) in tracking.completed_seeds:
+                    continue
+                policy_rows = self._seed_rows(pol, seed, rows)
+                paths = self._write_seed_artifacts(pol, seed, policy_rows)
+                self._seed_artifacts[pol, seed] = paths
+                self._try_mlflow(
+                    lambda: tracking.finish_seed(
+                        pol, seed, policy_rows, self._local_artifact_paths(paths)
+                    )
+                )
+                if (pol, seed) not in tracking.completed_seeds:
+                    tracking.fail(run_id)
+        except BaseException:
+            for pol, run_id in started.items():
+                if (pol, seed) not in tracking.completed_seeds:
+                    tracking.fail(run_id)
+            raise
+        return rows
+
+    def _seed_rows(self, policy: str, seed: int, rows: SeedRows) -> SeedRows:
+        def select(group):
+            return [
+                {"run_id": self.run_id, **row}
+                for row in group
+                if row.get("policy") == policy and int(row.get("seed", -1)) == seed
+            ]
+
+        regimes, summaries, retrains, batches = rows
+        return select(regimes), select(summaries), select(retrains), select(batches)
 
     def _rel(self, filename: str) -> str:
         return f"{self.run_id}/{filename}"
@@ -133,6 +246,32 @@ class BenchmarkTracker:
         for row in rows:
             self._aggregate_rows.append({"run_id": self.run_id, **row})
 
+    def log_retrain_event(self, seed: int, policy: str, event: dict[str, Any]) -> None:
+        if not self.settings.tracking_enabled:
+            return
+        self._retrain_events.append(
+            {
+                "run_id": self.run_id,
+                "seed": seed,
+                "policy": policy,
+                **event,
+            }
+        )
+
+    def log_paper_comparison(self, rows: list[dict[str, Any]]) -> None:
+        if not self.settings.tracking_enabled:
+            return
+        for row in rows:
+            self._paper_comparison_rows.append({"run_id": self.run_id, **row})
+
+    def log_system_metrics(self, sample: dict[str, Any]) -> None:
+        if not self.settings.tracking_enabled:
+            return
+        self._system_metrics.append(sample)
+
+    def register_external_artifacts(self, artifacts: dict[str, str]) -> None:
+        self._artifact_paths.update(artifacts)
+
     def flush(self) -> dict[str, str]:
         """Write buffered metrics and metadata via backend in JSON, CSV, and Parquet."""
         if not self.settings.tracking_enabled:
@@ -185,32 +324,115 @@ class BenchmarkTracker:
                 self._aggregate_rows,
             )
 
+        if self._retrain_events:
+            written["retrain_events.csv"] = self.backend.write_text(
+                self._rel("retrain_events.csv"),
+                _rows_to_csv(self._retrain_events),
+            )
+            written["retrain_events.json"] = self.backend.write_json(
+                self._rel("retrain_events.json"),
+                self._retrain_events,
+            )
+
+        written.update(self._write_per_level_artifacts())
+        self._artifact_paths.update(written)
         self._maybe_log_mlflow()
         return written
 
-    def _maybe_log_mlflow(self) -> None:
-        uri = self.settings.tracking_uri.strip()
-        if not uri or not uri.startswith(("http://", "https://", "mlflow")):
-            return
-        try:
-            import mlflow  # type: ignore[import-untyped]
-        except ImportError:
-            logger.warning("MLflow tracking_uri configured (%s) but mlflow is not installed.", uri)
-            return
+    def _write_per_level_artifacts(self) -> dict[str, str]:
+        """Persist per-policy, per-seed, and per-retrain-version artifacts at end of run."""
+        written: dict[str, str] = {}
+        policies: list[str] = list(self._metadata.get("policies") or [])
+        for row in self._seed_summaries:
+            pol = str(row.get("policy", ""))
+            if pol and pol not in policies:
+                policies.append(pol)
 
-        try:
-            mlflow.set_tracking_uri(uri)
-            with mlflow.start_run(run_name=self.run_id):
-                mlflow.log_params(
-                    {k: str(v)[:250] for k, v in self._metadata.items() if v is not None}
-                )
-                for row in self._aggregate_rows:
-                    policy = str(row.get("policy", "aggregate"))
-                    for key, value in row.items():
-                        if isinstance(value, (int, float)) and not isinstance(value, bool):
-                            mlflow.log_metric(f"{policy}.{key}", float(value))
-        except Exception as exc:
-            logger.warning("MLflow logging failed gracefully for %s: %s", uri, exc)
+        for pol in policies:
+            pol_aggs = [r for r in self._aggregate_rows if r.get("policy") == pol]
+            pol_seeds = [r for r in self._seed_summaries if r.get("policy") == pol]
+            pol_paper = [r for r in self._paper_comparison_rows if r.get("policy") == pol]
+            if pol_aggs:
+                key = f"policies/{pol}/policy_summary.json"
+                written[key] = self.backend.write_json(self._rel(key), pol_aggs)
+            if pol_seeds:
+                key = f"policies/{pol}/policy_seed_summaries.csv"
+                written[key] = self.backend.write_text(self._rel(key), _rows_to_csv(pol_seeds))
+            if pol_paper:
+                key = f"policies/{pol}/policy_paper_comparison.json"
+                written[key] = self.backend.write_json(self._rel(key), pol_paper)
+
+            seed_ids = sorted({int(r["seed"]) for r in pol_seeds if "seed" in r})
+            for seed_val in seed_ids:
+                seed_artifacts = self._seed_artifacts.get((pol, seed_val))
+                if seed_artifacts is None:
+                    seed_artifacts = self._write_seed_artifacts(
+                        pol,
+                        seed_val,
+                        self._seed_rows(
+                            pol, seed_val,
+                            (self._regime_rows, pol_seeds, self._retrain_events, self._batch_rows),
+                        ),
+                    )
+                written.update(seed_artifacts)
+        return written
+
+    def _write_seed_artifacts(self, policy: str, seed: int, rows: SeedRows) -> dict[str, str]:
+        regimes, summaries, retrains, batches = rows
+        prefix = f"policies/{policy}/seeds/seed-{seed}"
+        written: dict[str, str] = {}
+        for filename, records in (
+            ("seed_summary.json", summaries),
+            ("seed_retrain_events.json", retrains),
+        ):
+            if records:
+                key = f"{prefix}/{filename}"
+                written[key] = self.backend.write_json(self._rel(key), records)
+        for filename, records in (
+            ("seed_timeline.csv", batches),
+            ("seed_regimes.csv", regimes),
+        ):
+            if records:
+                key = f"{prefix}/{filename}"
+                written[key] = self.backend.write_text(self._rel(key), _rows_to_csv(records))
+        for event in retrains:
+            version_name = str(
+                event.get("version_name") or f"{policy}-s{seed}-b{event.get('batch_index', 0)}"
+            )
+            key = f"{prefix}/retrains/{version_name}.json"
+            written[key] = self.backend.write_json(self._rel(key), event)
+        return written
+
+    def _local_artifact_paths(self, artifacts: dict[str, str]) -> dict[str, str]:
+        # Remote execution backends return S3 URIs and keep a local staging copy.
+        staging_dir = getattr(self.backend, "staging_dir", getattr(self.backend, "output_dir", None))
+        return {
+            name: str(staging_dir / self._rel(name))
+            if path.startswith("s3://") and staging_dir is not None else path
+            for name, path in artifacts.items()
+        }
+
+    def _maybe_log_mlflow(self) -> None:
+        if not self.settings.tracking_uri.startswith(TRACKING_URI_PREFIXES):
+            return
+        self.mlflow_receipt = self._try_mlflow(
+            lambda: publish_campaign_to_mlflow(
+                settings=self.settings,
+                run_id=self.run_id,
+                metadata=self._metadata,
+                aggregate_rows=self._aggregate_rows,
+                seed_summaries=self._seed_summaries,
+                regime_rows=self._regime_rows,
+                batch_rows=self._batch_rows,
+                retrain_events=self._retrain_events,
+                paper_comparison_rows=self._paper_comparison_rows,
+                system_metrics=self._system_metrics,
+                artifact_paths=self._local_artifact_paths(self._artifact_paths),
+                active_runs=self._active_runs,
+            )
+        )
+        if self.mlflow_receipt is None:
+            self.fail_campaign()
 
     def assert_no_checkpoints(self) -> None:
         """Raise RuntimeError if any checkpoint files exist when save_model_checkpoints=False."""

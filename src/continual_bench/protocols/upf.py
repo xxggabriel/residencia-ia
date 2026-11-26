@@ -24,7 +24,7 @@ from continual_bench.protocols.common import (
 from continual_bench.retraining.matrix import PerformanceMatrix, build_paper_matrix
 from continual_bench.retraining.rules import UPF, CaraCT, CaraP, CaraT, Oracle
 from continual_bench.retraining.schedule import alpha_max_same_batch
-from continual_bench.tracking.tracker import BenchmarkTracker
+from continual_bench.tracking.tracker import BenchmarkTracker, SeedRows
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +319,12 @@ class UpfProtocol(BenchmarkProtocol):
             return seed, matrix, detector_schedules
 
         seed_matrices = backend.run_tasks(
-            [lambda s=s: _build_seed_matrix(s) for s in seeds],
+            [
+                lambda s=s: tracker.run_matrix(
+                    s, lambda: _build_seed_matrix(s), lambda result: result[1].fit_seconds
+                )
+                for s in seeds
+            ],
             max_workers=config.max_workers,
         )
 
@@ -354,7 +359,7 @@ class UpfProtocol(BenchmarkProtocol):
 
         def _score_seed(
             seed_data: tuple[int, PerformanceMatrix, dict[str, list[int]]],
-        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        ) -> SeedRows:
             seed, matrix, detector_schedules = seed_data
             seed_regime_rows: list[dict[str, Any]] = []
             seed_summary_rows: list[dict[str, Any]] = []
@@ -424,14 +429,17 @@ class UpfProtocol(BenchmarkProtocol):
                     }
                 )
 
-            return seed_regime_rows, seed_summary_rows
+            return seed_regime_rows, seed_summary_rows, [], []
 
-        tasks = [lambda sd=sd: _score_seed(sd) for sd in seed_matrices]
+        tasks = [
+            lambda sd=sd: tracker.run_seed_scoring(sd[0], policies, lambda: _score_seed(sd))
+            for sd in seed_matrices
+        ]
         seed_outputs = backend.run_tasks(tasks, max_workers=config.max_workers)
 
         all_regime_records: list[dict[str, Any]] = []
         all_seed_summaries: list[dict[str, Any]] = []
-        for reg_rows, sum_rows in seed_outputs:
+        for reg_rows, sum_rows, _, _ in seed_outputs:
             all_regime_records.extend(reg_rows)
             all_seed_summaries.extend(sum_rows)
 

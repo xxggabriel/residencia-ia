@@ -40,6 +40,9 @@ class RuntimeSettings(BaseModel):
     tracking_enabled: bool = True
     output_dir: Path | str = Field(default_factory=lambda: Path("state/benchmarks"))
     tracking_uri: str = ""
+    experiment_prefix: str = ""
+    env_name: str = "local"
+    generate_plots: bool = False
 
     @field_validator("platform", mode="before")
     @classmethod
@@ -49,7 +52,7 @@ class RuntimeSettings(BaseModel):
             raise ValueError(f"Unsupported platform {value!r}; expected one of {sorted(VALID_PLATFORMS)}")
         return normalized
 
-    @field_validator("save_model_checkpoints", "tracking_enabled", mode="before")
+    @field_validator("save_model_checkpoints", "tracking_enabled", "generate_plots", mode="before")
     @classmethod
     def _validate_bool(cls, value: Any, info: Any) -> bool:
         return _parse_bool(value, name=info.field_name)
@@ -104,6 +107,7 @@ class RuntimeSettings(BaseModel):
             "BENCH_SAVE_MODEL_CHECKPOINTS": "save_model_checkpoints",
             "BENCH_TRACKING_ENABLED": "tracking_enabled",
             "BENCH_OUTPUT_DIR": "output_dir",
+            "MLFLOW_TRACKING_URI": "tracking_uri",
             "BENCH_TRACKING_URI": "tracking_uri",
         }
         for env_key, field_name in env_map.items():
