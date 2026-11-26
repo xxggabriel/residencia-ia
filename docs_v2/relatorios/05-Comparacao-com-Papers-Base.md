@@ -2,6 +2,8 @@
 
 Este relatório analisa os resultados originais publicados nos dois artigos base da literatura, CARA (2024) e UPF (2025), apresenta o cotejo descritivo usando as **médias das 3 seeds (`42`, `43` e `44`)** obtidas na campanha na AWS para `electricity` e `airlines`, e responde objetivamente **quando e por que os resultados dos artigos podem ou não ser comparados diretamente** com os benchmarks na AWS. Todas as informações provêm exclusivamente dos dois artigos originais (`cost-aware-retraining.pdf` e `regol25a.pdf`), de [protocol-comparability.csv](../../evidencias/aws-benchmarks/papers/protocol-comparability.csv), [published-reference-values.csv](../../evidencias/aws-benchmarks/papers/published-reference-values.csv), [paper-metrics.csv](../../evidencias/aws-benchmarks/papers/paper-metrics.csv), [limitations.json](../../evidencias/aws-benchmarks/papers/limitations.json), [paper-data-provenance.json](../../evidencias/aws-benchmarks/papers/paper-data-provenance.json) e [metrics-by-seed.csv](../../evidencias/aws-benchmarks/metrics-by-seed.csv).
 
+> Para a replicação metodológica fiel de **CARA (2024)** e **UPF (2025)** com `scikit-multiflow==0.5.3` e a extensão completa para as duas variantes do **INSECTS**, consulte [09-Benchmarks-Metodologia-Artigos.md](09-Benchmarks-Metodologia-Artigos.md).
+
 Conforme registrado em [paper-data-provenance.json](../../evidencias/aws-benchmarks/papers/paper-data-provenance.json), a campanha na AWS **não** é comparada numericamente por meio de deltas ou rankings conjuntos com os valores publicados nos artigos. Os `110` valores de referência publicados passaram por auditoria independente (`1.085` verificações em `paper-data-provenance.json`, `all_pass = true`).
 
 ## 1. Análise dos Resultados Reais dos Artigos Base
@@ -115,5 +117,13 @@ De acordo com [limitations.json](../../evidencias/aws-benchmarks/papers/limitati
 
 ## 6. Referências Bibliográficas
 
+Conclui-se abaixo o cotejo histórico da campanha AWS F109.
+
+> [!NOTE]
+> Para os benchmarks executados **integralmente sob a metodologia fiel dos artigos CARA (2024) e UPF (2025)** (`99` valores de $\kappa$, `T = 8`, `scikit-multiflow 0.5.3`) — incluindo validação em `electricity`/`airlines` e extensão para as duas versões do **INSECTS** — consulte o relatório [09-Benchmarks-Metodologia-Artigos.md](09-Benchmarks-Metodologia-Artigos.md).
+
 1. **Cost-aware retraining for machine learning** (2024). Mahadevan, A.; Mathioudakis, M. *Knowledge-Based Systems*, v. 293, 111610. DOI: [https://doi.org/10.1016/j.knosys.2024.111610](https://doi.org/10.1016/j.knosys.2024.111610). Fonte numérica: Tabelas 1, 2, 3 e 4 (`cost-aware-retraining.pdf`).
 2. **When to retrain a machine learning model** (2025). Regol, F.; et al. *Proceedings of Machine Learning Research (PMLR)*, v. 267. URL: [https://proceedings.mlr.press/v267/regol25a.html](https://proceedings.mlr.press/v267/regol25a.html). DOI do preprint: [https://doi.org/10.48550/arXiv.2505.14903](https://doi.org/10.48550/arXiv.2505.14903). Fonte numérica: Tabelas 1, 2 e 4 e Apêndice A.12 (`regol25a.pdf`).
+
+> [!NOTE]
+> Para a reprodução experimental direta nos protocolos CARA (2024) e UPF (2025) após o alinhamento completo da arquitetura (`electricity`, `airlines` e as duas versões do `INSECTS`), consulte [09-Benchmarks-Metodologia-Artigos.md](09-Benchmarks-Metodologia-Artigos.md).
