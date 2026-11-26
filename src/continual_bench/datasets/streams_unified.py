@@ -23,7 +23,36 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "airlines": ("airlines", "airplanes"),
     "airplanes": ("airplanes", "airlines"),
     "electricity": ("electricity", "elecNormNew"),
+    "insects_abrupt_imbalanced": ("insects_abrupt_imbalanced", "abrupt_imbalanced"),
+    "abrupt_imbalanced": ("abrupt_imbalanced", "insects_abrupt_imbalanced"),
+    "insects_incremental_abrupt_reoccurring_imbalanced": (
+        "insects_incremental_abrupt_reoccurring_imbalanced",
+        "incremental_abrupt_imbalanced",
+    ),
+    "incremental_abrupt_imbalanced": (
+        "incremental_abrupt_imbalanced",
+        "insects_incremental_abrupt_reoccurring_imbalanced",
+    ),
 }
+
+_PREPARED_FILENAMES: tuple[str, ...] = ("full.parquet", "data.parquet", "data.csv", "full.csv")
+_TARGET_CANDIDATES: tuple[str, ...] = ("label", "target", "y", "class", "Delay")
+_METADATA_COLUMNS: frozenset[str] = frozenset(
+    {
+        "event_time",
+        "timestamp",
+        "available_at",
+        "label_available_at",
+        "point_available_at",
+        "seq",
+        "row_id",
+        "sample_id",
+        "concept",
+        "regime",
+        "epoch",
+        "batch_index",
+    }
+)
 
 _ELECTRICITY_FEATURES = ("period", "nswprice", "nswdemand", "vicprice", "vicdemand", "transfer")
 _AIRLINES_NOMINAL = ("Airline", "Flight", "AirportFrom", "AirportTo", "DayOfWeek")
@@ -89,10 +118,21 @@ def resolve_dataset_path(
             return explicit
         if explicit.is_dir():
             for cand in names:
+                direct = explicit / cand
+                if direct.is_file():
+                    return direct
                 for ext in extensions:
-                    p = explicit / f"{cand}{ext}"
+                    for p in (explicit / f"{cand}{ext}", explicit / cand / f"{cand}{ext}"):
+                        if p.is_file():
+                            return p
+                for fname in _PREPARED_FILENAMES:
+                    p = explicit / cand / fname
                     if p.is_file():
                         return p
+            for fname in _PREPARED_FILENAMES:
+                p = explicit / fname
+                if p.is_file():
+                    return p
         raise FileNotFoundError(f"Dataset source_path not found: {source_path}")
 
     search_dirs: list[Path] = []
@@ -123,6 +163,11 @@ def resolve_dataset_path(
                     searched.append(str(path))
                     if path.is_file():
                         return path
+            for fname in _PREPARED_FILENAMES:
+                path = directory / cand / fname
+                searched.append(str(path))
+                if path.is_file():
+                    return path
 
     raise FileNotFoundError(
         f"Could not locate dataset {name!r}; searched: {', '.join(searched)}"
@@ -270,16 +315,164 @@ def _load_airlines_columns(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarr
     raise ValueError(f"Unsupported airlines file format: {path.suffix}")
 
 
+def _resolve_target_column(columns: list[Any]) -> Any:
+    for cand in _TARGET_CANDIDATES:
+        if cand in columns:
+            return cand
+    lower_map = {str(c).strip().lower(): c for c in columns}
+    for cand in _TARGET_CANDIDATES:
+        match = lower_map.get(cand.lower())
+        if match is not None:
+            return match
+    return columns[-1]
+
+
+def _encode_target_labels(y_raw: Any) -> np.ndarray:
+    """Encode binary or multiclass targets into contiguous int64 class IDs.
+
+    Preserves ``{0, 1}`` for binary integer targets and contiguous ``0..K-1`` integers;
+    maps binary tokens (e.g. ``UP``/``DOWN``), arbitrary string labels, or non-contiguous
+    integers into sorted ``0..K-1``.
+    """
+    arr = np.asarray(y_raw)
+    if arr.size == 0:
+        return np.empty((0,), dtype=np.int64)
+    if arr.dtype == bool or np.issubdtype(arr.dtype, np.bool_):
+        return arr.astype(np.int64)
+    if np.issubdtype(arr.dtype, np.integer):
+        arr_i = arr.astype(np.int64, copy=False)
+        unique = np.unique(arr_i)
+        if unique[0] >= 0 and (
+            (unique.size <= 2 and set(unique.tolist()) <= {0, 1})
+            or (unique[0] == 0 and unique[-1] == unique.size - 1)
+        ):
+            return arr_i
+        return np.searchsorted(unique, arr_i).astype(np.int64)
+    if np.issubdtype(arr.dtype, np.floating):
+        if not np.all(np.isfinite(arr)):
+            raise ValueError("Target column contains non-finite values")
+        if np.all(np.floor(arr) == arr):
+            return _encode_target_labels(arr.astype(np.int64))
+        unique = np.unique(arr)
+        return np.searchsorted(unique, arr).astype(np.int64)
+
+    texts = [str(v).strip().strip("'\"") for v in arr.tolist()]
+    unique_texts, inverse = np.unique(np.asarray(texts, dtype=object), return_inverse=True)
+    binary_tokens = {
+        "DOWN": 0,
+        "FALSE": 0,
+        "NO": 0,
+        "UP": 1,
+        "TRUE": 1,
+        "YES": 1,
+    }
+    upper_tokens = [t.upper() for t in unique_texts.tolist()]
+    if all(t in binary_tokens for t in upper_tokens):
+        lookup = np.array([binary_tokens[t] for t in upper_tokens], dtype=np.int64)
+        return lookup[inverse]
+    try:
+        parsed = np.asarray([float(t) for t in unique_texts.tolist()], dtype=np.float64)
+    except ValueError:
+        return inverse.astype(np.int64)
+    if np.all(np.isfinite(parsed)) and np.all(np.floor(parsed) == parsed):
+        int_uniques = parsed.astype(np.int64)
+        if int_uniques.min() >= 0 and (
+            (int_uniques.size <= 2 and set(int_uniques.tolist()) <= {0, 1})
+            or np.array_equal(np.sort(int_uniques), np.arange(int_uniques.size, dtype=np.int64))
+        ):
+            return int_uniques[inverse]
+        sorted_vals = np.sort(int_uniques)
+        remapped = np.searchsorted(sorted_vals, int_uniques)
+        return remapped[inverse].astype(np.int64)
+    sorted_vals = np.sort(parsed)
+    remapped = np.searchsorted(sorted_vals, parsed)
+    return remapped[inverse].astype(np.int64)
+
+
+def _is_categorical_dtype(dtype: Any) -> bool:
+    import pandas as pd
+
+    return bool(
+        isinstance(dtype, pd.CategoricalDtype)
+        or pd.api.types.is_object_dtype(dtype)
+        or pd.api.types.is_string_dtype(dtype)
+    )
+
+
+def _sanitized_float64(arr: Any) -> np.ndarray:
+    out = np.asarray(arr, dtype=np.float64)
+    if out.size and not np.all(np.isfinite(out)):
+        out = np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+    return out
+
+
+def _arff_rows_to_xy(rows: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray]:
+    if not rows:
+        return np.empty((0, 0), dtype=np.float64), np.empty((0,), dtype=np.int64)
+    keys = list(rows[0].keys())
+    target_key = _resolve_target_column(keys)
+    feat_keys = [k for k in keys if k != target_key and str(k).strip().lower() not in _METADATA_COLUMNS]
+    codes: dict[str, dict[str, int]] = {}
+    x_rows, raw_y = [], []
+    for row in rows:
+        vals = []
+        for k in feat_keys:
+            v = row[k]
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                vals.append(float(v))
+            elif isinstance(v, bool):
+                vals.append(1.0 if v else 0.0)
+            else:
+                mapping = codes.setdefault(k, {})
+                vals.append(float(mapping.setdefault(str(v), len(mapping))))
+        x_rows.append(vals)
+        raw_y.append(row[target_key])
+    return _sanitized_float64(x_rows), _encode_target_labels(raw_y)
+
+
+def _arff_rows_split_columns(
+    rows: list[dict[str, Any]],
+) -> tuple[np.ndarray | None, np.ndarray, np.ndarray]:
+    if not rows:
+        return None, np.empty((0, 0), dtype=np.float64), np.empty((0,), dtype=np.int64)
+    keys = list(rows[0].keys())
+    target_key = _resolve_target_column(keys)
+    feat_keys = [k for k in keys if k != target_key and str(k).strip().lower() not in _METADATA_COLUMNS]
+    nom_keys = [
+        k
+        for k in feat_keys
+        if not isinstance(rows[0][k], (int, float)) or isinstance(rows[0][k], bool)
+    ]
+    num_keys = [k for k in feat_keys if k not in nom_keys]
+    y = _encode_target_labels([row[target_key] for row in rows])
+    numerics = (
+        _sanitized_float64([[float(row[k]) for k in num_keys] for row in rows])
+        if num_keys
+        else np.empty((len(rows), 0), dtype=np.float64)
+    )
+    if not nom_keys:
+        return None, numerics, y
+    nominals = np.asarray(
+        [[_normalize_cat_str(row[k]) for k in nom_keys] for row in rows],
+        dtype=object,
+    )
+    return nominals, numerics, y
+
+
 def _load_generic_raw(path: Path) -> tuple[np.ndarray, np.ndarray]:
     suffix = path.suffix.lower()
     if suffix == ".npz":
         with np.load(path, allow_pickle=False) as data:
             x_key = "X" if "X" in data else "x"
             y_key = "y" if "y" in data else "Y"
-            return np.asarray(data[x_key]), np.asarray(data[y_key], dtype=np.int64)
+            X = np.asarray(data[x_key])
+            if np.issubdtype(X.dtype, np.floating) and X.size and not np.all(np.isfinite(X)):
+                X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+            return X, _encode_target_labels(data[y_key])
     if suffix == ".npy":
         arr = np.load(path, allow_pickle=False)
-        return np.asarray(arr[:, :-1], dtype=np.float64), np.asarray(arr[:, -1], dtype=np.int64)
+        X = _sanitized_float64(arr[:, :-1])
+        return X, _encode_target_labels(arr[:, -1])
     if suffix == ".parquet":
         import pandas as pd
 
@@ -291,44 +484,56 @@ def _load_generic_raw(path: Path) -> tuple[np.ndarray, np.ndarray]:
         df = pd.read_csv(path)
         return _dataframe_to_xy(df)
     if suffix == ".arff":
-        rows = list(iter_arff(path))
-        if not rows:
-            return np.empty((0, 0), dtype=np.float64), np.empty((0,), dtype=np.int64)
-        keys = list(rows[0].keys())
-        target_key = keys[-1]
-        feat_keys = keys[:-1]
-        codes: dict[str, dict[str, int]] = {}
-        x_rows, y_rows = [], []
-        for row in rows:
-            vals = []
-            for k in feat_keys:
-                v = row[k]
-                if isinstance(v, (int, float)):
-                    vals.append(float(v))
-                else:
-                    mapping = codes.setdefault(k, {})
-                    vals.append(float(mapping.setdefault(str(v), len(mapping))))
-            x_rows.append(vals)
-            y_rows.append(_parse_binary_label(row[target_key]))
-        return np.asarray(x_rows, dtype=np.float64), np.asarray(y_rows, dtype=np.int64)
+        return _arff_rows_to_xy(list(iter_arff(path)))
     raise ValueError(f"Unsupported dataset file format: {path.suffix}")
 
 
-def _dataframe_to_xy(df: Any) -> tuple[np.ndarray, np.ndarray]:
-    target_col = next(
-        (c for c in ("label", "target", "y", "class", "Delay") if c in df.columns),
-        df.columns[-1],
-    )
-    y_series = df[target_col]
-    x_df = df.drop(columns=[target_col])
-    for col in x_df.columns:
-        if x_df[col].dtype == object or str(x_df[col].dtype) == "category":
-            x_df[col] = x_df[col].astype("category").cat.codes
-    x = x_df.to_numpy(dtype=np.float64)
-    if y_series.dtype == object or str(y_series.dtype) == "category":
-        y = np.asarray([_parse_binary_label(v) for v in y_series], dtype=np.int64)
+def _dataframe_split_columns(df: Any) -> tuple[np.ndarray | None, np.ndarray, np.ndarray]:
+    import pandas as pd
+
+    target_col = _resolve_target_column(list(df.columns))
+    y = _encode_target_labels(df[target_col].to_numpy())
+    drop_cols = [
+        target_col,
+        *(c for c in df.columns if c != target_col and str(c).strip().lower() in _METADATA_COLUMNS),
+    ]
+    x_df = df.drop(columns=drop_cols)
+    cat_cols = [c for c in x_df.columns if _is_categorical_dtype(x_df[c].dtype)]
+    num_cols = [c for c in x_df.columns if c not in cat_cols]
+
+    if num_cols:
+        num_df = x_df[num_cols].copy()
+        for col in num_cols:
+            if pd.api.types.is_bool_dtype(num_df[col].dtype):
+                num_df[col] = num_df[col].astype(np.float64)
+        numerics = _sanitized_float64(num_df.to_numpy(dtype=np.float64))
     else:
-        y = y_series.to_numpy(dtype=np.int64)
+        numerics = np.empty((len(x_df), 0), dtype=np.float64)
+
+    if cat_cols:
+        nominals = x_df[cat_cols].astype("string").fillna("__MISSING__").to_numpy(dtype=object)
+    else:
+        nominals = None
+    return nominals, numerics, y
+
+
+def _dataframe_to_xy(df: Any) -> tuple[np.ndarray, np.ndarray]:
+    import pandas as pd
+
+    target_col = _resolve_target_column(list(df.columns))
+    y = _encode_target_labels(df[target_col].to_numpy())
+    drop_cols = [
+        target_col,
+        *(c for c in df.columns if c != target_col and str(c).strip().lower() in _METADATA_COLUMNS),
+    ]
+    x_df = df.drop(columns=drop_cols)
+    for col in x_df.columns:
+        dtype = x_df[col].dtype
+        if _is_categorical_dtype(dtype):
+            x_df[col] = x_df[col].astype("category").cat.codes
+        elif pd.api.types.is_bool_dtype(dtype):
+            x_df[col] = x_df[col].astype(np.float64)
+    x = _sanitized_float64(x_df.to_numpy(dtype=np.float64))
     return x, y
 
 
@@ -447,6 +652,53 @@ def _make_batch_splits(
             )
         )
     return splits
+
+
+def _encode_cara_mixed_features(
+    nominals: np.ndarray,
+    numerics: np.ndarray,
+    offline_rows: int,
+    causal: bool,
+) -> Any:
+    encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=True)
+    if causal and 0 < offline_rows < nominals.shape[0]:
+        encoder.fit(nominals[:offline_rows])
+        encoded_nom = encoder.transform(nominals)
+    else:
+        encoded_nom = encoder.fit_transform(nominals)
+    X = hstack([encoded_nom, numerics]).tocsr() if numerics.shape[1] > 0 else encoded_nom.tocsr()
+    return _apply_scaler(MaxAbsScaler, X, offline_rows, causal)
+
+
+def _load_generic_for_protocol(
+    path: Path,
+    spec: StreamDatasetSpec,
+    offline_batches: int,
+    total_batches: int,
+) -> tuple[Any, np.ndarray]:
+    suffix = path.suffix.lower()
+    if spec.protocol == "cara" and suffix in (".parquet", ".csv", ".arff"):
+        if suffix in (".parquet", ".csv"):
+            import pandas as pd
+
+            df = pd.read_parquet(path) if suffix == ".parquet" else pd.read_csv(path)
+            nominals, numerics, y = _dataframe_split_columns(df)
+        else:
+            nominals, numerics, y = _arff_rows_split_columns(list(iter_arff(path)))
+        offline_rows = int(numerics.shape[0] * (offline_batches / max(1, total_batches)))
+        if nominals is not None:
+            X = _encode_cara_mixed_features(
+                nominals, numerics, offline_rows, spec.causal_preprocessing
+            )
+        else:
+            X = _apply_scaler(MinMaxScaler, numerics, offline_rows, spec.causal_preprocessing)
+        return X, y
+
+    X, y = _load_generic_raw(path)
+    if spec.protocol == "cara" and not issparse(X):
+        offline_rows = int(X.shape[0] * (offline_batches / max(1, total_batches)))
+        X = _apply_scaler(MinMaxScaler, X, offline_rows, spec.causal_preprocessing)
+    return X, y
 
 
 def _apply_scaler(scaler_cls: Any, X: Any, offline_rows: int, causal: bool) -> Any:
@@ -587,10 +839,7 @@ def load_stream_batches(
         )
 
     # Generic custom / CSV / Parquet / NumPy / ARFF
-    X, y = _load_generic_raw(path)
-    if spec.protocol == "cara" and not issparse(X):
-        offline_rows = int(X.shape[0] * (offline_batches / max(1, total_batches)))
-        X = _apply_scaler(MinMaxScaler, X, offline_rows, spec.causal_preprocessing)
+    X, y = _load_generic_for_protocol(path, spec, offline_batches, total_batches)
     raw_batches = _partition_into_batches(
         X, y, total_batches, spec.batch_size, spec.protocol, spec.seed
     )
