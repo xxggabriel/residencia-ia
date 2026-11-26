@@ -1,8 +1,11 @@
 """Internal-only finite-job endpoint; Airflow alone decides when to submit work."""
 
+import hashlib
 import json
+import logging
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -10,10 +13,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from uuid import uuid4
 
 from continual_bench.application.readiness import StackNotReady, ensure_tracking_ready
 from continual_bench.config import Config
 from continual_bench.infrastructure.storage import atomic_write, run_lock
+from continual_bench.observability.events import emit_event
 
 ROOT = Path(os.environ.get("BENCH_STATE", "/state/runs"))
 CONCURRENCY = int(os.environ.get("BENCH_CONCURRENCY", "1"))
@@ -117,7 +122,49 @@ def health_snapshot():
         }
 
 
-def submit_job(root, identity, config, perform_job, *, key_field="run_key"):
+def campaign_identity(payload: dict) -> str:
+    canonical = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()[:24]
+
+
+def _seed_fields(config, identity):
+    campaign_key = config["campaign_key"]
+    return {
+        "campaign_key": campaign_key,
+        "seed_key": identity,
+        "run_id": f"campaign-{campaign_identity({'campaign_key': campaign_key})}",
+        "seed": config["seed"],
+    }
+
+
+def _associate(status, observer, config):
+    if not observer:
+        return status
+    origin = status.get("worker_execution") or {}
+    execution_id = origin.get("job_attempt_id")
+    owns_execution = origin.get("task_attempt_key") == observer["task_attempt_key"]
+    association = {
+        "job_key": status["seed_key"],
+        "job_attempt_id": execution_id,
+        "association_role": "origin" if owns_execution else "observer",
+        "origin_task_attempt_key": origin.get("task_attempt_key"),
+    }
+    event_id = hashlib.sha256(
+        f"{observer['task_attempt_key']}:{status['seed_key']}:{execution_id}".encode()
+    ).hexdigest()[:32]
+    emit_event(
+        "seed.task_associated",
+        f"Task associated with seed job {status['seed_key']} ({association['association_role']})",
+        event_id=event_id,
+        worker_host=socket.gethostname(),
+        **observer,
+        **association,
+        **_seed_fields(config, status["seed_key"]),
+    )
+    return {**status, "task_association": association}
+
+
+def submit_job(root, identity, config, perform_job, *, key_field="run_key", observer=None):
     """One slot per backend; shared-volume claims prevent duplicate jobs across replicas."""
     root = Path(root)
     path = root / identity / "job.json"
@@ -125,45 +172,77 @@ def submit_job(root, identity, config, perform_job, *, key_field="run_key"):
     try:
         claim.__enter__()
     except RuntimeError:
-        return 202, {key_field: identity, "status": "queued_or_running"}
+        status = {key_field: identity, "status": "queued_or_running"}
+        if key_field == "seed_key" and path.exists():
+            status["worker_execution"] = json.loads(path.read_text()).get("worker_execution")
+        return 202, _associate(status, observer, config)
     try:
         if path.exists():
             previous = json.loads(path.read_text())
             if previous["status"] == "succeeded":
-                return 200, previous
+                return 200, _associate(previous, observer, config)
         if not SLOTS.acquire(blocking=False):
             return 429, {"error": "worker_busy"}
         token = str(root), identity
+        status = {key_field: identity, "status": "queued"}
+        execution = None
         try:
-            atomic_write(path, json.dumps({key_field: identity, "status": "queued"}).encode())
+            if key_field == "seed_key":
+                execution = {
+                    **(observer or {}),
+                    "worker_host": socket.gethostname(),
+                    **_seed_fields(config, identity),
+                    "job_key": identity,
+                    "job_attempt_id": uuid4().hex,
+                }
+                status["worker_execution"] = execution
+            atomic_write(path, json.dumps(status).encode())
             with GUARD:
                 JOBS[token] = True
-            EXECUTOR.submit(_run_claimed, token, config, perform_job, claim)
+            EXECUTOR.submit(_run_claimed, token, config, perform_job, claim, execution)
         except Exception:
             with GUARD:
                 JOBS.pop(token, None)
             SLOTS.release()
             raise
         claim = None  # The executor now owns the lease until publication finishes.
-        return 202, {key_field: identity, "status": "queued"}
+        return 202, _associate(status, observer, config)
     finally:
         if claim is not None:
             claim.__exit__(None, None, None)
 
 
-def _run_claimed(token, config, perform_job, claim):
+def _run_claimed(token, config, perform_job, claim, execution=None):
     global PEAK_ACTIVE
     with GUARD:
         ACTIVE.add(token)
         PEAK_ACTIVE = max(PEAK_ACTIVE, len(ACTIVE))
+    path = Path(token[0]) / token[1] / "job.json"
+    sequence = 0
+
+    def progress(name, message, *, level=logging.INFO):
+        nonlocal sequence
+        sequence += 1
+        emit_event(name, message, level=level, event_sequence=sequence, **execution)
+
+    terminal = "failed"
     try:
-        perform_job(config)
+        if execution:
+            progress("seed.started", f"Running seed {execution['seed']}")
+            perform_job(config, progress=progress, execution=execution)
+            terminal = json.loads(path.read_text())["status"]
+        else:
+            perform_job(config)
     except Exception as error:
-        path = Path(token[0]) / token[1] / "job.json"
         status = json.loads(path.read_text())
         status.update(status="failed", error=type(error).__name__, finished_at=time.time())
         atomic_write(path, json.dumps(status).encode())
     finally:
+        if execution:
+            progress(
+                "seed.finished", f"Seed {execution['seed']} finished: {terminal}",
+                level=logging.INFO if terminal == "succeeded" else logging.ERROR,
+            )
         with GUARD:
             ACTIVE.discard(token)
             JOBS.pop(token, None)

@@ -126,6 +126,8 @@ O distribuidor `worker` consulta a ocupação dos backends, encaminha cada `POST
 | `compose.zia.yaml` | Monta os dados Zia somente leitura nos workers |
 | `compose.homelab.yaml` | Define a sub-rede da rede `bench` |
 
+O perfil `observability` disponibiliza o Graylog e o encaminhador de eventos. Veja [Logs dos workers no homelab](Logs-no-Homelab.md).
+
 ### DAGs do Airflow
 
 Todas as DAGs usam `schedule=None`, isto é, só rodam por disparo manual.

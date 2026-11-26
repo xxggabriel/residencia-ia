@@ -212,8 +212,11 @@ services:
     <<: *common
     build: .
     image: continual-bench-worker:0.1.0
-    environment: *worker-env
-    volumes: [worker-data:/state, zen-artifacts:/state/zen-artifacts]
+    environment:
+      <<: *worker-env
+      BENCH_EVENT_SPOOL: /event-spool/events.sqlite3
+      BENCH_LOG_ENVIRONMENT: ${BENCH_LOG_ENVIRONMENT:-homelab}
+    volumes: [worker-data:/state, zen-artifacts:/state/zen-artifacts, event-spool:/event-spool]
     depends_on:
       storage-init: {condition: service_completed_successfully}
       kafka: {condition: service_healthy}
@@ -267,6 +270,16 @@ services:
 
   airflow-api:
     <<: *airflow
+    environment:
+      <<: *airflow-env
+      AIRFLOW__LOGGING__LOGGING_CONFIG_CLASS: continual_bench.observability.airflow_logs.LOGGING_CONFIG
+      BENCH_TASK_LOG_BACKEND: ${BENCH_TASK_LOG_BACKEND:-local}
+      BENCH_GRAYLOG_URL: http://graylog:9000
+      BENCH_GRAYLOG_STREAM: ${BENCH_GRAYLOG_STREAM:-}
+      BENCH_GRAYLOG_TOKEN_FILE: /run/secrets/graylog-reader
+      BENCH_LOG_ENVIRONMENT: ${BENCH_LOG_ENVIRONMENT:-homelab}
+    secrets: [graylog-reader]
+    networks: [bench, observability]
     command: api-server
     ports: ["${WEB_BIND_IP:?required}:18081:8080"]
     healthcheck:
@@ -296,8 +309,77 @@ services:
       timeout: 15s
       retries: 12
 
+  log-forwarder:
+    profiles: ["observability"]
+    image: continual-bench-worker:0.1.0
+    entrypoint: [python, -m, continual_bench.observability.forward]
+    environment:
+      BENCH_EVENT_SPOOL: /event-spool/events.sqlite3
+      BENCH_GELF_URL: http://graylog:12201/gelf
+    volumes: [event-spool:/event-spool]
+    networks: [observability]
+    restart: unless-stopped
+    mem_limit: 128m
+    security_opt: [no-new-privileges:true]
+
+  graylog-mongo:
+    profiles: ["observability"]
+    image: mongo:7.0.30
+    volumes: [graylog-mongo:/data/db]
+    networks: [graylog-storage]
+    restart: unless-stopped
+    mem_limit: 1g
+
+  graylog-search:
+    profiles: ["observability"]
+    image: opensearchproject/opensearch:2.19.5
+    environment:
+      discovery.type: single-node
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms768m -Xmx768m
+    volumes: [graylog-search:/usr/share/opensearch/data]
+    networks: [graylog-storage]
+    restart: unless-stopped
+    mem_limit: 2g
+
+  graylog:
+    profiles: ["observability"]
+    image: graylog/graylog:7.1.0
+    # Compose interpolates inactive profiles, so require credentials when this service starts.
+    entrypoint:
+      - tini
+      - --
+      - /bin/sh
+      - -ec
+      - |
+        : "$${GRAYLOG_PASSWORD_SECRET:?required}" "$${GRAYLOG_ROOT_PASSWORD_SHA2:?required}"
+        exec /docker-entrypoint.sh "$$@"
+      - graylog
+    command: [server]
+    environment:
+      GRAYLOG_PASSWORD_SECRET: ${GRAYLOG_PASSWORD_SECRET:-}
+      GRAYLOG_ROOT_PASSWORD_SHA2: ${GRAYLOG_ROOT_PASSWORD_SHA2:-}
+      GRAYLOG_HTTP_BIND_ADDRESS: 0.0.0.0:9000
+      GRAYLOG_HTTP_EXTERNAL_URI: http://127.0.0.1:${GRAYLOG_UI_PORT:-19000}/
+      GRAYLOG_MONGODB_URI: mongodb://graylog-mongo:27017/graylog
+      GRAYLOG_ELASTICSEARCH_HOSTS: http://graylog-search:9200
+      GRAYLOG_SERVER_JAVA_OPTS: -Xms768m -Xmx768m -XX:+UseG1GC
+      GRAYLOG_MESSAGE_JOURNAL_MAX_SIZE: 1gb
+      GRAYLOG_MESSAGE_JOURNAL_MAX_AGE: 24h
+    depends_on: [graylog-mongo, graylog-search]
+    volumes: [graylog-data:/usr/share/graylog/data]
+    ports: ["127.0.0.1:${GRAYLOG_UI_PORT:-19000}:9000"]
+    networks: [observability, graylog-storage]
+    restart: unless-stopped
+    mem_limit: 2g
+
 networks:
   bench: {}
+  observability: {}
+  graylog-storage:
+    internal: true
+
 volumes:
   postgres-data:
   minio-data:
@@ -307,3 +389,11 @@ volumes:
   worker-data:
   airflow-logs:
   zen-artifacts:
+  event-spool:
+  graylog-mongo:
+  graylog-search:
+  graylog-data:
+
+secrets:
+  graylog-reader:
+    file: ${BENCH_GRAYLOG_TOKEN_PATH:-/dev/null}

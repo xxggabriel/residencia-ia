@@ -29,6 +29,7 @@ from continual_bench.infrastructure.object_store import (
     split_uri,
 )
 from continual_bench.models.training.callbacks import GracefulTerminationHandler
+from continual_bench.observability.events import JsonFormatter
 
 from . import layout
 from .checkpoints import (
@@ -58,25 +59,6 @@ class ContractError(ValueError):
 
 class TrackingPublicationError(RuntimeError):
     pass
-
-
-class JsonFormatter(logging.Formatter):
-    def __init__(self, context):
-        super().__init__()
-        self.context = context
-
-    def format(self, record):
-        entry = {
-            "level": record.levelname,
-            "message": record.getMessage(),
-            "logger": record.name,
-            "time": self.formatTime(record),
-            **self.context,
-            **getattr(record, "fields", {}),
-        }
-        if record.exc_info:
-            entry["exception"] = self.formatException(record.exc_info)
-        return json.dumps(entry, default=str)
 
 
 def logger_for(context) -> logging.Logger:
