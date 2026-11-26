@@ -8,7 +8,7 @@ Os detectores apenas sinalizam. Quem decide atualizar o modelo é a política (v
 
 ## Catálogo
 
-`DETECTORS` em `src/continual_bench/detectors/__init__.py` registra `none` e sete detectores do River 0.26.1 (`src/continual_bench/detectors/river.py`). O sinal declarado no catálogo é `released_label_binary_prediction_error`.
+`DETECTORS` em `src/continual_bench/detectors/__init__.py` registra `none`, sete detectores do River 0.26.1 (`src/continual_bench/detectors/river.py`), `fhddm` (`src/continual_bench/detectors/fhddm.py`) e os equivalentes de `scikit-multiflow==0.5.3` (`skmultiflow_adwin`, `skmultiflow_ddm`, `skmultiflow_kswin` em `src/continual_bench/detectors/skmultiflow.py`, selecionados via `make_detector(..., backend="skmultiflow")`). O sinal declarado no catálogo é `released_label_binary_prediction_error`.
 
 | Nome na configuração | Classe River | Parâmetros padrão (River 0.26.1) | Artigo de origem citado pelo River |
 | --- | --- | --- | --- |
@@ -64,7 +64,7 @@ O erro binário usa o limiar de decisão do perfil de tracking (`p >= c_FP / (c_
 - **Alertas**: DDM, EDDM e HDDM produzem nível de alerta nos artigos e no River; o projeto usa apenas a detecção.
 - **Page-Hinkley** opera com `mode="both"` no padrão do River, então uma queda acentuada do erro também pode gerar alarme.
 - **KSWIN** é um teste de Kolmogorov-Smirnov sobre uma janela deslizante; aqui recebe a sequência de erros 0 e 1, não atributos, e usa seed fixa 42 para a amostragem da janela.
-- Os detectores e suas implementações são os do River 0.26.1, que podem diferir das implementações originais dos autores. O benchmark de referência do CARA oferece `--drift-backend skmultiflow` para usar os detectores do ambiente original, quando disponíveis, e `--drift-backend river` para os do projeto (`scripts/replicate_cara.py`).
+- Os detectores do catálogo padrão são os do River 0.26.1, que podem diferir das implementações originais dos autores; para fidelidade aos protocolos CARA e UPF (`src/continual_bench/protocols/`), `make_detector(..., backend="skmultiflow")` usa os equivalentes 1:1 do `scikit-multiflow==0.5.3` (`src/continual_bench/detectors/skmultiflow.py`) e `fhddm` (`src/continual_bench/detectors/fhddm.py`). O benchmark de referência do CARA também oferece `--drift-backend skmultiflow` ou `--drift-backend river` (`scripts/replicate_cara.py`).
 
 ## Estado
 

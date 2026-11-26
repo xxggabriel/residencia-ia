@@ -26,7 +26,7 @@ As políticas de retreinamento periódico, por alarme de detector, por desempenh
 
 ## Detectores de drift
 
-Todos os detectores implementados vêm do River 0.26.1 e são instanciados em `src/continual_bench/detectors/river.py` (`RiverDetector`). Eles recebem o erro binário de predição (0 ou 1) calculado quando o rótulo é liberado, e não os atributos brutos; entradas fora de {0, 1} são rejeitadas. Estado: Validado (`tests/test_task_policies.py`). Detalhes em [Detectores de Drift](Detectores-de-Drift).
+Os detectores de erro preditivo incluem os do River 0.26.1 em `src/continual_bench/detectors/river.py` (`RiverDetector`), além de `FHDDM` (`src/continual_bench/detectors/fhddm.py`) e dos equivalentes 1:1 de `scikit-multiflow==0.5.3` (`ADWIN`, `DDM`, `KSWIN`) em `src/continual_bench/detectors/skmultiflow.py` (`SkmultiflowDetector`, usados pelos protocolos CARA e UPF). Eles recebem o erro binário de predição (0 ou 1) e rejeitam valores fora de {0, 1}. Estado: Validado (`tests/test_task_policies.py`, `tests/unit/test_paper_compliance.py`). Detalhes em [Detectores de Drift](Detectores-de-Drift).
 
 **Learning from Time-Changing Data with Adaptive Windowing** (2007). Albert Bifet, Ricard Gavaldà. Proceedings of the 2007 SIAM International Conference on Data Mining, p. 443-448. DOI: [10.1137/1.9781611972771.42](https://doi.org/10.1137/1.9781611972771.42).
 - Uso no projeto: `adwin` (`river.drift.ADWIN`) em `src/continual_bench/detectors/river.py`; ADWIN também é linha de base na replicação CARA (`src/continual_bench/evaluation/cara_replication.py`, com backend River ou scikit-multiflow).
@@ -48,7 +48,7 @@ Todos os detectores implementados vêm do River 0.26.1 e são instanciados em `s
 - Adaptação: o projeto fixa `seed = 42` por padrão e exige `0 < stat_size <= window_size / 2` e `0 < alpha < 1`. O detector recebe uma sequência escalar de erros binários, não os atributos do fluxo.
 
 **Fast Hoeffding Drift Detection Method for Evolving Data Streams** (2016). Ali Pesaranghader, Herna L. Viktor. Machine Learning and Knowledge Discovery in Databases (ECML PKDD 2016), Lecture Notes in Computer Science, p. 96-111. DOI: [10.1007/978-3-319-46227-1_7](https://doi.org/10.1007/978-3-319-46227-1_7).
-- Uso no projeto: Não implementado. FHDDM aparece apenas como linha de base nos valores publicados do UPF (`evidencias/aws-benchmarks/papers/published-reference-values.csv`); `src/continual_bench/evaluation/retraining_replication.py` declara que as linhas de base ADWIN, KSWIN e FHDDM do artigo não são reproduzidas ali.
+- Uso no projeto: implementado em `src/continual_bench/detectors/fhddm.py` (`FHDDM`, registrado em `DETECTORS` e usado no protocolo UPF em `src/continual_bench/protocols/upf.py`), além dos valores publicados do UPF em `evidencias/aws-benchmarks/papers/published-reference-values.csv` (o harness legado `src/continual_bench/evaluation/retraining_replication.py` não reproduz ADWIN, KSWIN e FHDDM).
 
 ## Modelos
 
