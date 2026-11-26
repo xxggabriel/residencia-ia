@@ -1,0 +1,27 @@
+name: cara-airlines
+protocol: cara
+dataset:
+  name: airlines
+  protocol: cara
+  num_batches: 100
+  offline_batches: 25
+  online_batches: 75
+  split_ratio: 0.9
+  query_ratio: 0.1
+model:
+  name: random_forest
+  params:
+    n_estimators: 100
+    n_jobs: 4
+seeds: [0, 1, 2, 3, 4]
+max_workers: 5
+policies:
+  - cara
+  - cara_cumulative
+  - cara_periodic
+  - oracle_staleness
+  - frozen
+  - markov
+  - adwin
+  - ddm
+staleness_mode: relative
