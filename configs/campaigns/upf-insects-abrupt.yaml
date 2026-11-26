@@ -1,0 +1,32 @@
+name: upf-insects-abrupt
+protocol: upf
+dataset:
+  name: insects_abrupt_imbalanced
+  protocol: upf
+  batch_size: 10000
+  num_batches: 15
+  offline_batches: 7
+  online_batches: 8
+  split_ratio: 0.8
+model:
+  name: xgboost
+  params:
+    eta: 0.3
+    objective: "binary:logistic"
+    num_boost_round: 100
+    nthread: 2
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+max_workers: 5
+policies:
+  - upf
+  - cara
+  - cara_cumulative
+  - cara_periodic
+  - oracle
+  - adwin_5
+  - adwin_50
+  - fhddm_5
+  - fhddm_50
+  - kswin_5
+  - kswin_50
+staleness_mode: absolute
