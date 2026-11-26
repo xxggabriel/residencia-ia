@@ -113,11 +113,16 @@ def test_tracking_base_is_a_plain_root_profile_for_the_dags():
 
 
 def test_every_input_config_resolves_and_inputs_live_only_in_known_folders():
+    from continual_bench.protocols.base import CampaignConfig
+
     schemas = {"runs": Config, "typed": TypedConfig, "campaigns": Campaign, "matrices": ExperimentMatrix}
     for folder, schema in schemas.items():
         for path in sorted((CONFIGS / folder).glob("*.yaml")):
             if path.name != "base.yaml":
-                load_model(schema, path)
+                if folder == "campaigns" and "protocol" in yaml.safe_load(path.read_text()):
+                    load_model(CampaignConfig, path)
+                else:
+                    load_model(schema, path)
     expected = {"base", "runs", "typed", "campaigns", "matrices", "contracts", "history"}
     assert {p.name for p in CONFIGS.iterdir() if p.is_dir()} == expected
     assert sorted(p.name for p in CONFIGS.iterdir() if p.is_file()) == ["README.md"]
