@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         "campaign": args.campaign,
         "model": args.model,
         "policies": policies,
-        "seeds": seeds if not args.config else [],
+        "seeds": seeds if (not args.config or args.seeds != "42,43,44,45,46") else [],
         "save_checkpoints": save_ckpt,
     }
     jwt_token = _get_airflow_jwt(airflow_url, user, password)

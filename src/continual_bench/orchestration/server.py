@@ -476,7 +476,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/campaign-plan":
                 plan_payload = json.loads(payload)
                 cfg = _resolve_campaign_config(plan_payload)
-                cfg_dict = cfg.model_dump(mode="json")
+                cfg_dict = cfg.model_dump(mode="json", exclude_unset=True)
                 c_key = campaign_identity({
                     "config": cfg_dict,
                     "dag_run_id": plan_payload.get("dag_run_id"),

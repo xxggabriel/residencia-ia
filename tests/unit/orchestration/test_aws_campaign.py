@@ -10,6 +10,7 @@ import pytest
 from continual_bench.models.training.callbacks import GracefulTerminationHandler
 from continual_bench.orchestration.aws_campaign import (
     EXIT_INTERRUPTED,
+    config_fingerprint,
     consolidate_aws,
     resolve_campaign_config,
     resolve_campaign_resources,
@@ -212,7 +213,8 @@ def test_spot_checkpoint_resume_and_s3_consolidation(tmp_path, protocol):
     )
     assert interrupted["status"] == "interrupted"
     assert interrupted["exit_code"] == EXIT_INTERRUPTED
-    assert ("test-bucket", f"exp/campaigns/{cfg.name}/checkpoints/seed_0_matrix.json.gz") in s3.objects
+    fp = config_fingerprint(cfg)
+    assert ("test-bucket", f"exp/campaigns/{cfg.name}/{fp}/checkpoints/seed_0_matrix.json.gz") in s3.objects
 
     # Resume seed 0 and run seed 1
     res0 = run_seed_aws(
@@ -235,6 +237,19 @@ def test_spot_checkpoint_resume_and_s3_consolidation(tmp_path, protocol):
     # Idempotent reuse
     reused = run_seed_aws(cfg, 0, output_dir="s3://test-bucket/exp", s3_client=s3)
     assert reused["status"] == "reused"
+
+    # Changing model params invalidates reuse via config fingerprint
+    changed_model = cfg.model.model_copy(update={"params": {"n_estimators": 3}})
+    changed_cfg = cfg.model_copy(update={"model": changed_model})
+    assert config_fingerprint(changed_cfg) != fp
+    res_changed = run_seed_aws(
+        changed_cfg,
+        0,
+        output_dir="s3://test-bucket/exp",
+        s3_client=s3,
+        workdir=tmp_path / "work",
+    )
+    assert res_changed["status"] == "completed"
 
     # Consolidate from S3
     cons = consolidate_aws(

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -252,16 +254,106 @@ def resolve_campaign_config(
     return CampaignConfig(**raw_dict)
 
 
-def campaign_seed_rel_path(campaign_name: str, seed: int) -> str:
-    return f"campaigns/{campaign_name}/seeds/seed_{seed}_matrix.json.gz"
+def config_fingerprint(config: CampaignConfig) -> str:
+    """Short SHA-256 fingerprint of matrix-affecting campaign configuration fields."""
+    ds = (
+        config.dataset.model_dump(mode="json", exclude_unset=True)
+        if hasattr(config.dataset, "model_dump")
+        else dict(config.dataset)
+    )
+    mdl = (
+        config.model.model_dump(mode="json", exclude_unset=True)
+        if hasattr(config.model, "model_dump")
+        else dict(config.model)
+    )
+    payload = {
+        "protocol": config.protocol,
+        "dataset": ds,
+        "model": mdl,
+        "staleness_mode": config.staleness_mode,
+        "kernel_gamma": config.kernel_gamma,
+        "policies": list(config.policies),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:12]
 
 
-def campaign_checkpoint_rel_path(campaign_name: str, seed: int) -> str:
-    return f"campaigns/{campaign_name}/checkpoints/seed_{seed}_matrix.json.gz"
+def campaign_seed_rel_path(campaign_name: str, seed: int, fingerprint: str = "") -> str:
+    prefix = f"campaigns/{campaign_name}/{fingerprint}" if fingerprint else f"campaigns/{campaign_name}"
+    return f"{prefix}/seeds/seed_{seed}_matrix.json.gz"
+
+
+def campaign_checkpoint_rel_path(campaign_name: str, seed: int, fingerprint: str = "") -> str:
+    prefix = f"campaigns/{campaign_name}/{fingerprint}" if fingerprint else f"campaigns/{campaign_name}"
+    return f"{prefix}/checkpoints/seed_{seed}_matrix.json.gz"
 
 
 def campaign_config_rel_path(campaign_name: str) -> str:
     return f"campaigns/{campaign_name}/campaign_config.json"
+
+
+def _stage_dataset_if_needed(
+    config: CampaignConfig,
+    backend: Any,
+    workdir: Path,
+) -> CampaignConfig:
+    """Download prepared dataset from S3 into ``workdir`` when not present locally."""
+    from continual_bench.datasets.streams_unified import resolve_dataset_path
+
+    src = config.dataset.source_path
+    if src and src.startswith("s3://"):
+        bucket, key = _parse_s3_uri(src)
+        client = backend._get_s3_client()
+        if client is None:
+            import boto3  # type: ignore[import-untyped]
+
+            client = boto3.client("s3")
+        local_path = workdir / "datasets" / Path(key).name
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        if not local_path.is_file():
+            resp = client.get_object(Bucket=bucket, Key=key)
+            local_path.write_bytes(resp["Body"].read())
+        return config.model_copy(
+            update={"dataset": config.dataset.model_copy(update={"source_path": str(local_path)})}
+        )
+
+    try:
+        resolve_dataset_path(config.dataset.name, source_path=src)
+        return config
+    except FileNotFoundError:
+        pass
+
+    s3_bucket = getattr(backend, "s3_bucket", None) or os.environ.get("BENCH_BUCKET")
+    client = backend._get_s3_client() if hasattr(backend, "_get_s3_client") else None
+    if not s3_bucket or client is None:
+        return config
+
+    canonical = canonical_dataset_name(config.dataset.name)
+    prefixes = (
+        f"datasets/stream-sources/{canonical}/full/",
+        f"datasets/{canonical}/prepared/",
+        f"datasets/matrix/{canonical}/",
+    )
+    for prefix in prefixes:
+        if not hasattr(client, "list_objects_v2"):
+            continue
+        resp = client.list_objects_v2(Bucket=s3_bucket, Prefix=prefix)
+        candidates = [
+            obj["Key"]
+            for obj in resp.get("Contents", [])
+            if obj["Key"].endswith((".parquet", ".csv", ".arff"))
+        ]
+        if candidates:
+            key = sorted(candidates)[-1]
+            local_path = workdir / "datasets" / f"{canonical}{Path(key).suffix}"
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            if not local_path.is_file():
+                obj_resp = client.get_object(Bucket=s3_bucket, Key=key)
+                local_path.write_bytes(obj_resp["Body"].read())
+            return config.model_copy(
+                update={"dataset": config.dataset.model_copy(update={"source_path": str(local_path)})}
+            )
+    return config
 
 
 def serialize_seed_result(protocol: str, seed_result: tuple[Any, ...]) -> bytes:
@@ -359,12 +451,16 @@ def run_seed_aws(
     env_name: str = "aws",
     output_dir: str | None = None,
     tracking_uri: str | None = None,
+    workdir: str | Path | None = None,
     s3_client: Any | None = None,
     checkpoint_interval_seconds: float | None = None,
     stop_handler: GracefulTerminationHandler | None = None,
 ) -> dict[str, Any]:
     """Execute a single seed matrix build with S3 Spot checkpointing and resume."""
     from continual_bench.backends import resolve_backend
+
+    work_path = Path(workdir) if workdir is not None else (Path(tempfile.gettempdir()) / "cb-run")
+    work_path.mkdir(parents=True, exist_ok=True)
 
     settings = resolve_campaign_settings(
         config,
@@ -375,14 +471,18 @@ def run_seed_aws(
         save_model_checkpoints=False,
     )
     backend = resolve_backend(platform=settings.platform, settings=settings)
+    if hasattr(backend, "staging_dir"):
+        backend.staging_dir = work_path / "staging"
     if s3_client is not None and hasattr(backend, "_s3_client"):
         backend._s3_client = s3_client
 
-    seed_rel = campaign_seed_rel_path(config.name, seed)
+    fp = config_fingerprint(config)
+    seed_rel = campaign_seed_rel_path(config.name, seed, fingerprint=fp)
     if backend.exists(seed_rel):
         return {"campaign": config.name, "seed": seed, "status": "reused", "path": seed_rel}
 
-    ckpt_rel = campaign_checkpoint_rel_path(config.name, seed)
+    config = _stage_dataset_if_needed(config, backend, work_path)
+    ckpt_rel = campaign_checkpoint_rel_path(config.name, seed, fingerprint=fp)
     interval = (
         float(checkpoint_interval_seconds)
         if checkpoint_interval_seconds is not None
@@ -462,11 +562,12 @@ def consolidate_aws(
     if s3_client is not None and hasattr(backend, "_s3_client"):
         backend._s3_client = s3_client
 
+    fp = config_fingerprint(config)
     seeds = list(config.seeds) if config.seeds else [0, 1, 2, 3, 4]
     seed_matrices: list[tuple[Any, ...]] = []
     missing: list[int] = []
     for s in seeds:
-        raw = backend.read_bytes(campaign_seed_rel_path(config.name, s))
+        raw = backend.read_bytes(campaign_seed_rel_path(config.name, s, fingerprint=fp))
         if raw is None:
             missing.append(s)
         else:
@@ -563,7 +664,9 @@ def submit_aws_campaign(
         payload_uri = str(Path(out_str) / campaign_config_rel_path(config.name))
 
     if not dry_run:
-        body = json.dumps(config.model_dump(mode="json"), indent=2, sort_keys=True).encode("utf-8")
+        body = json.dumps(
+            config.model_dump(mode="json", exclude_unset=True), indent=2, sort_keys=True
+        ).encode("utf-8")
         if out_str.startswith("s3://"):
             s3 = s3_client
             if s3 is None:

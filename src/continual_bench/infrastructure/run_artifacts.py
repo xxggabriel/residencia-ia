@@ -63,7 +63,7 @@ def publish_run_artifacts(
     )
     root = Path(directory) / "artifacts"
     uploaded = 0
-    folders = () if (complete_series or not plots_enabled) else ("plots", "data")
+    folders = () if complete_series else (("plots", "data") if plots_enabled else ("data",))
     for folder in folders:
         if (root / folder).is_dir():
             client.log_artifacts(run_id, str(root / folder), artifact_path=folder)

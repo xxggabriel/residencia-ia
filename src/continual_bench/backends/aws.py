@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -49,7 +50,7 @@ class AwsBackend(ExecutionBackend):
             parsed_bucket, parsed_prefix = _parse_s3_uri(raw_output)
             self.s3_bucket = s3_bucket or parsed_bucket
             self.s3_prefix = s3_prefix.strip("/") or parsed_prefix
-            self.staging_dir = staging_dir or Path("state/benchmarks/aws_staging")
+            self.staging_dir = staging_dir or (Path(tempfile.gettempdir()) / "cb-aws-staging")
         else:
             self.s3_bucket = s3_bucket or os.environ.get("BENCH_S3_BUCKET") or None
             self.s3_prefix = s3_prefix.strip("/")

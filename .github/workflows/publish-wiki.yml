@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "docs/**"
+      - "docs_v2/**"
       - ".github/workflows/publish-wiki.yml"
   workflow_dispatch:
 
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Sync docs/ to GitHub Wiki
+    name: Sync docs_v2/ to GitHub Wiki
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -26,12 +26,12 @@ jobs:
         with:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
-            /docs/
+            /docs_v2/
 
       - name: Verify Wiki source files
         run: |
-          test -f docs/Home.md
-          test -f docs/_Sidebar.md
+          test -f docs_v2/Home.md
+          test -f docs_v2/_Sidebar.md
 
       - name: Clone Wiki repository
         env:
@@ -42,7 +42,7 @@ jobs:
       - name: Sync Markdown pages and push
         run: |
           find /tmp/wiki -maxdepth 1 -type f -name '*.md' -delete
-          cp docs/*.md /tmp/wiki/
+          cp docs_v2/*.md /tmp/wiki/
           cd /tmp/wiki
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

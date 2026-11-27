@@ -190,6 +190,7 @@ def run_seed(args):
         env_name=args.env,
         output_dir=args.output_dir,
         tracking_uri=args.tracking_uri,
+        workdir=args.workdir,
     )
     _emit(result)
     sys.exit(int(result.get("exit_code", 0)))
