@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gzip
+import json
 import logging
 import math
 import time
@@ -14,7 +16,12 @@ from scipy.sparse import issparse
 from continual_bench.backends.base import ExecutionBackend
 from continual_bench.datasets.streams_unified import load_stream_batches
 from continual_bench.models.adapters import ModelAdapter
-from continual_bench.protocols.base import BenchmarkProtocol, CampaignConfig, ProtocolResult
+from continual_bench.protocols.base import (
+    BenchmarkProtocol,
+    CampaignConfig,
+    ProtocolResult,
+    SpotInterruptedError,
+)
 from continual_bench.protocols.common import (
     AdapterLearner,
     aggregate_seed_summary,
@@ -148,6 +155,10 @@ class CaraProtocol(BenchmarkProtocol):
         seed: int,
         *,
         context: tuple[Any, ...] | None = None,
+        checkpoint_backend: Any | None = None,
+        checkpoint_rel_path: str | None = None,
+        stop_requested: Any | None = None,
+        checkpoint_interval_seconds: float = 30.0,
     ) -> tuple[
         int,
         np.ndarray,
@@ -157,7 +168,7 @@ class CaraProtocol(BenchmarkProtocol):
         list[float],
         list[int],
     ]:
-        """Build performance and staleness matrices for a single seed."""
+        """Build performance and staleness matrices for a single seed with Spot checkpointing."""
         policies = list(config.policies) if config.policies else list(_DEFAULT_CARA_POLICIES)
         batches, offline, _, phase_ranges, w_self, w_pair = (
             context if context is not None else self._prepare_context(config)
@@ -170,6 +181,8 @@ class CaraProtocol(BenchmarkProtocol):
         fit_times: list[float] = []
         sample_counts: list[int] = []
         for b in batches:
+            if stop_requested is not None and stop_requested():
+                raise SpotInterruptedError(f"Spot interruption during model fit for seed {seed}")
             t0 = time.perf_counter()
             adapter = learner.fit(b.batch_index, b.X_train, b.y_train)
             fit_times.append(float(time.perf_counter() - t0))
@@ -179,9 +192,37 @@ class CaraProtocol(BenchmarkProtocol):
 
         acc_matrix = np.zeros((n_batches, n_batches), dtype=np.float64)
         psi_matrix = np.zeros((n_batches, n_batches), dtype=np.float64)
+        completed_batches: set[int] = set()
 
+        if checkpoint_backend is not None and checkpoint_rel_path:
+            raw_ckpt = checkpoint_backend.read_bytes(checkpoint_rel_path)
+            if raw_ckpt is not None:
+                ckpt = json.loads(gzip.decompress(raw_ckpt).decode("utf-8"))
+                if int(ckpt.get("seed", -1)) == seed and len(ckpt.get("acc_matrix", [])) == n_batches:
+                    acc_matrix = np.asarray(ckpt["acc_matrix"], dtype=np.float64)
+                    psi_matrix = np.asarray(ckpt["psi_matrix"], dtype=np.float64)
+                    completed_batches = {int(idx) for idx in ckpt.get("completed_batches", [])}
+
+        def _flush_checkpoint() -> None:
+            if checkpoint_backend is None or not checkpoint_rel_path:
+                return
+            payload = {
+                "seed": seed,
+                "n_batches": n_batches,
+                "completed_batches": sorted(completed_batches),
+                "acc_matrix": acc_matrix.tolist(),
+                "psi_matrix": psi_matrix.tolist(),
+            }
+            checkpoint_backend.write_bytes(
+                checkpoint_rel_path,
+                gzip.compress(json.dumps(payload).encode("utf-8")),
+            )
+
+        last_ckpt = time.monotonic()
         for phase_start, phase_end in phase_ranges:
             for t in range(phase_start, phase_end):
+                if t in completed_batches:
+                    continue
                 b_t = batches[t]
                 eval_X = b_t.X_test if len(b_t.y_test) > 0 else b_t.X_query
                 eval_y = b_t.y_test if len(b_t.y_test) > 0 else b_t.y_query
@@ -201,6 +242,16 @@ class CaraProtocol(BenchmarkProtocol):
                             psi_matrix[tp, t] = psi_t - psi_tp
                         else:
                             psi_matrix[tp, t] = psi_t
+                completed_batches.add(t)
+                stopping = bool(stop_requested()) if stop_requested is not None else False
+                if checkpoint_backend is not None and checkpoint_rel_path:
+                    if stopping or (time.monotonic() - last_ckpt >= checkpoint_interval_seconds):
+                        _flush_checkpoint()
+                        last_ckpt = time.monotonic()
+                if stopping:
+                    raise SpotInterruptedError(
+                        f"Spot interruption after batch {t} for seed {seed}"
+                    )
 
         offline_cost = np.nan_to_num(psi_matrix[:offline, :offline], nan=0.0)
         online_cost = np.nan_to_num(psi_matrix[offline:, offline:], nan=0.0)

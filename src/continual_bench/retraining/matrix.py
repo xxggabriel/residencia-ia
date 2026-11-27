@@ -454,6 +454,11 @@ def build_paper_matrix(
     n_points: int = N_POINTS,
     n_queries: int = N_QUERIES,
     separate_query_split: bool = False,
+    completed_rows: set[int] | None = None,
+    err_init: np.ndarray | None = None,
+    sub_loss_init: dict[tuple[int, int], np.ndarray] | None = None,
+    on_row_complete: Callable[[int, np.ndarray, dict[tuple[int, int], np.ndarray]], None] | None = None,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> tuple[PerformanceMatrix, list[object]]:
     """Train each candidate on its own batch and score it on held-out rows.
 
@@ -469,6 +474,8 @@ def build_paper_matrix(
     points, queries, means, labels = [], [], [], []
     states, seconds = [], []
     for i, (x_train, y_train, x_test, y_test) in enumerate(batches):
+        if stop_requested is not None and stop_requested():
+            raise InterruptedError(f"Spot interruption during UPF fit at batch {i}")
         pool = np.concatenate([x_train, x_test])
         reference = x_train if separate_query_split else pool
         reference_labels = y_train if separate_query_split else np.concatenate([y_train, y_test])
@@ -482,13 +489,19 @@ def build_paper_matrix(
         started = time.perf_counter()
         states.append(learner.fit(i, x_train, y_train))
         seconds.append(time.perf_counter() - started)
-    err = np.full((size, size), np.nan)
-    sub_loss: dict[tuple[int, int], np.ndarray] = {}
+    err = err_init.copy() if err_init is not None else np.full((size, size), np.nan)
+    sub_loss: dict[tuple[int, int], np.ndarray] = dict(sub_loss_init) if sub_loss_init is not None else {}
+    done_rows = set(completed_rows) if completed_rows is not None else set()
     for i, state in enumerate(states):
+        if i in done_rows:
+            continue
         for j in range(i, size):
             sub_loss[i, j] = np.asarray(learner.losses(state, points[j], labels[j]), dtype=np.float64)
             if j > i or i >= offline:
                 err[i, j] = float(np.mean(learner.losses(state, batches[j][2], batches[j][3])))
+        done_rows.add(i)
+        if on_row_complete is not None:
+            on_row_complete(i, err, sub_loss)
     matrix = PerformanceMatrix(
         err=err,
         offline=offline,

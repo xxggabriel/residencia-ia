@@ -54,6 +54,21 @@ class LocalBackend(ExecutionBackend):
         serialized = json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
         return self.write_text(rel_path, serialized)
 
+    def read_bytes(self, rel_path: str) -> bytes | None:
+        target = _safe_relative_path(self.output_dir, rel_path)
+        if not target.is_file():
+            return None
+        return target.read_bytes()
+
+    def read_json(self, rel_path: str) -> Any | None:
+        raw = self.read_bytes(rel_path)
+        if raw is None:
+            return None
+        return json.loads(raw.decode("utf-8"))
+
+    def exists(self, rel_path: str) -> bool:
+        return _safe_relative_path(self.output_dir, rel_path).is_file()
+
     def save_model_checkpoint(self, rel_path: str, model_obj: Any) -> str | None:
         if not self.settings.save_model_checkpoints:
             return None

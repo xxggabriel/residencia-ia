@@ -51,6 +51,10 @@ class ProtocolResult:
     mlflow_receipt: dict[str, Any] | None = None
 
 
+class SpotInterruptedError(InterruptedError):
+    """Raised when a Fargate Spot SIGTERM interrupts matrix building after checkpoint flush."""
+
+
 class BenchmarkProtocol(ABC):
     """Abstract base class for continual-learning benchmark protocols."""
 

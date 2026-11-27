@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import gzip
+import json
 import logging
 import math
+import time
 from typing import Any
 
 import numpy as np
@@ -12,7 +15,12 @@ from scipy.sparse import issparse
 from continual_bench.backends.base import ExecutionBackend
 from continual_bench.datasets.streams_unified import BatchSplit, load_stream_batches
 from continual_bench.models.adapters import ModelAdapter
-from continual_bench.protocols.base import BenchmarkProtocol, CampaignConfig, ProtocolResult
+from continual_bench.protocols.base import (
+    BenchmarkProtocol,
+    CampaignConfig,
+    ProtocolResult,
+    SpotInterruptedError,
+)
 from continual_bench.protocols.common import (
     AdapterLearner,
     aggregate_seed_summary,
@@ -280,8 +288,13 @@ class UpfProtocol(BenchmarkProtocol):
         self,
         config: CampaignConfig,
         seed: int,
+        *,
+        checkpoint_backend: Any | None = None,
+        checkpoint_rel_path: str | None = None,
+        stop_requested: Any | None = None,
+        checkpoint_interval_seconds: float = 30.0,
     ) -> tuple[int, PerformanceMatrix, dict[str, list[int]]]:
-        """Build performance matrix and detector schedules for a single seed."""
+        """Build performance matrix and detector schedules for a single seed with Spot checkpointing."""
         policies = list(config.policies) if config.policies else list(_DEFAULT_UPF_POLICIES)
         staleness_mode = config.staleness_mode
         if "staleness_mode" not in config.model_fields_set:
@@ -322,7 +335,69 @@ class UpfProtocol(BenchmarkProtocol):
         ]
         model_cfg = config.model.model_copy(update={"seed": seed})
         learner = AdapterLearner(model_cfg)
-        matrix, states = build_paper_matrix(raw_batches, learner, offline=offline, seed=seed)
+
+        size = len(raw_batches)
+        completed_rows: set[int] = set()
+        err_init: np.ndarray | None = None
+        sub_loss_init: dict[tuple[int, int], np.ndarray] | None = None
+
+        if checkpoint_backend is not None and checkpoint_rel_path:
+            raw_ckpt = checkpoint_backend.read_bytes(checkpoint_rel_path)
+            if raw_ckpt is not None:
+                ckpt = json.loads(gzip.decompress(raw_ckpt).decode("utf-8"))
+                if int(ckpt.get("seed", -1)) == seed and len(ckpt.get("err", [])) == size:
+                    completed_rows = {int(r) for r in ckpt.get("completed_rows", [])}
+                    err_init = np.asarray(ckpt["err"], dtype=np.float64)
+                    sub_loss_init = {
+                        tuple(int(x) for x in k.split(",")): np.asarray(v, dtype=np.float64)
+                        for k, v in ckpt.get("sub_loss", {}).items()
+                    }
+
+        last_ckpt = [time.monotonic()]
+
+        def _on_row_complete(
+            row_idx: int,
+            err_arr: np.ndarray,
+            sub_loss_dict: dict[tuple[int, int], np.ndarray],
+        ) -> None:
+            completed_rows.add(row_idx)
+            stopping = bool(stop_requested()) if stop_requested is not None else False
+            if checkpoint_backend is not None and checkpoint_rel_path:
+                if stopping or (time.monotonic() - last_ckpt[0] >= checkpoint_interval_seconds):
+                    payload = {
+                        "seed": seed,
+                        "size": size,
+                        "completed_rows": sorted(completed_rows),
+                        "err": err_arr.tolist(),
+                        "sub_loss": {f"{i},{j}": v.tolist() for (i, j), v in sub_loss_dict.items()},
+                    }
+                    checkpoint_backend.write_bytes(
+                        checkpoint_rel_path,
+                        gzip.compress(json.dumps(payload).encode("utf-8")),
+                    )
+                    last_ckpt[0] = time.monotonic()
+            if stopping:
+                raise SpotInterruptedError(
+                    f"Spot interruption after row {row_idx} for seed {seed}"
+                )
+
+        try:
+            use_row_hook = checkpoint_backend is not None or stop_requested is not None
+            matrix, states = build_paper_matrix(
+                raw_batches,
+                learner,
+                offline=offline,
+                seed=seed,
+                completed_rows=completed_rows or None,
+                err_init=err_init,
+                sub_loss_init=sub_loss_init,
+                on_row_complete=_on_row_complete if use_row_hook else None,
+                stop_requested=stop_requested,
+            )
+        except InterruptedError as exc:
+            if not isinstance(exc, SpotInterruptedError):
+                raise SpotInterruptedError(str(exc)) from exc
+            raise
         if staleness_mode == "absolute":
             matrix = _to_absolute_staleness_matrix(matrix, gamma=config.kernel_gamma)
         elif config.kernel_gamma is not None:

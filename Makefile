@@ -1,5 +1,5 @@
 .PHONY: test lint format install-hooks smoke compose-check up down health logs \
-        bench run-experiment bench-paper tf-init tf-plan tf-apply tf-destroy \
+        bench run-experiment bench-paper \
         aws-validate aws-smoke aws-images aws-lambda \
         aws-bootstrap aws-dataset-smoke aws-dataset-full \
         aws-dataset-fraud-full aws-dataset-ecommerce-full \
@@ -22,8 +22,6 @@ SEEDS ?= 42,43,44,45,46
 SAVE_CHECKPOINTS ?= false
 DAG ?= benchmark_campaign
 WAIT ?= 1
-TF_ENV ?= local
-TF_DIR := infra/terraform/environments/$(TF_ENV)
 
 test:
 	MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE=1 uv run --frozen pytest -q -n 6 --dist=loadfile
@@ -83,18 +81,6 @@ bench-paper:
 		SAVE_CHECKPOINTS="$(SAVE_CHECKPOINTS)" \
 		DAG="$(DAG)" \
 		WAIT="$(WAIT)"
-
-tf-init:
-	terraform -chdir=$(TF_DIR) init -backend=false
-
-tf-plan:
-	terraform -chdir=$(TF_DIR) plan
-
-tf-apply:
-	terraform -chdir=$(TF_DIR) apply -auto-approve
-
-tf-destroy:
-	terraform -chdir=$(TF_DIR) destroy -auto-approve
 
 aws-validate:
 	CFN_LINT="uvx --from cfn-lint==1.60.0 cfn-lint" uv run python scripts/aws/validate_templates.py

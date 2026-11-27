@@ -254,9 +254,8 @@ Resources:
                   - !Sub "${DataBucketArn}/datasets/stream-sources/insects_abrupt_imbalanced/full/*/prepared.parquet"
                   - !Sub "${DataBucketArn}/datasets/stream-sources/insects_incremental_abrupt_reoccurring_imbalanced/full/*/manifest.json"
                   - !Sub "${DataBucketArn}/datasets/stream-sources/insects_incremental_abrupt_reoccurring_imbalanced/full/*/prepared.parquet"
-                  - !Sub "${DataBucketArn}/campaigns/*/units/*"
-                  - !Sub "${DataBucketArn}/campaigns/*/cancelled.json"
-                  - !Sub "${DataBucketArn}/campaigns/*/runs/*"
+                  - !Sub "${DataBucketArn}/campaigns/*"
+                  - !Sub "${DataBucketArn}/benchmarks/*"
                   - !Sub "${DataBucketArn}/analytics/runs/*"
                   - !Sub "${DataBucketArn}/analytics/metrics/*"
                   - !Sub "${DataBucketArn}/analytics/windows/*"
@@ -264,11 +263,12 @@ Resources:
                   - !Sub "${DataBucketArn}/mlflow/*"
                 Condition: {StringEquals: {aws:SourceVpce: !Ref S3GatewayEndpointId}}
               - Sid: WriteRunEvidence
-                # Includes the Spot attempt claims and the checkpoints under campaigns/*/runs/*/spot/.
+                # Includes Spot attempt claims, incremental matrix checkpoints, and final artifacts.
                 Effect: Allow
                 Action: [s3:PutObject, s3:AbortMultipartUpload]
                 Resource:
-                  - !Sub "${DataBucketArn}/campaigns/*/runs/*"
+                  - !Sub "${DataBucketArn}/campaigns/*"
+                  - !Sub "${DataBucketArn}/benchmarks/*"
                   - !Sub "${DataBucketArn}/analytics/runs/*"
                   - !Sub "${DataBucketArn}/analytics/metrics/*"
                   - !Sub "${DataBucketArn}/analytics/windows/*"
@@ -664,11 +664,11 @@ Resources:
           - {OnStatusReason: "ResourceInitializationError*", Action: RETRY}
           - {OnStatusReason: "CannotPullContainerError*", Action: RETRY}
           - {OnReason: "*", Action: EXIT}
-      Parameters: {unit_uri: "s3://unset"}
+      Parameters: {payload_uri: "s3://unset"}
       ContainerProperties:
         Image: !Ref RuntimeImage
         User: "1000"
-        Command: [continual-bench, aws, run-unit, --unit-uri, "Ref::unit_uri", --workdir, /tmp/cb/run]
+        Command: [continual-bench, aws, run-seed, --payload-uri, "Ref::payload_uri", --workdir, /tmp/cb/run]
         JobRoleArn: !GetAtt BenchmarkJobRole.Arn
         ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
         ResourceRequirements:
@@ -686,8 +686,10 @@ Resources:
             awslogs-region: !Ref AWS::Region
             awslogs-stream-prefix: benchmark
         Environment:
+          - {Name: BENCH_ENV, Value: aws}
           - {Name: BENCH_BUCKET, Value: !Ref DataBucketName}
           - {Name: BENCH_KMS_KEY_ID, Value: !Ref DataKeyArn}
+          - {Name: BENCH_SAVE_MODEL_CHECKPOINTS, Value: "false"}
           - {Name: BENCH_GIT_REVISION, Value: !Ref GitSha}
           - {Name: BENCH_IMAGE_DIGEST, Value: !Select [1, !Split ["@", !Ref RuntimeImage]]}
           - {Name: BENCH_PROJECT_ROOT, Value: /app}
@@ -789,8 +791,10 @@ Resources:
             awslogs-region: !Ref AWS::Region
             awslogs-stream-prefix: prepare
         Environment:
+          - {Name: BENCH_ENV, Value: aws}
           - {Name: BENCH_BUCKET, Value: !Ref DataBucketName}
           - {Name: BENCH_KMS_KEY_ID, Value: !Ref DataKeyArn}
+          - {Name: BENCH_SAVE_MODEL_CHECKPOINTS, Value: "false"}
           - {Name: BENCH_IMAGE_DIGEST, Value: !Select [1, !Split ["@", !Ref RuntimeImage]]}
           - {Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region}
 

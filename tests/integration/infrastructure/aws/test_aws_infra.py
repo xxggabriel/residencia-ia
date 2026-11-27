@@ -65,7 +65,7 @@ def test_job_definitions_match_the_reference_campaign():
     assert (params["BenchmarkVcpus"]["Default"], params["BenchmarkMemoryMiB"]["Default"]) == ("2", 4096)
     assert (root["BenchmarkVcpus"]["Default"], root["BenchmarkMemoryMiB"]["Default"]) == ("2", 4096)
     benchmark = resources["BenchmarkJobDefinition"]["Properties"]["ContainerProperties"]
-    assert benchmark["Command"][:4] == ["continual-bench", "aws", "run-unit", "--unit-uri"]
+    assert benchmark["Command"][:4] == ["continual-bench", "aws", "run-seed", "--payload-uri"]
     assert benchmark["User"] == "1000" and benchmark["NetworkConfiguration"]["AssignPublicIp"] == "DISABLED"
     benchmark_env = {item["Name"]: item["Value"] for item in benchmark["Environment"]}
     assert benchmark_env["OMP_NUM_THREADS"] == "2"

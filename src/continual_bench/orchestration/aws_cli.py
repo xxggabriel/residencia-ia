@@ -159,6 +159,102 @@ def run_unit(args):
     sys.exit(code)
 
 
+def run_seed(args):
+    from continual_bench.orchestration.aws_campaign import resolve_campaign_config, run_seed_aws
+
+    os.environ["OMP_NUM_THREADS"] = "2"
+    os.environ["OPENBLAS_NUM_THREADS"] = "2"
+    os.environ["MKL_NUM_THREADS"] = "2"
+    if args.workdir:
+        Path(args.workdir).mkdir(parents=True, exist_ok=True)
+    config = resolve_campaign_config(
+        config_ref=args.config,
+        payload_uri=args.payload_uri,
+        protocol=args.protocol,
+        dataset=args.dataset,
+        campaign=args.campaign,
+        model=args.model,
+        model_params=args.model_params,
+        policies=args.policies,
+        seeds=args.seeds,
+        seed=args.seed,
+        staleness_mode=args.staleness_mode,
+        overrides=args.overrides,
+        output_dir=args.output_dir,
+        tracking_uri=args.tracking_uri,
+    )
+    seed_val = args.seed if args.seed is not None else config.seeds[0]
+    result = run_seed_aws(
+        config,
+        seed_val,
+        env_name=args.env,
+        output_dir=args.output_dir,
+        tracking_uri=args.tracking_uri,
+    )
+    _emit(result)
+    sys.exit(int(result.get("exit_code", 0)))
+
+
+def consolidate_campaign(args):
+    from continual_bench.orchestration.aws_campaign import consolidate_aws, resolve_campaign_config
+
+    config = resolve_campaign_config(
+        config_ref=args.config,
+        payload_uri=args.payload_uri,
+        protocol=args.protocol,
+        dataset=args.dataset,
+        campaign=args.campaign,
+        model=args.model,
+        model_params=args.model_params,
+        policies=args.policies,
+        seeds=args.seeds,
+        staleness_mode=args.staleness_mode,
+        overrides=args.overrides,
+        output_dir=args.output_dir,
+        tracking_uri=args.tracking_uri,
+    )
+    result = consolidate_aws(
+        config,
+        env_name=args.env,
+        output_dir=args.output_dir,
+        tracking_uri=args.tracking_uri,
+    )
+    _emit(result)
+
+
+def run_campaign_aws(args):
+    from continual_bench.orchestration.aws_campaign import resolve_campaign_config, submit_aws_campaign
+
+    config = resolve_campaign_config(
+        config_ref=args.config,
+        payload_uri=args.payload_uri,
+        protocol=args.protocol,
+        dataset=args.dataset,
+        campaign=args.campaign,
+        model=args.model,
+        model_params=args.model_params,
+        policies=args.policies,
+        seeds=args.seeds,
+        seed=args.seed,
+        staleness_mode=args.staleness_mode,
+        overrides=args.overrides,
+        output_dir=args.output_dir,
+        tracking_uri=args.tracking_uri,
+    )
+    result = submit_aws_campaign(
+        config,
+        job_queue=args.job_queue,
+        job_definition=args.job_definition,
+        env_name=args.env,
+        output_dir=args.output_dir,
+        tracking_uri=args.tracking_uri,
+        vcpus=args.vcpus,
+        memory_mib=args.memory_mib,
+        dry_run=args.dry_run,
+    )
+    _emit(result)
+
+
 def selftest(args):
     """Image contract: imports, CLI entry point, locked runtime and scientific stack."""
     import importlib
@@ -453,6 +549,51 @@ def configure(parser: argparse.ArgumentParser):
         "run-unit",
         run_unit,
         lambda c: (c.add_argument("--unit-uri", required=True), c.add_argument("--workdir")),
+    )
+
+    def campaign_options(command):
+        command.add_argument("--config", default=None)
+        command.add_argument("--payload-uri", default=None)
+        command.add_argument("--protocol", choices=["cara", "upf"], default=None)
+        command.add_argument("--dataset", default=None)
+        command.add_argument("--campaign", default=None)
+        command.add_argument("--model", default=None)
+        command.add_argument("--model-params", default=None)
+        command.add_argument("--policies", default=None)
+        command.add_argument("--seeds", default=None)
+        command.add_argument("--staleness-mode", choices=["relative", "absolute"], default=None)
+        command.add_argument("--overrides", default=None)
+        command.add_argument("--env", default="aws")
+        command.add_argument("--output-dir", default=None)
+        command.add_argument("--tracking-uri", default=None)
+
+    add(
+        "run-seed",
+        run_seed,
+        campaign_options,
+        lambda c: (
+            c.add_argument("--seed", type=int, default=None),
+            c.add_argument("--workdir", default=None),
+        ),
+        store=False,
+    )
+    add("consolidate", consolidate_campaign, campaign_options, store=False)
+    add(
+        "run-campaign",
+        run_campaign_aws,
+        campaign_options,
+        lambda c: (
+            c.add_argument("--seed", type=int, default=None),
+            c.add_argument("--vcpus", default=None),
+            c.add_argument("--memory-mib", type=int, default=None),
+            c.add_argument("--job-queue", default=os.environ.get("BENCH_JOB_QUEUE", "continual-bench-jobs")),
+            c.add_argument(
+                "--job-definition",
+                default=os.environ.get("BENCH_JOB_DEFINITION", "continual-bench-benchmark"),
+            ),
+            c.add_argument("--dry-run", action="store_true"),
+        ),
+        store=False,
     )
     add(
         "selftest",
