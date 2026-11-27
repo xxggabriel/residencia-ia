@@ -395,8 +395,8 @@ def test_campaign_tracking_is_incremental(
     from continual_bench.protocols.upf import UpfProtocol
 
     monkeypatch.setitem(_STREAM_SOURCES, "electricity", _synth_binary_stream)
-    monkeypatch.setenv("MLFLOW_REGISTRY_URI", (tmp_path / "registry").as_uri())
-    uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    uri = (tmp_path / "mlflow").as_uri()
     client = MlflowClient(tracking_uri=uri)
     experiment_id = client.create_experiment(
         "incremental/electricity", artifact_location=(tmp_path / "artifacts").as_uri()

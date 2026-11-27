@@ -22,8 +22,8 @@ def tracking(tmp_path, monkeypatch):
         return x, (x[:, 0] > 0).astype(np.int64)
 
     monkeypatch.setitem(_STREAM_SOURCES, "electricity", stream)
-    monkeypatch.setenv("MLFLOW_REGISTRY_URI", (tmp_path / "registry").as_uri())
-    uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    uri = (tmp_path / "mlflow").as_uri()
     client = MlflowClient(tracking_uri=uri)
     experiment = client.create_experiment(
         "incremental/electricity", artifact_location=(tmp_path / "artifacts").as_uri()
