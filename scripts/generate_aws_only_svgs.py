@@ -19,12 +19,12 @@ OUT_FIG_ROOT = ROOT / "docs_v2/relatorios/figuras"
 TMP_OUT = Path("/tmp/aws-only-svg-build")
 
 sys.path.insert(0, str(ROOT / "notebooks"))
-import matplotlib.pyplot as plt
-import numpy as np
-from benchmark_athena_data import load_athena
-from benchmark_athena_figures import SHORT, build_figures
-from benchmark_plot_style import BLUE, INK, MUTED, ORANGE, TEAL, apply_style, export_bundle
-from matplotlib.lines import Line2D
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+from benchmark_athena_data import load_athena  # noqa: E402
+from benchmark_athena_figures import SHORT, build_figures  # noqa: E402
+from benchmark_plot_style import BLUE, INK, MUTED, ORANGE, TEAL, apply_style, export_bundle  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
 
 PURPLE = "#7C3AED"
 RED = "#DC2626"
@@ -188,8 +188,8 @@ def build_aws_calibracao() -> plt.Figure:
     fig.text(
         0.14,
         0.02,
-        "Fonte: AWS F109 (quality-summary.csv). Brier e Log-loss medem a qualidade das probabilidades preditas;\n"
-        "valores menores indicam probabilidades melhor calibradas. CARA-CT, CARA-P e Oracle coincidem com CARA.",
+        "Fonte: AWS F109 (quality-summary.csv). Brier e Log-loss medem a qualidade das probabilidades preditas;\n"  # noqa: E501
+        "valores menores indicam probabilidades melhor calibradas. CARA-CT, CARA-P e Oracle coincidem com CARA.",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -271,8 +271,8 @@ def build_aws_evolucao_vs_congelado() -> plt.Figure:
     fig.text(
         0.09,
         0.02,
-        "Fonte: 28 blocos completos extraídos dos report.json no S3 (seed 42; F109 determinístico entre seeds em qualidade).\n"
-        "Linhas verticais vermelhas marcam fronteiras reais nos streams INSECTS (Electricity e Airlines não têm fronteiras anotadas).",
+        "Fonte: 28 blocos completos extraídos dos report.json no S3 (seed 42; F109 determinístico entre seeds em qualidade).\n"  # noqa: E501
+        "Linhas verticais vermelhas marcam fronteiras reais nos streams INSECTS (Electricity e Airlines não têm fronteiras anotadas).",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -325,7 +325,7 @@ def build_aws_ganho_sobre_congelado() -> plt.Figure:
     fig.text(
         0.09,
         0.02,
-        "Fonte: blocos completos dos report.json no S3 (AWS F109). Valores positivos indicam ganho ao atualizar;\n"
+        "Fonte: blocos completos dos report.json no S3 (AWS F109). Valores positivos indicam ganho ao atualizar;\n"  # noqa: E501
         "valores negativos indicam degradação em relação ao modelo mantido congelado após o aquecimento.",
         fontsize=9,
         color=MUTED,
@@ -434,8 +434,8 @@ def build_drift_timeline_insects(ds: str, title: str) -> plt.Figure:
     fig.text(
         0.09,
         0.02,
-        "Fonte: S3 report.json (alarms, model_versions e windows) e Athena continual_bench.model_versions (AWS F109).\n"
-        "Triângulos laranja mostram cada alarme emitido; quadrados azuis mostram cada reset_retrain executado no fim do bloco.",
+        "Fonte: S3 report.json (alarms, model_versions e windows) e Athena continual_bench.model_versions (AWS F109).\n"  # noqa: E501
+        "Triângulos laranja mostram cada alarme emitido; quadrados azuis mostram cada reset_retrain executado no fim do bloco.",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -536,8 +536,8 @@ def build_drift_timeline_elec_air() -> plt.Figure:
     fig.text(
         0.09,
         0.02,
-        "Fonte: S3 report.json (alarms, model_versions e windows · AWS F109). Electricity e Airlines não possuem fronteiras reais anotadas;\n"
-        "os marcadores mostram todos os alarmes do ADWIN e os retreinos do zero disparados ao fim de cada bloco.",
+        "Fonte: S3 report.json (alarms, model_versions e windows · AWS F109). Electricity e Airlines não possuem fronteiras reais anotadas;\n"  # noqa: E501
+        "os marcadores mostram todos os alarmes do ADWIN e os retreinos do zero disparados ao fim de cada bloco.",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -546,7 +546,7 @@ def build_drift_timeline_elec_air() -> plt.Figure:
 
 
 def build_aws_versoes_timeline() -> plt.Figure:
-    """Plot exact model_versions (initial, reset_retrain, continue) from Athena continual_bench.model_versions."""
+    """Plot exact model_versions (initial, reset_retrain, continue) from Athena continual_bench.model_versions."""  # noqa: E501
     mvs = list(csv.DictReader(open(ATHENA_DIR / "f109_model_versions.csv", encoding="utf-8")))
     # Filter seed 42 runs by matching run_id from f109_runs_uris.csv
     seed42_runs = {
@@ -604,7 +604,7 @@ def build_aws_versoes_timeline() -> plt.Figure:
         0.14,
         0.02,
         "Fonte: Athena continual_bench.model_versions (885 versões promovidas na F109; exibida seed 42).\n"
-        "CARA-CT, CARA-P e Oracle seguem o mesmo ponto de retreino do CARA; upf executa 2 retreinos em INSECTS Recorrente.",
+        "CARA-CT, CARA-P e Oracle seguem o mesmo ponto de retreino do CARA; upf executa 2 retreinos em INSECTS Recorrente.",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -671,8 +671,8 @@ def build_aws_drift_alarmes_e_retreinos() -> plt.Figure:
     fig.text(
         0.14,
         0.02,
-        "Fonte: AWS F109 (resources-summary.csv). Apenas ADWIN e DDM emitem alarmes; incremental soma 23 atualizações sem retreino do zero.\n"
-        "CARA-CT, CARA-P e Oracle coincidem com CARA (1 retreino). A política drift permaneceu com 0 alarmes.",
+        "Fonte: AWS F109 (resources-summary.csv). Apenas ADWIN e DDM emitem alarmes; incremental soma 23 atualizações sem retreino do zero.\n"  # noqa: E501
+        "CARA-CT, CARA-P e Oracle coincidem com CARA (1 retreino). A política drift permaneceu com 0 alarmes.",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -726,8 +726,8 @@ def build_aws_retencao_absoluta() -> plt.Figure:
     fig.text(
         0.14,
         0.02,
-        "Fonte: S3 report.json (tracking_observations.retention.absolute_retention · AWS F109, média de 3 seeds).\n"
-        "gem_bwt e post_learning_fm estão marcados como indisponíveis no F109 (no_historical_post_learning_baselines).",
+        "Fonte: S3 report.json (tracking_observations.retention.absolute_retention · AWS F109, média de 3 seeds).\n"  # noqa: E501
+        "gem_bwt e post_learning_fm estão marcados como indisponíveis no F109 (no_historical_post_learning_baselines).",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -807,7 +807,7 @@ def build_aws_plasticidade_vs_estabilidade() -> plt.Figure:
     fig.text(
         0.09,
         0.02,
-        "Fonte: quality-summary.csv e S3 report.json (tracking_observations.retention.absolute_retention · AWS F109).\n"
+        "Fonte: quality-summary.csv e S3 report.json (tracking_observations.retention.absolute_retention · AWS F109).\n"  # noqa: E501
         "Em Electricity, Incremental lidera F1 macro (0,729), mas apresenta a menor retenção (0,539).",
         fontsize=9,
         color=MUTED,
@@ -887,8 +887,8 @@ def build_aws_quality_vs_cost() -> plt.Figure:
     fig.text(
         0.09,
         0.02,
-        "Linha pontilhada: piso de 60 s On-Demand (1,65 mUS$). Estimativa de referência (não é fatura AWS nem preço Spot).\n"
-        "CARA-CT, CARA-P, UPF e Oracle reutilizam a matriz construída fisicamente por CARA; frozen e drift coincidem.",
+        "Linha pontilhada: piso de 60 s On-Demand (1,65 mUS$). Estimativa de referência (não é fatura AWS nem preço Spot).\n"  # noqa: E501
+        "CARA-CT, CARA-P, UPF e Oracle reutilizam a matriz construída fisicamente por CARA; frozen e drift coincidem.",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -955,8 +955,8 @@ def build_aws_decomposicao_custos() -> plt.Figure:
     fig.text(
         0.14,
         0.02,
-        "Linha pontilhada: piso de 60 s On-Demand (1,65 mUS$). CARA inclui construção física da matriz em aws_evaluation_cost_total;\n"
-        "UPF e Oracle reutilizam a matriz em cache. Estimativas On-Demand em tasks Spot não representam fatura AWS.",
+        "Linha pontilhada: piso de 60 s On-Demand (1,65 mUS$). CARA inclui construção física da matriz em aws_evaluation_cost_total;\n"  # noqa: E501
+        "UPF e Oracle reutilizam a matriz em cache. Estimativas On-Demand em tasks Spot não representam fatura AWS.",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -965,7 +965,7 @@ def build_aws_decomposicao_custos() -> plt.Figure:
 
 
 def build_aws_batch_duracao_e_fila() -> plt.Figure:
-    """Plot real Batch/Fargate execution seconds vs queue seconds from Athena continual_bench.cost_estimates."""
+    """Plot real Batch/Fargate execution seconds vs queue seconds from Athena continual_bench.cost_estimates."""  # noqa: E501
     rows = list(csv.DictReader(open(ATHENA_DIR / "f109_cost_estimates.csv", encoding="utf-8")))
     policies = ["frozen", "periodic", "drift_ddm", "drift_adwin", "cara", "upf", "oracle", "incremental"]
     fig, axes = plt.subplots(2, 2, figsize=(8.6, 6.8), dpi=300)
@@ -1089,8 +1089,8 @@ def build_aws_cur2_faturamento() -> plt.Figure:
     fig.text(
         0.17,
         0.02,
-        "Fonte: Athena continual_bench_billing.cur2 (billing_period = 2026-11). Escopo da conta inteira no mês (inclui S3, VPC Endpoints e outras campanhas).\n"
-        "A tarifa efetiva Spot observada ($0,0148/vCPU-h) é ~2,7x menor que a tarifa On-Demand ($0,0405/vCPU-h) usada nas estimativas de referência.",
+        "Fonte: Athena continual_bench_billing.cur2 (billing_period = 2026-11). Escopo da conta inteira no mês (inclui S3, VPC Endpoints e outras campanhas).\n"  # noqa: E501
+        "A tarifa efetiva Spot observada ($0,0148/vCPU-h) é ~2,7x menor que a tarifa On-Demand ($0,0405/vCPU-h) usada nas estimativas de referência.",  # noqa: E501
         fontsize=8.8,
         color=MUTED,
         va="bottom",
@@ -1195,8 +1195,8 @@ def build_papers_referencia_publicada() -> plt.Figure:
     fig.text(
         0.12,
         0.02,
-        "Fonte: evidencias/aws-benchmarks/papers/published-reference-values.csv. Métricas e protocolos próprios dos artigos\n"
-        "(Random Forest no CARA; XGBoost eta=0,3 em 15 lotes no UPF), não comparáveis numericamente à campanha AWS F109.",
+        "Fonte: evidencias/aws-benchmarks/papers/published-reference-values.csv. Métricas e protocolos próprios dos artigos\n"  # noqa: E501
+        "(Random Forest no CARA; XGBoost eta=0,3 em 15 lotes no UPF), não comparáveis numericamente à campanha AWS F109.",  # noqa: E501
         fontsize=8.8,
         color=MUTED,
         va="bottom",

@@ -25,7 +25,7 @@ OUT_REGIMES = ROOT / "docs_v2/relatorios/figuras/regimes-e-matrizes"
 OUT_DRIFT = ROOT / "docs_v2/relatorios/figuras/drift-e-retreinos"
 
 sys.path.insert(0, str(ROOT / "notebooks"))
-from benchmark_plot_style import INK, MUTED, apply_style
+from benchmark_plot_style import INK, MUTED, apply_style  # noqa: E402
 
 
 def wilson_ci(p: float, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -106,7 +106,7 @@ def build_batch_accuracy_plot(
                 label=f"Modelo D{m_idx}",
             )
 
-    # Deployed "Em uso" trajectory: D7 served by M7 (or M0 on D7 -> M7 from D8..D23; include D7=mat[0][7] or mat[7][8])
+    # Deployed "Em uso" trajectory: D7 served by M7 (or M0 on D7 -> M7 from D8..D23; include D7=mat[0][7] or mat[7][8])  # noqa: E501
     dep_xs = list(range(8, 24))
     dep_ys = [float(mat[served_by[i]][8 + i]) * 100.0 for i in range(len(served_by))]
     ax.plot(
@@ -172,7 +172,7 @@ def build_batch_accuracy_plot(
     fig.text(
         0.08,
         0.875,
-        f"Matriz 24 x 24 da campanha na AWS · blocos D7 a D23 · mediana de ~{n_med:,} registros por lote".replace(
+        f"Matriz 24 x 24 da campanha na AWS · blocos D7 a D23 · mediana de ~{n_med:,} registros por lote".replace(  # noqa: E501
             ",", "."
         ),
         fontsize=9.0,
@@ -280,7 +280,6 @@ def build_insects_strip_heatmap() -> plt.Figure:
         n_bins = int(math.ceil(max_k / bin_w))
 
         # Rows: top is Regimes, then for each policy: Acuracia, Alarmes, Atualizacoes
-        y_rows = []
         row_labels = ["Regimes anotados"]
         row_totals = [""]
 
@@ -441,7 +440,7 @@ def build_insects_strip_heatmap() -> plt.Figure:
     fig.text(
         0.17,
         0.008,
-        "Fonte: evidencias/aws-benchmarks-v2 (janelas por bloco, alarmes por execução e versões de modelos do Athena).",
+        "Fonte: evidencias/aws-benchmarks-v2 (janelas por bloco, alarmes por execução e versões de modelos do Athena).",  # noqa: E501
         fontsize=8.2,
         color=MUTED,
     )

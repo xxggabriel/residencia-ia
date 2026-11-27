@@ -13,11 +13,11 @@ EV2 = ROOT / "evidencias/aws-benchmarks-v2"
 OUT_FIG_ROOT = ROOT / "docs_v2/relatorios/figuras"
 
 sys.path.insert(0, str(ROOT / "notebooks"))
-import matplotlib.pyplot as plt
-import numpy as np
-from benchmark_athena_figures import SHORT
-from benchmark_plot_style import BLUE, INK, MUTED, ORANGE, TEAL, apply_style
-from matplotlib.patches import Patch
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+from benchmark_athena_figures import SHORT  # noqa: E402
+from benchmark_plot_style import BLUE, INK, MUTED, ORANGE, TEAL, apply_style  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
 
 PURPLE = "#7C3AED"
 RED = "#DC2626"
@@ -128,7 +128,7 @@ def build_versoes_timeline_v2() -> plt.Figure:
         0.14,
         0.02,
         "Fonte: Athena continual_bench.model_versions (885 versões promovidas na F109; seed 42).\n"
-        "Cada célula representa um bloco do stream; linhas tracejadas vermelhas marcam blocos com fronteiras reais de drift nos INSECTS.",
+        "Cada célula representa um bloco do stream; linhas tracejadas vermelhas marcam blocos com fronteiras reais de drift nos INSECTS.",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -264,8 +264,8 @@ def build_papers_ref_v2() -> plt.Figure:
     fig.text(
         0.11,
         0.02,
-        "Fonte: evidencias/aws-benchmarks/papers/published-reference-values.csv. Métricas e protocolos próprios dos artigos\n"
-        "(Random Forest no CARA; XGBoost eta=0,3 em 15 lotes no UPF), não comparáveis numericamente à campanha AWS F109.",
+        "Fonte: evidencias/aws-benchmarks/papers/published-reference-values.csv. Métricas e protocolos próprios dos artigos\n"  # noqa: E501
+        "(Random Forest no CARA; XGBoost eta=0,3 em 15 lotes no UPF), não comparáveis numericamente à campanha AWS F109.",  # noqa: E501
         fontsize=8.8,
         color=MUTED,
         va="bottom",
@@ -372,7 +372,7 @@ def build_class_metrics_figure() -> plt.Figure:
         0.14,
         0.02,
         "Fonte: evidencias/aws-benchmarks-v2/s3-reports/class_metrics.csv (escopo prequencial completo).\n"
-        "Em streams desbalanceados (Airlines e INSECTS), a classe positiva (1) concentra a maior sensibilidade às atualizações.",
+        "Em streams desbalanceados (Airlines e INSECTS), a classe positiva (1) concentra a maior sensibilidade às atualizações.",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -484,8 +484,8 @@ def build_model_size_and_train_time() -> plt.Figure:
     fig.text(
         0.14,
         0.02,
-        "Fonte: Athena continual_bench.model_versions (885 versões promovidas). Em Incremental, o modelo XGBoost\n"
-        "acumula rodadas de boosting ao longo dos 23 ajustes, crescendo de ~200 KB para mais de 4 MB na versão final.",
+        "Fonte: Athena continual_bench.model_versions (885 versões promovidas). Em Incremental, o modelo XGBoost\n"  # noqa: E501
+        "acumula rodadas de boosting ao longo dos 23 ajustes, crescendo de ~200 KB para mais de 4 MB na versão final.",  # noqa: E501
         fontsize=9,
         color=MUTED,
         va="bottom",
@@ -501,7 +501,7 @@ def main():
         build_confusion_grid(
             "prequential",
             "Matrizes de confusão normalizadas no fluxo prequencial completo (F109)",
-            "Fonte: evidencias/aws-benchmarks-v2/s3-reports/confusion_matrices.csv (seed 42). Percentuais normalizados por linha (classe real).",
+            "Fonte: evidencias/aws-benchmarks-v2/s3-reports/confusion_matrices.csv (seed 42). Percentuais normalizados por linha (classe real).",  # noqa: E501
         ),
         "qualidade/aws-matriz-confusao-coorte.svg",
     )
@@ -509,7 +509,7 @@ def main():
         build_confusion_grid(
             "holdout",
             "Matrizes de confusão normalizadas no holdout final de 10% (F109)",
-            "Fonte: evidencias/aws-benchmarks-v2/s3-reports/confusion_matrices.csv (seed 42, escopo holdout). Percentuais normalizados por linha.",
+            "Fonte: evidencias/aws-benchmarks-v2/s3-reports/confusion_matrices.csv (seed 42, escopo holdout). Percentuais normalizados por linha.",  # noqa: E501
         ),
         "qualidade/aws-matriz-confusao-holdout.svg",
     )

@@ -146,8 +146,8 @@ def make_plan(args):
 
 
 def execute_case(args):
-    from continual_bench.evaluation.stream_benchmark import run
     from continual_bench.evaluation.stream_artifacts import tracking_report, write_zia_artifacts
+    from continual_bench.evaluation.stream_benchmark import run
     from continual_bench.evaluation.stream_predictions import prediction_manifest
 
     if __package__:

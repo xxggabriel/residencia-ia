@@ -14,9 +14,9 @@ OUT_FIG_ROOT = ROOT / "docs_v2/relatorios/figuras/papers"
 TMP_OUT = Path("/tmp/papers-svg-build")
 
 sys.path.insert(0, str(ROOT / "notebooks"))
-import matplotlib.pyplot as plt
-import numpy as np
-from benchmark_plot_style import BLUE, INK, MUTED, ORANGE, apply_style
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+from benchmark_plot_style import BLUE, INK, MUTED, ORANGE, apply_style  # noqa: E402
 
 
 def load_aws_3seed_means() -> dict[tuple[str, str, str], tuple[float, float]]:
@@ -190,8 +190,8 @@ def build_papers_vs_aws(aws_means: dict[tuple[str, str, str], tuple[float, float
     fig.text(
         0.11,
         0.02,
-        "Fonte: published-reference-values.csv (artigos) e metrics-by-seed.csv (campanha na AWS, média das seeds 42, 43 e 44).\n"
-        "Cotejo estritamente descritivo: horizontes (T=16 na AWS vs. T=8 no UPF), modelos (RF vs. XGBoost) e grades de custo diferem.",
+        "Fonte: published-reference-values.csv (artigos) e metrics-by-seed.csv (campanha na AWS, média das seeds 42, 43 e 44).\n"  # noqa: E501
+        "Cotejo estritamente descritivo: horizontes (T=16 na AWS vs. T=8 no UPF), modelos (RF vs. XGBoost) e grades de custo diferem.",  # noqa: E501
         fontsize=8.6,
         color=MUTED,
         va="bottom",
@@ -325,8 +325,8 @@ def build_accuracy_and_retrains_vs_cara(
     fig.text(
         0.11,
         0.02,
-        "Fonte: published-reference-values.csv (Tabelas 3 e 4 do CARA, n=5 seeds) e metrics-by-seed.csv (AWS, média das seeds 42, 43 e 44).\n"
-        "Na AWS, políticas de custo operam em alpha único (1,0), realizando 1 retreinamento vs. até 27,7 no CARA (média sobre 99 valores de kappa).",
+        "Fonte: published-reference-values.csv (Tabelas 3 e 4 do CARA, n=5 seeds) e metrics-by-seed.csv (AWS, média das seeds 42, 43 e 44).\n"  # noqa: E501
+        "Na AWS, políticas de custo operam em alpha único (1,0), realizando 1 retreinamento vs. até 27,7 no CARA (média sobre 99 valores de kappa).",  # noqa: E501
         fontsize=8.6,
         color=MUTED,
         va="bottom",

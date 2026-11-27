@@ -1,4 +1,4 @@
-"""Generate 4 pure-AWS regime/matrix SVGs from evidencias/aws-benchmarks-v2 and scrub F109/prequencial from all SVGs."""
+"""Generate 4 pure-AWS regime/matrix SVGs from evidencias/aws-benchmarks-v2 and scrub F109/prequencial from all SVGs."""  # noqa: E501
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ EV2 = ROOT / "evidencias/aws-benchmarks-v2"
 OUT_FIG_ROOT = ROOT / "docs_v2/relatorios/figuras"
 
 sys.path.insert(0, str(ROOT / "notebooks"))
-import matplotlib.pyplot as plt
-import numpy as np
-from benchmark_athena_figures import SHORT
-from benchmark_plot_style import BLUE, INK, MUTED, ORANGE, TEAL, apply_style
-from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+from benchmark_athena_figures import SHORT  # noqa: E402
+from benchmark_plot_style import BLUE, INK, MUTED, ORANGE, TEAL, apply_style  # noqa: E402
+from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 
 # Exact changepoints from src/continual_bench/datasets/real_streams.py
 CHANGEPOINTS = {
@@ -28,7 +28,7 @@ CHANGEPOINTS = {
 
 
 def build_aws_regime_heatmap(ds: str, title: str) -> plt.Figure:
-    """Heatmap of frozen F1 (%) baseline and p.p. gain/loss by annotated regime from windows_full_28blocks.csv."""
+    """Heatmap of frozen F1 (%) baseline and p.p. gain/loss by annotated regime from windows_full_28blocks.csv."""  # noqa: E501
     rows = [
         r
         for r in csv.DictReader(open(EV2 / "s3-reports/windows_full_28blocks.csv", encoding="utf-8"))
@@ -99,7 +99,7 @@ def build_aws_regime_heatmap(ds: str, title: str) -> plt.Figure:
         0.20,
         0.02,
         "Fonte: evidencias/aws-benchmarks-v2/s3-reports/windows_full_28blocks.csv (XGBoost).\n"
-        "A linha Congelado mostra o F1 macro absoluto (%) no regime; as demais mostram a diferença em pontos percentuais (p.p.).",
+        "A linha Congelado mostra o F1 macro absoluto (%) no regime; as demais mostram a diferença em pontos percentuais (p.p.).",  # noqa: E501
         fontsize=8.8,
         color=MUTED,
         va="bottom",
