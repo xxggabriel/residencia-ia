@@ -12,7 +12,7 @@ if [[ "${1:-}" == unit ]]; then
 elif [[ "${1:-}" == services ]]; then
   timeout 300 docker compose --env-file "$TASK_BENCH_SERVICE_ENV" -f "$TASK_BENCH_ROOT/compose.yaml" \
     run --rm --no-deps --entrypoint python validation -m pytest -q -p no:cacheprovider \
-    -m services tests/test_task_services.py
+    -m services tests/e2e/orchestration/test_task_services.py
 else
   echo 'Usage: run_task_homelab.sh unit|services' >&2; exit 2
 fi

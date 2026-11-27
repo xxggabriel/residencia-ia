@@ -103,7 +103,7 @@ def _source(path):
 
 def _archive_directory(root):
     root = Path(root)
-    candidates = (root, root / "dados", root / "docs/evidencias/semana-10/cara-upf/dados")
+    candidates = (root, root / "dados", root / "evidencias/semana-10/cara-upf/dados")
     matches = [p for p in candidates if (p / "upf.json.gz").is_file()]
     _require(bool(matches), "A pasta deve conter os arquivos históricos CARA/UPF.")
     return matches[0]

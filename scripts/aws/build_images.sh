@@ -2,7 +2,7 @@
 # Build, validate and publish the runtime and ml images for one commit, idempotently.
 #   - tag: git-<40-hex SHA>, immutable in ECR; an existing tag is reused, never rebuilt;
 #   - platform: linux/amd64, dependencies from requirements-aws.lock with hashes;
-#   - validation before push: runtime selftest (imports, x86_64, no MLflow/ZenML/Kafka) and the
+#   - validation before push: runtime selftest (imports, x86_64, no MLflow/Kafka) and the
 #     ml image's SageMaker contract (/ping, /invocations) on a tiny fixture model;
 #   - output: build-output.json with repository, tag and resolved digest per image.
 # Requires RUNTIME_REPOSITORY and ML_REPOSITORY (…amazonaws.com/<name>) and Docker.

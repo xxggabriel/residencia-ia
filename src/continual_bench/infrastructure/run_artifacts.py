@@ -6,6 +6,7 @@ are uploaded to the run artifact root as `plots/<group>/` and `data/<group>/`.
 Republishing is idempotent: existing metric points are checked, not duplicated.
 """
 
+import os
 from pathlib import Path
 
 from continual_bench.infrastructure.artifact_policy import metrics_only, verify_metrics_only_files
@@ -35,8 +36,22 @@ def publish_run_artifacts(
 
     backend = as_backend(client)
     complete_series = metrics_only(report)
+    plots_enabled = os.environ.get("BENCH_GENERATE_PLOTS", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    checkpoints_enabled = os.environ.get("BENCH_SAVE_MODEL_CHECKPOINTS", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     if complete_series:
         verify_metrics_only_files(directory)
+        include_checkpoints = False
+    elif not checkpoints_enabled:
         include_checkpoints = False
     points, stamps = system_metric_points(report.get("system_metrics"))
     sampled = downsample_points(
@@ -48,11 +63,12 @@ def publish_run_artifacts(
     )
     root = Path(directory) / "artifacts"
     uploaded = 0
-    for folder in () if complete_series else ("plots", "data"):
+    folders = () if complete_series else (("plots", "data") if plots_enabled else ("data",))
+    for folder in folders:
         if (root / folder).is_dir():
             client.log_artifacts(run_id, str(root / folder), artifact_path=folder)
             uploaded += sum(1 for path in (root / folder).rglob("*") if path.is_file())
-    figures = [] if complete_series else log_detailed_figures(report, run_id)
+    figures = [] if (complete_series or not plots_enabled) else log_detailed_figures(report, run_id)
     system = report.get("system_metrics") or {}
     backend.log_batch(
         run_id,

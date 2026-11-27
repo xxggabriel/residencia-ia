@@ -1,13 +1,24 @@
-.PHONY: test lint format install-hooks smoke compose-check aws-validate aws-smoke aws-images aws-lambda \
-        aws-bootstrap aws-dataset-smoke aws-dataset-full \
-        aws-dataset-fraud-full aws-dataset-ecommerce-full \
-        aws-campaign-smoke aws-campaign-full aws-campaign-fraud-full aws-campaign-ecommerce-full \
-        aws-campaign-full-cost-aware aws-campaign-matrix \
+.PHONY: test lint format install-hooks smoke compose-check up down health logs \
+        bench run-experiment bench-paper \
+        aws-validate aws-smoke aws-images aws-lambda \
+        aws-bootstrap aws-campaign \
         aws-mlflow-ui aws-studio-ui aws-cancel aws-teardown aws-teardown-all
 
 REPOSITORY ?= xxggabriel/residencia-ia
 BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD)
 OVERRIDES ?= infra/params/runtime-overrides.example.json
+
+ENV ?= docker
+CONFIG ?=
+PROTOCOL ?= cara
+DATASET ?= electricity
+CAMPAIGN ?=
+MODEL ?= logistic
+POLICIES ?=
+SEEDS ?= 42,43,44,45,46
+SAVE_CHECKPOINTS ?= false
+DAG ?= benchmark_campaign
+WAIT ?= 1
 
 test:
 	MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE=1 uv run --frozen pytest -q -n 6 --dist=loadfile
@@ -29,6 +40,45 @@ smoke:
 compose-check:
 	docker compose --env-file .env.example config --quiet
 
+up:
+	docker compose up -d --build
+
+down:
+	docker compose down
+
+health:
+	docker compose ps
+
+logs:
+	docker compose logs -f --tail=100
+
+bench run-experiment:
+	uv run python scripts/run_experiment.py \
+		--env "$(ENV)" \
+		--config "$(CONFIG)" \
+		--protocol "$(PROTOCOL)" \
+		--dataset "$(DATASET)" \
+		--campaign "$(CAMPAIGN)" \
+		--model "$(MODEL)" \
+		--policies "$(POLICIES)" \
+		--seeds "$(SEEDS)" \
+		--save-checkpoints "$(SAVE_CHECKPOINTS)" \
+		--dag "$(DAG)" \
+		--wait "$(WAIT)"
+
+bench-paper:
+	@if [ -z "$(CAMPAIGN)" ] && [ -z "$(CONFIG)" ]; then \
+		echo "Uso: make bench-paper CAMPAIGN=cara-electricity [ENV=docker|local|aws]"; \
+		exit 1; \
+	fi
+	$(MAKE) bench \
+		ENV="$(ENV)" \
+		CONFIG="$(if $(CONFIG),$(CONFIG),configs/campaigns/$(CAMPAIGN).yaml)" \
+		CAMPAIGN="$(CAMPAIGN)" \
+		SAVE_CHECKPOINTS="$(SAVE_CHECKPOINTS)" \
+		DAG="$(DAG)" \
+		WAIT="$(WAIT)"
+
 aws-validate:
 	CFN_LINT="uvx --from cfn-lint==1.60.0 cfn-lint" uv run python scripts/aws/validate_templates.py
 	uv run python scripts/aws/validate_asl.py infra/statemachines/benchmark.asl.json infra/statemachines/dataset.asl.json
@@ -48,35 +98,17 @@ aws-lambda:
 aws-bootstrap:
 	REPOSITORY=$(REPOSITORY) OVERRIDES=$(OVERRIDES) scripts/aws/bootstrap.sh
 
-aws-dataset-smoke:
-	scripts/aws/start_dataset.sh infra/examples/dataset-social-smoke.json
-
-aws-dataset-full:
-	scripts/aws/start_dataset.sh infra/examples/dataset-social-full.json $(SUFFIX)
-
-aws-dataset-fraud-full:
-	scripts/aws/start_dataset.sh infra/examples/dataset-fraud-full.json $(SUFFIX)
-
-aws-dataset-ecommerce-full:
-	scripts/aws/start_dataset.sh infra/examples/dataset-ecommerce-full.json $(SUFFIX)
-
-aws-campaign-smoke:
-	scripts/aws/start_campaign.sh infra/examples/campaign-social-smoke.json $(SUFFIX)
-
-aws-campaign-full:
-	scripts/aws/start_campaign.sh infra/examples/campaign-social-full.json $(SUFFIX)
-
-aws-campaign-fraud-full:
-	scripts/aws/start_campaign.sh infra/examples/campaign-fraud-full.json $(SUFFIX)
-
-aws-campaign-ecommerce-full:
-	scripts/aws/start_campaign.sh infra/examples/campaign-ecommerce-full.json $(SUFFIX)
-
-aws-campaign-full-cost-aware:
-	scripts/aws/start_campaign.sh infra/examples/campaign-social-full-cost-aware.json $(SUFFIX)
-
-aws-campaign-matrix:
-	scripts/aws/start_campaign.sh infra/examples/campaign-binary-matrix.json
+aws-campaign:
+	@if [ -z "$(CAMPAIGN)" ] && [ -z "$(CONFIG)" ]; then \
+		echo "Uso: make aws-campaign CAMPAIGN=cara-electricity [SEEDS=0,1,2] [VCPUS=2] [MEMORY_MIB=4096]"; \
+		exit 1; \
+	fi
+	uv run continual-bench aws run-campaign \
+		--config "$(if $(CONFIG),$(CONFIG),configs/campaigns/$(CAMPAIGN).yaml)" \
+		$(if $(SEEDS),--seeds "$(SEEDS)",) \
+		$(if $(POLICIES),--policies "$(POLICIES)",) \
+		$(if $(VCPUS),--vcpus "$(VCPUS)",) \
+		$(if $(MEMORY_MIB),--memory-mib "$(MEMORY_MIB)",)
 
 aws-mlflow-ui:
 	uv run continual-bench aws mlflow-url

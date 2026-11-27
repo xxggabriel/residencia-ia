@@ -25,7 +25,7 @@ from typing import Protocol
 
 from continual_bench.infrastructure.storage import atomic_write
 
-from . import zia
+from . import pinned_stream as zia
 from .pinned_streams import PinnedRealStreamProvider
 
 FORMAT = zia.FORMAT

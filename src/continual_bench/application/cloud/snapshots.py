@@ -10,7 +10,7 @@ import json
 import shutil
 from pathlib import Path
 
-from continual_bench.datasets.zia import DATASETS, FORMAT, SMOKE_ROWS, load_manifest, prepare
+from continual_bench.datasets.pinned_stream import DATASETS, FORMAT, SMOKE_ROWS, load_manifest, prepare
 from continual_bench.infrastructure.object_store import ObjectExists, get_json, put_json_once, sha256_path
 
 from . import layout
@@ -28,7 +28,7 @@ class SnapshotNotReady(RuntimeError):
 
 
 def transform_code_sha256() -> str:
-    import continual_bench.datasets.zia as module
+    import continual_bench.datasets.pinned_stream as module
 
     return hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
 

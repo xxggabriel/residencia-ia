@@ -1,6 +1,14 @@
+from pathlib import Path
+
 import pytest
 
 _RENDER_MARKERS = ("observation_pngs", "services", "benchmark")
+_TIER_MARKERS = {
+    "unit": pytest.mark.unit,
+    "integration": pytest.mark.integration,
+    "e2e": pytest.mark.e2e,
+}
+_TESTS_ROOT = Path(__file__).resolve().parent
 
 
 def pytest_addoption(parser):
@@ -9,6 +17,14 @@ def pytest_addoption(parser):
 
 
 def pytest_collection_modifyitems(config, items):
+    for item in items:
+        try:
+            rel_parts = Path(item.fspath).resolve().relative_to(_TESTS_ROOT).parts
+        except ValueError:
+            rel_parts = ()
+        if rel_parts and rel_parts[0] in _TIER_MARKERS:
+            item.add_marker(_TIER_MARKERS[rel_parts[0]])
+
     shard = config.getoption("--shard")
     num_shards = config.getoption("--num-shards")
     if shard is None or num_shards <= 1:

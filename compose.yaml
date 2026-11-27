@@ -34,6 +34,9 @@ x-airflow: &airflow
 
 x-worker-env: &worker-env
   PYTHONHASHSEED: "0"
+  BENCH_ENV: ${BENCH_ENV:-docker}
+  BENCH_SAVE_MODEL_CHECKPOINTS: ${BENCH_SAVE_MODEL_CHECKPOINTS:-false}
+  BENCH_GENERATE_PLOTS: ${BENCH_GENERATE_PLOTS:-false}
   BENCH_STATE: /state/runs
   BENCH_DATASETS: /state/datasets
   # Exactly one run in each independently limited execution container.
@@ -51,15 +54,6 @@ x-worker-env: &worker-env
   MLFLOW_TRACKING_URI: http://mlflow:5000
   MLFLOW_TRACKING_USERNAME: ${WEB_USER:?required}
   MLFLOW_TRACKING_PASSWORD: ${MLFLOW_PASSWORD:?required}
-  ZENML_STORE_URL: http://zenml:8080
-  ZENML_STORE_USERNAME: ${WEB_USER:?required}
-  ZENML_STORE_PASSWORD: ${WEB_PASSWORD:?required}
-  ZENML_CONFIG_PATH: /state/zen-config
-  ZENML_ANALYTICS_OPT_IN: "false"
-  # OSS dashboard only renders default. It is dedicated to this benchmark deployment.
-  BENCH_ZENML_PROJECT: default
-  BENCH_ZENML_ARTIFACT_STORE: benchmark-minio-v2
-  BENCH_ZENML_STACK: benchmark-minio-v2
 
 services:
   postgres:
@@ -114,25 +108,6 @@ services:
     volumes: [kafka-data:/var/lib/kafka/data]
     healthcheck:
       test: [CMD-SHELL, /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null]
-      interval: 15s
-      timeout: 10s
-      retries: 12
-    mem_limit: 1536m
-    cpus: 2
-
-  zenml:
-    <<: *common
-    image: zenmldocker/zenml-server:0.98.0
-    environment:
-      ZENML_STORE_URL: sqlite:////zenml/zenml.db
-      ZENML_SERVER_AUTO_ACTIVATE: "1"
-      ZENML_DEFAULT_USER_NAME: ${WEB_USER:?required}
-      ZENML_DEFAULT_USER_PASSWORD: ${WEB_PASSWORD:?required}
-      ZENML_ANALYTICS_OPT_IN: "false"
-    volumes: [zenml-data:/zenml, zen-artifacts:/state/zen-artifacts:ro]
-    ports: ["${WEB_BIND_IP:?required}:18082:8080"]
-    healthcheck:
-      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
       interval: 15s
       timeout: 10s
       retries: 12
@@ -212,12 +187,14 @@ services:
     <<: *common
     build: .
     image: continual-bench-worker:0.1.0
-    environment: *worker-env
-    volumes: [worker-data:/state, zen-artifacts:/state/zen-artifacts]
+    environment:
+      <<: *worker-env
+      BENCH_EVENT_SPOOL: /event-spool/events.sqlite3
+      BENCH_LOG_ENVIRONMENT: ${BENCH_LOG_ENVIRONMENT:-homelab}
+    volumes: [worker-data:/state, event-spool:/event-spool]
     depends_on:
       storage-init: {condition: service_completed_successfully}
       kafka: {condition: service_healthy}
-      zenml: {condition: service_healthy}
       mlflow: {condition: service_healthy}
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8088/ready', timeout=5)"]
@@ -267,6 +244,16 @@ services:
 
   airflow-api:
     <<: *airflow
+    environment:
+      <<: *airflow-env
+      AIRFLOW__LOGGING__LOGGING_CONFIG_CLASS: continual_bench.observability.airflow_logs.LOGGING_CONFIG
+      BENCH_TASK_LOG_BACKEND: ${BENCH_TASK_LOG_BACKEND:-local}
+      BENCH_GRAYLOG_URL: http://graylog:9000
+      BENCH_GRAYLOG_STREAM: ${BENCH_GRAYLOG_STREAM:-}
+      BENCH_GRAYLOG_TOKEN_FILE: /run/secrets/graylog-reader
+      BENCH_LOG_ENVIRONMENT: ${BENCH_LOG_ENVIRONMENT:-homelab}
+    secrets: [graylog-reader]
+    networks: [bench, observability]
     command: api-server
     ports: ["${WEB_BIND_IP:?required}:18081:8080"]
     healthcheck:
@@ -296,14 +283,89 @@ services:
       timeout: 15s
       retries: 12
 
+  log-forwarder:
+    profiles: ["observability"]
+    image: continual-bench-worker:0.1.0
+    entrypoint: [python, -m, continual_bench.observability.forward]
+    environment:
+      BENCH_EVENT_SPOOL: /event-spool/events.sqlite3
+      BENCH_GELF_URL: http://graylog:12201/gelf
+    volumes: [event-spool:/event-spool]
+    networks: [observability]
+    restart: unless-stopped
+    mem_limit: 128m
+    security_opt: [no-new-privileges:true]
+
+  graylog-mongo:
+    profiles: ["observability"]
+    image: mongo:7.0.30
+    volumes: [graylog-mongo:/data/db]
+    networks: [graylog-storage]
+    restart: unless-stopped
+    mem_limit: 1g
+
+  graylog-search:
+    profiles: ["observability"]
+    image: opensearchproject/opensearch:2.19.5
+    environment:
+      discovery.type: single-node
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms768m -Xmx768m
+    volumes: [graylog-search:/usr/share/opensearch/data]
+    networks: [graylog-storage]
+    restart: unless-stopped
+    mem_limit: 2g
+
+  graylog:
+    profiles: ["observability"]
+    image: graylog/graylog:7.1.0
+    # Compose interpolates inactive profiles, so require credentials when this service starts.
+    entrypoint:
+      - tini
+      - --
+      - /bin/sh
+      - -ec
+      - |
+        : "$${GRAYLOG_PASSWORD_SECRET:?required}" "$${GRAYLOG_ROOT_PASSWORD_SHA2:?required}"
+        exec /docker-entrypoint.sh "$$@"
+      - graylog
+    command: [server]
+    environment:
+      GRAYLOG_PASSWORD_SECRET: ${GRAYLOG_PASSWORD_SECRET:-}
+      GRAYLOG_ROOT_PASSWORD_SHA2: ${GRAYLOG_ROOT_PASSWORD_SHA2:-}
+      GRAYLOG_HTTP_BIND_ADDRESS: 0.0.0.0:9000
+      GRAYLOG_HTTP_EXTERNAL_URI: http://127.0.0.1:${GRAYLOG_UI_PORT:-19000}/
+      GRAYLOG_MONGODB_URI: mongodb://graylog-mongo:27017/graylog
+      GRAYLOG_ELASTICSEARCH_HOSTS: http://graylog-search:9200
+      GRAYLOG_SERVER_JAVA_OPTS: -Xms768m -Xmx768m -XX:+UseG1GC
+      GRAYLOG_MESSAGE_JOURNAL_MAX_SIZE: 1gb
+      GRAYLOG_MESSAGE_JOURNAL_MAX_AGE: 24h
+    depends_on: [graylog-mongo, graylog-search]
+    volumes: [graylog-data:/usr/share/graylog/data]
+    ports: ["127.0.0.1:${GRAYLOG_UI_PORT:-19000}:9000"]
+    networks: [observability, graylog-storage]
+    restart: unless-stopped
+    mem_limit: 2g
+
 networks:
   bench: {}
+  observability: {}
+  graylog-storage:
+    internal: true
+
 volumes:
   postgres-data:
   minio-data:
   kafka-data:
-  zenml-data:
   mlflow-data:
   worker-data:
   airflow-logs:
-  zen-artifacts:
+  event-spool:
+  graylog-mongo:
+  graylog-search:
+  graylog-data:
+
+secrets:
+  graylog-reader:
+    file: ${BENCH_GRAYLOG_TOKEN_PATH:-/dev/null}

@@ -8,7 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from continual_bench.datasets.zia import DATASETS, FORMAT, SMOKE_ROWS
+from continual_bench.datasets.pinned_stream import DATASETS, FORMAT, SMOKE_ROWS
 from continual_bench.infrastructure.object_store import put_json, put_json_once
 
 from . import layout
@@ -23,7 +23,7 @@ def fixture_parquet(path: Path, dataset="social") -> dict:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    from continual_bench.datasets.zia import sha256_file
+    from continual_bench.datasets.pinned_stream import sha256_file
 
     path.parent.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(7)

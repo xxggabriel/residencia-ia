@@ -146,7 +146,7 @@ def resolve_unit_model_name(unit: RunUnit) -> str:
         return str(unit.labels["model"])
     dataset = params.get("dataset") or unit.labels.get("dataset")
     if dataset:
-        from continual_bench.datasets.zia import DATASETS as ZIA_DATASETS
+        from continual_bench.datasets.pinned_stream import DATASETS as ZIA_DATASETS
 
         if dataset in ZIA_DATASETS:
             return ZIA_DATASETS[dataset]["model"]
@@ -357,4 +357,60 @@ def build_aws_runtime(
         tracker_factory=tracker_factory,
         model_registrar=registrar,
         env=resolved_env,
+    )
+
+
+def resolve_runtime(
+    env_name: str | None = None,
+    *,
+    settings: Any = None,
+    plugins: tuple[str, ...] = (),
+    env: Mapping[str, str] | None = None,
+) -> ExecutionRuntime:
+    """Resolve an ``ExecutionRuntime`` from ``RuntimeSettings`` (``local``, ``docker``, or ``aws``)."""
+    from continual_bench.backends.base import RuntimeSettings
+
+    resolved_settings = settings or RuntimeSettings.from_env(env_name=env_name)
+    merged_env = dict(os.environ if env is None else env)
+    merged_env.setdefault("BENCH_ENV", resolved_settings.env_name)
+    merged_env.setdefault("BENCH_PLATFORM", resolved_settings.platform)
+    merged_env.setdefault(
+        "BENCH_SAVE_MODEL_CHECKPOINTS",
+        "true" if resolved_settings.save_model_checkpoints else "false",
+    )
+    merged_env.setdefault(
+        "BENCH_GENERATE_PLOTS",
+        "true" if resolved_settings.generate_plots else "false",
+    )
+    if resolved_settings.tracking_uri:
+        merged_env.setdefault("MLFLOW_TRACKING_URI", resolved_settings.tracking_uri)
+    if resolved_settings.s3_endpoint_url:
+        merged_env.setdefault("S3_ENDPOINT_URL", resolved_settings.s3_endpoint_url)
+    if resolved_settings.bucket:
+        merged_env.setdefault("BENCH_BUCKET", resolved_settings.bucket)
+
+    if resolved_settings.platform == "aws":
+        bucket = resolved_settings.bucket or merged_env.get("BENCH_BUCKET", "benchmarks")
+        return build_aws_runtime(
+            bucket,
+            mlflow_tracking_uri=resolved_settings.tracking_uri or None,
+            enable_model_registry=resolved_settings.save_model_checkpoints,
+            plugins=plugins,
+            env=merged_env,
+        )
+    if resolved_settings.platform == "homelab":
+        raw_out = str(resolved_settings.output_dir)
+        local_root = None if raw_out.startswith("s3://") else raw_out
+        return build_container_runtime(
+            local_root=local_root,
+            bucket=resolved_settings.bucket or None,
+            endpoint_url=resolved_settings.s3_endpoint_url or None,
+            mlflow_tracking_uri=resolved_settings.tracking_uri or None,
+            plugins=plugins,
+            env=merged_env,
+        )
+    return build_cli_runtime(
+        str(resolved_settings.output_dir),
+        plugins=plugins,
+        env=merged_env,
     )

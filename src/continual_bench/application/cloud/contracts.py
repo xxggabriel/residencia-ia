@@ -9,7 +9,7 @@ from pydantic import Field, field_validator, model_validator
 
 from continual_bench.config import Strict
 from continual_bench.core.policies import ZiaPolicy
-from continual_bench.datasets.zia import DATASETS, FORMAT, SCOPES
+from continual_bench.datasets.pinned_stream import DATASETS, FORMAT, SCOPES
 
 CAMPAIGN_ID = r"^[a-z0-9][a-z0-9-]{0,39}$"
 GIT_SHA = r"^[0-9a-f]{40}$"

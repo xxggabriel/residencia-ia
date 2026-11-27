@@ -25,14 +25,9 @@ def emit(value):
 def _run_options(parser):
     parser.add_argument("--state", default="state")
     parser.add_argument("--services", action="store_true")
-    parser.add_argument("--zenml", action="store_true")
 
 
 def _execute(config, args):
-    if args.zenml:
-        from .orchestration.zenml_pipeline import execute_pipeline
-
-        return execute_pipeline(config, args.state, services=args.services)
     from .application.runner import run
 
     return run(config, args.state, services=args.services)
@@ -111,7 +106,6 @@ def _campaign_options(parser):
     parser.add_argument("config")
     parser.add_argument("--state", default="state/task_evaluation")
     parser.add_argument("--services", action="store_true")
-    parser.add_argument("--zenml", action="store_true")
 
 
 @command("campaign", _campaign_options)
@@ -120,14 +114,7 @@ def campaign_command(args):
     from .config import load_model
 
     specification = load_model(Campaign, args.config)
-    executor = None
-    if args.zenml:
-        from .orchestration.zenml_pipeline import execute_pipeline as executor
-    emit(
-        execute_campaign(
-            specification, args.state, services=args.services, zenml=args.zenml, executor=executor
-        )
-    )
+    emit(execute_campaign(specification, args.state, services=args.services))
 
 
 @command(
@@ -385,6 +372,40 @@ def matrix_command(args):
     )
     emit(
         {"complete": journal["complete"], "cases": len(journal["cases"]), "skipped": len(journal["skipped"])}
+    )
+
+
+def _benchmark_options(parser):
+    parser.add_argument("config", help="YAML or JSON CampaignConfig")
+    parser.add_argument("--platform", choices=("local", "homelab", "aws"), default=None)
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--tracking-uri", default=None)
+    parser.add_argument(
+        "--save-checkpoints",
+        action="store_true",
+        default=None,
+        help="allow saving model checkpoints (default: disabled)",
+    )
+
+
+@command("benchmark", _benchmark_options)
+def benchmark_command(args):
+    from .protocols.campaign import run_campaign
+
+    result = run_campaign(
+        args.config,
+        platform=args.platform,
+        output_dir=args.output_dir,
+        tracking_uri=args.tracking_uri,
+        save_model_checkpoints=args.save_checkpoints,
+    )
+    emit(
+        {
+            "protocol": result.protocol,
+            "dataset": result.dataset,
+            "aggregate_summary": result.aggregate_summary,
+            "artifacts": result.artifacts,
+        }
     )
 
 

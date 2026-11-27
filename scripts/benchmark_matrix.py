@@ -15,7 +15,6 @@ def main():
     parser.add_argument("--samples", type=int, default=30_000)
     parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     parser.add_argument("--services", action="store_true")
-    parser.add_argument("--zenml", action="store_true")
     args = parser.parse_args()
     root = Path(args.state).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -48,11 +47,8 @@ def main():
                         "--state",
                         str(root),
                     ]
-                    command += [
-                        flag
-                        for flag, enabled in (("--services", args.services), ("--zenml", args.zenml))
-                        if enabled
-                    ]
+                    if args.services:
+                        command.append("--services")
                     subprocess.run(command, check=True)
                     summary.append(json.loads((root / config.identity() / "report.json").read_text()))
                     (root / "matrix-summary.json").write_text(json.dumps(summary, indent=2))

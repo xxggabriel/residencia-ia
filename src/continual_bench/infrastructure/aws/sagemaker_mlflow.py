@@ -27,6 +27,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from continual_bench.infrastructure.stream_model_bundle import (
+    PYFUNC_LOADER,
+    pyfunc_code_paths,
+    pyfunc_dependencies,
+)
 from continual_bench.infrastructure.tracking import MlflowClientBackend
 from continual_bench.infrastructure.tracking.artifacts import artifact_plan, upload_concurrently
 from continual_bench.infrastructure.tracking.mlflow_async import (
@@ -34,11 +39,6 @@ from continual_bench.infrastructure.tracking.mlflow_async import (
     configure_mlflow_system_metrics,
 )
 from continual_bench.infrastructure.tracking.rounds import publish_training_rounds
-from continual_bench.infrastructure.zia_model_bundle import (
-    PYFUNC_LOADER,
-    pyfunc_code_paths,
-    pyfunc_dependencies,
-)
 
 from .mlflow_tracking import ARTIFACT_ROOT, report_metric_items, report_params
 
@@ -367,8 +367,19 @@ def publish_with_library(
                 report,
                 child_runs,
             )
-            # prepare_artifacts already rendered the dashboards: upload them instead of re-plotting.
-            figures = _saved_figures(output_dir) or log_report_figures(report)
+            plots_enabled = os.environ.get("BENCH_GENERATE_PLOTS", "true").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            checkpoints_enabled = os.environ.get("BENCH_SAVE_MODEL_CHECKPOINTS", "true").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            figures = (_saved_figures(output_dir) or log_report_figures(report)) if plots_enabled else []
             uploaded = _log_artifacts(
                 client,
                 run_id,
@@ -377,9 +388,13 @@ def publish_with_library(
             )
             if output_dir is not None and not uploaded:
                 raise ValueError("MLflow run has no uploaded artifacts")
-            pyfunc_logged = _log_pyfunc_model(mlflow, output_dir, report)
+            pyfunc_logged = _log_pyfunc_model(mlflow, output_dir, report) if checkpoints_enabled else False
             run = client.get_run(run_id)  # artifact_uri is final once the run exists
-            registry = _register_checkpoints(client, tracker, report, run, model_package_arn, pyfunc_logged)
+            registry = (
+                _register_checkpoints(client, tracker, report, run, model_package_arn, pyfunc_logged)
+                if checkpoints_enabled
+                else {"registered_model": "", "registered_model_version": ""}
+            )
             tags_done = {
                 "benchmark_complete": "true",
                 "zia_artifacts_status": "complete",

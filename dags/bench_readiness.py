@@ -1,20 +1,25 @@
 """Finite read-only checks used by the Airflow admission task."""
 
 import json
+import os
 import urllib.error
 import urllib.request
 
 HTTP_DEPENDENCIES = {
-    "mlflow": "http://mlflow:5000/health",
-    "minio": "http://minio:9000/minio/health/live",
-    "zenml": "http://zenml:8080/health",
-    "worker": "http://worker:8088/ready",
+    "mlflow": os.environ.get("BENCH_MLFLOW_HEALTH_URL", "http://mlflow:5000/health"),
+    "minio": os.environ.get("BENCH_MINIO_HEALTH_URL", "http://minio:9000/minio/health/live"),
+    "worker": os.environ.get("BENCH_WORKER_HEALTH_URL", "http://worker:8088/ready"),
 }
 
 
-def require_dependencies(opener=None):
+def require_dependencies(opener=None, *, include_worker: bool = True):
     failures = []
-    for name, url in HTTP_DEPENDENCIES.items():
+    deps = {
+        k: v
+        for k, v in HTTP_DEPENDENCIES.items()
+        if include_worker or k != "worker"
+    }
+    for name, url in deps.items():
         try:
             with (opener or urllib.request.urlopen)(url, timeout=4) as response:
                 if response.status != 200:
@@ -35,4 +40,4 @@ def require_dependencies(opener=None):
             + "; ".join(failures)
             + ". No benchmark was submitted. Check deployment readiness before rerunning."
         )
-    return {"ready": True, "checked": list(HTTP_DEPENDENCIES)}
+    return {"ready": True, "checked": list(deps)}

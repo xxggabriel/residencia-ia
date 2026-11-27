@@ -1,0 +1,55 @@
+name: Publish Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs_v2/**"
+      - ".github/workflows/publish-wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-wiki-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Sync docs_v2/ to GitHub Wiki
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout docs
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /docs_v2/
+
+      - name: Verify Wiki source files
+        run: |
+          test -f docs_v2/Home.md
+          test -f docs_v2/_Sidebar.md
+
+      - name: Clone Wiki repository
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_PUSH_TOKEN || github.token }}
+        run: |
+          git clone "https://x-access-token:${WIKI_TOKEN}@github.com/${{ github.repository }}.wiki.git" /tmp/wiki
+
+      - name: Sync Markdown pages and push
+        run: |
+          find /tmp/wiki -maxdepth 1 -type f -name '*.md' -delete
+          cp docs_v2/*.md /tmp/wiki/
+          cd /tmp/wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteracao na Wiki."
+            exit 0
+          fi
+          git commit -m "docs: publish wiki from main (${GITHUB_SHA::7})"
+          git push origin HEAD
