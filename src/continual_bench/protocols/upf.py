@@ -24,7 +24,7 @@ from continual_bench.protocols.common import (
 from continual_bench.retraining.matrix import PerformanceMatrix, build_paper_matrix
 from continual_bench.retraining.rules import UPF, CaraCT, CaraP, CaraT, Oracle
 from continual_bench.retraining.schedule import alpha_max_same_batch
-from continual_bench.tracking.tracker import BenchmarkTracker, SeedRows
+from continual_bench.tracking.tracker import BenchmarkTracker
 
 logger = logging.getLogger(__name__)
 
@@ -178,38 +178,50 @@ def _detector_retrains(
     )
 
 
-def _evaluate_schedule(matrix: PerformanceMatrix, retrains: list[int], alpha: float) -> dict[str, float]:
+def _evaluate_schedule_with_retrains(
+    matrix: PerformanceMatrix, retrains: list[int], alpha: float
+) -> tuple[dict[str, float], list[int]]:
     retrain_set = set(retrains)
     deployed = matrix.initial
     total_err = 0.0
     n_retrains = 0
     online_count = matrix.batches - matrix.offline
+    executed: list[int] = []
     for t in range(matrix.offline, matrix.batches):
         if t in retrain_set:
             deployed = t
             n_retrains += 1
+            executed.append(t)
         total_err += float(matrix.err[deployed, t])
     cost = total_err + float(alpha) * n_retrains
     avg_acc = 1.0 - (total_err / max(1, online_count))
-    return {
-        "cost": float(cost),
-        "retrains": float(n_retrains),
-        "average_accuracy": float(avg_acc),
-    }
+    return (
+        {
+            "cost": float(cost),
+            "retrains": float(n_retrains),
+            "average_accuracy": float(avg_acc),
+        },
+        executed,
+    )
 
 
-def _replay_rule(
+def _evaluate_schedule(matrix: PerformanceMatrix, retrains: list[int], alpha: float) -> dict[str, float]:
+    metrics, _ = _evaluate_schedule_with_retrains(matrix, retrains, alpha)
+    return metrics
+
+
+def _replay_rule_with_retrains(
     matrix: PerformanceMatrix,
     policy: str,
     alpha: float,
     seed: int,
     upf_delta: float,
     upf_samples: int,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], list[int]]:
     if policy == "oracle":
         rule = Oracle(objective="error", same_batch=False)
         rule.fit_future(matrix, alpha)
-        return _evaluate_schedule(matrix, rule.schedule, alpha)
+        return _evaluate_schedule_with_retrains(matrix, rule.schedule, alpha)
 
     if policy == "upf":
         rule = UPF(delta=upf_delta, samples=upf_samples, seed=seed)
@@ -246,11 +258,94 @@ def _replay_rule(
         if rule.decide(t, deployed, view):
             retrains.append(t)
             deployed = t
-    return _evaluate_schedule(matrix, retrains, alpha)
+    return _evaluate_schedule_with_retrains(matrix, retrains, alpha)
+
+
+def _replay_rule(
+    matrix: PerformanceMatrix,
+    policy: str,
+    alpha: float,
+    seed: int,
+    upf_delta: float,
+    upf_samples: int,
+) -> dict[str, float]:
+    metrics, _ = _replay_rule_with_retrains(matrix, policy, alpha, seed, upf_delta, upf_samples)
+    return metrics
 
 
 class UpfProtocol(BenchmarkProtocol):
     """Strict UPF (Regol et al. 2025) protocol implementation."""
+
+    def build_seed_matrix(
+        self,
+        config: CampaignConfig,
+        seed: int,
+    ) -> tuple[int, PerformanceMatrix, dict[str, list[int]]]:
+        """Build performance matrix and detector schedules for a single seed."""
+        policies = list(config.policies) if config.policies else list(_DEFAULT_UPF_POLICIES)
+        staleness_mode = config.staleness_mode
+        if "staleness_mode" not in config.model_fields_set:
+            staleness_mode = "absolute"
+
+        ds_fields = config.dataset.model_fields_set
+        ds_updates: dict[str, Any] = {
+            "protocol": "upf",
+            "seed": config.dataset.seed + seed,
+        }
+        if "offline_batches" not in ds_fields:
+            ds_updates["offline_batches"] = 7
+        if "online_batches" not in ds_fields:
+            ds_updates["online_batches"] = 8
+        if "num_batches" not in ds_fields:
+            off_val = ds_updates.get("offline_batches", config.dataset.offline_batches)
+            on_val = ds_updates.get("online_batches", config.dataset.online_batches)
+            ds_updates["num_batches"] = (
+                off_val + on_val
+                if ("offline_batches" in ds_fields or "online_batches" in ds_fields)
+                else 15
+            )
+        if "split_ratio" not in ds_fields:
+            ds_updates["split_ratio"] = 0.8
+        spec = config.dataset.model_copy(update=ds_updates)
+        batches = load_stream_batches(spec)
+        offline = sum(1 for b in batches if b.is_offline)
+        if offline < 2 or offline > len(batches) - 2:
+            offline = min(max(2, spec.offline_batches), max(2, len(batches) - 2))
+        raw_batches = [
+            (
+                _to_dense_float64(b.X_train),
+                np.asarray(b.y_train),
+                _to_dense_float64(b.X_test),
+                np.asarray(b.y_test),
+            )
+            for b in batches
+        ]
+        model_cfg = config.model.model_copy(update={"seed": seed})
+        learner = AdapterLearner(model_cfg)
+        matrix, states = build_paper_matrix(raw_batches, learner, offline=offline, seed=seed)
+        if staleness_mode == "absolute":
+            matrix = _to_absolute_staleness_matrix(matrix, gamma=config.kernel_gamma)
+        elif config.kernel_gamma is not None:
+            matrix._gamma = float(config.kernel_gamma)
+
+        detector_schedules: dict[str, list[int]] = {}
+        for pol in policies:
+            if pol in _DETECTOR_SPECS:
+                detector_schedules[pol] = _detector_retrains(pol, batches, states, offline, seed=seed)
+
+        return seed, matrix, detector_schedules
+
+    def run_seed_matrix(
+        self,
+        config: CampaignConfig,
+        seed: int,
+        tracker: BenchmarkTracker,
+    ) -> tuple:
+        return tracker.run_matrix(
+            seed,
+            lambda: self.build_seed_matrix(config, seed),
+            lambda result: result[1].fit_seconds,
+        )
 
     def run(
         self,
@@ -259,74 +354,21 @@ class UpfProtocol(BenchmarkProtocol):
         tracker: BenchmarkTracker,
     ) -> ProtocolResult:
         seeds = list(config.seeds) if config.seeds else list(range(10))
-        policies = list(config.policies) if config.policies else list(_DEFAULT_UPF_POLICIES)
-        dataset_canonical = canonical_dataset_name(config.dataset.name)
-
-        # UPF default staleness mode is "absolute" per Appendix A.12 p. 32 unless overridden.
-        staleness_mode = config.staleness_mode
-        if "staleness_mode" not in config.model_fields_set:
-            staleness_mode = "absolute"
-
-        def _build_seed_matrix(
-            seed: int,
-        ) -> tuple[int, PerformanceMatrix, dict[str, list[int]]]:
-            ds_fields = config.dataset.model_fields_set
-            ds_updates: dict[str, Any] = {
-                "protocol": "upf",
-                "seed": config.dataset.seed + seed,
-            }
-            if "offline_batches" not in ds_fields:
-                ds_updates["offline_batches"] = 7
-            if "online_batches" not in ds_fields:
-                ds_updates["online_batches"] = 8
-            if "num_batches" not in ds_fields:
-                off_val = ds_updates.get("offline_batches", config.dataset.offline_batches)
-                on_val = ds_updates.get("online_batches", config.dataset.online_batches)
-                ds_updates["num_batches"] = (
-                    off_val + on_val
-                    if ("offline_batches" in ds_fields or "online_batches" in ds_fields)
-                    else 15
-                )
-            if "split_ratio" not in ds_fields:
-                ds_updates["split_ratio"] = 0.8
-            spec = config.dataset.model_copy(update=ds_updates)
-            batches = load_stream_batches(spec)
-            offline = sum(1 for b in batches if b.is_offline)
-            if offline < 2 or offline > len(batches) - 2:
-                offline = min(max(2, spec.offline_batches), max(2, len(batches) - 2))
-            raw_batches = [
-                (
-                    _to_dense_float64(b.X_train),
-                    np.asarray(b.y_train),
-                    _to_dense_float64(b.X_test),
-                    np.asarray(b.y_test),
-                )
-                for b in batches
-            ]
-            model_cfg = config.model.model_copy(update={"seed": seed})
-            learner = AdapterLearner(model_cfg)
-            matrix, states = build_paper_matrix(raw_batches, learner, offline=offline, seed=seed)
-            if staleness_mode == "absolute":
-                matrix = _to_absolute_staleness_matrix(matrix, gamma=config.kernel_gamma)
-            elif config.kernel_gamma is not None:
-                matrix._gamma = float(config.kernel_gamma)
-
-            detector_schedules: dict[str, list[int]] = {}
-            for pol in policies:
-                if pol in _DETECTOR_SPECS:
-                    detector_schedules[pol] = _detector_retrains(pol, batches, states, offline, seed=seed)
-
-            return seed, matrix, detector_schedules
-
         seed_matrices = backend.run_tasks(
-            [
-                lambda s=s: tracker.run_matrix(
-                    s, lambda: _build_seed_matrix(s), lambda result: result[1].fit_seconds
-                )
-                for s in seeds
-            ],
+            [lambda s=s: self.run_seed_matrix(config, s, tracker) for s in seeds],
             max_workers=config.max_workers,
         )
+        return self.score_and_finalize(config, seed_matrices, backend, tracker)
+
+    def score_and_finalize(
+        self,
+        config: CampaignConfig,
+        seed_matrices: list[tuple[int, PerformanceMatrix, dict[str, list[int]]]],
+        backend: ExecutionBackend,
+        tracker: BenchmarkTracker,
+    ) -> ProtocolResult:
+        policies = list(config.policies) if config.policies else list(_DEFAULT_UPF_POLICIES)
+        dataset_canonical = canonical_dataset_name(config.dataset.name)
 
         if config.alpha_grid:
             alpha_grid = [float(v) for v in config.alpha_grid]
@@ -359,10 +401,17 @@ class UpfProtocol(BenchmarkProtocol):
 
         def _score_seed(
             seed_data: tuple[int, PerformanceMatrix, dict[str, list[int]]],
-        ) -> SeedRows:
+        ) -> tuple[
+            list[dict[str, Any]],
+            list[dict[str, Any]],
+            list[dict[str, Any]],
+            list[dict[str, Any]],
+        ]:
             seed, matrix, detector_schedules = seed_data
             seed_regime_rows: list[dict[str, Any]] = []
             seed_summary_rows: list[dict[str, Any]] = []
+            seed_retrain_events: list[dict[str, Any]] = []
+            seed_batch_rows: list[dict[str, Any]] = []
 
             for pol in policies:
                 grid_costs: list[float] = []
@@ -393,11 +442,13 @@ class UpfProtocol(BenchmarkProtocol):
                         }
                     )
 
-                for reg_name, alpha_val in regimes.items():
+                for reg_idx, (reg_name, alpha_val) in enumerate(regimes.items()):
                     if pol in detector_schedules:
-                        metrics = _evaluate_schedule(matrix, detector_schedules[pol], alpha_val)
+                        metrics, executed = _evaluate_schedule_with_retrains(
+                            matrix, detector_schedules[pol], alpha_val
+                        )
                     else:
-                        metrics = _replay_rule(
+                        metrics, executed = _replay_rule_with_retrains(
                             matrix,
                             pol,
                             alpha_val,
@@ -414,6 +465,63 @@ class UpfProtocol(BenchmarkProtocol):
                             **metrics,
                         }
                     )
+                    if reg_idx == 0:
+                        retrain_set = set(executed)
+                        deployed = matrix.initial
+                        cum_cost = 0.0
+                        for t in range(matrix.offline, matrix.batches):
+                            is_ret = t in retrain_set
+                            if is_ret:
+                                deployed = t
+                            err_t = float(matrix.err[deployed, t])
+                            acc_t = 1.0 - err_t
+                            stale_t = float(matrix.staleness(t, deployed)) if deployed < t else 0.0
+                            cum_cost += err_t + (float(alpha_val) if is_ret else 0.0)
+                            fit_sec = (
+                                float(matrix.fit_seconds[t])
+                                if is_ret and t < len(matrix.fit_seconds)
+                                else 0.0
+                            )
+                            seed_batch_rows.append(
+                                {
+                                    "seed": seed,
+                                    "policy": pol,
+                                    "regime": reg_name,
+                                    "batch_index": int(t),
+                                    "accuracy": acc_t,
+                                    "error": err_t,
+                                    "staleness": stale_t if math.isfinite(stale_t) else 0.0,
+                                    "model_age": int(t - deployed),
+                                    "deployed_model": int(deployed),
+                                    "cumulative_cost": cum_cost,
+                                    "retrain_decision": is_ret,
+                                    "fit_time_s": fit_sec,
+                                }
+                            )
+                    for v_idx, b in enumerate(executed, start=1):
+                        fit_sec = float(matrix.fit_seconds[b]) if b < len(matrix.fit_seconds) else 0.0
+                        samples_n = int(matrix.rows[b]) if b < len(matrix.rows) else 0
+                        post_err = float(matrix.err[b, b]) if b < matrix.err.shape[0] else 0.0
+                        v_name = f"{pol}-s{seed}-{reg_name}-v{v_idx}-b{int(b)}"
+                        seed_retrain_events.append(
+                            {
+                                "seed": seed,
+                                "policy": pol,
+                                "version_index": v_idx,
+                                "version_name": v_name,
+                                "batch_index": int(b),
+                                "step": int(b),
+                                "regime": reg_name,
+                                "alpha": float(alpha_val),
+                                "retrain_cost": float(alpha_val),
+                                "fit_seconds": fit_sec,
+                                "train_seconds": fit_sec,
+                                "train_samples": samples_n,
+                                "window_size": samples_n,
+                                "post_retrain_error": post_err,
+                                "post_retrain_accuracy": 1.0 - post_err,
+                            }
+                        )
 
                 auc_val = (
                     trapezoid_auc(grid_costs, alpha_grid) if len(alpha_grid) >= 2 else float(grid_costs[0])
@@ -429,7 +537,7 @@ class UpfProtocol(BenchmarkProtocol):
                     }
                 )
 
-            return seed_regime_rows, seed_summary_rows, [], []
+            return seed_regime_rows, seed_summary_rows, seed_retrain_events, seed_batch_rows
 
         tasks = [
             lambda sd=sd: tracker.run_seed_scoring(sd[0], policies, lambda: _score_seed(sd))
@@ -439,9 +547,18 @@ class UpfProtocol(BenchmarkProtocol):
 
         all_regime_records: list[dict[str, Any]] = []
         all_seed_summaries: list[dict[str, Any]] = []
-        for reg_rows, sum_rows, _, _ in seed_outputs:
+        for reg_rows, sum_rows, ret_events, batch_rows in seed_outputs:
             all_regime_records.extend(reg_rows)
             all_seed_summaries.extend(sum_rows)
+            for ev in ret_events:
+                tracker.log_retrain_event(ev["seed"], ev["policy"], ev)
+            for br in batch_rows:
+                tracker.log_batch(
+                    br["seed"],
+                    br["policy"],
+                    br["regime"],
+                    {k: v for k, v in br.items() if k not in {"seed", "policy", "regime"}},
+                )
 
         log_protocol_outputs(tracker, all_seed_summaries, all_regime_records)
 

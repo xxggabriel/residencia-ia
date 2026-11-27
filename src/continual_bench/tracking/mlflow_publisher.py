@@ -125,6 +125,8 @@ def _ensure_experiment_id(
     if raw_client is not None:
         exp = raw_client.get_experiment_by_name(exp_name)
         if exp is not None:
+            if getattr(exp, "lifecycle_stage", "active") == "deleted":
+                raw_client.restore_experiment(exp.experiment_id)
             return str(exp.experiment_id)
         try:
             return str(raw_client.create_experiment(exp_name))
@@ -132,6 +134,8 @@ def _ensure_experiment_id(
             exp = raw_client.get_experiment_by_name(exp_name)
             if exp is None:
                 raise
+            if getattr(exp, "lifecycle_stage", "active") == "deleted":
+                raw_client.restore_experiment(exp.experiment_id)
             return str(exp.experiment_id)
 
     if isinstance(backend, RestBackend):
@@ -141,7 +145,15 @@ def _ensure_experiment_id(
                 f"{backend.API}/experiments/get-by-name",
                 params={"experiment_name": exp_name},
             )
-            return str(found["experiment"]["experiment_id"])
+            exp_obj = found["experiment"]
+            exp_id = str(exp_obj["experiment_id"])
+            if exp_obj.get("lifecycle_stage") == "deleted":
+                backend.request(
+                    "POST",
+                    f"{backend.API}/experiments/restore",
+                    payload={"experiment_id": exp_id},
+                )
+            return exp_id
         except Exception:
             created = backend.request(
                 "POST",
@@ -274,7 +286,13 @@ def _publish_seed_results(
                 s_metrics.append(
                     MetricPoint("cost_sensitivity/total_cost", cost_val, grid_idx, now_ms)
                 )
-                grid_idx += 1
+            for extra_key in ("kappa", "alpha", "strategy_scpe", "average_accuracy", "retrains"):
+                extra_val = _finite_float(rrow.get(extra_key))
+                if extra_val is not None:
+                    s_metrics.append(
+                        MetricPoint(f"cost_sensitivity/{extra_key}", extra_val, grid_idx, now_ms)
+                    )
+            grid_idx += 1
             continue
         for k, v in rrow.items():
             if k in {"run_id", "seed", "policy", "regime"}:
@@ -762,8 +780,13 @@ def publish_campaign_to_mlflow(
             metric_name = str(row.get("metric", "value"))
             mean_val = _finite_float(row.get("mean"))
             if mean_val is not None:
+                summary_key = (
+                    f"summary/{metric_name}"
+                    if reg in {"", "default", "price_grid"}
+                    else f"summary/{reg}/{metric_name}"
+                )
                 pol_metrics.append(
-                    MetricPoint(_sanitize_mlflow_name(f"summary/{metric_name}"), mean_val, 0, now_ms)
+                    MetricPoint(_sanitize_mlflow_name(summary_key), mean_val, 0, now_ms)
                 )
             for stat_key in ("mean", "std", "n_seeds"):
                 fval = _finite_float(row.get(stat_key))

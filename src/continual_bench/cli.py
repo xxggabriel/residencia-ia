@@ -25,14 +25,9 @@ def emit(value):
 def _run_options(parser):
     parser.add_argument("--state", default="state")
     parser.add_argument("--services", action="store_true")
-    parser.add_argument("--zenml", action="store_true")
 
 
 def _execute(config, args):
-    if args.zenml:
-        from .orchestration.zenml_pipeline import execute_pipeline
-
-        return execute_pipeline(config, args.state, services=args.services)
     from .application.runner import run
 
     return run(config, args.state, services=args.services)
@@ -111,7 +106,6 @@ def _campaign_options(parser):
     parser.add_argument("config")
     parser.add_argument("--state", default="state/task_evaluation")
     parser.add_argument("--services", action="store_true")
-    parser.add_argument("--zenml", action="store_true")
 
 
 @command("campaign", _campaign_options)
@@ -120,14 +114,7 @@ def campaign_command(args):
     from .config import load_model
 
     specification = load_model(Campaign, args.config)
-    executor = None
-    if args.zenml:
-        from .orchestration.zenml_pipeline import execute_pipeline as executor
-    emit(
-        execute_campaign(
-            specification, args.state, services=args.services, zenml=args.zenml, executor=executor
-        )
-    )
+    emit(execute_campaign(specification, args.state, services=args.services))
 
 
 @command(

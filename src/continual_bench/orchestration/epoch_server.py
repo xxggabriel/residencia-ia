@@ -131,7 +131,4 @@ class Handler(server.Handler):
 
 
 def serve():
-    from continual_bench.orchestration.zenml_pipeline import configure_local_stack
-
-    configure_local_stack(str(server.ROOT))
     ThreadingHTTPServer(("0.0.0.0", 8088), Handler).serve_forever()

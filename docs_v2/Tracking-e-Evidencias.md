@@ -38,7 +38,7 @@ Com o tracking habilitado e uma URI do MLflow configurada, a campanha cria ou re
 
 A avaliação abre runs por política e seed. Cada avaliação de seed publica as métricas, os arquivos de resumo, regimes e linha do tempo, e os eventos de retreino disponíveis antes do encerramento. A grade de avaliação calculada a partir do conjunto das matrizes continua aguardando todas as seeds. Os agregados por campanha e política, junto da comparação com os artigos, são publicados na consolidação.
 
-Falhas de execução capturadas encerram as runs afetadas com `FAILED`.
+O fluxo local e o worker usado pela DAG `benchmark_campaign` seguem esse ciclo. Falhas de execução capturadas encerram as runs afetadas com `FAILED`.
 
 ## MLflow gerenciado no SageMaker
 

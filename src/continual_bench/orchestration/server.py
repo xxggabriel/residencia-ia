@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -17,8 +16,8 @@ from uuid import uuid4
 
 from continual_bench.application.readiness import StackNotReady, ensure_tracking_ready
 from continual_bench.config import Config
-from continual_bench.infrastructure.storage import atomic_write, run_lock
-from continual_bench.observability.events import emit_event
+from continual_bench.infrastructure.storage import atomic_write, publication_lock, run_lock
+from continual_bench.observability.events import emit_event, task_context
 
 ROOT = Path(os.environ.get("BENCH_STATE", "/state/runs"))
 CONCURRENCY = int(os.environ.get("BENCH_CONCURRENCY", "1"))
@@ -39,12 +38,7 @@ def perform(config):
     status = {"run_key": identity, "status": "running", "started_at": time.time()}
     atomic_write(directory / "job.json", json.dumps(status).encode())
     try:
-        # SDK active-stack/project files are mutable: each subprocess owns a copy.
         environment = os.environ.copy()
-        if environment.get("ZENML_CONFIG_PATH"):
-            isolated = directory / "zen-config"
-            shutil.copytree(environment["ZENML_CONFIG_PATH"], isolated, dirs_exist_ok=True)
-            environment["ZENML_CONFIG_PATH"] = str(isolated)
         with (directory / "worker.log").open("a") as log:
             result = subprocess.run(
                 [
@@ -56,7 +50,6 @@ def perform(config):
                     "--state",
                     str(ROOT),
                     "--services",
-                    "--zenml",
                 ],
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -111,6 +104,191 @@ def perform(config):
         atomic_write(directory / "job.json", json.dumps(status).encode())
 
 
+def campaign_identity(payload: dict) -> str:
+    canonical = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()[:24]
+
+
+def _resolve_campaign_config(payload: dict):
+    from continual_bench.protocols.base import CampaignConfig
+    from continual_bench.protocols.campaign import load_campaign_config
+
+    config_path = payload.get("config_path")
+    if config_path:
+        cfg = load_campaign_config(config_path)
+        updates: dict = {}
+        if payload.get("campaign"):
+            updates["name"] = str(payload["campaign"])
+        if payload.get("policies"):
+            updates["policies"] = list(payload["policies"])
+        if payload.get("seeds"):
+            updates["seeds"] = [int(s) for s in payload["seeds"]]
+        if updates:
+            cfg = cfg.model_copy(update=updates)
+        return cfg
+
+    protocol = str(payload.get("protocol", "cara")).strip().lower()
+    dataset_name = str(payload.get("dataset", "electricity")).strip()
+    campaign_name = str(payload.get("campaign") or f"{protocol}-{dataset_name}")
+    model_name = str(payload.get("model") or "logistic")
+    policies = list(payload.get("policies") or [])
+    seeds = [int(s) for s in (payload.get("seeds") or [42, 43, 44, 45, 46])]
+    return CampaignConfig(
+        name=campaign_name,
+        protocol=protocol,  # type: ignore[arg-type]
+        dataset={"name": dataset_name, "protocol": protocol},  # type: ignore[arg-type]
+        model={"name": model_name},  # type: ignore[arg-type]
+        seeds=seeds,
+        policies=policies,
+    )
+
+
+def perform_campaign(payload: dict) -> None:
+    from continual_bench.protocols.campaign import run_campaign
+
+    identity = campaign_identity(payload)
+    campaign_root = ROOT / "campaigns"
+    directory = campaign_root / identity
+    directory.mkdir(parents=True, exist_ok=True)
+    status: dict = {"campaign_key": identity, "status": "running", "started_at": time.time()}
+    atomic_write(directory / "job.json", json.dumps(status).encode())
+    try:
+        env_name = payload.get("env") or os.environ.get("BENCH_ENV", "docker")
+        save_checkpoints = payload.get("save_checkpoints")
+        cfg = _resolve_campaign_config(payload)
+        result = run_campaign(
+            cfg,
+            env_name=env_name,
+            save_model_checkpoints=save_checkpoints,
+        )
+        status.update(
+            status="succeeded",
+            protocol=result.protocol,
+            dataset=result.dataset,
+            aggregate_summary=result.aggregate_summary,
+            artifacts=result.artifacts,
+            mlflow_receipt=result.mlflow_receipt,
+        )
+    except Exception as error:
+        status.update(status="failed", error=str(error))
+    finally:
+        status["finished_at"] = time.time()
+        atomic_write(directory / "job.json", json.dumps(status, default=str).encode())
+
+
+def _open_campaign_tracker(config, payload, *, recover_evaluations=False):
+    from continual_bench.protocols.campaign import create_campaign_tracker, resolve_campaign_settings
+
+    settings = resolve_campaign_settings(
+        config,
+        env_name=payload.get("env") or os.environ.get("BENCH_ENV", "docker"),
+        save_model_checkpoints=payload.get("save_checkpoints"),
+    )
+    batch_key = campaign_identity({"campaign_key": payload["campaign_key"]})
+    run_id = f"campaign-{batch_key}"
+    backend, tracker, run_id = create_campaign_tracker(config, settings, run_id=run_id)
+    with publication_lock(ROOT, run_id):
+        tracker.start_campaign(resume=True, recover_evaluations=recover_evaluations)
+    return backend, tracker, run_id, settings
+
+
+def perform_campaign_seed(payload: dict, *, progress=None, execution=None) -> None:
+    import pickle
+
+    from continual_bench.protocols.base import CampaignConfig
+    from continual_bench.protocols.cara import CaraProtocol
+    from continual_bench.protocols.upf import UpfProtocol
+
+    identity = campaign_identity(payload)
+    seed_root = ROOT / "campaign_seeds"
+    directory = seed_root / identity
+    directory.mkdir(parents=True, exist_ok=True)
+    tracker = None
+    status: dict = {"seed_key": identity, "status": "running", "started_at": time.time()}
+    if execution:
+        status["worker_execution"] = execution
+    atomic_write(directory / "job.json", json.dumps(status).encode())
+    try:
+        cfg = CampaignConfig(**payload["config"])
+        seed = int(payload["seed"])
+        batch_key = str(payload["campaign_key"])
+        _, tracker, _, _ = _open_campaign_tracker(cfg, payload)
+        protocol = CaraProtocol() if cfg.protocol == "cara" else UpfProtocol()
+        if progress:
+            progress("seed.matrix_started", "Building the seed matrix")
+        seed_data = protocol.run_seed_matrix(cfg, seed, tracker)
+        if progress:
+            progress("seed.matrix_completed", "Seed matrix computed; publishing result")
+        cache_dir = ROOT / "campaign_cache" / batch_key
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        seed_path = cache_dir / f"seed_{seed}.pkl"
+        atomic_write(seed_path, pickle.dumps(seed_data))
+        status.update(status="succeeded", seed=seed, seed_path=str(seed_path))
+    except Exception as error:
+        if progress:
+            progress(
+                "seed.execution_failed",
+                f"Seed execution failed ({type(error).__name__})",
+                level=logging.ERROR,
+            )
+        if tracker is not None:
+            tracker.fail_campaign()
+        status.update(status="failed", error=str(error))
+    finally:
+        status["finished_at"] = time.time()
+        atomic_write(directory / "job.json", json.dumps(status, default=str).encode())
+
+
+def perform_campaign_consolidate(payload: dict) -> None:
+    import pickle
+    import shutil
+
+    from continual_bench.protocols.base import CampaignConfig
+    from continual_bench.protocols.campaign import finalize_campaign_result
+    from continual_bench.protocols.cara import CaraProtocol
+    from continual_bench.protocols.upf import UpfProtocol
+
+    identity = campaign_identity(payload)
+    cons_root = ROOT / "campaign_consolidate"
+    directory = cons_root / identity
+    directory.mkdir(parents=True, exist_ok=True)
+    tracker = None
+    status: dict = {"consolidate_key": identity, "status": "running", "started_at": time.time()}
+    atomic_write(directory / "job.json", json.dumps(status).encode())
+    try:
+        cfg = CampaignConfig(**payload["config"])
+        backend, tracker, run_id, settings = _open_campaign_tracker(cfg, payload, recover_evaluations=True)
+        seed_paths = [Path(p) for p in payload["seed_paths"]]
+        seed_matrices = [pickle.loads(p.read_bytes()) for p in seed_paths]
+        if cfg.protocol == "cara":
+            proto = CaraProtocol()
+            ctx = proto._prepare_context(cfg)
+            result = proto.score_and_finalize(
+                cfg, seed_matrices, backend, tracker, gamma=ctx[2], offline=ctx[1]
+            )
+        else:
+            result = UpfProtocol().score_and_finalize(cfg, seed_matrices, backend, tracker)
+        result = finalize_campaign_result(cfg, result, backend, tracker, settings, run_id)
+
+        batch_key = str(payload["campaign_key"])
+        shutil.rmtree(ROOT / "campaign_cache" / batch_key, ignore_errors=True)
+        status.update(
+            status="succeeded",
+            protocol=result.protocol,
+            dataset=result.dataset,
+            aggregate_summary=result.aggregate_summary,
+            artifacts=result.artifacts,
+            mlflow_receipt=result.mlflow_receipt,
+        )
+    except Exception as error:
+        if tracker is not None:
+            tracker.fail_campaign()
+        status.update(status="failed", error=str(error))
+    finally:
+        status["finished_at"] = time.time()
+        atomic_write(directory / "job.json", json.dumps(status, default=str).encode())
+
+
 def health_snapshot():
     with GUARD:
         return {
@@ -120,11 +298,6 @@ def health_snapshot():
             "peak_active": PEAK_ACTIVE,
             "concurrency": CONCURRENCY,
         }
-
-
-def campaign_identity(payload: dict) -> str:
-    canonical = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()[:24]
 
 
 def _seed_fields(config, identity):
@@ -270,13 +443,15 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, health_snapshot())
             return
         prefix, _, identity = self.path.rpartition("/")
-        if prefix in ("/runs", "/zia-runs"):
+        if prefix in ("/runs", "/campaigns", "/campaign-seeds", "/campaign-consolidate"):
             if len(identity) == 24 and all(c in "0123456789abcdef" for c in identity):
                 root = ROOT
-                if prefix == "/zia-runs":
-                    from .zia_jobs import JOB_ROOT
-
-                    root = JOB_ROOT
+                if prefix == "/campaigns":
+                    root = ROOT / "campaigns"
+                elif prefix == "/campaign-seeds":
+                    root = ROOT / "campaign_seeds"
+                elif prefix == "/campaign-consolidate":
+                    root = ROOT / "campaign_consolidate"
                 path = root / identity / "job.json"
                 if path.exists():
                     self.respond(200, json.loads(path.read_text()))
@@ -284,7 +459,13 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(404, {"error": "not_found"})
 
     def do_POST(self):
-        if self.path not in ("/runs", "/zia-runs"):
+        if self.path not in (
+            "/runs",
+            "/campaigns",
+            "/campaign-plan",
+            "/campaign-seeds",
+            "/campaign-consolidate",
+        ):
             self.respond(404, {"error": "not_found"})
             return
         try:
@@ -292,17 +473,70 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= 65536:
                 raise ValueError("body size must be 1..65536")
             payload = self.rfile.read(length)
-            if self.path == "/zia-runs":
-                from . import zia_jobs
-
-                config = zia_jobs.Job.model_validate_json(payload)
-                root, identity, handler = zia_jobs.JOB_ROOT, zia_jobs.identity(config), zia_jobs.perform
-            else:
-                config = Config.model_validate_json(payload)
-                # Plugins run only from the trusted CLI/config deployment path.
-                if config.plugins:
-                    raise ValueError("plugins must be installed/configured by operator, not HTTP requests")
-                root, identity, handler = ROOT, config.identity(), perform
+            if self.path == "/campaign-plan":
+                plan_payload = json.loads(payload)
+                cfg = _resolve_campaign_config(plan_payload)
+                cfg_dict = cfg.model_dump(mode="json")
+                c_key = campaign_identity({
+                    "config": cfg_dict,
+                    "dag_run_id": plan_payload.get("dag_run_id"),
+                    "env": plan_payload.get("env", "docker"),
+                    "save_checkpoints": bool(plan_payload.get("save_checkpoints", False)),
+                })
+                seed_jobs = [
+                    {
+                        "campaign_key": c_key,
+                        "seed": int(s),
+                        "config": cfg_dict,
+                        "env": plan_payload.get("env", "docker"),
+                        "save_checkpoints": bool(plan_payload.get("save_checkpoints", False)),
+                    }
+                    for s in cfg.seeds
+                ]
+                self.respond(200, {"campaign_key": c_key, "config": cfg_dict, "seed_jobs": seed_jobs})
+                return
+            if self.path == "/campaign-seeds":
+                seed_payload = json.loads(payload)
+                observer = task_context(seed_payload.pop("airflow_task", None))
+                seed_key = campaign_identity(seed_payload)
+                seed_root = ROOT / "campaign_seeds"
+                # Serialize admission and origin publication across execution containers.
+                with publication_lock(seed_root, seed_key):
+                    code, status = submit_job(
+                        seed_root, seed_key, seed_payload, perform_campaign_seed,
+                        key_field="seed_key", observer=observer,
+                    )
+                self.respond(code, status)
+                return
+            if self.path == "/campaign-consolidate":
+                cons_payload = json.loads(payload)
+                code, status = submit_job(
+                    ROOT / "campaign_consolidate",
+                    campaign_identity(cons_payload),
+                    cons_payload,
+                    perform_campaign_consolidate,
+                    key_field="consolidate_key",
+                )
+                self.respond(code, status)
+                return
+            if self.path == "/campaigns":
+                campaign_payload = json.loads(payload)
+                if not isinstance(campaign_payload, dict):
+                    raise ValueError("campaign payload must be a JSON object")
+                code, status = submit_job(
+                    ROOT / "campaigns",
+                    campaign_identity(campaign_payload),
+                    campaign_payload,
+                    perform_campaign,
+                    key_field="campaign_key",
+                )
+                self.respond(code, status)
+                return
+            config = Config.model_validate_json(payload)
+            # Plugins run only from the trusted CLI/config deployment path.
+            if config.plugins:
+                raise ValueError("plugins must be installed/configured by operator, not HTTP requests")
+            root, identity, handler = ROOT, config.identity(), perform
         except Exception as error:
             self.respond(400, {"error": str(error)})
             return

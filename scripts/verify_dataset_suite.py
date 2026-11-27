@@ -22,8 +22,8 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 
-from continual_bench.evaluation.zia_artifacts import tracking_report
-from continual_bench.evaluation.zia_metrics import SCORE_BINS, ClassificationMetrics
+from continual_bench.evaluation.stream_artifacts import tracking_report
+from continual_bench.evaluation.stream_metrics import SCORE_BINS, ClassificationMetrics
 from continual_bench.infrastructure.artifact_policy import verify_metrics_only_files
 from continual_bench.infrastructure.metric_tracking import metric_points
 from continual_bench.infrastructure.storage import atomic_write

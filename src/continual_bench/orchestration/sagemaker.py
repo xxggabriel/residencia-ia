@@ -87,7 +87,7 @@ def _training_job_name():
 
 def _resolve_spec(dataset: str, manifest: dict, params: dict):
     """Resolve model name and classes from params/manifest, falling back to Zia catalog if applicable."""
-    from continual_bench.datasets.zia import DATASETS as ZIA_DATASETS
+    from continual_bench.datasets.pinned_stream import DATASETS as ZIA_DATASETS
 
     spec = ZIA_DATASETS.get(dataset, {})
     model_name = params.get("model") or manifest.get("model") or spec.get("model") or "xgboost"
@@ -181,12 +181,12 @@ def train(channel=None, model_dir=None, params=None, *, tracker=None, finish_tra
     from continual_bench.datasets.streams import dataset_model_params
     from continual_bench.evaluation.environment import encoded, environment
     from continual_bench.evaluation.epoch_history import epoch_fit, write_state
+    from continual_bench.evaluation.stream_metrics import ClassificationMetrics
     from continual_bench.evaluation.tracking_observations import observations
     from continual_bench.evaluation.training_evidence import write_training_artifacts
-    from continual_bench.evaluation.zia_metrics import ClassificationMetrics
     from continual_bench.infrastructure.storage import atomic_write
+    from continual_bench.models.stream_models import make_zia_model
     from continual_bench.models.training.loop import train_iterative
-    from continual_bench.models.zia import make_zia_model
 
     started = time.perf_counter()
     params = params if params is not None else hyperparameters()
@@ -524,7 +524,7 @@ def native_pipeline_job(command):
 
 
 def load_predictor(model_dir=None):
-    from continual_bench.models.zia import ZiaPredictor
+    from continual_bench.models.stream_models import ZiaPredictor
 
     return ZiaPredictor(Path(model_dir or PREFIX / "model"))
 

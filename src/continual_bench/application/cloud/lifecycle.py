@@ -173,7 +173,7 @@ def reported_outcomes(results) -> dict:
 
 
 def _publish_zia_comparisons(store, campaign_id, units):
-    from continual_bench.evaluation.zia_artifacts import write_zia_campaign_artifacts
+    from continual_bench.evaluation.stream_artifacts import write_zia_campaign_artifacts
 
     prefix = f"{layout.campaign_prefix(campaign_id)}/artifacts"
     with TemporaryDirectory(prefix="zia-campaign-") as temp:

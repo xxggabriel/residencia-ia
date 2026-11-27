@@ -147,8 +147,8 @@ def make_plan(args):
 
 def execute_case(args):
     from continual_bench.evaluation.stream_benchmark import run
-    from continual_bench.evaluation.zia_artifacts import tracking_report, write_zia_artifacts
-    from continual_bench.evaluation.zia_predictions import prediction_manifest
+    from continual_bench.evaluation.stream_artifacts import tracking_report, write_zia_artifacts
+    from continual_bench.evaluation.stream_predictions import prediction_manifest
 
     if __package__:
         from .verify_dataset_suite import verify_case
@@ -189,8 +189,8 @@ def execute_case(args):
                 raise ValueError("tracking requires an explicitly configured MLflow endpoint")
             from mlflow.tracking import MlflowClient
 
-            from continual_bench.evaluation.zia_publication import publish
-            from continual_bench.infrastructure.zia_tracking import begin
+            from continual_bench.evaluation.stream_publication import publish
+            from continual_bench.infrastructure.stream_tracking import begin
 
             client = MlflowClient()
             run_id, experiment = begin(
@@ -298,7 +298,7 @@ def run_suite(args, plan):
 def write_requests(args, plan):
     """Write inputs only; never deploy infrastructure or start an AWS execution."""
     from continual_bench.application.cloud.contracts import CampaignRequest
-    from continual_bench.datasets.zia import DATASETS as ZIA
+    from continual_bench.datasets.pinned_stream import DATASETS as ZIA
 
     if len(args.release or "") != 40 or any(c not in "0123456789abcdef" for c in args.release):
         raise ValueError("--write-requests requires an immutable 40-character --release SHA")

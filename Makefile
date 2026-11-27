@@ -1,4 +1,6 @@
-.PHONY: test lint format install-hooks smoke compose-check aws-validate aws-smoke aws-images aws-lambda \
+.PHONY: test lint format install-hooks smoke compose-check up down health logs \
+        bench run-experiment bench-paper tf-init tf-plan tf-apply tf-destroy \
+        aws-validate aws-smoke aws-images aws-lambda \
         aws-bootstrap aws-dataset-smoke aws-dataset-full \
         aws-dataset-fraud-full aws-dataset-ecommerce-full \
         aws-campaign-smoke aws-campaign-full aws-campaign-fraud-full aws-campaign-ecommerce-full \
@@ -8,6 +10,20 @@
 REPOSITORY ?= xxggabriel/residencia-ia
 BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD)
 OVERRIDES ?= infra/params/runtime-overrides.example.json
+
+ENV ?= docker
+CONFIG ?=
+PROTOCOL ?= cara
+DATASET ?= electricity
+CAMPAIGN ?=
+MODEL ?= logistic
+POLICIES ?=
+SEEDS ?= 42,43,44,45,46
+SAVE_CHECKPOINTS ?= false
+DAG ?= benchmark_campaign
+WAIT ?= 1
+TF_ENV ?= local
+TF_DIR := infra/terraform/environments/$(TF_ENV)
 
 test:
 	MLFLOW_ASYNC_LOGGING_THREADPOOL_SIZE=1 uv run --frozen pytest -q -n 6 --dist=loadfile
@@ -28,6 +44,57 @@ smoke:
 
 compose-check:
 	docker compose --env-file .env.example config --quiet
+
+up:
+	docker compose up -d --build
+
+down:
+	docker compose down
+
+health:
+	docker compose ps
+
+logs:
+	docker compose logs -f --tail=100
+
+bench run-experiment:
+	uv run python scripts/run_experiment.py \
+		--env "$(ENV)" \
+		--config "$(CONFIG)" \
+		--protocol "$(PROTOCOL)" \
+		--dataset "$(DATASET)" \
+		--campaign "$(CAMPAIGN)" \
+		--model "$(MODEL)" \
+		--policies "$(POLICIES)" \
+		--seeds "$(SEEDS)" \
+		--save-checkpoints "$(SAVE_CHECKPOINTS)" \
+		--dag "$(DAG)" \
+		--wait "$(WAIT)"
+
+bench-paper:
+	@if [ -z "$(CAMPAIGN)" ] && [ -z "$(CONFIG)" ]; then \
+		echo "Uso: make bench-paper CAMPAIGN=cara-electricity [ENV=docker|local|aws]"; \
+		exit 1; \
+	fi
+	$(MAKE) bench \
+		ENV="$(ENV)" \
+		CONFIG="$(if $(CONFIG),$(CONFIG),configs/campaigns/$(CAMPAIGN).yaml)" \
+		CAMPAIGN="$(CAMPAIGN)" \
+		SAVE_CHECKPOINTS="$(SAVE_CHECKPOINTS)" \
+		DAG="$(DAG)" \
+		WAIT="$(WAIT)"
+
+tf-init:
+	terraform -chdir=$(TF_DIR) init -backend=false
+
+tf-plan:
+	terraform -chdir=$(TF_DIR) plan
+
+tf-apply:
+	terraform -chdir=$(TF_DIR) apply -auto-approve
+
+tf-destroy:
+	terraform -chdir=$(TF_DIR) destroy -auto-approve
 
 aws-validate:
 	CFN_LINT="uvx --from cfn-lint==1.60.0 cfn-lint" uv run python scripts/aws/validate_templates.py

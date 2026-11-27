@@ -168,7 +168,7 @@ def selftest(args):
     checks = {"python": platform.python_version(), "machine": platform.machine()}
     modules = {
         "runtime": [
-            "continual_bench.evaluation.zia",
+            "continual_bench.evaluation.stream_benchmark",
             "continual_bench.evaluation.stream_benchmark",
             "continual_bench.infrastructure.tracking",
             "continual_bench.application.cloud.worker",
@@ -185,7 +185,7 @@ def selftest(args):
             "continual_bench.orchestration.sagemaker",
             "continual_bench.infrastructure.aws.experiments",
             "continual_bench.infrastructure.aws.mlflow_tracking",
-            "continual_bench.models.zia",
+            "continual_bench.models.stream_models",
             "continual_bench.models.training.loop",
             "pandas",
             "xgboost",

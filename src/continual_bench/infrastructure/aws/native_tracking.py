@@ -10,7 +10,7 @@ from .mlflow_tracking import sanitize_mlflow_name
 def _resolve_native_model_name(dataset: str, model_name: str | None) -> str:
     if model_name:
         return model_name
-    from continual_bench.datasets.zia import DATASETS as ZIA_DATASETS
+    from continual_bench.datasets.pinned_stream import DATASETS as ZIA_DATASETS
 
     if dataset in ZIA_DATASETS:
         return ZIA_DATASETS[dataset]["model"]

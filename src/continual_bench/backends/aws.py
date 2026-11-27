@@ -64,7 +64,11 @@ class AwsBackend(ExecutionBackend):
             import boto3  # type: ignore[import-untyped]
         except ImportError:
             return None
-        self._s3_client = boto3.client("s3")
+        kwargs: dict[str, Any] = {}
+        endpoint = self.settings.s3_endpoint_url or os.environ.get("S3_ENDPOINT_URL", "")
+        if endpoint:
+            kwargs["endpoint_url"] = endpoint
+        self._s3_client = boto3.client("s3", **kwargs)
         return self._s3_client
 
     def _s3_key(self, rel_path: str) -> str:

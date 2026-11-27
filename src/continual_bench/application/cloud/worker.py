@@ -148,8 +148,8 @@ def verify_native_loader(directory: Path, report: dict, data_root: Path, rows: i
     import pandas as pd
     import pyarrow.parquet as pq
 
-    from continual_bench.datasets.zia import load_manifest
-    from continual_bench.models.zia import ZiaPredictor
+    from continual_bench.datasets.pinned_stream import load_manifest
+    from continual_bench.models.stream_models import ZiaPredictor
 
     final = report["model_versions"][-1]
     staging = directory / "inference-check"
@@ -234,10 +234,10 @@ def execute_zia(
     import yaml
 
     from continual_bench.config import TrackingConfig
-    from continual_bench.evaluation.zia import run
-    from continual_bench.evaluation.zia_artifacts import tracking_report, write_zia_artifacts
-    from continual_bench.evaluation.zia_predictions import prediction_manifest
-    from continual_bench.evaluation.zia_publication import run_documents
+    from continual_bench.evaluation.stream_artifacts import tracking_report, write_zia_artifacts
+    from continual_bench.evaluation.stream_benchmark import run
+    from continual_bench.evaluation.stream_predictions import prediction_manifest
+    from continual_bench.evaluation.stream_publication import run_documents
 
     params = unit.params
     manifest = snapshot_manifest if snapshot_manifest is not None else zia_snapshot(store, unit)
@@ -1116,8 +1116,8 @@ def run_unit(
         if unit.kind == "zia" and publication_required:
             check_stop()
             if resuming:
-                from continual_bench.evaluation.zia_artifacts import tracking_report
-                from continual_bench.evaluation.zia_predictions import prediction_manifest
+                from continual_bench.evaluation.stream_artifacts import tracking_report
+                from continual_bench.evaluation.stream_predictions import prediction_manifest
 
                 if not spot:
                     final = get_json(store, pending_key)

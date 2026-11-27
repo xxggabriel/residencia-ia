@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 
+from continual_bench.datasets.pinned_stream import FORMAT, SCOPES
 from continual_bench.datasets.pinned_streams import (
     PINNED_NAMES,
     PREPARATION,
@@ -17,7 +18,6 @@ from continual_bench.datasets.pinned_streams import (
     source_contract,
 )
 from continual_bench.datasets.streams import input_paths, load_stream_manifest
-from continual_bench.datasets.zia import FORMAT, SCOPES
 from continual_bench.infrastructure.object_store import ObjectExists, sha256_bytes, sha256_path
 
 MAX_MANIFEST_BYTES = 256 * 1024

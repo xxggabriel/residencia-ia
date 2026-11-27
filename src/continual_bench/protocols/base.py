@@ -35,7 +35,7 @@ class CampaignConfig(BaseModel):
     tracking_uri: str | None = None
     save_model_checkpoints: bool | None = None
     max_workers: int = 1
-    reference_csv: str = "evidencias/aws-benchmarks/papers/published-reference-values.csv"
+    reference_csv: str = "configs/contracts/published-reference-values.csv"
 
 
 @dataclass

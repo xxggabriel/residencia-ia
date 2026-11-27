@@ -13,7 +13,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from continual_bench.datasets.zia import DATASETS
+from continual_bench.datasets.pinned_stream import DATASETS
 
 HF_BASE = "https://huggingface.co/datasets/ziadatalabs"
 # huggingface.co resolves LFS/Xet files through CDN hosts under these domains.

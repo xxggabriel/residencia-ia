@@ -30,7 +30,7 @@ class Campaign(Strict):
         return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
-def execute_campaign(campaign, root, *, services=False, zenml=False, executor=None):
+def execute_campaign(campaign, root, *, services=False, executor=None):
     """Fail fast, retain completed cases, and explicitly resume on a subsequent call.
 
     No automatic retry of denied or uncertain external operations. Each individual
@@ -38,15 +38,13 @@ def execute_campaign(campaign, root, *, services=False, zenml=False, executor=No
     completed case goes through that verification on a subsequent invocation.
     """
     if executor is None:
-        if zenml:
-            raise ValueError("ZenML campaigns require the pipeline executor injected by the entry point")
         from .runner import run
 
         executor = run
     directory = Path(root) / campaign.identity()
     directory.mkdir(parents=True, exist_ok=True)
     journal = directory / "campaign.json"
-    contract = {"campaign": campaign.model_dump(mode="json"), "services": services, "zenml": zenml}
+    contract = {"campaign": campaign.model_dump(mode="json"), "services": services}
     with run_lock(root, "campaign-" + campaign.identity()):
         state = (
             json.loads(journal.read_text())

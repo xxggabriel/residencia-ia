@@ -42,26 +42,32 @@ from continual_bench.datasets.streams import (  # noqa: E402
     stream_names,
     stream_spec,
 )
-from continual_bench.evaluation import zia_retraining  # noqa: E402
+from continual_bench.evaluation import stream_retraining  # noqa: E402
 from continual_bench.evaluation.costs import account, aws_account, profile  # noqa: E402
 from continual_bench.evaluation.environment import encoded, environment, peak_rss_bytes  # noqa: E402
-from continual_bench.evaluation.system_metrics import SystemMetricsSampler  # noqa: E402
-from continual_bench.evaluation.tracking import metric_catalog  # noqa: E402
-from continual_bench.evaluation.zia_metrics import (  # noqa: E402
+from continual_bench.evaluation.stream_metrics import (  # noqa: E402
     SCORE_BINS,
     ClassificationMetrics,
     decide,
     decision_threshold,
     ratio,
 )
-from continual_bench.evaluation.zia_observations import TemporalHoldoutProbes, run_observations  # noqa: E402
-from continual_bench.evaluation.zia_predictions import (  # noqa: E402
+from continual_bench.evaluation.stream_observations import (  # noqa: E402
+    TemporalHoldoutProbes,
+    run_observations,
+)
+from continual_bench.evaluation.stream_predictions import (  # noqa: E402
     PredictionArchive,
     prediction_manifest,
 )
-from continual_bench.evaluation.zia_training_history import TrainingHistory, unique_train_rows  # noqa: E402
+from continual_bench.evaluation.stream_training_history import (  # noqa: E402
+    TrainingHistory,
+    unique_train_rows,
+)
+from continual_bench.evaluation.system_metrics import SystemMetricsSampler  # noqa: E402
+from continual_bench.evaluation.tracking import metric_catalog  # noqa: E402
 from continual_bench.infrastructure.storage import atomic_write, run_lock  # noqa: E402
-from continual_bench.models.zia import make_zia_model  # noqa: E402
+from continual_bench.models.stream_models import make_zia_model  # noqa: E402
 
 POLICIES = get_args(ZiaPolicy)
 # Zia block sizes, kept for callers; each dataset declares its own in its stream spec.
@@ -421,7 +427,9 @@ def _run(
     detector = None
     policy_settings = {}
     batch_policy = None
-    retraining_options = zia_retraining.settings(tracking_settings) if policy in BATCH_POLICY_KINDS else None
+    retraining_options = (
+        stream_retraining.settings(tracking_settings) if policy in BATCH_POLICY_KINDS else None
+    )
     if metrics_only and retraining_options is not None:
         explicit_seed = (tracking_settings.get("retraining") or {}).get("seed", iter_config.seed)
         if explicit_seed != iter_config.seed:
@@ -540,10 +548,12 @@ def _run(
                 partial = resume["state"] if resume is not None else None
                 matrix_start = partial[0].processed_rows if partial is not None else 0
                 build_matrix = (
-                    zia_retraining.bounded_stream_matrix if metrics_only else zia_retraining.stream_matrix
+                    stream_retraining.bounded_stream_matrix
+                    if metrics_only
+                    else stream_retraining.stream_matrix
                 )
                 if matrix_metrics_cache is not None and Path(matrix_metrics_cache).exists():
-                    matrix, states, source_execution = zia_retraining.read_matrix_metrics_cache(
+                    matrix, states, source_execution = stream_retraining.read_matrix_metrics_cache(
                         matrix_metrics_cache, cache_contract, history
                     )
                     cache_reused = True
@@ -584,12 +594,12 @@ def _run(
                         "policy": policy,
                     }
                     if matrix_metrics_cache is not None:
-                        zia_retraining.write_matrix_metrics_cache(
+                        stream_retraining.write_matrix_metrics_cache(
                             matrix_metrics_cache, cache_contract, matrix, states, history, source_execution
                         )
                 if matrix_metrics_cache is not None:
                     cache_metadata = {
-                        "schema": zia_retraining.MATRIX_CACHE_SCHEMA,
+                        "schema": stream_retraining.MATRIX_CACHE_SCHEMA,
                         "file": Path(matrix_metrics_cache).name,
                         "sha256": sha256_file(matrix_metrics_cache),
                         "bytes": Path(matrix_metrics_cache).stat().st_size,
@@ -893,8 +903,8 @@ def _run(
         raise ValueError("dataset coverage or temporal split is incomplete")
     retraining, retraining_metrics = None, {}
     if batch_policy is not None:
-        zia_retraining.verify_realised(matrix, windows, batch_policy)
-        retraining, retraining_metrics = zia_retraining.finalize(
+        stream_retraining.verify_realised(matrix, windows, batch_policy)
+        retraining, retraining_metrics = stream_retraining.finalize(
             batch_policy, matrix, states, retraining_options
         )
         for fit in history.fits:
@@ -1167,8 +1177,8 @@ def _run_cli(args, settings):
     if args.campaign:
         from mlflow.tracking import MlflowClient
 
-        from continual_bench.evaluation.zia_publication import publish
-        from continual_bench.infrastructure.zia_tracking import begin
+        from continual_bench.evaluation.stream_publication import publish
+        from continual_bench.infrastructure.stream_tracking import begin
 
         client = MlflowClient()
         run_id, experiment_id = begin(
@@ -1200,7 +1210,7 @@ def _run_cli(args, settings):
             client.set_terminated(run_id, "FAILED")
             raise
     else:
-        from continual_bench.evaluation.zia_artifacts import tracking_report, write_zia_artifacts
+        from continual_bench.evaluation.stream_artifacts import tracking_report, write_zia_artifacts
 
         report = run(args.root, args.dataset, args.scope, args.policy, args.output, settings)
         evidence = prediction_manifest(args.output, report)

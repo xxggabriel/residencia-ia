@@ -15,7 +15,8 @@ from tempfile import TemporaryDirectory
 
 from continual_bench.infrastructure.storage import atomic_write
 
-from . import openml, real_streams, zia
+from . import openml, real_streams
+from . import pinned_stream as zia
 from .arff import _iter_rows, file_sha256, read_schema
 
 PREPARATION = "pinned-real-batch-stream-v1"
