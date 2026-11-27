@@ -10,7 +10,7 @@ A documentação completa está na [Wiki do projeto](docs/Home.md).
 
 Um *drift* é uma mudança na distribuição dos dados ou na relação entre atributos e rótulo. O benchmark simula a operação de um modelo nesse cenário: cada exemplo (ou bloco de exemplos) é previsto antes de o rótulo ficar disponível, os rótulos chegam com atraso, um detector pode sinalizar mudanças e uma política decide se e como atualizar o modelo. As métricas são calculadas sobre faixas de avaliação comuns a todas as políticas, para que as comparações usem o mesmo denominador.
 
-Todo o ciclo contínuo roda no núcleo Python (`src/continual_bench`). Serviços externos são opcionais e têm papéis delimitados: MLflow registra execuções, MinIO ou S3 guardam artefatos, Kafka transporta eventos, ZenML e Airflow disparam execuções finitas, e o perfil AWS escala campanhas com Step Functions e AWS Batch.
+Todo o ciclo contínuo roda no núcleo Python (`src/continual_bench`). Serviços externos são opcionais e têm papéis delimitados: MLflow registra execuções, MinIO ou S3 guardam artefatos, Kafka transporta eventos, Airflow dispara execuções finitas, e o perfil AWS escala campanhas com Step Functions e AWS Batch.
 
 ## Principais capacidades
 

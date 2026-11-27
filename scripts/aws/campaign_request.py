@@ -18,11 +18,11 @@ def prepare(campaign, *, release=None, campaign_id=None, dataset=None):
         raise ValueError("campaign_id must contain 1–40 lowercase letters, digits or dashes")
 
     release = release or request.get("release", "latest")
-    zia = request.get("matrix", {}).get("kind", "zia") == "zia"
+    requires_release = request.get("matrix", {}).get("kind", "stream") in {"zia", "stream"}
     if release == "latest":
-        if zia:
+        if requires_release:
             raise ValueError(
-                "Zia campaigns require RELEASE_SHA or request.release set to a published Git SHA"
+                "Campaigns require RELEASE_SHA or request.release set to a published Git SHA"
             )
     elif not re.fullmatch(GIT_SHA, release):
         raise ValueError("release must be a 40-character lowercase Git SHA")
@@ -31,7 +31,9 @@ def prepare(campaign, *, release=None, campaign_id=None, dataset=None):
     if dataset is not None:
         snapshot = request.get("snapshot") or {}
         source = dataset["request"]
-        if zia and any(source.get(field) != snapshot.get(field) for field in ("dataset", "scope")):
+        if requires_release and any(
+            source.get(field) != snapshot.get(field) for field in ("dataset", "scope")
+        ):
             raise ValueError("dataset preparation does not match the campaign snapshot")
         dataset["release"] = release
     return request["campaign_id"]

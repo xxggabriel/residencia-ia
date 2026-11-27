@@ -11,10 +11,8 @@ from continual_bench.config import Config
 from tests.e2e._service_fakes import (
     FakeMlflowClient,
     FakeS3Objects,
-    FakeZenmlClient,
     install_fake_kafka,
     install_fake_mlflow,
-    install_fake_zenml,
     write_fake_receipt,
 )
 
@@ -87,12 +85,7 @@ def test_single_run_publishes_aws_costs_to_mlflow(tmp_path, monkeypatch):
         fake_mlflow.record_metric(run_id, "tracking_v1/summary/aws_" + name, value, step=0)
 
     install_fake_mlflow(monkeypatch, fake_mlflow)
-    install_fake_zenml(
-        monkeypatch,
-        FakeZenmlClient(("materialize", "benchmark", "audit_drift_and_retraining", "persist")),
-    )
     install_fake_kafka(monkeypatch, config.dataset.samples)
-    monkeypatch.setenv("BENCH_ZENML_PROJECT", "fake-project")
     monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "fake-kafka:9092")
 
     verify_published_run(config, directory, report, fake_s3)
@@ -103,7 +96,6 @@ def verify_published_run(config, directory: Path, report: dict, objects: FakeS3O
 
     from confluent_kafka import Consumer, TopicPartition
     from mlflow.tracking import MlflowClient
-    from zenml.client import Client
 
     assert report["complete"] and report["observed"] == 180
     receipt = json.loads((directory / "receipt.json").read_text())
@@ -162,20 +154,6 @@ def verify_published_run(config, directory: Path, report: dict, objects: FakeS3O
         assert digest == hashlib.sha256(local.read_bytes()).hexdigest()
         artifact_hashes[remote] = digest
 
-    zenml = Client()
-    runs = zenml.list_pipeline_runs(project=os.environ["BENCH_ZENML_PROJECT"], size=2, hydrate=True)
-    assert len(runs.items) == 1
-    pipeline = runs.items[0]
-    assert str(pipeline.status) == "completed"
-    steps = zenml.list_run_steps(pipeline_run_id=pipeline.id, hydrate=True).items
-    assert {step.name for step in steps} == {
-        "materialize",
-        "benchmark",
-        "audit_drift_and_retraining",
-        "persist",
-    }
-    assert all(str(step.status) == "completed" and step.outputs for step in steps)
-
     consumer = Consumer(
         {
             "bootstrap.servers": os.environ["KAFKA_BOOTSTRAP_SERVERS"],
@@ -195,8 +173,6 @@ def verify_published_run(config, directory: Path, report: dict, objects: FakeS3O
         "mlflow_run_id": run_id,
         "mlflow_experiment_id": tracked.info.experiment_id,
         "mlflow_experiment_name": receipt["mlflow_experiment_name"],
-        "zenml_run_id": str(pipeline.id),
-        "zenml_steps_verified": len(steps),
         "benchmark_runs_executed": 1,
         "publication_replayed": False,
         "aws_costs": costs,

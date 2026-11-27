@@ -11,9 +11,7 @@ from continual_bench.orchestration import epoch_pipeline
 from tests.e2e._service_fakes import (
     FakeMlflowClient,
     FakeS3Objects,
-    FakeZenmlClient,
     install_fake_mlflow,
-    install_fake_zenml,
 )
 
 
@@ -83,7 +81,6 @@ def test_epoch_pipeline_artifacts_and_publication_retry(tmp_path, monkeypatch, p
 
     monkeypatch.setattr(epoch_pipeline, "epoch_publish", fake_epoch_publish)
     install_fake_mlflow(monkeypatch, fake_mlflow)
-    install_fake_zenml(monkeypatch, FakeZenmlClient(("epoch_evaluate", "epoch_publish")))
 
     result = epoch_pipeline.execute_epoch_pipeline(
         config,
@@ -103,7 +100,6 @@ def test_epoch_pipeline_artifacts_and_publication_retry(tmp_path, monkeypatch, p
         assert raw == (directory / filename).read_bytes()
 
     from mlflow.tracking import MlflowClient
-    from zenml.client import Client
 
     mlflow = MlflowClient()
     tracked = mlflow.get_run(receipt["mlflow_run_id"])
@@ -123,13 +119,6 @@ def test_epoch_pipeline_artifacts_and_publication_retry(tmp_path, monkeypatch, p
     assert {point.step for point in history} == {1, 2}
     assert len(history) == 2
 
-    zenml = Client()
-    run = zenml.list_pipeline_runs(project="fake-project", size=1, hydrate=True).items[0]
-    assert str(run.status) == "completed"
-    steps = zenml.list_run_steps(pipeline_run_id=run.id, hydrate=True).items
-    assert {step.name for step in steps} == {"epoch_evaluate", "epoch_publish"}
-    assert all(str(step.status) == "completed" and step.outputs for step in steps)
-
     repeated = epoch_pipeline.execute_epoch_pipeline(
         config,
         str(root),
@@ -141,8 +130,6 @@ def test_epoch_pipeline_artifacts_and_publication_retry(tmp_path, monkeypatch, p
     evidence = {
         "run_key": report["run_key"],
         "mlflow_run_id": tracked.info.run_id,
-        "zenml_run_id": str(run.id),
-        "zenml_steps_verified": len(steps),
         "objects_sha256_verified": True,
         "publication_replay_idempotent": True,
         "costs": report["costs"],

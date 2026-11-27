@@ -157,6 +157,45 @@ def path_value(expression, data, context=None):
     return copy.deepcopy(source)
 
 
+def _eval_intrinsic_arg(token, data, context=None):
+    token = token.strip()
+    if token.startswith("'") and token.endswith("'"):
+        return token[1:-1]
+    if token.startswith("$"):
+        return path_value(token, data, context)
+    if token in ("true", "false"):
+        return token == "true"
+    if token == "null":
+        return None
+    try:
+        return int(token)
+    except ValueError:
+        return float(token)
+
+
+def _split_intrinsic_args(raw_args):
+    args, current, in_quotes = [], [], False
+    escaped = False
+    for ch in raw_args:
+        if escaped:
+            current.append(ch)
+            escaped = False
+        elif ch == "\\" and in_quotes:
+            current.append(ch)
+            escaped = True
+        elif ch == "'":
+            in_quotes = not in_quotes
+            current.append(ch)
+        elif ch == "," and not in_quotes:
+            args.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current or raw_args.strip():
+        args.append("".join(current))
+    return args
+
+
 def render(template, data, context=None):
     if isinstance(template, list):
         return [render(value, data, context) for value in template]
@@ -165,15 +204,18 @@ def render(template, data, context=None):
     result = {}
     for key, value in template.items():
         if key.endswith(".$"):
-            match = re.fullmatch(r"States\.MathAdd\(([^,]+),\s*([^)]+)\)", value)
-            if match:
-                operands = [
-                    path_value(part.strip(), data, context)
-                    if part.strip().startswith("$")
-                    else int(part.strip())
-                    for part in match.groups()
-                ]
+            math_match = re.fullmatch(r"States\.MathAdd\(([^,]+),\s*([^)]+)\)", value)
+            array_match = re.fullmatch(r"States\.Array\((.*)\)", value)
+            if math_match:
+                operands = [_eval_intrinsic_arg(part, data, context) for part in math_match.groups()]
                 result[key[:-2]] = sum(operands)
+            elif array_match:
+                raw_args = array_match.group(1).strip()
+                result[key[:-2]] = (
+                    [_eval_intrinsic_arg(part, data, context) for part in _split_intrinsic_args(raw_args)]
+                    if raw_args
+                    else []
+                )
             else:
                 result[key[:-2]] = path_value(value, data, context)
         else:

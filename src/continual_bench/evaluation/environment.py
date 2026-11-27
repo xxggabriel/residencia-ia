@@ -78,7 +78,6 @@ def environment():
         "continual-bench",
         "river",
         "pydantic",
-        "zenml",
         "mlflow-skinny",
         "confluent-kafka",
         "pandas",

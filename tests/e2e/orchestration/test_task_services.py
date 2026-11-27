@@ -11,10 +11,8 @@ from continual_bench.evaluation.environment import environment
 from tests.e2e._service_fakes import (
     FakeMlflowClient,
     FakeS3Objects,
-    FakeZenmlClient,
     install_fake_kafka,
     install_fake_mlflow,
-    install_fake_zenml,
     write_fake_receipt,
 )
 
@@ -104,16 +102,10 @@ def test_task_evaluation_real_service_evidence(tmp_path, monkeypatch, source, mo
         fake_mlflow.record_metric(run_id, "tracking_v1/summary/" + key, value, step=0)
 
     install_fake_mlflow(monkeypatch, fake_mlflow)
-    install_fake_zenml(
-        monkeypatch,
-        FakeZenmlClient(("materialize", "benchmark", "audit_drift_and_retraining", "persist")),
-    )
     install_fake_kafka(monkeypatch, cfg.dataset.samples)
-    monkeypatch.setenv("BENCH_ZENML_PROJECT", "fake-project")
     monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "fake-kafka:9092")
 
     from mlflow.tracking import MlflowClient
-    from zenml.client import Client
 
     loaded_receipt = json.loads((directory / "receipt.json").read_text())
     for name in ("events.jsonl", "manifest.json", "report.json", "checkpoint.bin"):
@@ -144,19 +136,6 @@ def test_task_evaluation_real_service_evidence(tmp_path, monkeypatch, source, mo
     assert mlflow.list_artifacts(tracked.info.run_id)
     history = mlflow.get_metric_history(tracked.info.run_id, "accuracy")
     assert history
-
-    zenml = Client()
-    runs = zenml.list_pipeline_runs(project="fake-project", size=1, hydrate=True)
-    latest = runs.items[0]
-    assert str(latest.status) == "completed"
-    steps = zenml.list_run_steps(pipeline_run_id=latest.id, hydrate=True).items
-    assert {step.name for step in steps} == {
-        "materialize",
-        "benchmark",
-        "audit_drift_and_retraining",
-        "persist",
-    }
-    assert all(str(step.status) == "completed" and step.outputs for step in steps)
 
     kafka_evidence = None
     if mode == "streaming":
@@ -190,10 +169,8 @@ def test_task_evaluation_real_service_evidence(tmp_path, monkeypatch, source, mo
         "mode": mode,
         "policy": policy,
         "mlflow_run_id": tracked.info.run_id,
-        "zenml_run_id": str(latest.id),
         "costs": costs,
         "mlflow_costs_verified": True,
-        "steps_verified": len(steps),
         "kafka": kafka_evidence,
         "objects_sha256_verified": True,
         "publication_replay_idempotent": True,

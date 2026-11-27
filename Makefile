@@ -1,10 +1,7 @@
 .PHONY: test lint format install-hooks smoke compose-check up down health logs \
         bench run-experiment bench-paper \
         aws-validate aws-smoke aws-images aws-lambda \
-        aws-bootstrap aws-dataset-smoke aws-dataset-full \
-        aws-dataset-fraud-full aws-dataset-ecommerce-full \
-        aws-campaign-smoke aws-campaign-full aws-campaign-fraud-full aws-campaign-ecommerce-full \
-        aws-campaign-full-cost-aware aws-campaign-matrix \
+        aws-bootstrap aws-campaign \
         aws-mlflow-ui aws-studio-ui aws-cancel aws-teardown aws-teardown-all
 
 REPOSITORY ?= xxggabriel/residencia-ia
@@ -101,35 +98,17 @@ aws-lambda:
 aws-bootstrap:
 	REPOSITORY=$(REPOSITORY) OVERRIDES=$(OVERRIDES) scripts/aws/bootstrap.sh
 
-aws-dataset-smoke:
-	scripts/aws/start_dataset.sh infra/examples/dataset-social-smoke.json
-
-aws-dataset-full:
-	scripts/aws/start_dataset.sh infra/examples/dataset-social-full.json $(SUFFIX)
-
-aws-dataset-fraud-full:
-	scripts/aws/start_dataset.sh infra/examples/dataset-fraud-full.json $(SUFFIX)
-
-aws-dataset-ecommerce-full:
-	scripts/aws/start_dataset.sh infra/examples/dataset-ecommerce-full.json $(SUFFIX)
-
-aws-campaign-smoke:
-	scripts/aws/start_campaign.sh infra/examples/campaign-social-smoke.json $(SUFFIX)
-
-aws-campaign-full:
-	scripts/aws/start_campaign.sh infra/examples/campaign-social-full.json $(SUFFIX)
-
-aws-campaign-fraud-full:
-	scripts/aws/start_campaign.sh infra/examples/campaign-fraud-full.json $(SUFFIX)
-
-aws-campaign-ecommerce-full:
-	scripts/aws/start_campaign.sh infra/examples/campaign-ecommerce-full.json $(SUFFIX)
-
-aws-campaign-full-cost-aware:
-	scripts/aws/start_campaign.sh infra/examples/campaign-social-full-cost-aware.json $(SUFFIX)
-
-aws-campaign-matrix:
-	scripts/aws/start_campaign.sh infra/examples/campaign-binary-matrix.json
+aws-campaign:
+	@if [ -z "$(CAMPAIGN)" ] && [ -z "$(CONFIG)" ]; then \
+		echo "Uso: make aws-campaign CAMPAIGN=cara-electricity [SEEDS=0,1,2] [VCPUS=2] [MEMORY_MIB=4096]"; \
+		exit 1; \
+	fi
+	uv run continual-bench aws run-campaign \
+		--config "$(if $(CONFIG),$(CONFIG),configs/campaigns/$(CAMPAIGN).yaml)" \
+		$(if $(SEEDS),--seeds "$(SEEDS)",) \
+		$(if $(POLICIES),--policies "$(POLICIES)",) \
+		$(if $(VCPUS),--vcpus "$(VCPUS)",) \
+		$(if $(MEMORY_MIB),--memory-mib "$(MEMORY_MIB)",)
 
 aws-mlflow-ui:
 	uv run continual-bench aws mlflow-url

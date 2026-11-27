@@ -1,4 +1,4 @@
-"""In-process fakes for external services (S3, MLflow, ZenML, Kafka) used in E2E tests."""
+"""In-process fakes for external services (S3, MLflow, Kafka) used in E2E tests."""
 
 from __future__ import annotations
 
@@ -145,23 +145,6 @@ class FakeMlflowClient:
         return str(target)
 
 
-class FakeZenmlClient:
-    """In-memory ZenML client for pipeline/step readback assertions."""
-
-    def __init__(self, step_names: tuple[str, ...], run_id: str = "zenml-run-1") -> None:
-        self._run = SimpleNamespace(id=run_id, status="completed")
-        self._steps = [
-            SimpleNamespace(name=name, status="completed", outputs={"output": name})
-            for name in step_names
-        ]
-
-    def list_pipeline_runs(self, **_kwargs) -> SimpleNamespace:
-        return SimpleNamespace(items=[self._run])
-
-    def list_run_steps(self, **_kwargs) -> SimpleNamespace:
-        return SimpleNamespace(items=list(self._steps))
-
-
 def install_fake_mlflow(monkeypatch, client: FakeMlflowClient) -> None:
     """Inject a fake mlflow.tracking module returning `client`."""
     mlflow_mod = ModuleType("mlflow")
@@ -170,16 +153,6 @@ def install_fake_mlflow(monkeypatch, client: FakeMlflowClient) -> None:
     mlflow_mod.tracking = tracking_mod
     monkeypatch.setitem(sys.modules, "mlflow", mlflow_mod)
     monkeypatch.setitem(sys.modules, "mlflow.tracking", tracking_mod)
-
-
-def install_fake_zenml(monkeypatch, client: FakeZenmlClient) -> None:
-    """Inject a fake zenml.client module returning `client`."""
-    zenml_mod = ModuleType("zenml")
-    client_mod = ModuleType("zenml.client")
-    client_mod.Client = lambda *args, **kwargs: client
-    zenml_mod.client = client_mod
-    monkeypatch.setitem(sys.modules, "zenml", zenml_mod)
-    monkeypatch.setitem(sys.modules, "zenml.client", client_mod)
 
 
 def install_fake_kafka(monkeypatch, samples: int) -> None:

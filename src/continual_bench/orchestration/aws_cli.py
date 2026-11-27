@@ -296,7 +296,7 @@ def selftest(args):
         missing = [m for m in ("mlflow", "sagemaker_mlflow") if importlib.util.find_spec(m) is None]
         if missing:
             raise SystemExit(f"runtime image lacks MLflow async logging packages: {missing}")
-    forbidden = [m for m in ("mlflow", "zenml", "confluent_kafka", "airflow") if m in sys.modules]
+    forbidden = [m for m in ("mlflow", "confluent_kafka", "airflow") if m in sys.modules]
     if forbidden:
         raise SystemExit(f"AWS profile imported forbidden services: {forbidden}")
     if args.require_x86_64 and platform.machine() != "x86_64":
